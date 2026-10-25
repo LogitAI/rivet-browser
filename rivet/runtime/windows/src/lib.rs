@@ -43,8 +43,8 @@ fn install_prototype_frame() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
         GetWindowThreadProcessId, IsWindow, IsWindowVisible, PeekMessageW, RegisterClassW,
-        SetWindowPos, TranslateMessage, MSG, PM_REMOVE, SWP_NOZORDER, WM_ERASEBKGND, WM_PAINT,
-        WM_QUIT, WNDCLASSW, WS_CHILD, WS_VISIBLE,
+        SetWindowPos, TranslateMessage, ES_AUTOHSCROLL, MSG, PM_REMOVE, SWP_NOZORDER,
+        WM_ERASEBKGND, WM_PAINT, WM_QUIT, WNDCLASSW, WS_BORDER, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
     };
 
     const PANEL_WIDTH: i32 = 292;
@@ -233,6 +233,50 @@ fn install_prototype_frame() {
         if panel.is_null() {
             return;
         }
+        let edit_class = [b'E' as u16, b'D' as u16, b'I' as u16, b'T' as u16, 0];
+        let prompt = [
+            b'A' as u16,
+            b's' as u16,
+            b'k' as u16,
+            b' ' as u16,
+            b'R' as u16,
+            b'i' as u16,
+            b'v' as u16,
+            b'e' as u16,
+            b't' as u16,
+            b' ' as u16,
+            b'a' as u16,
+            b'b' as u16,
+            b'o' as u16,
+            b'u' as u16,
+            b't' as u16,
+            b' ' as u16,
+            b't' as u16,
+            b'h' as u16,
+            b'i' as u16,
+            b's' as u16,
+            b' ' as u16,
+            b'p' as u16,
+            b'a' as u16,
+            b'g' as u16,
+            b'e' as u16,
+            b'.' as u16,
+            0,
+        ];
+        let command = CreateWindowExW(
+            0,
+            edit_class.as_ptr(),
+            prompt.as_ptr(),
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+            17,
+            170,
+            PANEL_WIDTH - 34,
+            34,
+            panel,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        );
         loop {
             if IsWindow(parent) == 0 || IsWindow(panel) == 0 {
                 break;
@@ -256,6 +300,18 @@ fn install_prototype_frame() {
                     bounds.bottom - bounds.top,
                     SWP_NOZORDER,
                 );
+                if !command.is_null() {
+                    let panel_height = bounds.bottom - bounds.top;
+                    SetWindowPos(
+                        command,
+                        std::ptr::null_mut(),
+                        17,
+                        (panel_height - 168).max(340),
+                        PANEL_WIDTH - 34,
+                        34,
+                        SWP_NOZORDER,
+                    );
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
