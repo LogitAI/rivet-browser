@@ -3,8 +3,7 @@
   Rivet's Windows package. This is the reduced adaptation of DSA's WiX package flow: stage
   the signed Rust payload, install it per-machine and expose the CLI on PATH.
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
     <Package Name="Rivet Browser"
              Manufacturer="LogitAI"
              Version="$(Version)"

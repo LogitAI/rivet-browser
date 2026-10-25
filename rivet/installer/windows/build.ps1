@@ -40,7 +40,7 @@ Copy-Item (Join-Path $repository "LICENSE") (Join-Path $stage "LICENSE")
 $msi = Join-Path $out "rivet-$Version.msi"
 Push-Location $installer
 try {
-    wix build -arch x64 -ext WixToolset.Util.wixext -d "Version=$Version" -d "SourceDir=$stage" rivet.wxs -o $msi
+    wix build -arch x64 -d "Version=$Version" -d "SourceDir=$stage" rivet.wxs -o $msi
     if ($LASTEXITCODE -ne 0) { throw "building the Rivet package failed" }
 } finally {
     Pop-Location
