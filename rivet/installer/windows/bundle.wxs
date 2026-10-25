@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  setup.exe: the Rivet package behind the setup screens in setup-ui\. Burn starts
+  RivetSetup.exe as its own process. It runs on .NET Framework 4.7.2, which every supported
+  Windows 10 and 11 already has.
+
+  The reader chooses the program folder (InstallFolder) on the first screen or on the
+  command line. The package installs into it.
+
+  Build variables: Version, MsiPath (the package), SetupUiDir (the built setup screens).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+    <Bundle Name="Rivet Browser"
+            Manufacturer="LogitAI"
+            Version="$(Version)"
+            UpgradeCode="0b6f2a55-0c84-4f0e-9e4a-6b8f6f3cb8d1"
+            IconSourceFile="setup-ui\assets\logo.ico">
+        <BootstrapperApplication SourceFile="$(SetupUiDir)\RivetSetup.exe">
+            <Payload SourceFile="$(SetupUiDir)\RivetSetup.exe.config" />
+            <Payload SourceFile="$(SetupUiDir)\WixToolset.BootstrapperApplicationApi.dll" />
+            <Payload SourceFile="$(SetupUiDir)\mbanative.dll" />
+        </BootstrapperApplication>
+
+        <!-- Overridable: setup.exe InstallFolder=... sets it. Persisted, so repair and
+             uninstall see the folder chosen at install time. -->
+        <Variable Name="InstallFolder" Type="formatted" Value="[ProgramFiles64Folder]Rivet Browser" Persisted="yes" bal:Overridable="yes" />
+
+        <Chain>
+            <MsiPackage Id="RivetPackage" SourceFile="$(MsiPath)" Visible="no">
+                <MsiProperty Name="INSTALLFOLDER" Value="[InstallFolder]" />
+            </MsiPackage>
+        </Chain>
+    </Bundle>
+</Wix>

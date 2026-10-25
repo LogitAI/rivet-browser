@@ -1,12 +1,17 @@
 # Rivet Windows installer
 
-This directory adapts the DSA staged Windows installer flow for Rivet. It packages the Rust CLI
-and the Windows runtime DLL into a per-machine MSI.
+This directory adapts DSA's Windows installer for Rivet. `rivet.wxs` is the package (MSI), and
+`bundle.wxs` wraps it in `setup.exe` with the setup screens in `setup-ui/` (WPF on .NET
+Framework 4.7.2, which every supported Windows 10 and 11 has). The screens come from DSA's
+installer with the Rivet name, one program folder and Rivet's own text.
 
 ## Build
 
-Run `build.ps1` from a Windows PowerShell session with Rust and WiX 5 available. The script
-writes `rivet-<version>.msi` below `rivet/target/installer/`.
+Run `build.ps1` from a Windows PowerShell session with Rust, the .NET SDK and WiX 5 available.
+The script writes `rivet-<version>.msi` and `setup-<version>.exe` below `rivet/target/installer/`.
+Ship `setup.exe`; the MSI is inside it.
+
+`setup-ui/assets/logo.png` and `logo.ico` are still DSA's logo until Rivet has its own.
 
 ## First prototype run
 
