@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Rivet's Windows package. This is the reduced adaptation of DSA's WiX package flow: stage
+  the signed Rust payload, install it per-machine and expose the CLI on PATH.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+    <Package Name="Rivet Browser"
+             Manufacturer="LogitAI"
+             Version="$(Version)"
+             UpgradeCode="5a3b0f5e-fd95-44fa-93cf-5e0c517e8b37"
+             Scope="perMachine"
+             Compressed="yes">
+        <MajorUpgrade Schedule="afterInstallExecute"
+                      DowngradeErrorMessage="A newer Rivet Browser is already installed." />
+        <Media Id="1" Cabinet="rivet.cab" EmbedCab="yes" />
+
+        <StandardDirectory Id="ProgramFiles64Folder">
+            <Directory Id="INSTALLFOLDER" Name="Rivet Browser">
+                <Directory Id="LICENSESFOLDER" Name="licenses" />
+            </Directory>
+        </StandardDirectory>
+
+        <ComponentGroup Id="Rivet" Directory="INSTALLFOLDER">
+            <Component Id="RivetCli" Guid="*">
+                <File Id="RivetCli" Source="$(SourceDir)\rivet.exe" KeyPath="yes" />
+                <Environment Id="RivetPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
+            </Component>
+            <Component Id="RivetRuntime" Guid="*">
+                <File Id="RivetRuntime" Source="$(SourceDir)\rivet_runtime_windows.dll" KeyPath="yes" />
+            </Component>
+            <Component Id="RivetLicense" Directory="LICENSESFOLDER" Guid="*">
+                <File Id="RivetLicense" Source="$(SourceDir)\LICENSE" KeyPath="yes" />
+            </Component>
+            <Component Id="InstallFolderRecord" Guid="a9986310-5135-4fc1-a3ac-319829bb0ea6">
+                <RegistryValue Root="HKLM" Key="SOFTWARE\LogitAI\Rivet" Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+            </Component>
+        </ComponentGroup>
+
+        <Feature Id="Main" Title="Rivet Browser" Level="1">
+            <ComponentGroupRef Id="Rivet" />
+        </Feature>
+    </Package>
+</Wix>
