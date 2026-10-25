@@ -227,6 +227,8 @@ pub enum InjectError {
     StartRemoteThread(u32),
     WaitRemoteThread(u32),
     RemoteLoadFailed,
+    SnapshotModules(u32),
+    RuntimeModuleNotFound,
 }
 
 impl std::fmt::Display for InjectError {
@@ -264,6 +266,16 @@ impl std::fmt::Display for InjectError {
             Self::RemoteLoadFailed => {
                 write!(f, "the browser process did not load the Rivet runtime")
             }
+            Self::SnapshotModules(code) => write!(
+                f,
+                "could not inspect modules in the selected browser process (Windows error {code})"
+            ),
+            Self::RuntimeModuleNotFound => {
+                write!(
+                    f,
+                    "the selected browser process did not expose the loaded Rivet runtime"
+                )
+            }
         }
     }
 }
@@ -282,6 +294,65 @@ pub fn validate_runtime_path(path: &Path) -> Result<(), InjectError> {
         return Err(InjectError::RuntimePathContainsNul);
     }
     Ok(())
+}
+
+/// Returns the full-width base address of the selected runtime module in a browser process.
+///
+/// `GetExitCodeThread` can only return a 32-bit value, so it cannot safely provide an injected
+/// DLL base address in a 64-bit Chrome process. Toolhelp reports the actual module address.
+#[cfg(windows)]
+pub fn remote_runtime_module_base(
+    process_id: u32,
+    runtime_path: &Path,
+) -> Result<usize, InjectError> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, MODULEENTRY32W, TH32CS_SNAPMODULE,
+        TH32CS_SNAPMODULE32,
+    };
+
+    validate_runtime_path(runtime_path)?;
+    let runtime = runtime_path
+        .canonicalize()
+        .map_err(|_| InjectError::MissingRuntimePath)?;
+    unsafe {
+        let snapshot =
+            CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process_id);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(InjectError::SnapshotModules(GetLastError()));
+        }
+        let mut entry: MODULEENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<MODULEENTRY32W>() as u32;
+        let mut found = Module32FirstW(snapshot, &mut entry) != 0;
+        while found {
+            let length = entry
+                .szExePath
+                .iter()
+                .position(|character| *character == 0)
+                .unwrap_or(entry.szExePath.len());
+            let path = String::from_utf16_lossy(&entry.szExePath[..length]);
+            if Path::new(&path)
+                .canonicalize()
+                .is_ok_and(|candidate| same_path(&candidate, &runtime))
+            {
+                let base = entry.modBaseAddr as usize;
+                CloseHandle(snapshot);
+                return Ok(base);
+            }
+            entry.dwSize = std::mem::size_of::<MODULEENTRY32W>() as u32;
+            found = Module32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+    Err(InjectError::RuntimeModuleNotFound)
+}
+
+#[cfg(not(windows))]
+pub fn remote_runtime_module_base(
+    _process_id: u32,
+    _runtime_path: &Path,
+) -> Result<usize, InjectError> {
+    Err(InjectError::UnsupportedPlatform)
 }
 
 /// Loads `runtime_path` into exactly `process_id` on Windows.
