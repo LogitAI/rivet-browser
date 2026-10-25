@@ -8,11 +8,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use rivet_core::{build_launch_plan, DisplayMode, LaunchRequest};
+use rivet_platform_windows::inject_runtime;
 
 const USAGE: &str = "\
 Usage:
   rivet session start --browser <path> --url <url> [--user-data-dir <path>] \\
-      [--display visible|hidden|auto] [--json]
+      [--display visible|hidden|auto] [--runtime <path>] [--json]
 
 The browser executable is always explicit in this first release. Rivet does not guess a browser
 path or open a remote debugging port.\n";
@@ -23,6 +24,7 @@ struct StartOptions {
     url: String,
     user_data_dir: Option<PathBuf>,
     display: DisplayMode,
+    runtime: Option<PathBuf>,
     json: bool,
 }
 
@@ -48,18 +50,26 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
         .args(&plan.arguments)
         .spawn()
         .map_err(|error| format!("could not start {}: {error}", plan.program.display()))?;
+    let task_id = child.id();
+
+    if let Some(runtime) = &options.runtime {
+        inject_runtime(task_id, runtime).map_err(|error| {
+            format!("could not load the Rivet runtime into browser task {task_id}: {error}")
+        })?;
+    }
 
     if options.json {
         println!(
-            "{{\"pid\":{},\"display\":\"{}\",\"url\":\"{}\"}}",
-            child.id(),
+            "{{\"pid\":{},\"display\":\"{}\",\"url\":\"{}\",\"runtime_loaded\":{}}}",
+            task_id,
             plan.display.as_str(),
-            escape_json(&request.url)
+            escape_json(&request.url),
+            options.runtime.is_some()
         );
     } else {
         println!(
             "started Rivet browser task {} ({})",
-            child.id(),
+            task_id,
             plan.display.as_str()
         );
     }
@@ -74,6 +84,7 @@ fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
     let mut url = None;
     let mut user_data_dir = None;
     let mut display = DisplayMode::Auto;
+    let mut runtime = None;
     let mut json = false;
     let mut index = 2;
     while index < arguments.len() {
@@ -97,6 +108,13 @@ fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
                 display = DisplayMode::parse(&next_value(&arguments, &mut index, "--display")?)
                     .map_err(|error| error.to_string())?
             }
+            "--runtime" => {
+                runtime = Some(PathBuf::from(next_value(
+                    &arguments,
+                    &mut index,
+                    "--runtime",
+                )?))
+            }
             "--json" => json = true,
             option => return Err(format!("unknown option {option:?}")),
         }
@@ -107,6 +125,7 @@ fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
         url: url.ok_or_else(|| "--url is required".to_owned())?,
         user_data_dir,
         display,
+        runtime,
         json,
     })
 }
@@ -138,10 +157,16 @@ mod tests {
             "https://example.test/".into(),
             "--display".into(),
             "hidden".into(),
+            "--runtime".into(),
+            "C:/Rivet/rivet-runtime-windows.dll".into(),
             "--json".into(),
         ])
         .unwrap();
         assert_eq!(options.display, DisplayMode::Hidden);
+        assert_eq!(
+            options.runtime,
+            Some(PathBuf::from("C:/Rivet/rivet-runtime-windows.dll"))
+        );
         assert!(options.json);
     }
 

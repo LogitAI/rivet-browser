@@ -12,3 +12,4 @@ path = "src/main.rs"
 
 [dependencies]
 rivet-core.workspace = true
+rivet-platform-windows = { path = "../platform/windows" }
