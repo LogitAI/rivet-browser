@@ -22,8 +22,72 @@ pub extern "system" fn rivet_runtime_start() -> u32 {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     static STARTED: AtomicBool = AtomicBool::new(false);
-    STARTED.store(true, Ordering::Release);
+    if STARTED.swap(true, Ordering::AcqRel) {
+        return 1;
+    }
+    std::thread::spawn(install_prototype_frame);
     1
+}
+
+/// Adds the first native Rivet panel directly to the Chromium app window.
+#[cfg(windows)]
+fn install_prototype_frame() {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, WS_BORDER,
+        WS_CHILD, WS_VISIBLE,
+    };
+
+    unsafe extern "system" fn find_parent(window: HWND, parameter: LPARAM) -> i32 {
+        let parent = &mut *(parameter as *mut HWND);
+        let mut process_id = 0;
+        GetWindowThreadProcessId(window, &mut process_id);
+        if process_id == GetCurrentProcessId() && IsWindowVisible(window) != 0 {
+            *parent = window;
+            return 0;
+        }
+        1
+    }
+
+    let mut parent: HWND = std::ptr::null_mut();
+    unsafe {
+        EnumWindows(Some(find_parent), (&mut parent as *mut HWND) as isize);
+        if parent.is_null() {
+            return;
+        }
+        let class = [
+            b'S' as u16,
+            b'T' as u16,
+            b'A' as u16,
+            b'T' as u16,
+            b'I' as u16,
+            b'C' as u16,
+            0,
+        ];
+        let text = [
+            b'R' as u16,
+            b'I' as u16,
+            b'V' as u16,
+            b'E' as u16,
+            b'T' as u16,
+            0,
+        ];
+        CreateWindowExW(
+            0,
+            class.as_ptr(),
+            text.as_ptr(),
+            WS_CHILD | WS_VISIBLE | WS_BORDER,
+            0,
+            0,
+            280,
+            48,
+            parent,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        );
+    }
 }
 
 #[cfg(windows)]
