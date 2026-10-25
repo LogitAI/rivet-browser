@@ -90,6 +90,83 @@ fn install_prototype_frame() {
         if panel.is_null() {
             return;
         }
+        let title = [
+            b'R' as u16,
+            b'I' as u16,
+            b'V' as u16,
+            b'E' as u16,
+            b'T' as u16,
+            0,
+        ];
+        let workspace = [
+            b'W' as u16,
+            b'O' as u16,
+            b'R' as u16,
+            b'K' as u16,
+            b'S' as u16,
+            b'P' as u16,
+            b'A' as u16,
+            b'C' as u16,
+            b'E' as u16,
+            0,
+        ];
+        let command = [
+            b'A' as u16,
+            b's' as u16,
+            b'k' as u16,
+            b' ' as u16,
+            b'R' as u16,
+            b'i' as u16,
+            b'v' as u16,
+            b'e' as u16,
+            b't' as u16,
+            b'.' as u16,
+            b'.' as u16,
+            b'.' as u16,
+            0,
+        ];
+        CreateWindowExW(
+            0,
+            class.as_ptr(),
+            title.as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            20,
+            20,
+            230,
+            28,
+            panel,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        );
+        CreateWindowExW(
+            0,
+            class.as_ptr(),
+            workspace.as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            20,
+            76,
+            230,
+            24,
+            panel,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        );
+        CreateWindowExW(
+            0,
+            class.as_ptr(),
+            command.as_ptr(),
+            WS_CHILD | WS_VISIBLE | WS_BORDER,
+            16,
+            124,
+            248,
+            32,
+            panel,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        );
         loop {
             if IsWindow(parent) == 0 || IsWindow(panel) == 0 {
                 break;
