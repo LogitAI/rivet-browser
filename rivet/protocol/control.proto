@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package rivet.control.v1;
+
+message ProtocolVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+}
+
+message Hello {
+  ProtocolVersion version = 1;
+  string schema_hash = 2;
+}
+
+message HelloAccepted {}
+
+message HelloRejected {
+  string reason = 1;
+}
+
+message Envelope {
+  oneof message {
+    Hello hello = 1;
+    HelloAccepted hello_accepted = 2;
+    HelloRejected hello_rejected = 3;
+  }
+}

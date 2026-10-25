@@ -1,7 +1,7 @@
 # The Rust workspace lives below rivet/ so every buildable project file stays out of the repository root.
 [workspace]
 resolver = "2"
-members = ["core", "cli"]
+members = ["core", "cli", "protocol"]
 
 [workspace.package]
 edition = "2021"
@@ -11,3 +11,4 @@ publish = false
 
 [workspace.dependencies]
 rivet-core = { path = "core" }
+prost = "0.13"
