@@ -2,9 +2,9 @@
 
 This directory is the only home for Rivet code and packaging inputs.
 
-The initial repository contains no Rust crate because the implementation requirements remain
-`Draft`. The first implementation change creates the relevant crate below this directory, its
-manifest, a failing requirement-named test and the smallest code that makes the test pass.
+The Rust workspace contains the CLI, local-control protocol, Windows runtime, platform
+integration and installer inputs. The implementation is experimental. The native Rivet frame
+is a prototype and Ember integration is not complete.
 
 Planned homes are recorded in `AGENTS.md`:
 
