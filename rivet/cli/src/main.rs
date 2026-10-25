@@ -76,7 +76,8 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         display: options.display,
     };
     let plan = build_launch_plan(&request).map_err(|error| error.to_string())?;
-    let existing_windows = if plan.display == DisplayMode::Visible {
+    let runtime = resolve_runtime(options.runtime.as_deref());
+    let existing_windows = if runtime.is_some() && plan.display == DisplayMode::Visible {
         browser_windows(&plan.program).map_err(|error| error.to_string())?
     } else {
         Vec::new()
@@ -98,7 +99,7 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         None
     };
 
-    if let Some(runtime) = &options.runtime {
+    if let Some(runtime) = &runtime {
         let target_id = window.map_or(task_id, |window| window.process_id);
         inject_runtime(target_id, runtime).map_err(|error| {
             format!("could not load the Rivet runtime into browser task {target_id}: {error}")
@@ -115,7 +116,7 @@ fn run_start(options: StartOptions) -> Result<(), String> {
             task_id,
             plan.display.as_str(),
             escape_json(&request.url),
-            options.runtime.is_some(),
+            runtime.is_some(),
             session_id.as_ref().map_or("null".to_owned(), |id| format!("\"{}\"", escape_json(id)))
         );
     } else {
@@ -127,6 +128,15 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+fn resolve_runtime(explicit: Option<&std::path::Path>) -> Option<PathBuf> {
+    if let Some(path) = explicit {
+        return Some(path.to_path_buf());
+    }
+    let executable = env::current_exe().ok()?;
+    let sibling = executable.parent()?.join("rivet_runtime_windows.dll");
+    sibling.is_file().then_some(sibling)
 }
 
 fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
@@ -381,5 +391,11 @@ mod tests {
         assert_eq!(options.id, "123-abc");
         assert_eq!(options.state, Some(PathBuf::from("C:/Rivet/sessions.json")));
         assert!(options.json);
+    }
+
+    #[test]
+    fn fr2_explicit_runtime_wins_over_an_installed_sibling() {
+        let runtime = resolve_runtime(Some(std::path::Path::new("C:/Rivet/custom-runtime.dll")));
+        assert_eq!(runtime, Some(PathBuf::from("C:/Rivet/custom-runtime.dll")));
     }
 }

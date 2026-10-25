@@ -35,9 +35,9 @@ fn install_prototype_frame() {
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, EnumWindows, GetClientRect, GetWindowThreadProcessId, IsWindow,
-        IsWindowVisible, SetWindowPos, ES_AUTOHSCROLL, SWP_NOZORDER, WS_BORDER, WS_CHILD,
-        WS_TABSTOP, WS_VISIBLE,
+        CreateWindowExW, DispatchMessageW, EnumWindows, GetClientRect, GetWindowThreadProcessId,
+        IsWindow, IsWindowVisible, PeekMessageW, SetWindowPos, TranslateMessage, ES_AUTOHSCROLL,
+        MSG, PM_REMOVE, SWP_NOZORDER, WM_QUIT, WS_BORDER, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
     };
 
     unsafe extern "system" fn find_parent(window: HWND, parameter: LPARAM) -> i32 {
@@ -172,6 +172,14 @@ fn install_prototype_frame() {
         loop {
             if IsWindow(parent) == 0 || IsWindow(panel) == 0 {
                 break;
+            }
+            let mut message: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                if message.message == WM_QUIT {
+                    return;
+                }
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
             }
             let mut bounds = std::mem::zeroed();
             if GetClientRect(parent, &mut bounds) != 0 {
