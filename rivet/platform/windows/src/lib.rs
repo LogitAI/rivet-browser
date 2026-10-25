@@ -22,6 +22,33 @@ pub enum WindowDiscoveryError {
     TimedOut,
 }
 
+/// A failure while closing a Rivet-owned browser window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowCloseError {
+    UnsupportedPlatform,
+    WindowIsNotOwnedByTheSelectedBrowser,
+    CloseMessageFailed,
+}
+
+impl std::fmt::Display for WindowCloseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedPlatform => {
+                write!(f, "browser-window closing is only available on Windows")
+            }
+            Self::WindowIsNotOwnedByTheSelectedBrowser => write!(
+                f,
+                "the recorded Rivet window no longer belongs to the selected browser process"
+            ),
+            Self::CloseMessageFailed => {
+                write!(f, "could not request the Rivet browser window to close")
+            }
+        }
+    }
+}
+
+impl std::error::Error for WindowCloseError {}
+
 impl std::fmt::Display for WindowDiscoveryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -124,6 +151,25 @@ pub fn wait_for_new_browser_window(
     }
 }
 
+/// Closes exactly one previously discovered browser window.
+///
+/// The window handle and process identifier are checked again to prevent a stale handle from
+/// closing another application after Windows reuses it.
+#[cfg(windows)]
+pub fn close_browser_window(browser: &Path, window: BrowserWindow) -> Result<(), WindowCloseError> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+
+    let windows = browser_windows(browser)
+        .map_err(|_| WindowCloseError::WindowIsNotOwnedByTheSelectedBrowser)?;
+    if !windows.contains(&window) {
+        return Err(WindowCloseError::WindowIsNotOwnedByTheSelectedBrowser);
+    }
+    if unsafe { PostMessageW(window.handle as _, WM_CLOSE, 0, 0) } == 0 {
+        return Err(WindowCloseError::CloseMessageFailed);
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 fn same_path(left: &Path, right: &Path) -> bool {
     left.as_os_str()
@@ -156,6 +202,15 @@ pub fn wait_for_new_browser_window(
     _timeout: Duration,
 ) -> Result<BrowserWindow, WindowDiscoveryError> {
     Err(WindowDiscoveryError::UnsupportedPlatform)
+}
+
+/// Reports that browser-window closing is unavailable on non-Windows targets.
+#[cfg(not(windows))]
+pub fn close_browser_window(
+    _browser: &Path,
+    _window: BrowserWindow,
+) -> Result<(), WindowCloseError> {
+    Err(WindowCloseError::UnsupportedPlatform)
 }
 
 /// A failure while preparing or performing one explicit runtime load.
