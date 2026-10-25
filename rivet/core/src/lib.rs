@@ -6,6 +6,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+pub mod session;
+
 /// Whether a browser task creates a visible Rivet surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayMode {
