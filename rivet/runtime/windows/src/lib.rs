@@ -36,7 +36,8 @@ fn install_prototype_frame() {
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, EnumWindows, GetClientRect, GetWindowThreadProcessId, IsWindow,
-        IsWindowVisible, SetWindowPos, SWP_NOZORDER, WS_BORDER, WS_CHILD, WS_VISIBLE,
+        IsWindowVisible, SetWindowPos, ES_AUTOHSCROLL, SWP_NOZORDER, WS_BORDER, WS_CHILD,
+        WS_TABSTOP, WS_VISIBLE,
     };
 
     unsafe extern "system" fn find_parent(window: HWND, parameter: LPARAM) -> i32 {
@@ -110,6 +111,7 @@ fn install_prototype_frame() {
             b'E' as u16,
             0,
         ];
+        let edit = [b'E' as u16, b'D' as u16, b'I' as u16, b'T' as u16, 0];
         let command = [
             b'A' as u16,
             b's' as u16,
@@ -155,9 +157,9 @@ fn install_prototype_frame() {
         );
         CreateWindowExW(
             0,
-            class.as_ptr(),
+            edit.as_ptr(),
             command.as_ptr(),
-            WS_CHILD | WS_VISIBLE | WS_BORDER,
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
             16,
             124,
             248,
