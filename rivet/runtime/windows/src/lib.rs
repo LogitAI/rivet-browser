@@ -12,6 +12,20 @@ pub extern "C" fn rivet_runtime_abi_version() -> u32 {
     RUNTIME_ABI_VERSION
 }
 
+/// Starts Rivet after the DLL has loaded and the Windows loader lock has been released.
+///
+/// The first native-frame implementation is initialized from this stable entry point. Calling it
+/// again is harmless, which lets a launcher recover after a command retry.
+#[cfg(windows)]
+#[no_mangle]
+pub extern "system" fn rivet_runtime_start() -> u32 {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    STARTED.store(true, Ordering::Release);
+    1
+}
+
 #[cfg(windows)]
 #[no_mangle]
 #[allow(non_snake_case)]
@@ -36,5 +50,12 @@ mod tests {
     #[test]
     fn fr2_runtime_exposes_the_expected_abi() {
         assert_eq!(rivet_runtime_abi_version(), RUNTIME_ABI_VERSION);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fr2_runtime_bootstrap_is_idempotent() {
+        assert_eq!(rivet_runtime_start(), 1);
+        assert_eq!(rivet_runtime_start(), 1);
     }
 }

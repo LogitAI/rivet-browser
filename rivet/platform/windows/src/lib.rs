@@ -224,7 +224,9 @@ pub enum InjectError {
     AllocateRemoteMemory(u32),
     WriteRemoteMemory(u32),
     FindLoadLibrary,
+    FindRuntimeStart,
     StartRemoteThread(u32),
+    StartRuntime(u32),
     WaitRemoteThread(u32),
     RemoteLoadFailed,
     SnapshotModules(u32),
@@ -255,9 +257,16 @@ impl std::fmt::Display for InjectError {
                 "could not copy the runtime path into the browser process (Windows error {code})"
             ),
             Self::FindLoadLibrary => write!(f, "could not locate LoadLibraryW"),
+            Self::FindRuntimeStart => {
+                write!(f, "could not locate rivet_runtime_start in the runtime DLL")
+            }
             Self::StartRemoteThread(code) => write!(
                 f,
                 "could not start the browser runtime loader (Windows error {code})"
+            ),
+            Self::StartRuntime(code) => write!(
+                f,
+                "could not start the Rivet runtime in the browser process (Windows error {code})"
             ),
             Self::WaitRemoteThread(code) => write!(
                 f,
@@ -362,9 +371,13 @@ pub fn remote_runtime_module_base(
 pub fn inject_runtime(process_id: u32, runtime_path: &Path) -> Result<(), InjectError> {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, FreeLibrary, GetLastError, HANDLE, WAIT_OBJECT_0,
+    };
     use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
-    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetModuleHandleW, GetProcAddress, LoadLibraryW,
+    };
     use windows_sys::Win32::System::Memory::{
         VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
     };
@@ -464,9 +477,64 @@ pub fn inject_runtime(process_id: u32, runtime_path: &Path) -> Result<(), Inject
         let status = GetExitCodeThread(thread, &mut module_handle);
         CloseHandle(thread);
         VirtualFreeEx(process, remote, 0, MEM_RELEASE);
-        CloseHandle(process);
         if status == 0 || module_handle == 0 {
+            CloseHandle(process);
             return Err(InjectError::RemoteLoadFailed);
+        }
+
+        let remote_base = match remote_runtime_module_base(process_id, runtime_path) {
+            Ok(base) => base,
+            Err(error) => {
+                CloseHandle(process);
+                return Err(error);
+            }
+        };
+        let local_runtime = LoadLibraryW(path.as_ptr());
+        if local_runtime.is_null() {
+            CloseHandle(process);
+            return Err(InjectError::FindRuntimeStart);
+        }
+        let local_start = GetProcAddress(local_runtime, c"rivet_runtime_start".as_ptr().cast());
+        let Some(local_start) = local_start else {
+            FreeLibrary(local_runtime);
+            CloseHandle(process);
+            return Err(InjectError::FindRuntimeStart);
+        };
+        let offset = (local_start as usize).saturating_sub(local_runtime as usize);
+        let remote_start = remote_base.saturating_add(offset);
+        let start: LPTHREAD_START_ROUTINE = Some(std::mem::transmute::<
+            usize,
+            unsafe extern "system" fn(*mut c_void) -> u32,
+        >(remote_start));
+        let runtime_thread = CreateRemoteThread(
+            process,
+            std::ptr::null(),
+            0,
+            start,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+        );
+        if runtime_thread.is_null() {
+            let error = GetLastError();
+            FreeLibrary(local_runtime);
+            CloseHandle(process);
+            return Err(InjectError::StartRuntime(error));
+        }
+        if WaitForSingleObject(runtime_thread, INFINITE) != WAIT_OBJECT_0 {
+            let error = GetLastError();
+            CloseHandle(runtime_thread);
+            FreeLibrary(local_runtime);
+            CloseHandle(process);
+            return Err(InjectError::StartRuntime(error));
+        }
+        let mut runtime_status = 0;
+        let runtime_finished = GetExitCodeThread(runtime_thread, &mut runtime_status);
+        CloseHandle(runtime_thread);
+        FreeLibrary(local_runtime);
+        CloseHandle(process);
+        if runtime_finished == 0 || runtime_status == 0 {
+            return Err(InjectError::StartRuntime(GetLastError()));
         }
     }
     Ok(())
