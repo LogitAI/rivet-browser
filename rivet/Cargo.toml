@@ -1,0 +1,13 @@
+# The Rust workspace lives below rivet/ so every buildable project file stays out of the repository root.
+[workspace]
+resolver = "2"
+members = ["core", "cli"]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.85"
+publish = false
+
+[workspace.dependencies]
+rivet-core = { path = "core" }

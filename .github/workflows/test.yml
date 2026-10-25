@@ -38,3 +38,25 @@ jobs:
           git config --global user.name "CI"
           ./scripts/check.sh
 
+  rust:
+    name: Test the Rust code (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: rivet
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run the tests
+        run: cargo test --workspace
+
