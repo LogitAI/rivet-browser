@@ -11,7 +11,8 @@ Run `build.ps1` from a Windows PowerShell session with Rust, the .NET SDK and Wi
 The script writes `rivet-<version>.msi` and `setup-<version>.exe` below `rivet/target/installer/`.
 Ship `setup.exe`; the MSI is inside it.
 
-`setup-ui/assets/logo.png` and `logo.ico` are still DSA's logo until Rivet has its own.
+`setup-ui/assets/logo.png` and `logo.ico` are generated from Rivet's own interlocking-fastener
+mark by `setup-ui/assets/make-logo.py`.
 
 ## First prototype run
 

@@ -2,18 +2,19 @@
 #
 #   uv run make-logo.py logo.png logo.ico
 #
-# The picture is two overlapping window frames, one per task, on a rounded green tile. The
-# green is only a colour; the logo carries no mark of anyone else. It is drawn on a 96 unit
-# grid and supersampled, so every size is drawn from the shapes rather than scaled.
+# The Rivet mark is two interlocking fastener heads. The open cuts point at each other: a
+# browser session stays attached to the user's browser while Rivet supplies its own surface.
+# It is drawn on a 96 unit grid and supersampled, so every size is drawn from shapes rather
+# than scaled.
 import struct, sys, zlib
 
 GRID = 96.0
-TILE_TOP = (0x5A, 0xE5, 0x97)
-TILE_BOTTOM = (0x3E, 0xDC, 0x85)
-RING = (0x48, 0xDE, 0x8B)
-BACK_BAR = (0x13, 0x56, 0x6E)
-DARK = (0x07, 0x30, 0x42)
-WHITE = (0xFF, 0xFF, 0xFF)
+TILE_TOP = (0x10, 0x14, 0x31)
+TILE_BOTTOM = (0x27, 0x16, 0x47)
+COBALT = (0x41, 0x7C, 0xFF)
+VIOLET = (0x91, 0x58, 0xFF)
+CORAL = (0xFF, 0x6B, 0x73)
+INK = (0x10, 0x14, 0x31)
 
 
 def rounded(x, y, x0, y0, x1, y1, r):
@@ -25,21 +26,33 @@ def rounded(x, y, x0, y0, x1, y1, r):
     return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
 
 
+def circle(x, y, cx, cy, radius):
+    return (x - cx) ** 2 + (y - cy) ** 2 <= radius * radius
+
+
+def blend(a, b, t):
+    t = min(1.0, max(0.0, t))
+    return tuple(round(start + (end - start) * t) for start, end in zip(a, b))
+
+
 def colour(x, y):
     """The colour at grid point (x, y), or None outside the tile."""
     if not rounded(x, y, 0, 0, 96, 96, 22):
         return None
-    t = y / GRID
-    c = tuple(round(a + (b - a) * t) for a, b in zip(TILE_TOP, TILE_BOTTOM))
-    # The back window: a lighter title bar over a dark body.
-    if rounded(x, y, 15, 18, 62, 57, 5):
-        c = BACK_BAR if y < 30 else DARK
-    # A ring in the tile colour separates the front window from the back one.
-    if rounded(x, y, 29, 34, 86, 82, 10):
-        c = RING
-    # The front window: a dark title bar over a white body.
-    if rounded(x, y, 34, 39, 81, 77, 5):
-        c = DARK if y < 51 else WHITE
+
+    c = blend(TILE_TOP, TILE_BOTTOM, (x + y) / (GRID * 2))
+    # Two open rings form the fastening point. The lower ring is painted first, which gives
+    # the icon a clear reading order even at 16 px.
+    if circle(x, y, 61, 61, 28) and not circle(x, y, 61, 61, 13):
+        c = blend(VIOLET, CORAL, (x + y - 64) / 64)
+    if circle(x, y, 37, 37, 28) and not circle(x, y, 37, 37, 13):
+        c = blend(COBALT, VIOLET, (x + y) / 80)
+
+    # Facing diagonal cuts keep the two rings separate and recognizable as a connection.
+    if 41 < x < 61 and 41 < y < 61 and abs(x - y) < 8:
+        c = INK
+    if circle(x, y, 37, 37, 12) or circle(x, y, 61, 61, 12):
+        c = INK
     return c
 
 
