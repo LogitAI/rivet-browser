@@ -1,7 +1,7 @@
 # The Rust workspace lives below rivet/ so every buildable project file stays out of the repository root.
 [workspace]
 resolver = "2"
-members = ["core", "cli", "protocol"]
+members = ["core", "cli", "protocol", "runtime/windows", "platform/windows"]
 
 [workspace.package]
 edition = "2021"
@@ -12,3 +12,11 @@ publish = false
 [workspace.dependencies]
 rivet-core = { path = "core" }
 prost = "0.13"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
