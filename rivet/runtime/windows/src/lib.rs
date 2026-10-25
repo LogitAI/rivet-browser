@@ -35,8 +35,8 @@ fn install_prototype_frame() {
     use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
         BeginPaint, CreateSolidBrush, DeleteObject, Ellipse, EndPaint, FillRect, GetStockObject,
-        SelectObject, SetBkMode, SetTextColor, TextOutW, DEFAULT_GUI_FONT, HDC, PAINTSTRUCT,
-        TRANSPARENT,
+        SelectObject, SetBkColor, SetBkMode, SetDCBrushColor, SetTextColor, TextOutW, DC_BRUSH,
+        DEFAULT_GUI_FONT, HDC, PAINTSTRUCT, TRANSPARENT,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
@@ -44,7 +44,8 @@ fn install_prototype_frame() {
         CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
         GetWindowThreadProcessId, IsWindow, IsWindowVisible, PeekMessageW, RegisterClassW,
         SetWindowPos, TranslateMessage, ES_AUTOHSCROLL, MSG, PM_REMOVE, SWP_NOZORDER,
-        WM_ERASEBKGND, WM_PAINT, WM_QUIT, WNDCLASSW, WS_BORDER, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+        WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_PAINT, WM_QUIT, WNDCLASSW, WS_BORDER, WS_CHILD,
+        WS_TABSTOP, WS_VISIBLE,
     };
 
     const PANEL_WIDTH: i32 = 292;
@@ -84,6 +85,33 @@ fn install_prototype_frame() {
         TextOutW(dc, x, y, wide.as_ptr(), wide.len() as i32);
     }
 
+    unsafe fn static_label(parent: HWND, value: &str, x: i32, y: i32, width: i32, height: i32) {
+        let class = [
+            b'S' as u16,
+            b'T' as u16,
+            b'A' as u16,
+            b'T' as u16,
+            b'I' as u16,
+            b'C' as u16,
+            0,
+        ];
+        let text: Vec<u16> = value.encode_utf16().chain(Some(0)).collect();
+        CreateWindowExW(
+            0,
+            class.as_ptr(),
+            text.as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            x,
+            y,
+            width,
+            height,
+            parent,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        );
+    }
+
     unsafe extern "system" fn panel_proc(
         window: HWND,
         message: u32,
@@ -92,6 +120,14 @@ fn install_prototype_frame() {
     ) -> LRESULT {
         match message {
             WM_ERASEBKGND => 1,
+            WM_CTLCOLORSTATIC => {
+                let dc = _wparam as HDC;
+                let background = color(0xf2, 0xee, 0xe5);
+                SetTextColor(dc, color(0x1f, 0x20, 0x24));
+                SetBkColor(dc, background);
+                SetDCBrushColor(dc, background);
+                GetStockObject(DC_BRUSH) as LRESULT
+            }
             WM_PAINT => {
                 let mut paint: PAINTSTRUCT = std::mem::zeroed();
                 let dc = BeginPaint(window, &mut paint);
@@ -233,6 +269,20 @@ fn install_prototype_frame() {
         if panel.is_null() {
             return;
         }
+        // Chromium can suppress direct GDI text when it repaints a cross-thread child window.
+        // Static controls travel through the standard window and input path, so they stay visible.
+        static_label(panel, "Rivet", 57, 26, 170, 25);
+        static_label(panel, "WORK / AGENT BRIEF", 24, 70, 220, 18);
+        static_label(panel, "TODAY", 25, 113, 120, 18);
+        static_label(panel, "Agent brief", 49, 147, 190, 20);
+        static_label(panel, "Ember workspace", 28, 184, 210, 20);
+        static_label(panel, "Release notes", 28, 216, 210, 20);
+        static_label(panel, "SAVED", 25, 262, 120, 18);
+        static_label(panel, "Research queue", 28, 289, 210, 20);
+        static_label(panel, "Design references", 28, 321, 210, 20);
+        static_label(panel, "One browser,", 24, 372, 210, 20);
+        static_label(panel, "wherever you work.", 24, 392, 210, 20);
+        static_label(panel, "RIVET / EMBER LINK", 24, 426, 210, 18);
         let edit_class = [b'E' as u16, b'D' as u16, b'I' as u16, b'T' as u16, 0];
         let prompt = [
             b'A' as u16,
