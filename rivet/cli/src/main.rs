@@ -6,9 +6,10 @@
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use rivet_core::{build_launch_plan, DisplayMode, LaunchRequest};
-use rivet_platform_windows::inject_runtime;
+use rivet_platform_windows::{browser_windows, inject_runtime, wait_for_new_browser_window};
 
 const USAGE: &str = "\
 Usage:
@@ -46,6 +47,11 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
         display: options.display,
     };
     let plan = build_launch_plan(&request).map_err(|error| error.to_string())?;
+    let existing_windows = if options.runtime.is_some() && plan.display == DisplayMode::Visible {
+        browser_windows(&plan.program).map_err(|error| error.to_string())?
+    } else {
+        Vec::new()
+    };
     let child = Command::new(&plan.program)
         .args(&plan.arguments)
         .spawn()
@@ -53,8 +59,17 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
     let task_id = child.id();
 
     if let Some(runtime) = &options.runtime {
-        inject_runtime(task_id, runtime).map_err(|error| {
-            format!("could not load the Rivet runtime into browser task {task_id}: {error}")
+        let target_id = if plan.display == DisplayMode::Visible {
+            wait_for_new_browser_window(&plan.program, &existing_windows, Duration::from_secs(10))
+                .map_err(|error| {
+                    format!("could not identify the launched Rivet browser window: {error}")
+                })?
+                .process_id
+        } else {
+            task_id
+        };
+        inject_runtime(target_id, runtime).map_err(|error| {
+            format!("could not load the Rivet runtime into browser task {target_id}: {error}")
         })?;
     }
 

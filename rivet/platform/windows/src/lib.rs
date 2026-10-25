@@ -5,6 +5,158 @@
 //! ownership checks.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
+
+/// A top-level browser window and the browser process that owns it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrowserWindow {
+    pub handle: isize,
+    pub process_id: u32,
+}
+
+/// A failure while identifying the browser window that a Rivet launch created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowDiscoveryError {
+    UnsupportedPlatform,
+    BrowserPathMissing,
+    TimedOut,
+}
+
+impl std::fmt::Display for WindowDiscoveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedPlatform => {
+                write!(f, "browser-window discovery is only available on Windows")
+            }
+            Self::BrowserPathMissing => write!(f, "the selected browser executable does not exist"),
+            Self::TimedOut => write!(
+                f,
+                "the launched browser did not create a discoverable app window"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for WindowDiscoveryError {}
+
+/// Returns visible top-level windows owned by the exact browser executable.
+#[cfg(windows)]
+pub fn browser_windows(browser: &Path) -> Result<Vec<BrowserWindow>, WindowDiscoveryError> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
+    };
+
+    let browser = browser
+        .canonicalize()
+        .map_err(|_| WindowDiscoveryError::BrowserPathMissing)?;
+    struct Enumeration<'a> {
+        browser: &'a Path,
+        windows: Vec<BrowserWindow>,
+    }
+    unsafe extern "system" fn visit_window(window: HWND, parameter: LPARAM) -> i32 {
+        let enumeration = &mut *(parameter as *mut Enumeration<'_>);
+        if IsWindowVisible(window) == 0 {
+            return 1;
+        }
+        let mut process_id = 0;
+        GetWindowThreadProcessId(window, &mut process_id);
+        if process_id == 0 {
+            return 1;
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id);
+        if process.is_null() {
+            return 1;
+        }
+        let mut image = vec![0u16; 32_768];
+        let mut length = image.len() as u32;
+        let found = QueryFullProcessImageNameW(process, 0, image.as_mut_ptr(), &mut length) != 0;
+        CloseHandle(process);
+        if !found {
+            return 1;
+        }
+        let image = String::from_utf16_lossy(&image[..length as usize]);
+        let Ok(image) = Path::new(&image).canonicalize() else {
+            return 1;
+        };
+        if same_path(&image, enumeration.browser) {
+            enumeration.windows.push(BrowserWindow {
+                handle: window as isize,
+                process_id,
+            });
+        }
+        1
+    }
+
+    let mut enumeration = Enumeration {
+        browser: &browser,
+        windows: Vec::new(),
+    };
+    unsafe {
+        EnumWindows(
+            Some(visit_window),
+            (&mut enumeration as *mut Enumeration<'_>) as isize,
+        );
+    }
+    Ok(enumeration.windows)
+}
+
+/// Waits for the app window that did not exist before Rivet started the browser command.
+#[cfg(windows)]
+pub fn wait_for_new_browser_window(
+    browser: &Path,
+    existing: &[BrowserWindow],
+    timeout: Duration,
+) -> Result<BrowserWindow, WindowDiscoveryError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let windows = browser_windows(browser)?;
+        if let Some(window) = first_unseen_window(existing, &windows) {
+            return Ok(window);
+        }
+        if Instant::now() >= deadline {
+            return Err(WindowDiscoveryError::TimedOut);
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(windows)]
+fn same_path(left: &Path, right: &Path) -> bool {
+    left.as_os_str()
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+}
+
+fn first_unseen_window(
+    existing: &[BrowserWindow],
+    current: &[BrowserWindow],
+) -> Option<BrowserWindow> {
+    current.iter().copied().find(|candidate| {
+        !existing
+            .iter()
+            .any(|known| known.handle == candidate.handle)
+    })
+}
+
+/// Reports that browser-window discovery is unavailable on non-Windows targets.
+#[cfg(not(windows))]
+pub fn browser_windows(_browser: &Path) -> Result<Vec<BrowserWindow>, WindowDiscoveryError> {
+    Err(WindowDiscoveryError::UnsupportedPlatform)
+}
+
+/// Reports that browser-window discovery is unavailable on non-Windows targets.
+#[cfg(not(windows))]
+pub fn wait_for_new_browser_window(
+    _browser: &Path,
+    _existing: &[BrowserWindow],
+    _timeout: Duration,
+) -> Result<BrowserWindow, WindowDiscoveryError> {
+    Err(WindowDiscoveryError::UnsupportedPlatform)
+}
 
 /// A failure while preparing or performing one explicit runtime load.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +364,31 @@ fn wide(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr1_selects_the_new_window_even_when_its_process_already_owned_other_windows() {
+        let existing = [BrowserWindow {
+            handle: 10,
+            process_id: 42,
+        }];
+        let current = [
+            BrowserWindow {
+                handle: 10,
+                process_id: 42,
+            },
+            BrowserWindow {
+                handle: 11,
+                process_id: 42,
+            },
+        ];
+        assert_eq!(
+            first_unseen_window(&existing, &current),
+            Some(BrowserWindow {
+                handle: 11,
+                process_id: 42,
+            })
+        );
+    }
 
     #[test]
     fn fr2_rejects_a_missing_runtime_before_targeting_a_process() {
