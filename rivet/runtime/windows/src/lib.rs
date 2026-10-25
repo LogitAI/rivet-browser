@@ -35,8 +35,8 @@ fn install_prototype_frame() {
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, WS_BORDER,
-        WS_CHILD, WS_VISIBLE,
+        CreateWindowExW, EnumWindows, GetClientRect, GetWindowThreadProcessId, IsWindow,
+        IsWindowVisible, SetWindowPos, SWP_NOZORDER, WS_BORDER, WS_CHILD, WS_VISIBLE,
     };
 
     unsafe extern "system" fn find_parent(window: HWND, parameter: LPARAM) -> i32 {
@@ -73,7 +73,7 @@ fn install_prototype_frame() {
             b'T' as u16,
             0,
         ];
-        CreateWindowExW(
+        let panel = CreateWindowExW(
             0,
             class.as_ptr(),
             text.as_ptr(),
@@ -87,6 +87,27 @@ fn install_prototype_frame() {
             std::ptr::null_mut(),
             std::ptr::null(),
         );
+        if panel.is_null() {
+            return;
+        }
+        loop {
+            if IsWindow(parent) == 0 || IsWindow(panel) == 0 {
+                break;
+            }
+            let mut bounds = std::mem::zeroed();
+            if GetClientRect(parent, &mut bounds) != 0 {
+                SetWindowPos(
+                    panel,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    280,
+                    bounds.bottom - bounds.top,
+                    SWP_NOZORDER,
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 }
 
