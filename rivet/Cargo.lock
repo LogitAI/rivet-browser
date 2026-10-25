@@ -396,6 +396,7 @@ version = "0.1.0"
 dependencies = [
  "rivet-core",
  "rivet-platform-windows",
+ "serde_json",
 ]
 
 [[package]]
