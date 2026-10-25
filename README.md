@@ -14,9 +14,10 @@ Rivet is not a Chromium fork and it is not a webview browser.
 
 ## Status
 
-**Design stage. There is no runnable implementation yet.** The repository starts with the
-architecture, requirements and delivery rules. Rust implementation begins when the relevant
-requirements are agreed.
+**Early implementation.** The Rust workspace contains an experimental `rivet session start`
+command, a generated local control protocol and a Windows runtime-injection bootstrap. It can
+start an explicitly selected Chromium executable in visible or hidden mode. The direct native
+frame, browser control commands, Ember integration and installer are not complete yet.
 
 ## What Rivet is meant to do
 
