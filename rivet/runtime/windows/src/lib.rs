@@ -30,125 +30,82 @@ pub extern "system" fn rivet_runtime_start() -> u32 {
 }
 
 #[cfg(windows)]
-static BROWSER_PARENT: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+static HOST_BROWSER: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 #[cfg(windows)]
-static RIVET_PANEL: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
-#[cfg(windows)]
-static ORIGINAL_BROWSER_PROC: std::sync::atomic::AtomicIsize =
-    std::sync::atomic::AtomicIsize::new(0);
+static HOST_PANEL: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
 #[cfg(windows)]
 const RIVET_PANEL_WIDTH: i32 = 292;
 
 #[cfg(windows)]
-unsafe extern "system" fn find_browser_renderer(
-    window: windows_sys::Win32::Foundation::HWND,
-    parameter: windows_sys::Win32::Foundation::LPARAM,
-) -> i32 {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetParent};
-
-    let (parent, renderers) = &mut *(parameter
-        as *mut (
-            windows_sys::Win32::Foundation::HWND,
-            Vec<windows_sys::Win32::Foundation::HWND>,
-        ));
-    if GetParent(window) != *parent {
-        return 1;
-    }
-    let mut class_name = [0_u16; 64];
-    let length = GetClassNameW(window, class_name.as_mut_ptr(), class_name.len() as i32);
-    if String::from_utf16_lossy(&class_name[..length.max(0) as usize])
-        == "Chrome_RenderWidgetHostHWND"
-    {
-        renderers.push(window);
-    }
-    1
-}
-
-#[cfg(windows)]
-unsafe fn sync_panel_to_browser(parent: windows_sys::Win32::Foundation::HWND) {
-    use windows_sys::Win32::Foundation::{POINT, RECT};
-    use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, CreateRoundRectRgn, SetWindowRgn};
+unsafe fn layout_host(host: windows_sys::Win32::Foundation::HWND) {
+    use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumChildWindows, GetClientRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+        GetClientRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
     };
 
-    let panel = RIVET_PANEL.load(std::sync::atomic::Ordering::Acquire)
+    let panel = HOST_PANEL.load(std::sync::atomic::Ordering::Acquire)
         as windows_sys::Win32::Foundation::HWND;
-    if panel.is_null() {
+    let browser = HOST_BROWSER.load(std::sync::atomic::Ordering::Acquire)
+        as windows_sys::Win32::Foundation::HWND;
+    if panel.is_null() || browser.is_null() {
         return;
     }
     let mut bounds: RECT = std::mem::zeroed();
-    if GetClientRect(parent, &mut bounds) == 0 {
+    if GetClientRect(host, &mut bounds) == 0 {
         return;
     }
-    let mut origin = POINT { x: 0, y: 0 };
-    ClientToScreen(parent, &mut origin);
-    let dpi = GetDpiForWindow(parent).max(96) as i32;
+    let dpi = GetDpiForWindow(host).max(96) as i32;
     let width = RIVET_PANEL_WIDTH * dpi / 96;
     let height = bounds.bottom - bounds.top;
     SetWindowPos(
         panel,
         std::ptr::null_mut(),
-        origin.x,
-        origin.y,
+        0,
+        0,
         width,
         height,
         SWP_NOACTIVATE | SWP_NOZORDER,
     );
-    let radius = 14 * dpi / 96;
-    let region = CreateRoundRectRgn(0, 0, width + radius, height, radius * 2, radius * 2);
-    SetWindowRgn(panel, region, 1);
-
-    // Chromium's actual page surface is the render widget. Do not resize the compositor's
-    // `Intermediate D3D Window`, which also carries browser chrome on some versions.
-    let mut search = (parent, Vec::new());
-    EnumChildWindows(
-        parent,
-        Some(find_browser_renderer),
-        (&mut search
-            as *mut (
-                windows_sys::Win32::Foundation::HWND,
-                Vec<windows_sys::Win32::Foundation::HWND>,
-            )) as isize,
+    SetWindowPos(
+        browser,
+        std::ptr::null_mut(),
+        width,
+        0,
+        (bounds.right - bounds.left - width).max(1),
+        height,
+        SWP_NOACTIVATE | SWP_NOZORDER,
     );
-    for renderer in search.1 {
-        SetWindowPos(
-            renderer,
-            std::ptr::null_mut(),
-            width,
-            0,
-            (bounds.right - bounds.left - width).max(1),
-            height,
-            SWP_NOACTIVATE | SWP_NOZORDER,
-        );
-    }
 }
 
 #[cfg(windows)]
-unsafe extern "system" fn browser_window_proc(
+unsafe extern "system" fn host_window_proc(
     window: windows_sys::Win32::Foundation::HWND,
     message: u32,
     wparam: windows_sys::Win32::Foundation::WPARAM,
     lparam: windows_sys::Win32::Foundation::LPARAM,
 ) -> windows_sys::Win32::Foundation::LRESULT {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, WM_DPICHANGED, WM_MOVE, WM_SIZE, WM_WINDOWPOSCHANGED, WNDPROC,
+        DefWindowProcW, DestroyWindow, PostQuitMessage, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
+        WM_SIZE,
     };
 
-    let original = ORIGINAL_BROWSER_PROC.load(std::sync::atomic::Ordering::Acquire);
-    let procedure: WNDPROC = std::mem::transmute(original);
-    let result = CallWindowProcW(procedure, window, message, wparam, lparam);
-    if BROWSER_PARENT.load(std::sync::atomic::Ordering::Acquire) == window as isize
-        && matches!(
-            message,
-            WM_WINDOWPOSCHANGED | WM_MOVE | WM_SIZE | WM_DPICHANGED
-        )
-    {
-        sync_panel_to_browser(window);
+    match message {
+        WM_SIZE | WM_DPICHANGED => {
+            layout_host(window);
+            0
+        }
+        WM_CLOSE => {
+            DestroyWindow(window);
+            0
+        }
+        WM_DESTROY => {
+            PostQuitMessage(0);
+            0
+        }
+        _ => DefWindowProcW(window, message, wparam, lparam),
     }
-    result
 }
 
 /// Adds the first native Rivet panel directly to the Chromium app window.
@@ -167,10 +124,11 @@ fn install_prototype_frame() {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
-        GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadImageW, PeekMessageW,
-        RegisterClassW, SendMessageW, SetWindowLongPtrW, TranslateMessage, GWLP_WNDPROC,
-        IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, MSG, PM_REMOVE, WM_ERASEBKGND, WM_PAINT,
-        WM_QUIT, WM_SETICON, WNDCLASSW, WS_POPUP, WS_VISIBLE,
+        GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
+        LoadImageW, PeekMessageW, RegisterClassW, SendMessageW, SetParent, SetWindowLongPtrW,
+        SetWindowPos, TranslateMessage, GWL_STYLE, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE,
+        MSG, PM_REMOVE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, WM_ERASEBKGND, WM_PAINT,
+        WM_QUIT, WM_SETICON, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     const PANEL_CLASS: [u16; 17] = [
@@ -190,6 +148,24 @@ fn install_prototype_frame() {
         0,
         0,
         0,
+        0,
+    ];
+    const HOST_CLASS: [u16; 16] = [
+        b'R' as u16,
+        b'i' as u16,
+        b'v' as u16,
+        b'e' as u16,
+        b't' as u16,
+        b'H' as u16,
+        b'o' as u16,
+        b's' as u16,
+        b't' as u16,
+        b'W' as u16,
+        b'i' as u16,
+        b'n' as u16,
+        b'd' as u16,
+        b'o' as u16,
+        b'w' as u16,
         0,
     ];
 
@@ -505,27 +481,50 @@ fn install_prototype_frame() {
         if parent.is_null() {
             return;
         }
-        set_taskbar_icon(parent);
         let dpi = GetDpiForWindow(parent).max(96) as i32;
         let panel_width = RIVET_PANEL_WIDTH * dpi / 96;
+        let mut browser_bounds: RECT = std::mem::zeroed();
+        if GetWindowRect(parent, &mut browser_bounds) == 0 {
+            return;
+        }
         let mut window_class: WNDCLASSW = std::mem::zeroed();
         window_class.lpfnWndProc = Some(panel_proc);
         window_class.hInstance = GetModuleHandleW(std::ptr::null());
         window_class.lpszClassName = PANEL_CLASS.as_ptr();
         RegisterClassW(&window_class);
+        let mut host_class: WNDCLASSW = std::mem::zeroed();
+        host_class.lpfnWndProc = Some(host_window_proc);
+        host_class.hInstance = GetModuleHandleW(std::ptr::null());
+        host_class.lpszClassName = HOST_CLASS.as_ptr();
+        RegisterClassW(&host_class);
+        let host_title: Vec<u16> = "Rivet Browser".encode_utf16().chain(Some(0)).collect();
+        let host = CreateWindowExW(
+            0,
+            HOST_CLASS.as_ptr(),
+            host_title.as_ptr(),
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            browser_bounds.left,
+            browser_bounds.top,
+            browser_bounds.right - browser_bounds.left,
+            browser_bounds.bottom - browser_bounds.top,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            GetModuleHandleW(std::ptr::null()),
+            std::ptr::null(),
+        );
+        if host.is_null() {
+            return;
+        }
         let panel = CreateWindowExW(
             0,
             PANEL_CLASS.as_ptr(),
             PANEL_CLASS.as_ptr(),
-            // A Chromium Direct3D child surface can compose over every sibling child HWND, even
-            // when Rivet is topmost in the child z-order. The whole Rivet surface is an owned
-            // popup in the browser process, so it composes above that renderer reliably.
-            WS_POPUP | WS_VISIBLE,
+            WS_CHILD | WS_VISIBLE,
             0,
             0,
             panel_width,
             48,
-            parent,
+            host,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null(),
@@ -533,25 +532,33 @@ fn install_prototype_frame() {
         if panel.is_null() {
             return;
         }
-        // Rivet stays inside Chromium's app window. The browser's outer frame remains intact;
-        // the page render widget is reserved to the right in `sync_panel_to_browser`.
-        BROWSER_PARENT.store(parent as isize, std::sync::atomic::Ordering::Release);
-        RIVET_PANEL.store(panel as isize, std::sync::atomic::Ordering::Release);
-        let original = SetWindowLongPtrW(
+        // The real Chrome app window becomes the host's child. Chromium receives the right-pane
+        // size as its own window size, which makes normal page layout reflow instead of leaving
+        // an overlay above a full-width page.
+        SetParent(parent, host);
+        let browser_style = GetWindowLongPtrW(parent, GWL_STYLE) as u32;
+        SetWindowLongPtrW(
             parent,
-            GWLP_WNDPROC,
-            browser_window_proc as *const () as usize as isize,
+            GWL_STYLE,
+            ((browser_style & !WS_OVERLAPPEDWINDOW) | WS_CHILD | WS_VISIBLE) as isize,
         );
-        if original == 0 {
-            return;
-        }
-        ORIGINAL_BROWSER_PROC.store(original, std::sync::atomic::Ordering::Release);
-        sync_panel_to_browser(parent);
-        // Rivet owns the panel HWND on this injected worker thread. The browser UI thread owns
-        // the synchronized layout hook, so this only keeps the panel alive and dispatches its
-        // paint and input messages. It never polls or repositions the browser.
+        HOST_BROWSER.store(parent as isize, std::sync::atomic::Ordering::Release);
+        HOST_PANEL.store(panel as isize, std::sync::atomic::Ordering::Release);
+        set_taskbar_icon(host);
+        layout_host(host);
+        SetWindowPos(
+            parent,
+            std::ptr::null_mut(),
+            panel_width,
+            0,
+            (browser_bounds.right - browser_bounds.left - panel_width).max(1),
+            browser_bounds.bottom - browser_bounds.top,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+        // Rivet owns the host and panel HWNDs on this injected worker thread. Chrome keeps its
+        // own UI thread, while this loop dispatches native host and sidebar messages.
         loop {
-            if IsWindow(parent) == 0 || IsWindow(panel) == 0 {
+            if IsWindow(host) == 0 || IsWindow(parent) == 0 || IsWindow(panel) == 0 {
                 break;
             }
             let mut message: MSG = std::mem::zeroed();
