@@ -25,6 +25,9 @@
                 <File Id="RivetCli" Source="$(SourceDir)\rivet.exe" KeyPath="yes" />
                 <Environment Id="RivetPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
             </Component>
+            <Component Id="RivetLauncher" Guid="*">
+                <File Id="RivetLauncher" Source="$(SourceDir)\rivet-launcher.exe" KeyPath="yes" />
+            </Component>
             <Component Id="RivetRuntime" Guid="*">
                 <File Id="RivetRuntime" Source="$(SourceDir)\rivet_runtime_windows.dll" KeyPath="yes" />
             </Component>

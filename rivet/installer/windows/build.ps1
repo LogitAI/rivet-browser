@@ -43,6 +43,7 @@ try {
 }
 
 Copy-Item (Join-Path $rivet "target\release\rivet.exe") $stage
+Copy-Item (Join-Path $rivet "target\release\rivet-launcher.exe") $stage
 Copy-Item (Join-Path $rivet "target\release\rivet_runtime_windows.dll") $stage
 Copy-Item (Join-Path $repository "LICENSE") (Join-Path $stage "LICENSE")
 

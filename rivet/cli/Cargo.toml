@@ -10,7 +10,12 @@ publish.workspace = true
 name = "rivet"
 path = "src/main.rs"
 
+[[bin]]
+name = "rivet-launcher"
+path = "src/launcher.rs"
+
 [dependencies]
 rivet-core.workspace = true
 rivet-platform-windows = { path = "../platform/windows" }
 serde_json.workspace = true
+windows-sys.workspace = true
