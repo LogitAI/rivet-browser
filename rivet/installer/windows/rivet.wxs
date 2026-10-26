@@ -31,6 +31,9 @@
             <Component Id="RivetRuntime" Guid="*">
                 <File Id="RivetRuntime" Source="$(SourceDir)\rivet_runtime_windows.dll" KeyPath="yes" />
             </Component>
+            <Component Id="RivetIcon" Guid="*">
+                <File Id="RivetIcon" Source="$(SourceDir)\rivet.ico" KeyPath="yes" />
+            </Component>
             <Component Id="RivetLicense" Directory="LICENSESFOLDER" Guid="*">
                 <File Id="RivetLicense" Source="$(SourceDir)\LICENSE" KeyPath="yes" />
             </Component>

@@ -2,19 +2,16 @@
 #
 #   uv run make-logo.py logo.png logo.ico
 #
-# The Rivet mark is two interlocking fastener heads. The open cuts point at each other: a
-# browser session stays attached to the user's browser while Rivet supplies its own surface.
+# The Rivet mark is a single open fastener. It reads as a compact C-shaped connection at small
+# taskbar sizes, and uses the same paper, ink and claret palette as the browser surface.
 # It is drawn on a 96 unit grid and supersampled, so every size is drawn from shapes rather
 # than scaled.
 import struct, sys, zlib
 
 GRID = 96.0
-TILE_TOP = (0x10, 0x14, 0x31)
-TILE_BOTTOM = (0x27, 0x16, 0x47)
-COBALT = (0x41, 0x7C, 0xFF)
-VIOLET = (0x91, 0x58, 0xFF)
-CORAL = (0xFF, 0x6B, 0x73)
-INK = (0x10, 0x14, 0x31)
+PAPER = (0xF2, 0xEE, 0xE5)
+INK = (0x1F, 0x20, 0x24)
+ACCENT = (0x7C, 0x2D, 0x4F)
 
 
 def rounded(x, y, x0, y0, x1, y1, r):
@@ -30,29 +27,19 @@ def circle(x, y, cx, cy, radius):
     return (x - cx) ** 2 + (y - cy) ** 2 <= radius * radius
 
 
-def blend(a, b, t):
-    t = min(1.0, max(0.0, t))
-    return tuple(round(start + (end - start) * t) for start, end in zip(a, b))
-
-
 def colour(x, y):
     """The colour at grid point (x, y), or None outside the tile."""
     if not rounded(x, y, 0, 0, 96, 96, 22):
         return None
-
-    c = blend(TILE_TOP, TILE_BOTTOM, (x + y) / (GRID * 2))
-    # Two open rings form the fastening point. The lower ring is painted first, which gives
-    # the icon a clear reading order even at 16 px.
-    if circle(x, y, 61, 61, 28) and not circle(x, y, 61, 61, 13):
-        c = blend(VIOLET, CORAL, (x + y - 64) / 64)
-    if circle(x, y, 37, 37, 28) and not circle(x, y, 37, 37, 13):
-        c = blend(COBALT, VIOLET, (x + y) / 80)
-
-    # Facing diagonal cuts keep the two rings separate and recognizable as a connection.
-    if 41 < x < 61 and 41 < y < 61 and abs(x - y) < 8:
+    c = PAPER
+    # A weighty open ring is legible at 16px. The opening faces the browser content, while the
+    # claret pin makes the attachment point read as an intentional product mark.
+    if circle(x, y, 45, 48, 31) and not circle(x, y, 45, 48, 17):
         c = INK
-    if circle(x, y, 37, 37, 12) or circle(x, y, 61, 61, 12):
-        c = INK
+    if x > 49 and 37 < y < 59:
+        c = PAPER
+    if rounded(x, y, 56, 42, 74, 54, 4):
+        c = ACCENT
     return c
 
 

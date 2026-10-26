@@ -34,20 +34,21 @@ pub extern "system" fn rivet_runtime_start() -> u32 {
 fn install_prototype_frame() {
     use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
-        BeginPaint, ClientToScreen, CreateFontW, CreateSolidBrush, DeleteObject, Ellipse, EndPaint,
-        FillRect, SelectObject, SetBkMode, SetTextColor, TextOutW, FW_SEMIBOLD, HDC, PAINTSTRUCT,
-        TRANSPARENT,
+        BeginPaint, ClientToScreen, CreateFontW, CreateRoundRectRgn, CreateSolidBrush,
+        DeleteObject, Ellipse, EndPaint, FillRect, SelectObject, SetBkMode, SetTextColor,
+        SetWindowRgn, TextOutW, CLEARTYPE_QUALITY, FW_SEMIBOLD, HDC, PAINTSTRUCT, TRANSPARENT,
     };
-    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::HiDpi::{
         GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
-        GetWindowThreadProcessId, IsWindow, IsWindowVisible, PeekMessageW, RegisterClassW,
-        SetWindowPos, TranslateMessage, MSG, PM_REMOVE, SWP_NOACTIVATE, WM_ERASEBKGND, WM_PAINT,
-        WM_QUIT, WNDCLASSW, WS_POPUP, WS_VISIBLE,
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumChildWindows, EnumWindows,
+        GetClassNameW, GetClientRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
+        LoadImageW, PeekMessageW, RegisterClassW, SendMessageW, SetWindowPos, TranslateMessage,
+        IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOZORDER,
+        WM_ERASEBKGND, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSW, WS_POPUP, WS_VISIBLE,
     };
 
     const PANEL_WIDTH: i32 = 292;
@@ -105,7 +106,7 @@ fn install_prototype_frame() {
             1,
             0,
             0,
-            0,
+            CLEARTYPE_QUALITY as u32,
             0,
             face.as_ptr(),
         );
@@ -344,6 +345,49 @@ fn install_prototype_frame() {
         1
     }
 
+    unsafe extern "system" fn find_renderer(window: HWND, parameter: LPARAM) -> i32 {
+        let renderers = &mut *(parameter as *mut Vec<HWND>);
+        let mut class_name = [0_u16; 64];
+        let length = GetClassNameW(window, class_name.as_mut_ptr(), class_name.len() as i32);
+        let class_name = String::from_utf16_lossy(&class_name[..length.max(0) as usize]);
+        if matches!(
+            class_name.as_str(),
+            "Chrome_RenderWidgetHostHWND" | "Intermediate D3D Window"
+        ) {
+            renderers.push(window);
+        }
+        1
+    }
+
+    unsafe fn set_taskbar_icon(parent: HWND) {
+        let mut module_path = [0_u16; 32768];
+        let length = GetModuleFileNameW(
+            std::ptr::null_mut(),
+            module_path.as_mut_ptr(),
+            module_path.len() as u32,
+        );
+        if length == 0 || length as usize == module_path.len() {
+            return;
+        }
+        let mut icon_path =
+            std::path::PathBuf::from(String::from_utf16_lossy(&module_path[..length as usize]));
+        icon_path.set_file_name("rivet.ico");
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = icon_path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let icon = LoadImageW(
+            std::ptr::null_mut(),
+            wide.as_ptr(),
+            IMAGE_ICON,
+            0,
+            0,
+            LR_LOADFROMFILE | LR_DEFAULTSIZE,
+        );
+        if !icon.is_null() {
+            SendMessageW(parent, WM_SETICON, 1, icon as isize);
+            SendMessageW(parent, WM_SETICON, 0, icon as isize);
+        }
+    }
+
     let mut parent: HWND = std::ptr::null_mut();
     unsafe {
         // Chromium's injected worker starts in a DPI-virtualized context. A popup created in
@@ -354,6 +398,7 @@ fn install_prototype_frame() {
         if parent.is_null() {
             return;
         }
+        set_taskbar_icon(parent);
         let scale = (GetDpiForWindow(parent).max(96) / 96) as i32;
         let panel_width = PANEL_WIDTH * scale;
         let mut window_class: WNDCLASSW = std::mem::zeroed();
@@ -397,17 +442,47 @@ fn install_prototype_frame() {
             if GetClientRect(parent, &mut bounds) != 0 {
                 let mut screen_origin = POINT { x: 0, y: 0 };
                 ClientToScreen(parent, &mut screen_origin);
+                let height = bounds.bottom - bounds.top;
                 SetWindowPos(
                     panel,
                     std::ptr::null_mut(),
                     screen_origin.x,
                     screen_origin.y,
                     panel_width,
-                    bounds.bottom - bounds.top,
+                    height,
                     // Chromium creates a Direct3D child after our injected worker starts. Do
                     // not preserve the old sibling order or that renderer covers Rivet entirely.
                     SWP_NOACTIVATE,
                 );
+                // The renderer is a Chromium child HWND. Keeping its left edge at zero leaves
+                // the page underneath Rivet. Resize the renderer itself so page layout and
+                // hit-testing use the remaining pane, rather than merely hiding its left edge.
+                let mut renderers = Vec::new();
+                EnumChildWindows(
+                    parent,
+                    Some(find_renderer),
+                    (&mut renderers as *mut Vec<HWND>) as isize,
+                );
+                for renderer in renderers {
+                    if IsWindow(renderer) != 0 {
+                        SetWindowPos(
+                            renderer,
+                            std::ptr::null_mut(),
+                            panel_width,
+                            0,
+                            (bounds.right - bounds.left - panel_width).max(1),
+                            height,
+                            SWP_NOACTIVATE | SWP_NOZORDER,
+                        );
+                    }
+                }
+                // This is an owned popup because Chromium's Direct3D child surface can cover
+                // an ordinary sibling child. Its region extends beyond the right edge, leaving
+                // that edge square while matching the browser's rounded outer-left corners.
+                let radius = 14 * scale;
+                let region =
+                    CreateRoundRectRgn(0, 0, panel_width + radius, height, radius * 2, radius * 2);
+                SetWindowRgn(panel, region, 1);
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
