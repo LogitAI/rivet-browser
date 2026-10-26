@@ -397,6 +397,7 @@ dependencies = [
  "rivet-core",
  "rivet-platform-windows",
  "serde_json",
+ "windows-sys",
 ]
 
 [[package]]
