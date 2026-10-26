@@ -86,27 +86,30 @@ unsafe extern "system" fn host_window_proc(
     wparam: windows_sys::Win32::Foundation::WPARAM,
     lparam: windows_sys::Win32::Foundation::LPARAM,
 ) -> windows_sys::Win32::Foundation::LRESULT {
-    use windows_sys::Win32::Graphics::Dwm::DwmDefWindowProc;
+    use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DefWindowProcW, DestroyWindow, PostQuitMessage, HTCAPTION, WM_CLOSE, WM_DESTROY,
-        WM_DPICHANGED, WM_NCCALCSIZE, WM_NCHITTEST, WM_SIZE,
+        DefWindowProcW, DestroyWindow, PostQuitMessage, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+        WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_SIZE,
     };
 
-    // Let DWM claim the native caption controls before Rivet supplies title-region behaviour.
-    // This preserves Windows hover, snap-layout, accessibility, and command handling.
-    let mut dwm_result = 0;
-    if DwmDefWindowProc(window, message, wparam, lparam, &mut dwm_result) != 0 {
-        return dwm_result;
-    }
-
     match message {
-        WM_NCCALCSIZE if wparam != 0 => 0,
-        WM_NCHITTEST => {
-            // The panel and browser are child windows and receive their own input. Remaining
-            // host space at the top behaves as the normal Windows drag region.
-            HTCAPTION as isize
+        WM_DPICHANGED => {
+            // Windows supplies physical coordinates for the destination monitor. Applying this
+            // rectangle avoids DPI virtualization, a stale caption height, and a delayed panel.
+            let suggested = &*(lparam as *const RECT);
+            SetWindowPos(
+                window,
+                std::ptr::null_mut(),
+                suggested.left,
+                suggested.top,
+                suggested.right - suggested.left,
+                suggested.bottom - suggested.top,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+            layout_host(window);
+            0
         }
-        WM_SIZE | WM_DPICHANGED => {
+        WM_SIZE => {
             layout_host(window);
             0
         }
@@ -126,7 +129,7 @@ unsafe extern "system" fn host_window_proc(
 #[cfg(windows)]
 fn install_prototype_frame() {
     use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-    use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CAPTION_COLOR};
     use windows_sys::Win32::Graphics::Gdi::{
         BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, Ellipse, EndPaint, FillRect,
         SelectObject, SetBkMode, SetTextColor, TextOutW, CLEARTYPE_QUALITY, FW_SEMIBOLD, HDC,
@@ -134,7 +137,6 @@ fn install_prototype_frame() {
     };
     use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
-    use windows_sys::Win32::UI::Controls::MARGINS;
     use windows_sys::Win32::UI::HiDpi::{
         GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
@@ -496,6 +498,30 @@ fn install_prototype_frame() {
         }
     }
 
+    unsafe fn remove_browser_nonclient(window: HWND) {
+        let style = GetWindowLongPtrW(window, GWL_STYLE) as u32;
+        let child_style = (style
+            & !(WS_CAPTION
+                | WS_THICKFRAME
+                | WS_MINIMIZEBOX
+                | WS_MAXIMIZEBOX
+                | WS_SYSMENU
+                | WS_BORDER
+                | WS_DLGFRAME))
+            | WS_CHILD
+            | WS_VISIBLE;
+        SetWindowLongPtrW(window, GWL_STYLE, child_style as isize);
+        SetWindowPos(
+            window,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+    }
+
     let mut parent: HWND = std::ptr::null_mut();
     unsafe {
         // Chromium's injected worker starts in a DPI-virtualized context. A popup created in
@@ -542,15 +568,15 @@ fn install_prototype_frame() {
         if host.is_null() {
             return;
         }
-        // Draw Rivet into the former caption space while DWM retains the actual system buttons.
-        // One physical top pixel is sufficient to opt into DWM's extended-frame treatment.
-        let title_margin = MARGINS {
-            cxLeftWidth: 0,
-            cxRightWidth: 0,
-            cyTopHeight: 1,
-            cyBottomHeight: 0,
-        };
-        DwmExtendFrameIntoClientArea(host, &title_margin);
+        // Windows retains the real caption buttons while the caption surface adopts Rivet's
+        // paper tone. This keeps native hit testing and snap layouts intact.
+        let caption_color: u32 = color(0xf2, 0xee, 0xe5);
+        DwmSetWindowAttribute(
+            host,
+            DWMWA_CAPTION_COLOR as u32,
+            (&caption_color as *const u32).cast(),
+            std::mem::size_of::<u32>() as u32,
+        );
         let panel = CreateWindowExW(
             0,
             PANEL_CLASS.as_ptr(),
@@ -571,36 +597,9 @@ fn install_prototype_frame() {
         // The real Chrome app window becomes the host's child. Chromium receives the right-pane
         // size as its own window size, which makes normal page layout reflow instead of leaving
         // an overlay above a full-width page.
-        let browser_style = GetWindowLongPtrW(parent, GWL_STYLE) as u32;
-        SetWindowLongPtrW(
-            parent,
-            GWL_STYLE,
-            ((browser_style
-                & !(WS_CAPTION
-                    | WS_THICKFRAME
-                    | WS_MINIMIZEBOX
-                    | WS_MAXIMIZEBOX
-                    | WS_SYSMENU
-                    | WS_BORDER
-                    | WS_DLGFRAME))
-                | WS_VISIBLE) as isize,
-        );
-        SetWindowPos(
-            parent,
-            std::ptr::null_mut(),
-            0,
-            0,
-            0,
-            0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
-        );
+        remove_browser_nonclient(parent);
         SetParent(parent, host);
-        let child_style = GetWindowLongPtrW(parent, GWL_STYLE) as u32;
-        SetWindowLongPtrW(
-            parent,
-            GWL_STYLE,
-            (child_style | WS_CHILD | WS_VISIBLE) as isize,
-        );
+        remove_browser_nonclient(parent);
         HOST_BROWSER.store(parent as isize, std::sync::atomic::Ordering::Release);
         HOST_PANEL.store(panel as isize, std::sync::atomic::Ordering::Release);
         set_taskbar_icon(host);
@@ -616,6 +615,7 @@ fn install_prototype_frame() {
         );
         // Rivet owns the host and panel HWNDs on this injected worker thread. Chrome keeps its
         // own UI thread, while this loop dispatches native host and sidebar messages.
+        let mut next_style_check = std::time::Instant::now();
         loop {
             if IsWindow(host) == 0 || IsWindow(parent) == 0 || IsWindow(panel) == 0 {
                 break;
@@ -627,6 +627,13 @@ fn install_prototype_frame() {
                 }
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
+            }
+            if std::time::Instant::now() >= next_style_check {
+                // Chromium can restore its app-window decoration after navigation or a monitor
+                // transition. Rivet owns this child and keeps its nonclient area disabled.
+                remove_browser_nonclient(parent);
+                next_style_check =
+                    std::time::Instant::now() + std::time::Duration::from_millis(250);
             }
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
