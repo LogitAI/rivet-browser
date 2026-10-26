@@ -51,11 +51,11 @@ namespace Rivet.Setup
                 window.Resources[pair.Key] = Frozen(pair.Value);
             }
 
-            // Without Mica the window has a solid background; with it, the material shows
-            // through a transparent window.
-            window.Resources["WindowBackground"] = Frozen(HasMica
-                ? Colors.Transparent
-                : dark ? Rgb(0x20, 0x20, 0x20) : Rgb(0xF3, 0xF3, 0xF3));
+            // Setup uses the same paper or charcoal surface as Rivet itself. Mica may still
+            // shape the window frame, but it must not dilute the product's signature colour.
+            window.Resources["WindowBackground"] = Frozen(dark
+                ? Rgb(0x20, 0x1E, 0x20)
+                : Rgb(0xF2, 0xEE, 0xE5));
 
             window.Resources["ButtonBorder"] = Elevation(dark ? Argb(0x18, 0xFF, 0xFF, 0xFF) : Argb(0x0F, 0, 0, 0),
                                                          dark ? Argb(0x12, 0xFF, 0xFF, 0xFF) : Argb(0x29, 0, 0, 0));
@@ -107,62 +107,62 @@ namespace Rivet.Setup
         // background where there is no Mica.
         private static readonly Dictionary<string, Color> Light = new Dictionary<string, Color>
         {
-            ["TextPrimary"] = Rgb(0x1B, 0x1B, 0x1B),
-            ["TextSecondary"] = Rgb(0x5D, 0x5D, 0x5D),
+            ["TextPrimary"] = Rgb(0x1F, 0x20, 0x24),
+            ["TextSecondary"] = Rgb(0x68, 0x64, 0x5D),
             ["TextDisabled"] = Argb(0x5C, 0, 0, 0),
-            ["CardFill"] = Argb(0xB3, 0xFF, 0xFF, 0xFF),
-            ["CardStroke"] = Argb(0x0F, 0, 0, 0),
-            ["LayerFill"] = Argb(0x80, 0xFF, 0xFF, 0xFF),
-            ["LayerStroke"] = Argb(0x0F, 0, 0, 0),
-            ["ButtonFill"] = Rgb(0xFB, 0xFB, 0xFB),
-            ["ButtonFillHover"] = Rgb(0xF6, 0xF6, 0xF6),
-            ["ButtonFillPressed"] = Rgb(0xF5, 0xF5, 0xF5),
-            ["ButtonFillDisabled"] = Argb(0x4D, 0xF9, 0xF9, 0xF9),
-            ["Accent"] = Rgb(0x5B, 0x4B, 0xFF),
-            ["AccentHover"] = Argb(0xE6, 0x4B, 0x3B, 0xEE),
-            ["AccentPressed"] = Argb(0xCC, 0x3D, 0x2E, 0xD1),
+            ["CardFill"] = Rgb(0xFB, 0xFA, 0xF6),
+            ["CardStroke"] = Argb(0x2E, 0x1F, 0x20, 0x24),
+            ["LayerFill"] = Rgb(0xE9, 0xE3, 0xD8),
+            ["LayerStroke"] = Argb(0x33, 0x1F, 0x20, 0x24),
+            ["ButtonFill"] = Rgb(0xFB, 0xFA, 0xF6),
+            ["ButtonFillHover"] = Rgb(0xEE, 0xE8, 0xDD),
+            ["ButtonFillPressed"] = Rgb(0xE3, 0xDA, 0xCD),
+            ["ButtonFillDisabled"] = Argb(0x66, 0xFB, 0xFA, 0xF6),
+            ["Accent"] = Rgb(0x7C, 0x2D, 0x4F),
+            ["AccentHover"] = Rgb(0x69, 0x23, 0x41),
+            ["AccentPressed"] = Rgb(0x52, 0x19, 0x31),
             ["AccentDisabled"] = Argb(0x37, 0, 0, 0),
             ["AccentText"] = Colors.White,
             ["AccentTextPressed"] = Argb(0xB3, 0xFF, 0xFF, 0xFF),
             ["ChipFill"] = Argb(0x0F, 0, 0, 0),
-            ["Link"] = Rgb(0x4B, 0x3B, 0xEE),
-            ["LinkHover"] = Rgb(0x3D, 0x2E, 0xD1),
-            ["Track"] = Argb(0x72, 0, 0, 0),
+            ["Link"] = Rgb(0x7C, 0x2D, 0x4F),
+            ["LinkHover"] = Rgb(0x52, 0x19, 0x31),
+            ["Track"] = Argb(0x72, 0x1F, 0x20, 0x24),
             ["Critical"] = Rgb(0xC4, 0x2B, 0x1C),
             ["CriticalText"] = Colors.White,
-            ["Neutral"] = Rgb(0x5D, 0x5D, 0x5D),
+            ["Neutral"] = Rgb(0x68, 0x64, 0x5D),
             ["NeutralText"] = Colors.White,
             ["SubtleHover"] = Argb(0x09, 0, 0, 0),
             ["SubtlePressed"] = Argb(0x06, 0, 0, 0),
-            ["TextBoxFill"] = Argb(0xB3, 0xFF, 0xFF, 0xFF),
-            ["TextBoxFillHover"] = Argb(0x80, 0xF9, 0xF9, 0xF9),
-            ["TextBoxFillFocused"] = Colors.White,
-            ["FocusOuter"] = Argb(0xE4, 0, 0, 0),
-            ["FocusInner"] = Argb(0xB3, 0xFF, 0xFF, 0xFF),
+            ["TextBoxFill"] = Rgb(0xFB, 0xFA, 0xF6),
+            ["TextBoxFillHover"] = Rgb(0xF4, 0xEF, 0xE6),
+            ["TextBoxFillFocused"] = Rgb(0xFF, 0xFC, 0xF7),
+            ["FocusOuter"] = Rgb(0x7C, 0x2D, 0x4F),
+            ["FocusInner"] = Argb(0xB3, 0xFF, 0xFC, 0xF7),
         };
 
         private static readonly Dictionary<string, Color> Dark = new Dictionary<string, Color>
         {
-            ["TextPrimary"] = Colors.White,
-            ["TextSecondary"] = Rgb(0xC5, 0xC5, 0xC5),
+            ["TextPrimary"] = Rgb(0xF7, 0xF1, 0xE7),
+            ["TextSecondary"] = Rgb(0xD1, 0xC7, 0xBB),
             ["TextDisabled"] = Argb(0x5D, 0xFF, 0xFF, 0xFF),
             ["CardFill"] = Argb(0x0D, 0xFF, 0xFF, 0xFF),
             ["CardStroke"] = Argb(0x1A, 0, 0, 0),
-            ["LayerFill"] = Argb(0x4D, 0x3A, 0x3A, 0x3A),
+            ["LayerFill"] = Rgb(0x2A, 0x26, 0x29),
             ["LayerStroke"] = Argb(0x12, 0xFF, 0xFF, 0xFF),
             ["ButtonFill"] = Argb(0x0F, 0xFF, 0xFF, 0xFF),
             ["ButtonFillHover"] = Argb(0x15, 0xFF, 0xFF, 0xFF),
             ["ButtonFillPressed"] = Argb(0x08, 0xFF, 0xFF, 0xFF),
             ["ButtonFillDisabled"] = Argb(0x0B, 0xFF, 0xFF, 0xFF),
-            ["Accent"] = Rgb(0xA7, 0x9B, 0xFF),
-            ["AccentHover"] = Argb(0xE6, 0xB9, 0xB0, 0xFF),
-            ["AccentPressed"] = Argb(0xCC, 0x8E, 0x80, 0xF2),
+            ["Accent"] = Rgb(0xD8, 0x7C, 0xA4),
+            ["AccentHover"] = Rgb(0xE7, 0x95, 0xB7),
+            ["AccentPressed"] = Rgb(0xB8, 0x58, 0x81),
             ["AccentDisabled"] = Argb(0x28, 0xFF, 0xFF, 0xFF),
-            ["AccentText"] = Rgb(0x18, 0x13, 0x36),
-            ["AccentTextPressed"] = Argb(0xCC, 0x18, 0x13, 0x36),
+            ["AccentText"] = Rgb(0x32, 0x0B, 0x20),
+            ["AccentTextPressed"] = Argb(0xCC, 0x32, 0x0B, 0x20),
             ["ChipFill"] = Argb(0x15, 0xFF, 0xFF, 0xFF),
-            ["Link"] = Rgb(0xB9, 0xB0, 0xFF),
-            ["LinkHover"] = Rgb(0xD0, 0xC9, 0xFF),
+            ["Link"] = Rgb(0xE7, 0x95, 0xB7),
+            ["LinkHover"] = Rgb(0xF1, 0xB2, 0xCA),
             ["Track"] = Argb(0x8B, 0xFF, 0xFF, 0xFF),
             ["Critical"] = Rgb(0xFF, 0x99, 0xA4),
             ["CriticalText"] = Rgb(0x2B, 0x0A, 0x0E),

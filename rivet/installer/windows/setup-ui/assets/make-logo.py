@@ -2,8 +2,9 @@
 #
 #   uv run make-logo.py logo.png logo.ico
 #
-# The Rivet mark is a single open fastener. It reads as a compact C-shaped connection at small
-# taskbar sizes, and uses the same paper, ink and claret palette as the browser surface.
+# The Rivet mark is a centered rivet head: an ink collar, a paper recess and a claret pin.
+# The three concentric forms keep their reading order at taskbar size and share the browser
+# surface's paper, ink and claret palette.
 # It is drawn on a 96 unit grid and supersampled, so every size is drawn from shapes rather
 # than scaled.
 import struct, sys, zlib
@@ -32,13 +33,10 @@ def colour(x, y):
     if not rounded(x, y, 0, 0, 96, 96, 22):
         return None
     c = PAPER
-    # A weighty open ring is legible at 16px. The opening faces the browser content, while the
-    # claret pin makes the attachment point read as an intentional product mark.
-    if circle(x, y, 45, 48, 31) and not circle(x, y, 45, 48, 17):
+    # A compact ring and centred pin make the fastener literal without becoming a letterform.
+    if circle(x, y, 48, 48, 31) and not circle(x, y, 48, 48, 19):
         c = INK
-    if x > 49 and 37 < y < 59:
-        c = PAPER
-    if rounded(x, y, 56, 42, 74, 54, 4):
+    if circle(x, y, 48, 48, 9):
         c = ACCENT
     return c
 

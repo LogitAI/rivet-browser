@@ -141,21 +141,16 @@ fn install_prototype_frame() {
                 Ellipse(dc, 24 * scale, 24 * scale, 44 * scale, 44 * scale);
                 SelectObject(dc, old_brush);
                 DeleteObject(mark);
-                let cut = CreateSolidBrush(color(0xf2, 0xee, 0xe5));
-                let old_cut = SelectObject(dc, cut);
-                Ellipse(dc, 31 * scale, 31 * scale, 39 * scale, 39 * scale);
-                SelectObject(dc, old_cut);
-                DeleteObject(cut);
-                fill(
-                    dc,
-                    RECT {
-                        left: 38 * scale,
-                        top: 36 * scale,
-                        right: 48 * scale,
-                        bottom: 46 * scale,
-                    },
-                    color(0xf2, 0xee, 0xe5),
-                );
+                let recess = CreateSolidBrush(color(0xf2, 0xee, 0xe5));
+                let old_recess = SelectObject(dc, recess);
+                Ellipse(dc, 30 * scale, 30 * scale, 38 * scale, 38 * scale);
+                SelectObject(dc, old_recess);
+                DeleteObject(recess);
+                let pin = CreateSolidBrush(accent);
+                let old_pin = SelectObject(dc, pin);
+                Ellipse(dc, 32 * scale, 32 * scale, 36 * scale, 36 * scale);
+                SelectObject(dc, old_pin);
+                DeleteObject(pin);
 
                 label(dc, scale, 57, 24, "Rivet", 20, FW_SEMIBOLD as i32, dark);
                 label(
