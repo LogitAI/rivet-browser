@@ -32,11 +32,11 @@ pub extern "system" fn rivet_runtime_start() -> u32 {
 /// Adds the first native Rivet panel directly to the Chromium app window.
 #[cfg(windows)]
 fn install_prototype_frame() {
-    use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
-        BeginPaint, CreateSolidBrush, DeleteObject, Ellipse, EndPaint, FillRect, GetStockObject,
-        SelectObject, SetBkColor, SetBkMode, SetDCBrushColor, SetTextColor, TextOutW, DC_BRUSH,
-        DEFAULT_GUI_FONT, HDC, PAINTSTRUCT, TRANSPARENT,
+        BeginPaint, ClientToScreen, CreateSolidBrush, DeleteObject, Ellipse, EndPaint, FillRect,
+        GetStockObject, SelectObject, SetBkColor, SetBkMode, SetDCBrushColor, SetTextColor,
+        TextOutW, DC_BRUSH, DEFAULT_GUI_FONT, HDC, PAINTSTRUCT, TRANSPARENT,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
@@ -45,7 +45,7 @@ fn install_prototype_frame() {
         GetWindowThreadProcessId, IsWindow, IsWindowVisible, PeekMessageW, RegisterClassW,
         SetWindowPos, TranslateMessage, ES_AUTOHSCROLL, MSG, PM_REMOVE, SWP_NOACTIVATE,
         SWP_NOZORDER, WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_PAINT, WM_QUIT, WNDCLASSW, WS_BORDER,
-        WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+        WS_CHILD, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
     };
 
     const PANEL_WIDTH: i32 = 292;
@@ -100,7 +100,10 @@ fn install_prototype_frame() {
             0,
             class.as_ptr(),
             text.as_ptr(),
-            WS_CHILD | WS_VISIBLE,
+            // A Chromium Direct3D child surface can compose over every sibling child HWND, even
+            // when Rivet is topmost in the child z-order. An owned popup stays in this browser
+            // process but composes above that surface reliably.
+            WS_POPUP | WS_VISIBLE,
             x,
             y,
             width,
@@ -341,11 +344,13 @@ fn install_prototype_frame() {
             }
             let mut bounds = std::mem::zeroed();
             if GetClientRect(parent, &mut bounds) != 0 {
+                let mut screen_origin = POINT { x: 0, y: 0 };
+                ClientToScreen(parent, &mut screen_origin);
                 SetWindowPos(
                     panel,
                     std::ptr::null_mut(),
-                    0,
-                    0,
+                    screen_origin.x,
+                    screen_origin.y,
                     PANEL_WIDTH,
                     bounds.bottom - bounds.top,
                     // Chromium creates a Direct3D child after our injected worker starts. Do
