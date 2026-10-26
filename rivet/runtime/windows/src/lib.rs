@@ -29,14 +29,85 @@ pub extern "system" fn rivet_runtime_start() -> u32 {
     1
 }
 
+#[cfg(windows)]
+static BROWSER_PARENT: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+#[cfg(windows)]
+static RIVET_PANEL: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+#[cfg(windows)]
+static ORIGINAL_BROWSER_PROC: std::sync::atomic::AtomicIsize =
+    std::sync::atomic::AtomicIsize::new(0);
+
+#[cfg(windows)]
+const RIVET_PANEL_WIDTH: i32 = 292;
+
+#[cfg(windows)]
+unsafe fn sync_panel_to_browser(parent: windows_sys::Win32::Foundation::HWND) {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Gdi::{CreateRoundRectRgn, SetWindowRgn};
+    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+    };
+
+    let panel = RIVET_PANEL.load(std::sync::atomic::Ordering::Acquire)
+        as windows_sys::Win32::Foundation::HWND;
+    if panel.is_null() {
+        return;
+    }
+    let mut bounds: RECT = std::mem::zeroed();
+    if GetWindowRect(parent, &mut bounds) == 0 {
+        return;
+    }
+    let dpi = GetDpiForWindow(parent).max(96) as i32;
+    let width = RIVET_PANEL_WIDTH * dpi / 96;
+    let height = bounds.bottom - bounds.top;
+    SetWindowPos(
+        panel,
+        std::ptr::null_mut(),
+        bounds.left - width,
+        bounds.top,
+        width,
+        height,
+        SWP_NOACTIVATE | SWP_NOZORDER,
+    );
+    let radius = 14 * dpi / 96;
+    let region = CreateRoundRectRgn(0, 0, width + radius, height, radius * 2, radius * 2);
+    SetWindowRgn(panel, region, 1);
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn browser_window_proc(
+    window: windows_sys::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows_sys::Win32::Foundation::WPARAM,
+    lparam: windows_sys::Win32::Foundation::LPARAM,
+) -> windows_sys::Win32::Foundation::LRESULT {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallWindowProcW, WM_DPICHANGED, WM_MOVE, WM_SIZE, WM_WINDOWPOSCHANGED, WNDPROC,
+    };
+
+    let original = ORIGINAL_BROWSER_PROC.load(std::sync::atomic::Ordering::Acquire);
+    let procedure: WNDPROC = std::mem::transmute(original);
+    let result = CallWindowProcW(procedure, window, message, wparam, lparam);
+    if BROWSER_PARENT.load(std::sync::atomic::Ordering::Acquire) == window as isize
+        && matches!(
+            message,
+            WM_WINDOWPOSCHANGED | WM_MOVE | WM_SIZE | WM_DPICHANGED
+        )
+    {
+        sync_panel_to_browser(window);
+    }
+    result
+}
+
 /// Adds the first native Rivet panel directly to the Chromium app window.
 #[cfg(windows)]
 fn install_prototype_frame() {
-    use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
-        BeginPaint, ClientToScreen, CreateFontW, CreateRoundRectRgn, CreateSolidBrush,
-        DeleteObject, Ellipse, EndPaint, FillRect, SelectObject, SetBkMode, SetTextColor,
-        SetWindowRgn, TextOutW, CLEARTYPE_QUALITY, FW_SEMIBOLD, HDC, PAINTSTRUCT, TRANSPARENT,
+        BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, Ellipse, EndPaint, FillRect,
+        SelectObject, SetBkMode, SetTextColor, TextOutW, CLEARTYPE_QUALITY, FW_SEMIBOLD, HDC,
+        PAINTSTRUCT, TRANSPARENT,
     };
     use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
@@ -44,14 +115,13 @@ fn install_prototype_frame() {
         GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumChildWindows, EnumWindows,
-        GetClassNameW, GetClientRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
-        LoadImageW, PeekMessageW, RegisterClassW, SendMessageW, SetWindowPos, TranslateMessage,
-        IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOZORDER,
-        WM_ERASEBKGND, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSW, WS_POPUP, WS_VISIBLE,
+        CreateWindowExW, DefWindowProcW, EnumWindows, GetClientRect, GetWindowRect,
+        GetWindowThreadProcessId, IsWindowVisible, LoadImageW, RegisterClassW, SendMessageW,
+        SetWindowLongPtrW, SetWindowPos, GWLP_WNDPROC, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE,
+        SWP_NOACTIVATE, SWP_NOZORDER, WM_ERASEBKGND, WM_PAINT, WM_SETICON, WNDCLASSW, WS_POPUP,
+        WS_VISIBLE,
     };
 
-    const PANEL_WIDTH: i32 = 292;
     const PANEL_CLASS: [u16; 17] = [
         b'R' as u16,
         b'i' as u16,
@@ -76,6 +146,10 @@ fn install_prototype_frame() {
         (red as COLORREF) | ((green as COLORREF) << 8) | ((blue as COLORREF) << 16)
     }
 
+    fn px(value: i32, dpi: i32) -> i32 {
+        (value * dpi + 48) / 96
+    }
+
     unsafe fn fill(dc: HDC, rect: RECT, value: COLORREF) {
         let brush = CreateSolidBrush(value);
         FillRect(dc, &rect, brush);
@@ -85,7 +159,7 @@ fn install_prototype_frame() {
     #[allow(clippy::too_many_arguments)]
     unsafe fn label(
         dc: HDC,
-        scale: i32,
+        dpi: i32,
         x: i32,
         y: i32,
         value: &str,
@@ -95,7 +169,7 @@ fn install_prototype_frame() {
     ) {
         let face: Vec<u16> = "Segoe UI".encode_utf16().chain(Some(0)).collect();
         let font = CreateFontW(
-            -size * scale,
+            -px(size, dpi),
             0,
             0,
             0,
@@ -113,7 +187,7 @@ fn install_prototype_frame() {
         let old_font = SelectObject(dc, font);
         let wide: Vec<u16> = value.encode_utf16().collect();
         SetTextColor(dc, ink);
-        TextOutW(dc, x * scale, y * scale, wide.as_ptr(), wide.len() as i32);
+        TextOutW(dc, px(x, dpi), px(y, dpi), wide.as_ptr(), wide.len() as i32);
         SelectObject(dc, old_font);
         DeleteObject(font);
     }
@@ -131,31 +205,31 @@ fn install_prototype_frame() {
                 let dc = BeginPaint(window, &mut paint);
                 let mut bounds: RECT = std::mem::zeroed();
                 GetClientRect(window, &mut bounds);
-                let scale = (GetDpiForWindow(window).max(96) / 96) as i32;
+                let dpi = GetDpiForWindow(window).max(96) as i32;
                 fill(dc, bounds, color(0xf2, 0xee, 0xe5));
                 SetBkMode(dc, TRANSPARENT as i32);
                 let dark = color(0x1f, 0x20, 0x24);
                 let accent = color(0x7c, 0x2d, 0x4f);
                 let mark = CreateSolidBrush(dark);
                 let old_brush = SelectObject(dc, mark);
-                Ellipse(dc, 24 * scale, 24 * scale, 44 * scale, 44 * scale);
+                Ellipse(dc, px(24, dpi), px(24, dpi), px(44, dpi), px(44, dpi));
                 SelectObject(dc, old_brush);
                 DeleteObject(mark);
                 let recess = CreateSolidBrush(color(0xf2, 0xee, 0xe5));
                 let old_recess = SelectObject(dc, recess);
-                Ellipse(dc, 30 * scale, 30 * scale, 38 * scale, 38 * scale);
+                Ellipse(dc, px(30, dpi), px(30, dpi), px(38, dpi), px(38, dpi));
                 SelectObject(dc, old_recess);
                 DeleteObject(recess);
                 let pin = CreateSolidBrush(accent);
                 let old_pin = SelectObject(dc, pin);
-                Ellipse(dc, 32 * scale, 32 * scale, 36 * scale, 36 * scale);
+                Ellipse(dc, px(32, dpi), px(32, dpi), px(36, dpi), px(36, dpi));
                 SelectObject(dc, old_pin);
                 DeleteObject(pin);
 
-                label(dc, scale, 57, 24, "Rivet", 20, FW_SEMIBOLD as i32, dark);
+                label(dc, dpi, 57, 24, "Rivet", 20, FW_SEMIBOLD as i32, dark);
                 label(
                     dc,
-                    scale,
+                    dpi,
                     24,
                     71,
                     "WORK / AGENT BRIEF",
@@ -166,17 +240,17 @@ fn install_prototype_frame() {
                 fill(
                     dc,
                     RECT {
-                        left: 24 * scale,
-                        top: 97 * scale,
-                        right: 268 * scale,
-                        bottom: 98 * scale,
+                        left: px(24, dpi),
+                        top: px(97, dpi),
+                        right: px(268, dpi),
+                        bottom: px(98, dpi),
                     },
                     color(0xc9, 0xc1, 0xb5),
                 );
 
                 label(
                     dc,
-                    scale,
+                    dpi,
                     24,
                     114,
                     "TODAY",
@@ -187,21 +261,21 @@ fn install_prototype_frame() {
                 fill(
                     dc,
                     RECT {
-                        left: 17 * scale,
-                        top: 136 * scale,
-                        right: 275 * scale,
-                        bottom: 171 * scale,
+                        left: px(17, dpi),
+                        top: px(136, dpi),
+                        right: px(275, dpi),
+                        bottom: px(171, dpi),
                     },
                     color(0xfb, 0xfa, 0xf6),
                 );
                 let active = CreateSolidBrush(accent);
                 let old_active = SelectObject(dc, active);
-                Ellipse(dc, 28 * scale, 149 * scale, 36 * scale, 157 * scale);
+                Ellipse(dc, px(28, dpi), px(149, dpi), px(36, dpi), px(157, dpi));
                 SelectObject(dc, old_active);
                 DeleteObject(active);
                 label(
                     dc,
-                    scale,
+                    dpi,
                     49,
                     145,
                     "Agent brief",
@@ -211,7 +285,7 @@ fn install_prototype_frame() {
                 );
                 label(
                     dc,
-                    scale,
+                    dpi,
                     28,
                     184,
                     "Ember workspace",
@@ -221,7 +295,7 @@ fn install_prototype_frame() {
                 );
                 label(
                     dc,
-                    scale,
+                    dpi,
                     28,
                     216,
                     "Release notes",
@@ -231,7 +305,7 @@ fn install_prototype_frame() {
                 );
                 label(
                     dc,
-                    scale,
+                    dpi,
                     24,
                     262,
                     "SAVED",
@@ -241,7 +315,7 @@ fn install_prototype_frame() {
                 );
                 label(
                     dc,
-                    scale,
+                    dpi,
                     28,
                     289,
                     "Research queue",
@@ -251,7 +325,7 @@ fn install_prototype_frame() {
                 );
                 label(
                     dc,
-                    scale,
+                    dpi,
                     28,
                     321,
                     "Design references",
@@ -260,43 +334,44 @@ fn install_prototype_frame() {
                     color(0x51, 0x50, 0x56),
                 );
 
-                let command_top = bounds.bottom - 218 * scale;
+                let logical_height = bounds.bottom * 96 / dpi;
+                let command_top = px(logical_height - 218, dpi);
                 fill(
                     dc,
                     RECT {
-                        left: 17 * scale,
+                        left: px(17, dpi),
                         top: command_top,
-                        right: bounds.right - 17 * scale,
-                        bottom: command_top + 42 * scale,
+                        right: bounds.right - px(17, dpi),
+                        bottom: command_top + px(42, dpi),
                     },
                     color(0xfb, 0xfa, 0xf6),
                 );
                 label(
                     dc,
-                    scale,
+                    dpi,
                     29,
-                    command_top / scale + 12,
+                    logical_height - 206,
                     "Ask Rivet about this page",
                     12,
                     400,
                     color(0x77, 0x74, 0x6f),
                 );
-                let card_top = bounds.bottom - 145 * scale;
+                let card_top = px(logical_height - 145, dpi);
                 fill(
                     dc,
                     RECT {
-                        left: 17 * scale,
+                        left: px(17, dpi),
                         top: card_top,
-                        right: bounds.right - 17 * scale,
-                        bottom: card_top + 2 * scale,
+                        right: bounds.right - px(17, dpi),
+                        bottom: card_top + px(2, dpi),
                     },
                     dark,
                 );
                 label(
                     dc,
-                    scale,
+                    dpi,
                     24,
-                    card_top / scale + 17,
+                    logical_height - 128,
                     "One browser,",
                     16,
                     FW_SEMIBOLD as i32,
@@ -304,9 +379,9 @@ fn install_prototype_frame() {
                 );
                 label(
                     dc,
-                    scale,
+                    dpi,
                     24,
-                    card_top / scale + 38,
+                    logical_height - 107,
                     "wherever you work.",
                     16,
                     400,
@@ -314,9 +389,9 @@ fn install_prototype_frame() {
                 );
                 label(
                     dc,
-                    scale,
+                    dpi,
                     24,
-                    card_top / scale + 77,
+                    logical_height - 68,
                     "RIVET / EMBER LINK",
                     9,
                     FW_SEMIBOLD as i32,
@@ -336,20 +411,6 @@ fn install_prototype_frame() {
         if process_id == GetCurrentProcessId() && IsWindowVisible(window) != 0 {
             *parent = window;
             return 0;
-        }
-        1
-    }
-
-    unsafe extern "system" fn find_renderer(window: HWND, parameter: LPARAM) -> i32 {
-        let renderers = &mut *(parameter as *mut Vec<HWND>);
-        let mut class_name = [0_u16; 64];
-        let length = GetClassNameW(window, class_name.as_mut_ptr(), class_name.len() as i32);
-        let class_name = String::from_utf16_lossy(&class_name[..length.max(0) as usize]);
-        if matches!(
-            class_name.as_str(),
-            "Chrome_RenderWidgetHostHWND" | "Intermediate D3D Window"
-        ) {
-            renderers.push(window);
         }
         1
     }
@@ -394,8 +455,8 @@ fn install_prototype_frame() {
             return;
         }
         set_taskbar_icon(parent);
-        let scale = (GetDpiForWindow(parent).max(96) / 96) as i32;
-        let panel_width = PANEL_WIDTH * scale;
+        let dpi = GetDpiForWindow(parent).max(96) as i32;
+        let panel_width = RIVET_PANEL_WIDTH * dpi / 96;
         let mut window_class: WNDCLASSW = std::mem::zeroed();
         window_class.lpfnWndProc = Some(panel_proc);
         window_class.hInstance = GetModuleHandleW(std::ptr::null());
@@ -421,66 +482,36 @@ fn install_prototype_frame() {
         if panel.is_null() {
             return;
         }
-        loop {
-            if IsWindow(parent) == 0 || IsWindow(panel) == 0 {
-                break;
-            }
-            let mut message: MSG = std::mem::zeroed();
-            while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
-                if message.message == WM_QUIT {
-                    return;
-                }
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
-            let mut bounds = std::mem::zeroed();
-            if GetClientRect(parent, &mut bounds) != 0 {
-                let mut screen_origin = POINT { x: 0, y: 0 };
-                ClientToScreen(parent, &mut screen_origin);
-                let height = bounds.bottom - bounds.top;
-                SetWindowPos(
-                    panel,
-                    std::ptr::null_mut(),
-                    screen_origin.x,
-                    screen_origin.y,
-                    panel_width,
-                    height,
-                    // Chromium creates a Direct3D child after our injected worker starts. Do
-                    // not preserve the old sibling order or that renderer covers Rivet entirely.
-                    SWP_NOACTIVATE,
-                );
-                // The renderer is a Chromium child HWND. Keeping its left edge at zero leaves
-                // the page underneath Rivet. Resize the renderer itself so page layout and
-                // hit-testing use the remaining pane, rather than merely hiding its left edge.
-                let mut renderers = Vec::new();
-                EnumChildWindows(
-                    parent,
-                    Some(find_renderer),
-                    (&mut renderers as *mut Vec<HWND>) as isize,
-                );
-                for renderer in renderers {
-                    if IsWindow(renderer) != 0 {
-                        SetWindowPos(
-                            renderer,
-                            std::ptr::null_mut(),
-                            panel_width,
-                            0,
-                            (bounds.right - bounds.left - panel_width).max(1),
-                            height,
-                            SWP_NOACTIVATE | SWP_NOZORDER,
-                        );
-                    }
-                }
-                // This is an owned popup because Chromium's Direct3D child surface can cover
-                // an ordinary sibling child. Its region extends beyond the right edge, leaving
-                // that edge square while matching the browser's rounded outer-left corners.
-                let radius = 14 * scale;
-                let region =
-                    CreateRoundRectRgn(0, 0, panel_width + radius, height, radius * 2, radius * 2);
-                SetWindowRgn(panel, region, 1);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        // A popup above the renderer is needed, but it must never change Chromium's child
+        // windows. Resize the browser's own top-level frame and reserve the left strip for
+        // Rivet. Chromium then owns its normal title buttons, page layout and DPI handling.
+        BROWSER_PARENT.store(parent as isize, std::sync::atomic::Ordering::Release);
+        RIVET_PANEL.store(panel as isize, std::sync::atomic::Ordering::Release);
+        let original = SetWindowLongPtrW(
+            parent,
+            GWLP_WNDPROC,
+            browser_window_proc as *const () as usize as isize,
+        );
+        if original == 0 {
+            return;
         }
+        ORIGINAL_BROWSER_PROC.store(original, std::sync::atomic::Ordering::Release);
+        let mut browser_bounds: RECT = std::mem::zeroed();
+        if GetWindowRect(parent, &mut browser_bounds) != 0 {
+            let browser_width = browser_bounds.right - browser_bounds.left;
+            let browser_height = browser_bounds.bottom - browser_bounds.top;
+            let minimum_content_width = 480 * dpi / 96;
+            SetWindowPos(
+                parent,
+                std::ptr::null_mut(),
+                browser_bounds.left + panel_width,
+                browser_bounds.top,
+                (browser_width - panel_width).max(minimum_content_width),
+                browser_height,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            );
+        }
+        sync_panel_to_browser(parent);
     }
 }
 
