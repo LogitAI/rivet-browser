@@ -115,11 +115,12 @@ fn install_prototype_frame() {
         GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, EnumWindows, GetClientRect, GetWindowRect,
-        GetWindowThreadProcessId, IsWindowVisible, LoadImageW, RegisterClassW, SendMessageW,
-        SetWindowLongPtrW, SetWindowPos, GWLP_WNDPROC, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE,
-        SWP_NOACTIVATE, SWP_NOZORDER, WM_ERASEBKGND, WM_PAINT, WM_SETICON, WNDCLASSW, WS_POPUP,
-        WS_VISIBLE,
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
+        GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadImageW,
+        PeekMessageW, RegisterClassW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+        TranslateMessage, GWLP_WNDPROC, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, MSG,
+        PM_REMOVE, SWP_NOACTIVATE, SWP_NOZORDER, WM_ERASEBKGND, WM_PAINT, WM_QUIT, WM_SETICON,
+        WNDCLASSW, WS_POPUP, WS_VISIBLE,
     };
 
     const PANEL_CLASS: [u16; 17] = [
@@ -512,6 +513,23 @@ fn install_prototype_frame() {
             );
         }
         sync_panel_to_browser(parent);
+        // Rivet owns the panel HWND on this injected worker thread. The browser UI thread owns
+        // the synchronized layout hook, so this only keeps the panel alive and dispatches its
+        // paint and input messages. It never polls or repositions the browser.
+        loop {
+            if IsWindow(parent) == 0 || IsWindow(panel) == 0 {
+                break;
+            }
+            let mut message: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                if message.message == WM_QUIT {
+                    return;
+                }
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
     }
 }
 
