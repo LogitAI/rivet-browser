@@ -41,12 +41,37 @@ static ORIGINAL_BROWSER_PROC: std::sync::atomic::AtomicIsize =
 const RIVET_PANEL_WIDTH: i32 = 292;
 
 #[cfg(windows)]
+unsafe extern "system" fn find_browser_renderer(
+    window: windows_sys::Win32::Foundation::HWND,
+    parameter: windows_sys::Win32::Foundation::LPARAM,
+) -> i32 {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetParent};
+
+    let (parent, renderers) = &mut *(parameter
+        as *mut (
+            windows_sys::Win32::Foundation::HWND,
+            Vec<windows_sys::Win32::Foundation::HWND>,
+        ));
+    if GetParent(window) != *parent {
+        return 1;
+    }
+    let mut class_name = [0_u16; 64];
+    let length = GetClassNameW(window, class_name.as_mut_ptr(), class_name.len() as i32);
+    if String::from_utf16_lossy(&class_name[..length.max(0) as usize])
+        == "Chrome_RenderWidgetHostHWND"
+    {
+        renderers.push(window);
+    }
+    1
+}
+
+#[cfg(windows)]
 unsafe fn sync_panel_to_browser(parent: windows_sys::Win32::Foundation::HWND) {
-    use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::Graphics::Gdi::{CreateRoundRectRgn, SetWindowRgn};
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, CreateRoundRectRgn, SetWindowRgn};
     use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+        EnumChildWindows, GetClientRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
     };
 
     let panel = RIVET_PANEL.load(std::sync::atomic::Ordering::Acquire)
@@ -55,17 +80,19 @@ unsafe fn sync_panel_to_browser(parent: windows_sys::Win32::Foundation::HWND) {
         return;
     }
     let mut bounds: RECT = std::mem::zeroed();
-    if GetWindowRect(parent, &mut bounds) == 0 {
+    if GetClientRect(parent, &mut bounds) == 0 {
         return;
     }
+    let mut origin = POINT { x: 0, y: 0 };
+    ClientToScreen(parent, &mut origin);
     let dpi = GetDpiForWindow(parent).max(96) as i32;
     let width = RIVET_PANEL_WIDTH * dpi / 96;
     let height = bounds.bottom - bounds.top;
     SetWindowPos(
         panel,
         std::ptr::null_mut(),
-        bounds.left - width,
-        bounds.top,
+        origin.x,
+        origin.y,
         width,
         height,
         SWP_NOACTIVATE | SWP_NOZORDER,
@@ -73,6 +100,30 @@ unsafe fn sync_panel_to_browser(parent: windows_sys::Win32::Foundation::HWND) {
     let radius = 14 * dpi / 96;
     let region = CreateRoundRectRgn(0, 0, width + radius, height, radius * 2, radius * 2);
     SetWindowRgn(panel, region, 1);
+
+    // Chromium's actual page surface is the render widget. Do not resize the compositor's
+    // `Intermediate D3D Window`, which also carries browser chrome on some versions.
+    let mut search = (parent, Vec::new());
+    EnumChildWindows(
+        parent,
+        Some(find_browser_renderer),
+        (&mut search
+            as *mut (
+                windows_sys::Win32::Foundation::HWND,
+                Vec<windows_sys::Win32::Foundation::HWND>,
+            )) as isize,
+    );
+    for renderer in search.1 {
+        SetWindowPos(
+            renderer,
+            std::ptr::null_mut(),
+            width,
+            0,
+            (bounds.right - bounds.left - width).max(1),
+            height,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+    }
 }
 
 #[cfg(windows)]
@@ -116,11 +167,10 @@ fn install_prototype_frame() {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
-        GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadImageW,
-        PeekMessageW, RegisterClassW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
-        TranslateMessage, GWLP_WNDPROC, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, MSG,
-        PM_REMOVE, SWP_NOACTIVATE, SWP_NOZORDER, WM_ERASEBKGND, WM_PAINT, WM_QUIT, WM_SETICON,
-        WNDCLASSW, WS_POPUP, WS_VISIBLE,
+        GetWindowThreadProcessId, IsWindow, IsWindowVisible, LoadImageW, PeekMessageW,
+        RegisterClassW, SendMessageW, SetWindowLongPtrW, TranslateMessage, GWLP_WNDPROC,
+        IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, MSG, PM_REMOVE, WM_ERASEBKGND, WM_PAINT,
+        WM_QUIT, WM_SETICON, WNDCLASSW, WS_POPUP, WS_VISIBLE,
     };
 
     const PANEL_CLASS: [u16; 17] = [
@@ -483,9 +533,8 @@ fn install_prototype_frame() {
         if panel.is_null() {
             return;
         }
-        // A popup above the renderer is needed, but it must never change Chromium's child
-        // windows. Resize the browser's own top-level frame and reserve the left strip for
-        // Rivet. Chromium then owns its normal title buttons, page layout and DPI handling.
+        // Rivet stays inside Chromium's app window. The browser's outer frame remains intact;
+        // the page render widget is reserved to the right in `sync_panel_to_browser`.
         BROWSER_PARENT.store(parent as isize, std::sync::atomic::Ordering::Release);
         RIVET_PANEL.store(panel as isize, std::sync::atomic::Ordering::Release);
         let original = SetWindowLongPtrW(
@@ -497,21 +546,6 @@ fn install_prototype_frame() {
             return;
         }
         ORIGINAL_BROWSER_PROC.store(original, std::sync::atomic::Ordering::Release);
-        let mut browser_bounds: RECT = std::mem::zeroed();
-        if GetWindowRect(parent, &mut browser_bounds) != 0 {
-            let browser_width = browser_bounds.right - browser_bounds.left;
-            let browser_height = browser_bounds.bottom - browser_bounds.top;
-            let minimum_content_width = 480 * dpi / 96;
-            SetWindowPos(
-                parent,
-                std::ptr::null_mut(),
-                browser_bounds.left + panel_width,
-                browser_bounds.top,
-                (browser_width - panel_width).max(minimum_content_width),
-                browser_height,
-                SWP_NOACTIVATE | SWP_NOZORDER,
-            );
-        }
         sync_panel_to_browser(parent);
         // Rivet owns the panel HWND on this injected worker thread. The browser UI thread owns
         // the synchronized layout hook, so this only keeps the panel alive and dispatches its
