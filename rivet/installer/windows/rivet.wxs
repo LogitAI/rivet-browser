@@ -19,6 +19,11 @@
                 <Directory Id="LICENSESFOLDER" Name="licenses" />
             </Directory>
         </StandardDirectory>
+        <StandardDirectory Id="ProgramMenuFolder">
+            <Directory Id="RivetStartMenuFolder" Name="Rivet Browser" />
+        </StandardDirectory>
+
+        <Icon Id="RivetStartMenuIcon" SourceFile="$(SourceDir)\rivet.ico" />
 
         <ComponentGroup Id="Rivet" Directory="INSTALLFOLDER">
             <Component Id="RivetCli" Guid="*">
@@ -36,6 +41,16 @@
             </Component>
             <Component Id="RivetLicense" Directory="LICENSESFOLDER" Guid="*">
                 <File Id="RivetLicense" Source="$(SourceDir)\LICENSE" KeyPath="yes" />
+            </Component>
+            <Component Id="RivetStartMenu" Directory="RivetStartMenuFolder" Guid="*">
+                <Shortcut Id="RivetStartMenuShortcut"
+                          Name="Rivet Browser"
+                          Description="Rivet Browser"
+                          Target="[INSTALLFOLDER]rivet-launcher.exe"
+                          WorkingDirectory="INSTALLFOLDER"
+                          Icon="RivetStartMenuIcon" />
+                <RemoveFolder Id="RemoveRivetStartMenuFolder" On="uninstall" />
+                <RegistryValue Root="HKLM" Key="SOFTWARE\LogitAI\Rivet" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
             </Component>
             <Component Id="InstallFolderRecord" Guid="a9986310-5135-4fc1-a3ac-319829bb0ea6">
                 <RegistryValue Root="HKLM" Key="SOFTWARE\LogitAI\Rivet" Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
