@@ -43,9 +43,9 @@ fn install_prototype_frame() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
         GetWindowThreadProcessId, IsWindow, IsWindowVisible, PeekMessageW, RegisterClassW,
-        SetWindowPos, TranslateMessage, ES_AUTOHSCROLL, MSG, PM_REMOVE, SWP_NOZORDER,
-        WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_PAINT, WM_QUIT, WNDCLASSW, WS_BORDER, WS_CHILD,
-        WS_TABSTOP, WS_VISIBLE,
+        SetWindowPos, TranslateMessage, ES_AUTOHSCROLL, MSG, PM_REMOVE, SWP_NOACTIVATE,
+        SWP_NOZORDER, WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_PAINT, WM_QUIT, WNDCLASSW, WS_BORDER,
+        WS_CHILD, WS_TABSTOP, WS_VISIBLE,
     };
 
     const PANEL_WIDTH: i32 = 292;
@@ -348,7 +348,9 @@ fn install_prototype_frame() {
                     0,
                     PANEL_WIDTH,
                     bounds.bottom - bounds.top,
-                    SWP_NOZORDER,
+                    // Chromium creates a Direct3D child after our injected worker starts. Do
+                    // not preserve the old sibling order or that renderer covers Rivet entirely.
+                    SWP_NOACTIVATE,
                 );
                 if !command.is_null() {
                     let panel_height = bounds.bottom - bounds.top;
