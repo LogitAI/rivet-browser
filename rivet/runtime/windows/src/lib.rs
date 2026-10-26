@@ -40,6 +40,9 @@ fn install_prototype_frame() {
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::HiDpi::{
+        SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
         GetWindowThreadProcessId, IsWindow, IsWindowVisible, PeekMessageW, RegisterClassW,
@@ -246,6 +249,10 @@ fn install_prototype_frame() {
 
     let mut parent: HWND = std::ptr::null_mut();
     unsafe {
+        // Chromium's injected worker starts in a DPI-virtualized context. A popup created in
+        // that context is scaled down again on high-DPI monitors, so its 292px design becomes a
+        // 146px strip at 200%. Use physical, per-monitor pixels before any Rivet HWND exists.
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         EnumWindows(Some(find_parent), (&mut parent as *mut HWND) as isize);
         if parent.is_null() {
             return;
