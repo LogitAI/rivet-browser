@@ -11,6 +11,9 @@ mod windows {
     use std::process::Command;
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::HiDpi::{
+        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, LoadCursorW,
         PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage, CW_USEDEFAULT, IDC_ARROW,
@@ -139,6 +142,9 @@ mod windows {
 
     pub fn run() -> Result<(), String> {
         unsafe {
+            // The picker can open on any monitor. Opt into the same per-monitor coordinate
+            // system as Rivet's in-browser frame before creating its first HWND.
+            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
             let instance = GetModuleHandleW(std::ptr::null());
             let mut class: WNDCLASSW = std::mem::zeroed();
             class.lpfnWndProc = Some(window_proc);

@@ -33,76 +33,9 @@ pub extern "system" fn rivet_runtime_start() -> u32 {
 static HOST_BROWSER: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 #[cfg(windows)]
 static HOST_PANEL: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
-#[cfg(windows)]
-static HOST_HEADER: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
 #[cfg(windows)]
 const RIVET_PANEL_WIDTH: i32 = 292;
-
-#[cfg(windows)]
-const RIVET_HEADER_HEIGHT: i32 = 40;
-
-#[cfg(windows)]
-unsafe extern "system" fn host_header_proc(
-    window: windows_sys::Win32::Foundation::HWND,
-    message: u32,
-    _wparam: windows_sys::Win32::Foundation::WPARAM,
-    lparam: windows_sys::Win32::Foundation::LPARAM,
-) -> windows_sys::Win32::Foundation::LRESULT {
-    use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::Graphics::Gdi::{
-        BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, SetBkMode, SetTextColor,
-        TextOutW, PAINTSTRUCT, TRANSPARENT,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DefWindowProcW, GetClientRect, GetParent, IsZoomed, ShowWindow, SW_MAXIMIZE, SW_MINIMIZE,
-        SW_RESTORE, WM_LBUTTONUP, WM_PAINT,
-    };
-
-    match message {
-        WM_PAINT => {
-            let mut paint: PAINTSTRUCT = std::mem::zeroed();
-            let dc = BeginPaint(window, &mut paint);
-            let mut rect: RECT = std::mem::zeroed();
-            GetClientRect(window, &mut rect);
-            let paper = CreateSolidBrush(0x00e5eef2);
-            FillRect(dc, &rect, paper);
-            DeleteObject(paper);
-            SetBkMode(dc, TRANSPARENT as i32);
-            SetTextColor(dc, 0x0024201f);
-            let minimize = [0x2212_u16];
-            let maximize = [0x25a1_u16];
-            let close = [0x00d7_u16];
-            TextOutW(dc, rect.right - 122, 11, minimize.as_ptr(), 1);
-            TextOutW(dc, rect.right - 78, 11, maximize.as_ptr(), 1);
-            TextOutW(dc, rect.right - 34, 10, close.as_ptr(), 1);
-            EndPaint(window, &paint);
-            0
-        }
-        WM_LBUTTONUP => {
-            let mut rect: RECT = std::mem::zeroed();
-            GetClientRect(window, &mut rect);
-            let x = (lparam & 0xffff) as i32;
-            let host = GetParent(window);
-            if x >= rect.right - 44 {
-                windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(host);
-            } else if x >= rect.right - 88 {
-                ShowWindow(
-                    host,
-                    if IsZoomed(host) != 0 {
-                        SW_RESTORE
-                    } else {
-                        SW_MAXIMIZE
-                    },
-                );
-            } else if x >= rect.right - 132 {
-                ShowWindow(host, SW_MINIMIZE);
-            }
-            0
-        }
-        _ => DefWindowProcW(window, message, _wparam, lparam),
-    }
-}
 
 #[cfg(windows)]
 unsafe fn layout_host(host: windows_sys::Win32::Foundation::HWND) {
@@ -113,8 +46,6 @@ unsafe fn layout_host(host: windows_sys::Win32::Foundation::HWND) {
     };
 
     let panel = HOST_PANEL.load(std::sync::atomic::Ordering::Acquire)
-        as windows_sys::Win32::Foundation::HWND;
-    let header = HOST_HEADER.load(std::sync::atomic::Ordering::Acquire)
         as windows_sys::Win32::Foundation::HWND;
     let browser = HOST_BROWSER.load(std::sync::atomic::Ordering::Acquire)
         as windows_sys::Win32::Foundation::HWND;
@@ -137,17 +68,6 @@ unsafe fn layout_host(host: windows_sys::Win32::Foundation::HWND) {
         height,
         SWP_NOACTIVATE | SWP_NOZORDER,
     );
-    if !header.is_null() {
-        SetWindowPos(
-            header,
-            std::ptr::null_mut(),
-            width,
-            0,
-            (bounds.right - bounds.left - width).max(1),
-            RIVET_HEADER_HEIGHT * dpi / 96,
-            SWP_NOACTIVATE | SWP_NOZORDER,
-        );
-    }
     SetWindowPos(
         browser,
         std::ptr::null_mut(),
@@ -166,12 +86,26 @@ unsafe extern "system" fn host_window_proc(
     wparam: windows_sys::Win32::Foundation::WPARAM,
     lparam: windows_sys::Win32::Foundation::LPARAM,
 ) -> windows_sys::Win32::Foundation::LRESULT {
+    use windows_sys::Win32::Graphics::Dwm::DwmDefWindowProc;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DefWindowProcW, DestroyWindow, PostQuitMessage, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
-        WM_SIZE,
+        DefWindowProcW, DestroyWindow, PostQuitMessage, HTCAPTION, WM_CLOSE, WM_DESTROY,
+        WM_DPICHANGED, WM_NCCALCSIZE, WM_NCHITTEST, WM_SIZE,
     };
 
+    // Let DWM claim the native caption controls before Rivet supplies title-region behaviour.
+    // This preserves Windows hover, snap-layout, accessibility, and command handling.
+    let mut dwm_result = 0;
+    if DwmDefWindowProc(window, message, wparam, lparam, &mut dwm_result) != 0 {
+        return dwm_result;
+    }
+
     match message {
+        WM_NCCALCSIZE if wparam != 0 => 0,
+        WM_NCHITTEST => {
+            // The panel and browser are child windows and receive their own input. Remaining
+            // host space at the top behaves as the normal Windows drag region.
+            HTCAPTION as isize
+        }
         WM_SIZE | WM_DPICHANGED => {
             layout_host(window);
             0
@@ -192,6 +126,7 @@ unsafe extern "system" fn host_window_proc(
 #[cfg(windows)]
 fn install_prototype_frame() {
     use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
     use windows_sys::Win32::Graphics::Gdi::{
         BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, Ellipse, EndPaint, FillRect,
         SelectObject, SetBkMode, SetTextColor, TextOutW, CLEARTYPE_QUALITY, FW_SEMIBOLD, HDC,
@@ -199,6 +134,7 @@ fn install_prototype_frame() {
     };
     use windows_sys::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::Controls::MARGINS;
     use windows_sys::Win32::UI::HiDpi::{
         GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
@@ -207,9 +143,10 @@ fn install_prototype_frame() {
         GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
         LoadImageW, PeekMessageW, RegisterClassW, SendMessageW, SetParent, SetWindowLongPtrW,
         SetWindowPos, TranslateMessage, GWL_STYLE, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE,
-        MSG, PM_REMOVE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, WM_ERASEBKGND, WM_PAINT,
-        WM_QUIT, WM_SETICON, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
-        WS_VISIBLE,
+        MSG, PM_REMOVE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        WM_ERASEBKGND, WM_PAINT, WM_QUIT, WM_SETICON, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
+        WS_DLGFRAME, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_SYSMENU,
+        WS_THICKFRAME, WS_VISIBLE,
     };
 
     const PANEL_CLASS: [u16; 17] = [
@@ -249,27 +186,6 @@ fn install_prototype_frame() {
         b'w' as u16,
         0,
     ];
-    const HEADER_CLASS: [u16; 18] = [
-        b'R' as u16,
-        b'i' as u16,
-        b'v' as u16,
-        b'e' as u16,
-        b't' as u16,
-        b'H' as u16,
-        b'e' as u16,
-        b'a' as u16,
-        b'd' as u16,
-        b'e' as u16,
-        b'r' as u16,
-        b'W' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'd' as u16,
-        b'o' as u16,
-        b'w' as u16,
-        0,
-    ];
-
     const fn color(red: u8, green: u8, blue: u8) -> COLORREF {
         (red as COLORREF) | ((green as COLORREF) << 8) | ((blue as COLORREF) << 16)
     }
@@ -606,17 +522,14 @@ fn install_prototype_frame() {
         host_class.hInstance = GetModuleHandleW(std::ptr::null());
         host_class.lpszClassName = HOST_CLASS.as_ptr();
         RegisterClassW(&host_class);
-        let mut header_class: WNDCLASSW = std::mem::zeroed();
-        header_class.lpfnWndProc = Some(host_header_proc);
-        header_class.hInstance = GetModuleHandleW(std::ptr::null());
-        header_class.lpszClassName = HEADER_CLASS.as_ptr();
-        RegisterClassW(&header_class);
-        let host_title: Vec<u16> = "Rivet Browser".encode_utf16().chain(Some(0)).collect();
+        // Windows remains responsible for minimize, maximize, and close. Keeping the title
+        // text empty leaves the left side available for Rivet's native surface.
+        let host_title: Vec<u16> = vec![0];
         let host = CreateWindowExW(
             0,
             HOST_CLASS.as_ptr(),
             host_title.as_ptr(),
-            WS_POPUP | WS_THICKFRAME | WS_VISIBLE,
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             browser_bounds.left,
             browser_bounds.top,
             browser_bounds.right - browser_bounds.left,
@@ -629,6 +542,15 @@ fn install_prototype_frame() {
         if host.is_null() {
             return;
         }
+        // Draw Rivet into the former caption space while DWM retains the actual system buttons.
+        // One physical top pixel is sufficient to opt into DWM's extended-frame treatment.
+        let title_margin = MARGINS {
+            cxLeftWidth: 0,
+            cxRightWidth: 0,
+            cyTopHeight: 1,
+            cyBottomHeight: 0,
+        };
+        DwmExtendFrameIntoClientArea(host, &title_margin);
         let panel = CreateWindowExW(
             0,
             PANEL_CLASS.as_ptr(),
@@ -646,33 +568,41 @@ fn install_prototype_frame() {
         if panel.is_null() {
             return;
         }
-        let header = CreateWindowExW(
-            0,
-            HEADER_CLASS.as_ptr(),
-            HEADER_CLASS.as_ptr(),
-            WS_CHILD | WS_VISIBLE,
-            panel_width,
-            0,
-            1,
-            1,
-            host,
-            std::ptr::null_mut(),
-            GetModuleHandleW(std::ptr::null()),
-            std::ptr::null(),
-        );
         // The real Chrome app window becomes the host's child. Chromium receives the right-pane
         // size as its own window size, which makes normal page layout reflow instead of leaving
         // an overlay above a full-width page.
-        SetParent(parent, host);
         let browser_style = GetWindowLongPtrW(parent, GWL_STYLE) as u32;
         SetWindowLongPtrW(
             parent,
             GWL_STYLE,
-            ((browser_style & !WS_OVERLAPPEDWINDOW) | WS_CHILD | WS_VISIBLE) as isize,
+            ((browser_style
+                & !(WS_CAPTION
+                    | WS_THICKFRAME
+                    | WS_MINIMIZEBOX
+                    | WS_MAXIMIZEBOX
+                    | WS_SYSMENU
+                    | WS_BORDER
+                    | WS_DLGFRAME))
+                | WS_VISIBLE) as isize,
+        );
+        SetWindowPos(
+            parent,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+        SetParent(parent, host);
+        let child_style = GetWindowLongPtrW(parent, GWL_STYLE) as u32;
+        SetWindowLongPtrW(
+            parent,
+            GWL_STYLE,
+            (child_style | WS_CHILD | WS_VISIBLE) as isize,
         );
         HOST_BROWSER.store(parent as isize, std::sync::atomic::Ordering::Release);
         HOST_PANEL.store(panel as isize, std::sync::atomic::Ordering::Release);
-        HOST_HEADER.store(header as isize, std::sync::atomic::Ordering::Release);
         set_taskbar_icon(host);
         layout_host(host);
         SetWindowPos(
