@@ -34,9 +34,9 @@ pub extern "system" fn rivet_runtime_start() -> u32 {
 fn install_prototype_frame() {
     use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
-        BeginPaint, ClientToScreen, CreateSolidBrush, DeleteObject, Ellipse, EndPaint, FillRect,
-        GetStockObject, SelectObject, SetBkColor, SetBkMode, SetDCBrushColor, SetTextColor,
-        TextOutW, DC_BRUSH, DEFAULT_GUI_FONT, HDC, PAINTSTRUCT, TRANSPARENT,
+        BeginPaint, ClientToScreen, CreateFontW, CreateSolidBrush, DeleteObject, Ellipse, EndPaint,
+        FillRect, SelectObject, SetBkMode, SetTextColor, TextOutW, FW_SEMIBOLD, HDC, PAINTSTRUCT,
+        TRANSPARENT,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
@@ -46,9 +46,8 @@ fn install_prototype_frame() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
         GetWindowThreadProcessId, IsWindow, IsWindowVisible, PeekMessageW, RegisterClassW,
-        SetWindowPos, TranslateMessage, ES_AUTOHSCROLL, MSG, PM_REMOVE, SWP_NOACTIVATE,
-        SWP_NOZORDER, WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_PAINT, WM_QUIT, WNDCLASSW, WS_BORDER,
-        WS_CHILD, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
+        SetWindowPos, TranslateMessage, MSG, PM_REMOVE, SWP_NOACTIVATE, WM_ERASEBKGND, WM_PAINT,
+        WM_QUIT, WNDCLASSW, WS_POPUP, WS_VISIBLE,
     };
 
     const PANEL_WIDTH: i32 = 292;
@@ -82,48 +81,40 @@ fn install_prototype_frame() {
         DeleteObject(brush);
     }
 
-    unsafe fn label(dc: HDC, x: i32, y: i32, value: &str, ink: COLORREF) {
-        let wide: Vec<u16> = value.encode_utf16().collect();
-        SetTextColor(dc, ink);
-        TextOutW(dc, x, y, wide.as_ptr(), wide.len() as i32);
-    }
-
-    unsafe fn static_label(
-        parent: HWND,
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn label(
+        dc: HDC,
         scale: i32,
-        value: &str,
         x: i32,
         y: i32,
-        width: i32,
-        height: i32,
+        value: &str,
+        size: i32,
+        weight: i32,
+        ink: COLORREF,
     ) {
-        let class = [
-            b'S' as u16,
-            b'T' as u16,
-            b'A' as u16,
-            b'T' as u16,
-            b'I' as u16,
-            b'C' as u16,
+        let face: Vec<u16> = "Segoe UI".encode_utf16().chain(Some(0)).collect();
+        let font = CreateFontW(
+            -size * scale,
             0,
-        ];
-        let text: Vec<u16> = value.encode_utf16().chain(Some(0)).collect();
-        CreateWindowExW(
             0,
-            class.as_ptr(),
-            text.as_ptr(),
-            // A Chromium Direct3D child surface can compose over every sibling child HWND, even
-            // when Rivet is topmost in the child z-order. An owned popup stays in this browser
-            // process but composes above that surface reliably.
-            WS_POPUP | WS_VISIBLE,
-            x * scale,
-            y * scale,
-            width * scale,
-            height * scale,
-            parent,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null(),
+            0,
+            weight,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            face.as_ptr(),
         );
+        let old_font = SelectObject(dc, font);
+        let wide: Vec<u16> = value.encode_utf16().collect();
+        SetTextColor(dc, ink);
+        TextOutW(dc, x * scale, y * scale, wide.as_ptr(), wide.len() as i32);
+        SelectObject(dc, old_font);
+        DeleteObject(font);
     }
 
     unsafe extern "system" fn panel_proc(
@@ -134,109 +125,207 @@ fn install_prototype_frame() {
     ) -> LRESULT {
         match message {
             WM_ERASEBKGND => 1,
-            WM_CTLCOLORSTATIC => {
-                let dc = _wparam as HDC;
-                let background = color(0xf2, 0xee, 0xe5);
-                SetTextColor(dc, color(0x1f, 0x20, 0x24));
-                SetBkColor(dc, background);
-                SetDCBrushColor(dc, background);
-                GetStockObject(DC_BRUSH) as LRESULT
-            }
             WM_PAINT => {
                 let mut paint: PAINTSTRUCT = std::mem::zeroed();
                 let dc = BeginPaint(window, &mut paint);
                 let mut bounds: RECT = std::mem::zeroed();
                 GetClientRect(window, &mut bounds);
+                let scale = (GetDpiForWindow(window).max(96) / 96) as i32;
                 fill(dc, bounds, color(0xf2, 0xee, 0xe5));
-
-                let font = GetStockObject(DEFAULT_GUI_FONT);
-                let old_font = SelectObject(dc, font);
                 SetBkMode(dc, TRANSPARENT as i32);
-
-                // The mark is intentionally small. Rivet is the attachment to the browser, not
-                // a competing browser chrome.
                 let dark = color(0x1f, 0x20, 0x24);
                 let accent = color(0x7c, 0x2d, 0x4f);
                 let mark = CreateSolidBrush(dark);
                 let old_brush = SelectObject(dc, mark);
-                Ellipse(dc, 24, 24, 44, 44);
+                Ellipse(dc, 24 * scale, 24 * scale, 44 * scale, 44 * scale);
                 SelectObject(dc, old_brush);
                 DeleteObject(mark);
                 let cut = CreateSolidBrush(color(0xf2, 0xee, 0xe5));
                 let old_cut = SelectObject(dc, cut);
-                Ellipse(dc, 31, 31, 39, 39);
+                Ellipse(dc, 31 * scale, 31 * scale, 39 * scale, 39 * scale);
                 SelectObject(dc, old_cut);
                 DeleteObject(cut);
                 fill(
                     dc,
                     RECT {
-                        left: 38,
-                        top: 36,
-                        right: 48,
-                        bottom: 46,
+                        left: 38 * scale,
+                        top: 36 * scale,
+                        right: 48 * scale,
+                        bottom: 46 * scale,
                     },
                     color(0xf2, 0xee, 0xe5),
                 );
 
-                label(dc, 57, 26, "Rivet", dark);
-                label(dc, 24, 70, "WORK / AGENT BRIEF", accent);
+                label(dc, scale, 57, 24, "Rivet", 20, FW_SEMIBOLD as i32, dark);
+                label(
+                    dc,
+                    scale,
+                    24,
+                    71,
+                    "WORK / AGENT BRIEF",
+                    9,
+                    FW_SEMIBOLD as i32,
+                    accent,
+                );
                 fill(
                     dc,
                     RECT {
-                        left: 24,
-                        top: 93,
-                        right: 268,
-                        bottom: 94,
+                        left: 24 * scale,
+                        top: 97 * scale,
+                        right: 268 * scale,
+                        bottom: 98 * scale,
                     },
                     color(0xc9, 0xc1, 0xb5),
                 );
 
-                label(dc, 25, 113, "TODAY", color(0x77, 0x74, 0x6f));
+                label(
+                    dc,
+                    scale,
+                    24,
+                    114,
+                    "TODAY",
+                    9,
+                    FW_SEMIBOLD as i32,
+                    color(0x77, 0x74, 0x6f),
+                );
                 fill(
                     dc,
                     RECT {
-                        left: 17,
-                        top: 137,
-                        right: 275,
-                        bottom: 170,
+                        left: 17 * scale,
+                        top: 136 * scale,
+                        right: 275 * scale,
+                        bottom: 171 * scale,
                     },
                     color(0xfb, 0xfa, 0xf6),
                 );
                 let active = CreateSolidBrush(accent);
                 let old_active = SelectObject(dc, active);
-                Ellipse(dc, 28, 149, 36, 157);
+                Ellipse(dc, 28 * scale, 149 * scale, 36 * scale, 157 * scale);
                 SelectObject(dc, old_active);
                 DeleteObject(active);
-                label(dc, 49, 147, "Agent brief", dark);
-                label(dc, 28, 184, "Ember workspace", color(0x51, 0x50, 0x56));
-                label(dc, 28, 216, "Release notes", color(0x51, 0x50, 0x56));
+                label(
+                    dc,
+                    scale,
+                    49,
+                    145,
+                    "Agent brief",
+                    12,
+                    FW_SEMIBOLD as i32,
+                    dark,
+                );
+                label(
+                    dc,
+                    scale,
+                    28,
+                    184,
+                    "Ember workspace",
+                    12,
+                    400,
+                    color(0x51, 0x50, 0x56),
+                );
+                label(
+                    dc,
+                    scale,
+                    28,
+                    216,
+                    "Release notes",
+                    12,
+                    400,
+                    color(0x51, 0x50, 0x56),
+                );
+                label(
+                    dc,
+                    scale,
+                    24,
+                    262,
+                    "SAVED",
+                    9,
+                    FW_SEMIBOLD as i32,
+                    color(0x77, 0x74, 0x6f),
+                );
+                label(
+                    dc,
+                    scale,
+                    28,
+                    289,
+                    "Research queue",
+                    12,
+                    400,
+                    color(0x51, 0x50, 0x56),
+                );
+                label(
+                    dc,
+                    scale,
+                    28,
+                    321,
+                    "Design references",
+                    12,
+                    400,
+                    color(0x51, 0x50, 0x56),
+                );
 
-                label(dc, 25, 262, "SAVED", color(0x77, 0x74, 0x6f));
-                label(dc, 28, 289, "Research queue", color(0x51, 0x50, 0x56));
-                label(dc, 28, 321, "Design references", color(0x51, 0x50, 0x56));
-
-                let card_top = (bounds.bottom - 119).max(350);
+                let command_top = bounds.bottom - 218 * scale;
                 fill(
                     dc,
                     RECT {
-                        left: 17,
+                        left: 17 * scale,
+                        top: command_top,
+                        right: bounds.right - 17 * scale,
+                        bottom: command_top + 42 * scale,
+                    },
+                    color(0xfb, 0xfa, 0xf6),
+                );
+                label(
+                    dc,
+                    scale,
+                    29,
+                    command_top / scale + 12,
+                    "Ask Rivet about this page",
+                    12,
+                    400,
+                    color(0x77, 0x74, 0x6f),
+                );
+                let card_top = bounds.bottom - 145 * scale;
+                fill(
+                    dc,
+                    RECT {
+                        left: 17 * scale,
                         top: card_top,
-                        right: 275,
-                        bottom: card_top + 2,
+                        right: bounds.right - 17 * scale,
+                        bottom: card_top + 2 * scale,
                     },
                     dark,
                 );
-                label(dc, 24, card_top + 16, "One browser,", dark);
-                label(dc, 24, card_top + 35, "wherever you work.", dark);
                 label(
                     dc,
+                    scale,
                     24,
-                    card_top + 67,
+                    card_top / scale + 17,
+                    "One browser,",
+                    16,
+                    FW_SEMIBOLD as i32,
+                    dark,
+                );
+                label(
+                    dc,
+                    scale,
+                    24,
+                    card_top / scale + 38,
+                    "wherever you work.",
+                    16,
+                    400,
+                    dark,
+                );
+                label(
+                    dc,
+                    scale,
+                    24,
+                    card_top / scale + 77,
                     "RIVET / EMBER LINK",
+                    9,
+                    FW_SEMIBOLD as i32,
                     color(0x77, 0x74, 0x6f),
                 );
-
-                SelectObject(dc, old_font);
                 EndPaint(window, &paint);
                 0
             }
@@ -276,7 +365,10 @@ fn install_prototype_frame() {
             0,
             PANEL_CLASS.as_ptr(),
             PANEL_CLASS.as_ptr(),
-            WS_CHILD | WS_VISIBLE,
+            // A Chromium Direct3D child surface can compose over every sibling child HWND, even
+            // when Rivet is topmost in the child z-order. The whole Rivet surface is an owned
+            // popup in the browser process, so it composes above that renderer reliably.
+            WS_POPUP | WS_VISIBLE,
             0,
             0,
             panel_width,
@@ -289,64 +381,6 @@ fn install_prototype_frame() {
         if panel.is_null() {
             return;
         }
-        // Chromium can suppress direct GDI text when it repaints a cross-thread child window.
-        // Static controls travel through the standard window and input path, so they stay visible.
-        static_label(panel, scale, "Rivet", 57, 26, 170, 25);
-        static_label(panel, scale, "WORK / AGENT BRIEF", 24, 70, 220, 18);
-        static_label(panel, scale, "TODAY", 25, 113, 120, 18);
-        static_label(panel, scale, "Agent brief", 49, 147, 190, 20);
-        static_label(panel, scale, "Ember workspace", 28, 184, 210, 20);
-        static_label(panel, scale, "Release notes", 28, 216, 210, 20);
-        static_label(panel, scale, "SAVED", 25, 262, 120, 18);
-        static_label(panel, scale, "Research queue", 28, 289, 210, 20);
-        static_label(panel, scale, "Design references", 28, 321, 210, 20);
-        static_label(panel, scale, "One browser,", 24, 372, 210, 20);
-        static_label(panel, scale, "wherever you work.", 24, 392, 210, 20);
-        static_label(panel, scale, "RIVET / EMBER LINK", 24, 426, 210, 18);
-        let edit_class = [b'E' as u16, b'D' as u16, b'I' as u16, b'T' as u16, 0];
-        let prompt = [
-            b'A' as u16,
-            b's' as u16,
-            b'k' as u16,
-            b' ' as u16,
-            b'R' as u16,
-            b'i' as u16,
-            b'v' as u16,
-            b'e' as u16,
-            b't' as u16,
-            b' ' as u16,
-            b'a' as u16,
-            b'b' as u16,
-            b'o' as u16,
-            b'u' as u16,
-            b't' as u16,
-            b' ' as u16,
-            b't' as u16,
-            b'h' as u16,
-            b'i' as u16,
-            b's' as u16,
-            b' ' as u16,
-            b'p' as u16,
-            b'a' as u16,
-            b'g' as u16,
-            b'e' as u16,
-            b'.' as u16,
-            0,
-        ];
-        let command = CreateWindowExW(
-            0,
-            edit_class.as_ptr(),
-            prompt.as_ptr(),
-            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
-            17 * scale,
-            170 * scale,
-            panel_width - 34 * scale,
-            34 * scale,
-            panel,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null(),
-        );
         loop {
             if IsWindow(parent) == 0 || IsWindow(panel) == 0 {
                 break;
@@ -374,18 +408,6 @@ fn install_prototype_frame() {
                     // not preserve the old sibling order or that renderer covers Rivet entirely.
                     SWP_NOACTIVATE,
                 );
-                if !command.is_null() {
-                    let panel_height = bounds.bottom - bounds.top;
-                    SetWindowPos(
-                        command,
-                        std::ptr::null_mut(),
-                        17 * scale,
-                        (panel_height - 168 * scale).max(340 * scale),
-                        panel_width - 34 * scale,
-                        34 * scale,
-                        SWP_NOZORDER,
-                    );
-                }
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
