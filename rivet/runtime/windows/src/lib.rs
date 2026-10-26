@@ -41,7 +41,7 @@ fn install_prototype_frame() {
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::HiDpi::{
-        SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClientRect,
@@ -88,7 +88,15 @@ fn install_prototype_frame() {
         TextOutW(dc, x, y, wide.as_ptr(), wide.len() as i32);
     }
 
-    unsafe fn static_label(parent: HWND, value: &str, x: i32, y: i32, width: i32, height: i32) {
+    unsafe fn static_label(
+        parent: HWND,
+        scale: i32,
+        value: &str,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) {
         let class = [
             b'S' as u16,
             b'T' as u16,
@@ -107,10 +115,10 @@ fn install_prototype_frame() {
             // when Rivet is topmost in the child z-order. An owned popup stays in this browser
             // process but composes above that surface reliably.
             WS_POPUP | WS_VISIBLE,
-            x,
-            y,
-            width,
-            height,
+            x * scale,
+            y * scale,
+            width * scale,
+            height * scale,
             parent,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -257,6 +265,8 @@ fn install_prototype_frame() {
         if parent.is_null() {
             return;
         }
+        let scale = (GetDpiForWindow(parent).max(96) / 96) as i32;
+        let panel_width = PANEL_WIDTH * scale;
         let mut window_class: WNDCLASSW = std::mem::zeroed();
         window_class.lpfnWndProc = Some(panel_proc);
         window_class.hInstance = GetModuleHandleW(std::ptr::null());
@@ -269,7 +279,7 @@ fn install_prototype_frame() {
             WS_CHILD | WS_VISIBLE,
             0,
             0,
-            PANEL_WIDTH,
+            panel_width,
             48,
             parent,
             std::ptr::null_mut(),
@@ -281,18 +291,18 @@ fn install_prototype_frame() {
         }
         // Chromium can suppress direct GDI text when it repaints a cross-thread child window.
         // Static controls travel through the standard window and input path, so they stay visible.
-        static_label(panel, "Rivet", 57, 26, 170, 25);
-        static_label(panel, "WORK / AGENT BRIEF", 24, 70, 220, 18);
-        static_label(panel, "TODAY", 25, 113, 120, 18);
-        static_label(panel, "Agent brief", 49, 147, 190, 20);
-        static_label(panel, "Ember workspace", 28, 184, 210, 20);
-        static_label(panel, "Release notes", 28, 216, 210, 20);
-        static_label(panel, "SAVED", 25, 262, 120, 18);
-        static_label(panel, "Research queue", 28, 289, 210, 20);
-        static_label(panel, "Design references", 28, 321, 210, 20);
-        static_label(panel, "One browser,", 24, 372, 210, 20);
-        static_label(panel, "wherever you work.", 24, 392, 210, 20);
-        static_label(panel, "RIVET / EMBER LINK", 24, 426, 210, 18);
+        static_label(panel, scale, "Rivet", 57, 26, 170, 25);
+        static_label(panel, scale, "WORK / AGENT BRIEF", 24, 70, 220, 18);
+        static_label(panel, scale, "TODAY", 25, 113, 120, 18);
+        static_label(panel, scale, "Agent brief", 49, 147, 190, 20);
+        static_label(panel, scale, "Ember workspace", 28, 184, 210, 20);
+        static_label(panel, scale, "Release notes", 28, 216, 210, 20);
+        static_label(panel, scale, "SAVED", 25, 262, 120, 18);
+        static_label(panel, scale, "Research queue", 28, 289, 210, 20);
+        static_label(panel, scale, "Design references", 28, 321, 210, 20);
+        static_label(panel, scale, "One browser,", 24, 372, 210, 20);
+        static_label(panel, scale, "wherever you work.", 24, 392, 210, 20);
+        static_label(panel, scale, "RIVET / EMBER LINK", 24, 426, 210, 18);
         let edit_class = [b'E' as u16, b'D' as u16, b'I' as u16, b'T' as u16, 0];
         let prompt = [
             b'A' as u16,
@@ -328,10 +338,10 @@ fn install_prototype_frame() {
             edit_class.as_ptr(),
             prompt.as_ptr(),
             WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
-            17,
-            170,
-            PANEL_WIDTH - 34,
-            34,
+            17 * scale,
+            170 * scale,
+            panel_width - 34 * scale,
+            34 * scale,
             panel,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -358,7 +368,7 @@ fn install_prototype_frame() {
                     std::ptr::null_mut(),
                     screen_origin.x,
                     screen_origin.y,
-                    PANEL_WIDTH,
+                    panel_width,
                     bounds.bottom - bounds.top,
                     // Chromium creates a Direct3D child after our injected worker starts. Do
                     // not preserve the old sibling order or that renderer covers Rivet entirely.
@@ -369,10 +379,10 @@ fn install_prototype_frame() {
                     SetWindowPos(
                         command,
                         std::ptr::null_mut(),
-                        17,
-                        (panel_height - 168).max(340),
-                        PANEL_WIDTH - 34,
-                        34,
+                        17 * scale,
+                        (panel_height - 168 * scale).max(340 * scale),
+                        panel_width - 34 * scale,
+                        34 * scale,
                         SWP_NOZORDER,
                     );
                 }
