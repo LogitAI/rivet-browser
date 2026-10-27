@@ -13,21 +13,47 @@ pub extern "C" fn rivet_runtime_abi_version() -> u32 {
 
 /// Starts Rivet after the DLL has loaded and the Windows loader lock has been released.
 ///
-/// The first native-frame implementation is initialized from this stable entry point. Calling it
-/// again is harmless, which lets a launcher recover after a command retry.
+/// The launcher supplies the exact browser window discovered for its session. A zero handle is
+/// reserved for a hidden task, which does not create a frame.
 #[cfg(windows)]
 #[no_mangle]
-pub extern "system" fn rivet_runtime_start() -> u32 {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    static STARTED: AtomicBool = AtomicBool::new(false);
-    if STARTED.swap(true, Ordering::AcqRel) {
+pub extern "system" fn rivet_runtime_start_for_window(window: isize) -> u32 {
+    use std::sync::atomic::Ordering;
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
+    };
+    if window == 0 {
         return 1;
     }
-    std::thread::spawn(install_prototype_frame);
+    unsafe {
+        let hwnd = window as windows_sys::Win32::Foundation::HWND;
+        let mut owner = 0;
+        let mut class = [0u16; 128];
+        let length = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
+        if IsWindow(hwnd) == 0 || IsWindowVisible(hwnd) == 0 || length <= 0 {
+            return 0;
+        }
+        GetWindowThreadProcessId(hwnd, &mut owner);
+        if owner != GetCurrentProcessId()
+            || String::from_utf16_lossy(&class[..length as usize]) != "Chrome_WidgetWin_1"
+        {
+            return 0;
+        }
+    }
+    match TARGET_WINDOW.compare_exchange(0, window, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => {}
+        Err(existing) => return u32::from(existing == window),
+    }
+    std::thread::spawn(move || {
+        install_prototype_frame(window);
+        TARGET_WINDOW.store(0, Ordering::Release);
+    });
     1
 }
 
+#[cfg(windows)]
+static TARGET_WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 #[cfg(windows)]
 static HOST_BROWSER: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 #[cfg(windows)]
@@ -64,7 +90,7 @@ unsafe fn runtime_module() -> windows_sys::Win32::Foundation::HMODULE {
     let mut module = std::ptr::null_mut();
     GetModuleHandleExW(
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        rivet_runtime_start as *const () as *const u16,
+        rivet_runtime_start_for_window as *const () as *const u16,
         &mut module,
     );
     module
@@ -281,7 +307,7 @@ unsafe extern "system" fn host_window_proc(
 
 /// Adds the first native Rivet panel directly to the Chromium app window.
 #[cfg(windows)]
-fn install_prototype_frame() {
+fn install_prototype_frame(selected_window: isize) {
     use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
         BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, Ellipse, EndPaint, FillRect,
@@ -290,14 +316,12 @@ fn install_prototype_frame() {
         TRANSPARENT,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
-    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::HiDpi::{
         GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClassNameW,
-        GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
-        IsWindowVisible, LoadImageW, PeekMessageW, RegisterClassW, SendMessageW, SetParent,
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetWindowLongPtrW,
+        GetWindowRect, IsWindow, LoadImageW, PeekMessageW, RegisterClassW, SendMessageW, SetParent,
         SetWindowLongPtrW, SetWindowPos, TranslateMessage, GWLP_WNDPROC, GWL_STYLE, IMAGE_ICON,
         LR_DEFAULTSIZE, LR_LOADFROMFILE, MSG, PM_REMOVE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
         SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WM_ERASEBKGND, WM_PAINT, WM_QUIT, WM_SETICON,
@@ -604,22 +628,6 @@ fn install_prototype_frame() {
         }
     }
 
-    unsafe extern "system" fn find_parent(window: HWND, parameter: LPARAM) -> i32 {
-        let parent = &mut *(parameter as *mut HWND);
-        let mut process_id = 0;
-        GetWindowThreadProcessId(window, &mut process_id);
-        if process_id == GetCurrentProcessId() && IsWindowVisible(window) != 0 {
-            let mut class = [0_u16; 128];
-            let length = GetClassNameW(window, class.as_mut_ptr(), class.len() as i32);
-            if String::from_utf16_lossy(&class[..length as usize]) != "Chrome_WidgetWin_1" {
-                return 1;
-            }
-            *parent = window;
-            return 0;
-        }
-        1
-    }
-
     unsafe fn set_taskbar_icon(parent: HWND) {
         let runtime_module = runtime_module();
         if runtime_module.is_null() {
@@ -677,15 +685,14 @@ fn install_prototype_frame() {
         );
     }
 
-    let mut parent: HWND = std::ptr::null_mut();
+    let parent = selected_window as HWND;
     unsafe {
         // Chromium's injected worker starts in a DPI-virtualized context. A popup created in
         // that context is scaled down again on high-DPI monitors, so its 292px design becomes a
         // 146px strip at 200%. Use physical, per-monitor pixels before any Rivet HWND exists.
         SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let instance = runtime_module();
-        EnumWindows(Some(find_parent), (&mut parent as *mut HWND) as isize);
-        if parent.is_null() {
+        if IsWindow(parent) == 0 {
             return;
         }
         let dpi = GetDpiForWindow(parent).max(96) as i32;
@@ -837,8 +844,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn fr2_runtime_bootstrap_is_idempotent() {
-        assert_eq!(rivet_runtime_start(), 1);
-        assert_eq!(rivet_runtime_start(), 1);
+    fn fr2_runtime_rejects_a_window_that_does_not_exist() {
+        assert_eq!(rivet_runtime_start_for_window(1), 0);
     }
 }

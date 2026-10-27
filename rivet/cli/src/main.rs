@@ -101,7 +101,7 @@ fn run_start(options: StartOptions) -> Result<(), String> {
 
     if let Some(runtime) = &runtime {
         let target_id = window.map_or(task_id, |window| window.process_id);
-        inject_runtime(target_id, runtime).map_err(|error| {
+        inject_runtime(target_id, window.map(|item| item.handle), runtime).map_err(|error| {
             format!("could not load the Rivet runtime into browser task {target_id}: {error}")
         })?;
     }

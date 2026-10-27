@@ -258,7 +258,10 @@ impl std::fmt::Display for InjectError {
             ),
             Self::FindLoadLibrary => write!(f, "could not locate LoadLibraryW"),
             Self::FindRuntimeStart => {
-                write!(f, "could not locate rivet_runtime_start in the runtime DLL")
+                write!(
+                    f,
+                    "could not locate the window-specific start entry in the runtime DLL"
+                )
             }
             Self::StartRemoteThread(code) => write!(
                 f,
@@ -368,7 +371,11 @@ pub fn remote_runtime_module_base(
 ///
 /// The caller is responsible for proving that the process belongs to the current Rivet session.
 #[cfg(windows)]
-pub fn inject_runtime(process_id: u32, runtime_path: &Path) -> Result<(), InjectError> {
+pub fn inject_runtime(
+    process_id: u32,
+    window_handle: Option<isize>,
+    runtime_path: &Path,
+) -> Result<(), InjectError> {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
@@ -494,7 +501,10 @@ pub fn inject_runtime(process_id: u32, runtime_path: &Path) -> Result<(), Inject
             CloseHandle(process);
             return Err(InjectError::FindRuntimeStart);
         }
-        let local_start = GetProcAddress(local_runtime, c"rivet_runtime_start".as_ptr().cast());
+        let local_start = GetProcAddress(
+            local_runtime,
+            c"rivet_runtime_start_for_window".as_ptr().cast(),
+        );
         let Some(local_start) = local_start else {
             FreeLibrary(local_runtime);
             CloseHandle(process);
@@ -511,7 +521,7 @@ pub fn inject_runtime(process_id: u32, runtime_path: &Path) -> Result<(), Inject
             std::ptr::null(),
             0,
             start,
-            std::ptr::null_mut(),
+            window_handle.unwrap_or(0) as *mut c_void,
             0,
             std::ptr::null_mut(),
         );
@@ -542,7 +552,11 @@ pub fn inject_runtime(process_id: u32, runtime_path: &Path) -> Result<(), Inject
 
 /// Reports that process injection is unavailable on non-Windows targets.
 #[cfg(not(windows))]
-pub fn inject_runtime(_process_id: u32, _runtime_path: &Path) -> Result<(), InjectError> {
+pub fn inject_runtime(
+    _process_id: u32,
+    _window_handle: Option<isize>,
+    _runtime_path: &Path,
+) -> Result<(), InjectError> {
     Err(InjectError::UnsupportedPlatform)
 }
 
@@ -594,7 +608,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn fr2_non_windows_never_attempts_injection() {
-        let error = inject_runtime(1, Path::new("runtime.dll")).unwrap_err();
+        let error = inject_runtime(1, Some(1), Path::new("runtime.dll")).unwrap_err();
         assert_eq!(error, InjectError::UnsupportedPlatform);
     }
 }
