@@ -12,14 +12,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, GetClassNameW, GetClientRect, GetPropW, GetWindowLongPtrW,
     GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW,
     RegisterWindowMessageW, RemovePropW, SetPropW, SetWindowLongPtrW, SetWindowPos, GWLP_WNDPROC,
-    GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT, SM_CXPADDEDBORDER, SM_CYSIZEFRAME,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WM_NCDESTROY,
-    WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCRBUTTONDOWN,
-    WM_NCRBUTTONUP, WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
+    GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT, ICON_BIG, ICON_SMALL, SM_CXICON,
+    SM_CXPADDEDBORDER, SM_CXSMICON, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, WM_DPICHANGED, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK,
+    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_SETICON,
+    WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
 };
 
 use super::chrome_layout;
 use super::sidebar::Sidebar;
+use super::taskbar;
 use super::{scale, strip_hit, StripHit, SIDEBAR_WIDTH};
 
 const BROWSER_CLASS: &str = "Chrome_WidgetWin_1";
@@ -59,6 +61,55 @@ unsafe fn framed(window: HWND) -> bool {
 
 unsafe fn dpi(window: HWND) -> u32 {
     GetDpiForWindow(window).max(96)
+}
+
+unsafe fn runtime_directory() -> Option<std::path::PathBuf> {
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    };
+    let mut module = std::ptr::null_mut();
+    GetModuleHandleExW(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        attach as *const () as *const u16,
+        &mut module,
+    );
+    let mut path = [0u16; 32768];
+    let length = GetModuleFileNameW(module, path.as_mut_ptr(), path.len() as u32) as usize;
+    if length == 0 || length == path.len() {
+        return None;
+    }
+    let path = std::path::PathBuf::from(String::from_utf16_lossy(&path[..length]));
+    path.parent().map(std::path::Path::to_path_buf)
+}
+
+/// The Rivet icon for one of the window's icon slots at the window's DPI. Icons are created once
+/// per slot and DPI and live as long as the browser process, because windows keep drawing them.
+unsafe fn rivet_icon(window: HWND, slot: usize) -> Option<isize> {
+    thread_local! {
+        static ICONS: RefCell<HashMap<(usize, u32), isize>> = RefCell::new(HashMap::new());
+    }
+    let dpi = dpi(window);
+    if let Some(icon) = ICONS.with(|icons| icons.borrow().get(&(slot, dpi)).copied()) {
+        return Some(icon);
+    }
+    let metric = if slot == ICON_BIG as usize {
+        SM_CXICON
+    } else {
+        SM_CXSMICON
+    };
+    let icon = taskbar::icon(GetSystemMetricsForDpi(metric, dpi))?.0 as isize;
+    ICONS.with(|icons| icons.borrow_mut().insert((slot, dpi), icon));
+    Some(icon)
+}
+
+/// Shows Rivet's icon in both of the window's icon slots.
+unsafe fn set_rivet_icons(window: HWND) {
+    for slot in [ICON_BIG as usize, ICON_SMALL as usize] {
+        if let Some(icon) = rivet_icon(window, slot) {
+            call_browser(window, WM_SETICON, slot, icon);
+        }
+    }
 }
 
 /// Subclasses the selected browser window. Runs on the launcher's injected thread.
@@ -117,6 +168,12 @@ unsafe fn create_sidebar(window: HWND) {
         }
     };
     SIDEBARS.with(|sidebars| sidebars.borrow_mut().insert(window as isize, sidebar));
+    if let Err(error) = taskbar::apply(window as isize, runtime_directory().as_deref()) {
+        log(&format!(
+            "rivet: could not set the taskbar identity: {error}"
+        ));
+    }
+    set_rivet_icons(window);
     // A frame change makes the browser lay out its frame again, now through the layout hook.
     SetWindowPos(
         window,
@@ -207,7 +264,20 @@ unsafe extern "system" fn browser_proc(
             update_sidebar(window);
             result
         }
+        // The browser sets its own or the page's icon. A Rivet window keeps Rivet's.
+        WM_SETICON if attached(window) => match rivet_icon(window, wparam) {
+            Some(icon) => call_browser(window, message, wparam, icon),
+            None => call_browser(window, message, wparam, lparam),
+        },
+        WM_DPICHANGED if attached(window) => {
+            let result = call_browser(window, message, wparam, lparam);
+            set_rivet_icons(window);
+            result
+        }
         WM_NCDESTROY => {
+            if attached(window) {
+                taskbar::clear(window as isize);
+            }
             SIDEBARS.with(|sidebars| sidebars.borrow_mut().remove(&(window as isize)));
             let key = wide(ORIGINAL_PROC);
             let original = GetPropW(window, key.as_ptr());

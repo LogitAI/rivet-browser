@@ -75,6 +75,8 @@ mod chrome_layout;
 mod frame;
 #[cfg(windows)]
 mod sidebar;
+#[cfg(windows)]
+mod taskbar;
 
 #[cfg(test)]
 mod tests {

@@ -58,7 +58,10 @@
                           Description="Rivet Browser"
                           Target="[INSTALLFOLDER]rivet-launcher.exe"
                           WorkingDirectory="INSTALLFOLDER"
-                          Icon="RivetStartMenuIcon" />
+                          Icon="RivetStartMenuIcon">
+                    <!-- Running Rivet windows carry the same ID, so they share this pinned button. -->
+                    <ShortcutProperty Key="System.AppUserModel.ID" Value="LogitAI.Rivet.Browser" />
+                </Shortcut>
                 <RemoveFolder Id="RemoveRivetStartMenuFolder" On="uninstall" />
                 <RegistryValue Root="HKLM" Key="SOFTWARE\LogitAI\Rivet" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
             </Component>
