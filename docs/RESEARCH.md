@@ -132,3 +132,32 @@
 
 - 최소화와 최대화 애니메이션의 육안 확인, 한국어 IME, 권한 창, 다운로드, 드래그앤드롭.
 - 첫 정기 CI 실행이 GitHub Windows 실행기에서 화면 검사를 통과하는지.
+
+## 2026-10-28: 패널 상단 줄을 Chrome 세로 탭 모드로 만드는 조사
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Google Chrome `156.0.8078.48`. 실험은 `.scratch/vt-profile`의 별도 프로필에서만 했다.
+
+### 결과
+
+- Chrome 156에는 세로 탭이 제품 기능으로 들어 있다. `VerticalTabsLaunch` 기능, 프로필 설정
+  `vertical_tabs.enabled`, `vertical_tabs.uncollapsed_width`, `vertical_tabs.collapsed_state`, 창 시스템 메뉴의
+  전환 항목(`kToggleVerticalTabsElementId`)을 바이너리에서 확인했다.
+- 별도 프로필에 `vertical_tabs.enabled`를 켜고 일반 창을 열자, 맨 위 한 줄에 뒤로, 앞으로, 새로고침,
+  주소창, 프로필, 메뉴와 Chrome 캡션 버튼이 모이고 왼쪽에 세로 탭 띠가 생겼다. 목업의 "Appbar와 맨 위 줄이
+  주소 줄인 페이지" 구성과 같다. `VerticalTabs.Toolbar.CaptionAreaPressed` 기록 이름으로 보아 이 줄은 창의
+  캡션 역할도 한다.
+- 이 설정은 프로필 단위라서 켜면 같은 프로필의 일반 Chrome 창도 모두 세로 탭이 된다. Rivet 창에만 적용해야
+  한다.
+- 창마다 하나씩 있는 `tabs::VerticalTabStripStateControllerImpl`에서 판정 함수를 찾았다.
+  - `ShouldDisplayVerticalTabs`(RVA `0x0369C6E0`)는 `this+0x1E8`의 한 바이트를 돌려주는 두 명령어 함수다.
+  - `GetUncollapsedWidth`(RVA `0x0369C700`)는 `this+0x1CC`의 폭을 돌려준다.
+  - `ShouldDisplayVerticalTabs`를 가리키는 vtable 칸은 RVA `0xFDAFE00` 하나뿐이다.
+- 따라서 현재 레이아웃 훅과 같은 방식으로 이 칸을 바꾸면 Rivet 창에서만 세로 탭 배치를 쓸 수 있다.
+
+### 남은 조사
+
+- 이 컨트롤러가 어느 창의 것인지 알아내는 방법. 컨트롤러에서 Browser, 창, HWND로 가는 경로를 찾아야 한다.
+- 세로 탭 띠 자리를 Appbar로 덮을 때 입력을 Rivet과 Chrome 중 어디로 보낼지.
+- 세로 탭 띠의 폭을 Appbar 폭(268 DIP)에 맞추는 방법. `GetUncollapsedWidth`나 설정 값으로 가능해 보인다.
