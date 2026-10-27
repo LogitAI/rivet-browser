@@ -14,6 +14,7 @@ public static class RivetFrameCheck {
     [StructLayout(LayoutKind.Sequential)] public struct MonitorInfo { public uint Size; public Rect Monitor, Work; public uint Flags; }
     [DllImport("user32.dll")] static extern bool EnumWindows(Visit callback, IntPtr data);
     [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr hwnd, Visit callback, IntPtr data);
+    [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hwnd);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder text, int size);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
@@ -42,8 +43,11 @@ public static class RivetFrameCheck {
                 if(Class(host)!="RivetHostWindow" || !IsWindowVisible(host) || IsIconic(host)) return true;
                 IntPtr browser=IntPtr.Zero, renderer=IntPtr.Zero;
                 EnumChildWindows(host,(child,q)=> {
-                    if(Class(child)=="Chrome_WidgetWin_1") browser=child;
-                    if(Class(child)=="Chrome_RenderWidgetHostHWND") renderer=child;
+                    if(Class(child)=="Chrome_WidgetWin_1" && GetParent(child)==host) browser=child;
+                    return true;
+                },IntPtr.Zero);
+                if(browser!=IntPtr.Zero) EnumChildWindows(browser,(child,q)=> {
+                    if(Class(child)=="Chrome_RenderWidgetHostHWND" && IsWindowVisible(child)) renderer=child;
                     return true;
                 },IntPtr.Zero);
                 if(browser==IntPtr.Zero || renderer==IntPtr.Zero) return true;

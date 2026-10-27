@@ -168,9 +168,17 @@ mod tests {
     }
 
     #[test]
-    fn fr2_embedded_browser_starts_without_its_own_title_layout() {
+    fn fr2_current_demo_requests_fullscreen_layout() {
         let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
         assert!(plan.arguments.contains(&"--start-fullscreen".into()));
+    }
+
+    #[test]
+    #[ignore = "Chrome currently uses fullscreen layout and exposes its exit control"]
+    fn fr2_browser_frame_does_not_require_fullscreen() {
+        let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
+        assert!(!plan.arguments.contains(&"--start-fullscreen".into()));
+        assert!(!plan.arguments.contains(&"--kiosk".into()));
     }
 
     #[test]
