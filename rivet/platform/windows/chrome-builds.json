@@ -1,0 +1,12 @@
+[
+  {
+    "browser": "Google Chrome",
+    "version": "156.0.8078.48",
+    "module": "chrome.dll",
+    "frame_view_vtable": 266812968,
+    "client_view_slot": 103,
+    "client_view_bounds": 57270768,
+    "hwnd_for_view": 57321808,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  }
+]

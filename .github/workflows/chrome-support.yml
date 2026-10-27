@@ -1,0 +1,112 @@
+# Keeps Rivet's in-browser layout hook in step with Google Chrome releases.
+#
+# Each run installs the current stable Chrome. When the supported-build table has no entry for
+# that version, the run downloads Chrome's public symbols, records the hook addresses, proves the
+# entry on the real browser with the native frame check and opens a pull request to develop.
+# Chrome keeps updating while a build is missing from the table. Rivet only steps aside on that
+# build until the pull request is merged.
+name: Chrome support
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: chrome-support
+  cancel-in-progress: false
+
+jobs:
+  stable:
+    name: Support the current stable Chrome
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Install the current stable Chrome
+        run: |
+          $msi = Join-Path $env:RUNNER_TEMP "chrome.msi"
+          curl.exe -fsSL -o $msi https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi
+          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait
+          $app = "C:\Program Files\Google\Chrome\Application"
+          $version = (Get-ChildItem $app -Directory |
+            Where-Object Name -match '^\d+(\.\d+){3}$' |
+            Sort-Object { [version]$_.Name } |
+            Select-Object -Last 1).Name
+          if (-not $version) { throw "Chrome did not install a versioned directory" }
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "MODULE=$app\$version\chrome.dll" >> $env:GITHUB_ENV
+          "CHROME=$app\chrome.exe" >> $env:GITHUB_ENV
+
+      - name: Check the supported-build table
+        id: table
+        run: |
+          $table = Get-Content rivet/platform/windows/chrome-builds.json | ConvertFrom-Json
+          $known = @($table | Where-Object { $_.browser -eq "Google Chrome" -and $_.version -eq $env:VERSION }).Count -gt 0
+          # A pull request from an earlier run is still waiting for review.
+          git ls-remote --exit-code --heads origin "feat/chrome-$env:VERSION" | Out-Null
+          if ($LASTEXITCODE -eq 0) { $known = $true; "A pull request for Chrome $env:VERSION is open." }
+          "known=$($known.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          if ($known) { "Chrome $env:VERSION needs no new entry." }
+          exit 0
+
+      - name: Download Chrome's public symbols
+        if: steps.table.outputs.known == 'false'
+        working-directory: rivet
+        run: |
+          $key = cargo run -q -p rivet-platform-windows --bin chrome-builds -- pdb-key $env:MODULE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $symbols = Join-Path $env:RUNNER_TEMP "symbols"
+          New-Item -ItemType Directory -Force $symbols | Out-Null
+          curl.exe -fsSL -o (Join-Path $symbols "chrome.dll.pdb") "https://chromium-browser-symsrv.commondatastorage.googleapis.com/$key"
+          if ($LASTEXITCODE -ne 0) { throw "Google's symbol server has no PDB for $key yet" }
+          "SYMBOLS=$symbols" >> $env:GITHUB_ENV
+
+      - name: Record the layout hook addresses
+        if: steps.table.outputs.known == 'false'
+        working-directory: rivet
+        run: |
+          cargo run -q -p rivet-platform-windows --bin chrome-builds -- extract $env:MODULE $env:SYMBOLS "Google Chrome" $env:VERSION platform/windows/chrome-builds.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Prove the entry on the real browser
+        if: steps.table.outputs.known == 'false'
+        run: |
+          Push-Location rivet
+          cargo build -p rivet -p rivet-runtime-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p rivet-platform-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          $work = Join-Path $env:RUNNER_TEMP "session"
+          $state = Join-Path $work "sessions.json"
+          rivet/target/debug/rivet.exe session start --browser $env:CHROME --url about:blank `
+            --runtime (Resolve-Path rivet/target/debug/rivet_runtime_windows.dll) `
+            --state $state --user-data-dir (Join-Path $work "profile")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Start-Sleep -Seconds 5
+          ./scripts/tests/windows-frame.ps1 -State $state
+
+      - name: Open a pull request
+        if: steps.table.outputs.known == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $branch = "feat/chrome-$env:VERSION"
+          git config user.name "rivet-chrome-support"
+          git config user.email "rivet-chrome-support@users.noreply.github.com"
+          git switch -c $branch
+          git add rivet/platform/windows/chrome-builds.json
+          git commit -m "Feat: Support Google Chrome $env:VERSION"
+          git push --force -u origin $branch
+          $body = "Adds Google Chrome $env:VERSION to the supported-build table. The addresses come from Google's public symbols, and the native frame check passed on the real browser in this run."
+          gh pr create --base develop --head $branch --title "Feat: Support Google Chrome $env:VERSION" --body $body

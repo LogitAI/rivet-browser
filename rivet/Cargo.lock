@@ -412,6 +412,8 @@ dependencies = [
 name = "rivet-platform-windows"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "windows-sys",
 ]
 
@@ -429,6 +431,7 @@ dependencies = [
 name = "rivet-runtime-windows"
 version = "0.1.0"
 dependencies = [
+ "rivet-platform-windows",
  "windows",
  "windows-numerics",
  "windows-sys",

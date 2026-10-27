@@ -4,6 +4,8 @@
 //! browser process identifier and the absolute runtime DLL path after applying Rivet's session
 //! ownership checks.
 
+pub mod chrome_build;
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
