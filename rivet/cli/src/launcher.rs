@@ -9,20 +9,84 @@
 mod windows {
     use std::path::PathBuf;
     use std::process::Command;
-    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use std::sync::atomic::{AtomicIsize, Ordering};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateFontW, DeleteObject, CLEARTYPE_QUALITY, COLOR_WINDOW,
+    };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::HiDpi::{
-        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        GetDpiForSystem, GetDpiForWindow, SetProcessDpiAwarenessContext,
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, LoadCursorW,
-        PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage, CW_USEDEFAULT, IDC_ARROW,
-        MB_ICONERROR, MB_OK, MSG, SW_SHOW, WM_COMMAND, WM_DESTROY, WNDCLASSW, WS_CAPTION, WS_CHILD,
-        WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetDlgItem, GetMessageW,
+        LoadCursorW, PostQuitMessage, RegisterClassW, SendMessageW, SetWindowPos, ShowWindow,
+        TranslateMessage, CW_USEDEFAULT, IDC_ARROW, MB_ICONERROR, MB_OK, MSG, SWP_NOACTIVATE,
+        SWP_NOZORDER, SW_SHOW, WM_COMMAND, WM_DESTROY, WM_DPICHANGED, WM_SETFONT, WNDCLASSW,
+        WS_CAPTION, WS_CHILD, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
     };
 
     const EDGE_BUTTON: usize = 101;
     const CHROME_BUTTON: usize = 102;
+    const HEADLINE: usize = 103;
+    const DETAIL: usize = 104;
+    static CONTROL_FONT: AtomicIsize = AtomicIsize::new(0);
+
+    fn scale(value: i32, dpi: u32) -> i32 {
+        (value * dpi as i32 + 48) / 96
+    }
+
+    unsafe fn layout(window: HWND, dpi: u32) {
+        for (id, x, y, width, height) in [
+            (HEADLINE, 32, 36, 380, 26),
+            (DETAIL, 32, 72, 390, 22),
+            (EDGE_BUTTON, 32, 128, 190, 40),
+            (CHROME_BUTTON, 238, 128, 190, 40),
+        ] {
+            let control = GetDlgItem(window, id as i32);
+            if !control.is_null() {
+                SetWindowPos(
+                    control,
+                    std::ptr::null_mut(),
+                    scale(x, dpi),
+                    scale(y, dpi),
+                    scale(width, dpi),
+                    scale(height, dpi),
+                    SWP_NOACTIVATE | SWP_NOZORDER,
+                );
+            }
+        }
+        let face = wide("Segoe UI");
+        let font = CreateFontW(
+            -scale(14, dpi),
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            CLEARTYPE_QUALITY as u32,
+            0,
+            face.as_ptr(),
+        );
+        if !font.is_null() {
+            for id in [HEADLINE, DETAIL, EDGE_BUTTON, CHROME_BUTTON] {
+                let control = GetDlgItem(window, id as i32);
+                if !control.is_null() {
+                    SendMessageW(control, WM_SETFONT, font as usize, 1);
+                }
+            }
+            let previous = CONTROL_FONT.swap(font as isize, Ordering::AcqRel);
+            if previous != 0 {
+                DeleteObject(previous as _);
+            }
+        }
+    }
     const WINDOW_CLASS: [u16; 15] = [
         b'R' as u16,
         b'i' as u16,
@@ -117,6 +181,20 @@ mod windows {
         lparam: LPARAM,
     ) -> LRESULT {
         match message_id {
+            WM_DPICHANGED => {
+                let rect = &*(lparam as *const RECT);
+                SetWindowPos(
+                    window,
+                    std::ptr::null_mut(),
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOACTIVATE | SWP_NOZORDER,
+                );
+                layout(window, (wparam & 0xffff) as u32);
+                0
+            }
             WM_COMMAND => {
                 let control = wparam & 0xffff;
                 if control == EDGE_BUTTON || control == CHROME_BUTTON {
@@ -133,6 +211,10 @@ mod windows {
                 DefWindowProcW(window, message_id, wparam, lparam)
             }
             WM_DESTROY => {
+                let font = CONTROL_FONT.swap(0, Ordering::AcqRel);
+                if font != 0 {
+                    DeleteObject(font as _);
+                }
                 PostQuitMessage(0);
                 0
             }
@@ -150,6 +232,7 @@ mod windows {
             class.lpfnWndProc = Some(window_proc);
             class.hInstance = instance;
             class.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
+            class.hbrBackground = (COLOR_WINDOW as usize + 1) as _;
             class.lpszClassName = WINDOW_CLASS.as_ptr();
             if RegisterClassW(&class) == 0 {
                 return Err("could not register the Rivet launcher window".into());
@@ -162,8 +245,8 @@ mod windows {
                 WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                480,
-                300,
+                scale(480, GetDpiForSystem()),
+                scale(300, GetDpiForSystem()),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 instance,
@@ -186,7 +269,7 @@ mod windows {
                 380,
                 26,
                 window,
-                std::ptr::null_mut(),
+                HEADLINE as _,
                 instance,
                 std::ptr::null(),
             );
@@ -200,7 +283,7 @@ mod windows {
                 390,
                 22,
                 window,
-                std::ptr::null_mut(),
+                DETAIL as _,
                 instance,
                 std::ptr::null(),
             );
@@ -232,6 +315,7 @@ mod windows {
                 instance,
                 std::ptr::null(),
             );
+            layout(window, GetDpiForWindow(window).max(96));
             ShowWindow(window, SW_SHOW);
             let mut message: MSG = std::mem::zeroed();
             while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
@@ -240,6 +324,18 @@ mod windows {
             }
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::scale;
+
+        #[test]
+        fn fr2_launcher_scales_layout_for_monitor_dpi() {
+            assert_eq!(scale(480, 96), 480);
+            assert_eq!(scale(480, 192), 960);
+            assert_eq!(scale(32, 144), 48);
+        }
     }
 }
 
