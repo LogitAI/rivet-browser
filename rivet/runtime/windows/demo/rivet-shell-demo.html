@@ -177,6 +177,35 @@
     .caption button:hover { background: rgba(0,0,0,.0373); }
     .caption button.close:hover { background: #c42b1c; color: #fff; }
     .body { position: relative; min-height: 0; overflow: hidden; }
+    .view { position: relative; height: 100%; min-width: 0; }
+    /* The Sidebar, as in Whale: extensions in a rail on the right. It lives inside the page that
+       holds the caption buttons, below that page's title bar, so the title bar and the window's
+       top right corner stay exactly as they are. */
+    .body.with-rail { display: flex; }
+    .body.with-rail .view { flex: 1; }
+    .rail { flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; width: 40px; padding: 6px 0; border-left: 1px solid var(--hairline); background: color-mix(in srgb, var(--tint) 4%, var(--paper)); }
+    .rail .ext { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--soft-ink); }
+    .rail .ext .g { font-size: 14px; }
+    .rail .ext:hover { background: rgba(31,32,36,.06); color: var(--ink); }
+    .rail .ext.on { background: color-mix(in srgb, var(--tint) 14%, #fff); color: var(--accent); }
+    .rail .rule { width: 18px; height: 1px; margin: 4px 0; background: var(--hairline); }
+    .rail .grow { flex: 1; }
+    /* While folded, the button that brings the Sidebar back stays hidden. It appears, translucent,
+       only when the pointer reaches the page's lower right corner, and turns solid under the pointer. */
+    .rail-hot { position: absolute; z-index: 3; right: 0; bottom: 0; width: 72px; height: 72px; }
+    .rail-open { position: absolute; z-index: 3; right: 4px; bottom: 6px; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: rgba(255,255,255,.4); backdrop-filter: blur(8px); color: var(--soft-ink); opacity: 0; pointer-events: none; transition: opacity .2s ease, background-color .15s, transform .36s cubic-bezier(.3, 1.45, .55, 1); }
+    .rail-hot:hover .rail-open, .rail-open:focus-visible { opacity: .6; pointer-events: auto; }
+    .rail-hot .rail-open:hover { opacity: 1; background: rgba(31,32,36,.06); color: var(--ink); }
+    .rail-open .g { font-size: 14px; }
+    .ext-panel { flex: none; display: flex; flex-direction: column; width: 240px; border-left: 1px solid var(--hairline); background: var(--paper); animation: settle .2s ease; }
+    .ext-panel header { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 6px 0 14px; border-bottom: 1px solid var(--hairline); font-size: 13px; font-weight: 600; }
+    .ext-panel header .g { color: var(--accent); font-size: 15px; }
+    .ext-panel header span { flex: 1; }
+    .ext-panel .content { flex: 1; overflow: auto; padding: 12px; font-size: 13px; line-height: 1.6; color: var(--soft-ink); }
+    .ext-panel textarea, .ext-panel input { width: 100%; border: 0; border-radius: 10px; padding: 10px 12px; background: #fff; box-shadow: inset 0 0 0 1px var(--hairline); font: 13px Manrope, sans-serif; color: var(--ink); resize: none; outline: 0; }
+    .ext-panel .result { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: rgba(31,32,36,.04); }
+    .ext-panel .keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; }
+    .ext-panel .keys button { height: 32px; border-radius: 10px; background: rgba(31,32,36,.05); font-weight: 600; }
     .page { height: 100%; overflow: auto; padding: 56px clamp(28px, 6vw, 104px); }
     .page.start { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; padding-bottom: 72px; background: linear-gradient(180deg, var(--paper), color-mix(in srgb, var(--tint) 9%, var(--paper))); }
     .ask { width: min(560px, 100%); margin: 0 0 6vh; border-radius: 16px; background: #fff; box-shadow: 0 0 0 1px rgba(31,32,36,.06), 0 10px 30px color-mix(in srgb, var(--tint) 14%, transparent); }
@@ -188,11 +217,14 @@
     .ask .attach { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 8px; color: #75737c; font-size: 12.5px; }
     .ask .attach .g { font-size: 12px; }
     .ask .attach:hover { background: rgba(31,32,36,.05); }
-    .ask .where-to { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 8px; background: color-mix(in srgb, var(--tint) 10%, #fff); color: var(--soft-ink); font: 500 10.5px/1 "DM Mono", monospace; }
-    .ask .where-to i { width: 6px; height: 6px; border-radius: 50%; background: var(--tint); }
-    .ask .send { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--tint) 22%, #fff); color: var(--accent); }
+    .ask .send { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--tint) 22%, #fff); color: var(--accent); }
     .ask .send .g { font-size: 13px; }
     .ask .send.ready { background: var(--accent); color: #fff; }
+    /* The start page shows only the mark's silhouette, a rivet head and its tail, filled with a
+       quiet gradient in the space colour. The logo's own ink and pin stay out of it. */
+    .sky-mark { width: 76px; height: 76px; margin: 0 0 22px; overflow: visible; filter: drop-shadow(0 10px 18px color-mix(in srgb, var(--tint) 16%, transparent)); }
+    .sky-mark .sky-top { stop-color: color-mix(in srgb, var(--tint) 16%, #fff); }
+    .sky-mark .sky-low { stop-color: color-mix(in srgb, var(--tint) 48%, var(--paper)); }
     /* The space line sits centred at the foot of the page and stays there while the page scrolls. */
     .workspace-info { position: absolute; left: 0; right: 0; bottom: 18px; display: flex; justify-content: center; gap: 6px; color: #8d8b94; font-size: 12px; pointer-events: none; }
     .workspace-info b { color: #5d5b64; font-weight: 600; }
@@ -362,6 +394,7 @@
   <nav class="features" aria-label="Features">
     <button data-feature="spaces">Spaces</button>
     <button data-feature="appbar">Appbar</button>
+    <button data-feature="sidebar" title="Unfold or fold the Sidebar. While folded, it opens from the lower right corner.">Sidebar</button>
     <button data-feature="split">Split View</button>
     <button data-feature="preview">Link Preview</button>
     <button data-feature="mini">Mini Window</button>
@@ -467,11 +500,23 @@
 
     function pageHtml(item) {
       if (item.body === 'hero') {
-        return `<div class="ask">
+        return `<svg class="sky-mark" viewBox="0 0 96 96" aria-hidden="true">
+            <defs>
+              <clipPath id="rivet-silhouette">
+                <circle cx="44" cy="44" r="32"/>
+                <path d="M58 49 L83 74 L74 83 L49 58 Z"/>
+                <circle cx="78.5" cy="78.5" r="6.4"/>
+              </clipPath>
+              <linearGradient id="sky-fill" x1="0" y1="0" x2=".3" y2="1"><stop class="sky-top" offset="0"/><stop class="sky-low" offset="1"/></linearGradient>
+            </defs>
+            <g clip-path="url(#rivet-silhouette)">
+              <rect width="96" height="96" fill="url(#sky-fill)"/>
+            </g>
+          </svg>
+          <div class="ask">
             <label class="line"><i class="g">&#xE721;</i><input class="ask-input" placeholder="Search or ask Rivet"></label>
             <div class="tools">
               <button class="attach"><i class="g">&#xE710;</i>Add tabs or files</button>
-              <span class="where-to" title="Opens in this space's browser and profile"><i></i>${spaces[currentSpace].profile}</span>
               <button class="send" title="Send (Enter)"><i class="g">&#xE74A;</i></button>
             </div>
           </div>`;
@@ -513,6 +558,27 @@
       return `<div class="devtools${active ? ' open' : ''}"><nav>${tabsHtml}</nav>${active ? bodies[active] : ''}</div>`;
     }
 
+    /* Sidebar extensions */
+    // The Sidebar is part of every window. It starts folded, one corner away.
+    let sidebarOn = true;
+    let sidebarFolded = true;
+    let openExtension = null;
+    const extensions = [
+      { id: 'translate', name: 'Translate', glyph: '&#xE774;', body: () => `<textarea rows="4" placeholder="Type or paste text"></textarea><div class="result">브라우저는 그대로, 작업 공간은 새롭게.</div>` },
+      { id: 'notes', name: 'Notes', glyph: '&#xE70F;', body: () => `<textarea rows="14" placeholder="A note for this space"></textarea>` },
+      { id: 'calculator', name: 'Calculator', glyph: '&#xE8EF;', body: () => `<input value="1,280 × 12" aria-label="Expression"><div class="result" style="font:600 20px Manrope">15,360</div><div class="keys">${['7','8','9','÷','4','5','6','×','1','2','3','−','0','.','=','+'].map((key) => `<button>${key}</button>`).join('')}</div>` },
+      { id: 'passwords', name: 'Passwords', glyph: '&#xE72E;', body: () => `Passwords and passkeys stay in the browser and Windows. This opens the browser's own manager for the current site.` },
+      { id: 'chat', name: 'Chat', glyph: '&#xE8BD;', body: () => `<div class="result">Team chat stays open beside your pages.</div>` },
+    ];
+    function railHtml() {
+      return `<nav class="rail" aria-label="Sidebar">${extensions.map((ext) => `<button class="ext${ext.id === openExtension ? ' on' : ''}" data-ext="${ext.id}" title="${ext.name}"><i class="g">${ext.glyph}</i></button>`).join('')}<span class="rule"></span><button class="ext" title="Add extension"><i class="g">&#xE710;</i></button><span class="grow"></span><button class="ext rail-fold" title="Fold the Sidebar"><i class="g">&#xE76C;</i></button></nav>`;
+    }
+    function extPanelHtml() {
+      const ext = extensions.find((item) => item.id === openExtension);
+      if (!ext) return '';
+      return `<section class="ext-panel" aria-label="${ext.name}"><header><i class="g">${ext.glyph}</i><span>${ext.name}</span><button class="icon ext-close" title="Close"><i class="g" style="font-size:10px">&#xE8BB;</i></button></header><div class="content">${ext.body()}</div></section>`;
+    }
+
     function buildPanel(id) {
       const item = byId(id);
       const first = id === corner(layout, 'left', 'top');
@@ -533,7 +599,7 @@
           ${isSplit() ? `<button class="icon unsplit" title="Close this page of the split"><i class="g" style="font-size:12px">&#xE711;</i></button>` : ''}
           ${last ? `<div class="caption"><button title="Minimize">&#xE921;</button><button title="Maximize">&#xE922;</button><button class="close" title="Close">&#xE8BB;</button></div>` : '<span style="width:6px"></span>'}
         </div>
-        <div class="body"><div class="page${item.body === 'hero' ? ' start' : ''}">${pageHtml(item)}</div>${item.body === 'hero' ? `<div class="workspace-info">Opened in <b>${spaces[currentSpace].profile}</b></div>` : ''}${drawerHtml(item)}</div>`;
+        <div class="body${last && sidebarOn && !sidebarFolded ? ' with-rail' : ''}"><div class="view"><div class="page${item.body === 'hero' ? ' start' : ''}">${pageHtml(item)}</div>${item.body === 'hero' ? `<div class="workspace-info">Opened in <b>${spaces[currentSpace].profile}</b></div>` : ''}${drawerHtml(item)}${id === corner(layout, 'right', 'bottom') && sidebarOn && sidebarFolded ? `<div class="rail-hot"><button class="rail-open" title="Open the Sidebar"><i class="g">&#xE76B;</i></button></div>` : ''}</div>${last && sidebarOn && !sidebarFolded ? extPanelHtml() + railHtml() : ''}</div>`;
       panel.addEventListener('pointerdown', (event) => { if (focus !== id && !event.target.closest('input')) { focus = id; render(); } });
       const ask = panel.querySelector('.ask-input');
       if (ask) {
@@ -548,6 +614,17 @@
       }
       panel.querySelectorAll('[data-dev]').forEach((button) => button.addEventListener('click', (event) => { event.stopPropagation(); devAction(item, button.dataset.dev, panel); }));
       panel.querySelectorAll('[data-drawer]').forEach((name) => name.addEventListener('click', () => { drawers[item.id] = name.dataset.drawer; renderPanes(); }));
+      panel.querySelectorAll('[data-ext]').forEach((button) => button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openExtension = openExtension === button.dataset.ext ? null : button.dataset.ext;
+        renderPanes();
+      }));
+      const fold = panel.querySelector('.rail-fold');
+      if (fold) fold.addEventListener('click', (event) => { event.stopPropagation(); sidebarFolded = true; openExtension = null; renderPanes(); });
+      const unfold = panel.querySelector('.rail-open');
+      if (unfold) unfold.addEventListener('click', (event) => { event.stopPropagation(); sidebarFolded = false; renderPanes(); });
+      const extClose = panel.querySelector('.ext-close');
+      if (extClose) extClose.addEventListener('click', (event) => { event.stopPropagation(); openExtension = null; renderPanes(); });
       const popout = panel.querySelector('.popout');
       if (popout) popout.addEventListener('click', (event) => { event.stopPropagation(); popOut(id); });
       const grip = panel.querySelector('.grip');
@@ -888,6 +965,7 @@
         renderPanes();
       },
       spaces: () => setSpace((currentSpace + 1) % spaces.length),
+      sidebar: () => { sidebarFolded = !sidebarFolded; if (sidebarFolded) openExtension = null; renderPanes(); },
       // Hiding keeps the appbar one edge away. Pinning from the floating appbar restores it.
       appbar: () => { frame.classList.toggle('collapsed'); frame.classList.remove('peek'); },
     };
