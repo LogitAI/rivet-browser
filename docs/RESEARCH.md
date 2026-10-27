@@ -73,3 +73,62 @@
 - 일반 창 상태에서 해당 객체의 클라이언트 영역 배치와 입력 처리가 함께 바뀌는지 검증한다.
 - 심볼 식별과 바이너리 확인에 실패한 브라우저 버전은 변경하지 않고 오류를 반환한다.
 - 일반 Chrome 창과 Rivet 창을 동시에 열어 격리, IME, 권한 창, 다운로드, DPI 변경을 확인한다.
+
+## 2026-10-28: 브라우저 레이아웃 훅과 합성 사이드바 실험
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Google Chrome `156.0.8078.48`, 주 모니터 200%(192 DPI), 보조 모니터 125%(120 DPI).
+- Chrome은 `--app`으로 열었다. 측정은 `scripts/tests/windows-frame.ps1`과 `PrintWindow` 캡처로 했다.
+
+### 이전 구현에서 확인한 문제
+
+- 런타임이 `RivetHostWindow`라는 별도 최상위 창을 만들고 Chrome 최상위 창을 `WS_CHILD`로 바꿔 그 안에
+  넣었다. Chrome은 캡션 버튼을 클라이언트 영역에 직접 그리므로 버튼이 두 벌 보였다. 이를 감추려고
+  `--start-fullscreen`을 썼고, 별도 스레드가 16ms마다 메시지를 확인했다.
+
+### 그리기 경로 실험
+
+- Chrome 최상위 창의 확장 스타일은 `0x200100`이다. `WS_EX_NOREDIRECTIONBITMAP`이 있어 GDI로 그린
+  non-client 영역은 화면에 나오지 않았다.
+- 같은 창에 DirectComposition 타깃을 만들 수 있었다. 브라우저 프로세스 안에서 만들어야 한다.
+- DirectComposition visual의 원점은 클라이언트 영역 왼쪽 위다. 클라이언트 밖으로 놓은 부분은 정확히 경계에서
+  잘렸다. 따라서 non-client 영역을 예약하는 방식으로는 같은 표면에 그릴 수 없다.
+
+### 레이아웃 함수
+
+- PDB 공개 심볼에서 `BrowserFrameViewWin`의 주 vtable(RVA `0x0FE73E28`)을 찾았다.
+  `GetBoundsForClientView`는 103번 칸이고 `this+0x378`의 캐시된 사각형을 돌려준다.
+  `GetBrowserLayoutParams`(124번 칸)도 같은 사각형을 첫 필드로 쓴다.
+- 103번 칸을 바꿔 사각형을 오른쪽으로 292 DIP 옮기자 Chrome이 타이틀바와 콘텐츠를 그 옆에 배치했다.
+  200%에서 렌더러 창은 클라이언트 왼쪽에서 584px 떨어져 시작했다.
+- 실제 마우스 입력으로 링크를 눌러 이동을 확인했다. 좌표 보정은 필요 없었다.
+- vtable은 같은 프로세스의 모든 Chrome 창에 공유된다. 훅은 `views::HWNDForView`로 창을 찾아 Rivet 창만
+  바꾼다.
+- 공개 PDB의 `BrowserFrameViewWin` 타입에는 멤버 목록이 없었다. 창 제목 뷰의 위치를 바꾸려면 다른 방법이
+  필요하다.
+- `chrome-builds` 도구는 PDB와 바이너리만으로 손으로 찾은 값과 같은 표 항목을 만들었다. Google 심볼 서버의
+  경로는 `chrome.dll.pdb/<GUID><age>/chrome.dll.pdb`이다.
+
+### 동작 확인
+
+- 최대화, 복원, 최소화 후 복원에서 프레임 검사가 통과했다.
+- F11 전체화면에서 사이드바가 빠지고 해제하면 돌아왔다.
+- 보조 모니터로 옮기면 사이드바가 365px(292 DIP, 125%)이 되고 검사가 통과했다. 모니터를 넘는 동안에는
+  Windows DPI와 Chrome 배율이 잠시 달랐다. 사이드바는 Chrome이 실제로 배치한 배율을 따르게 했다.
+- 사이드바가 창 위쪽 테두리까지 덮어 Chrome이 조금 아래에서 시작하는 것처럼 보였다. 사이드바를
+  `DWMWA_VISIBLE_FRAME_BORDER_THICKNESS`만큼 내려 테두리가 창 전체 폭에 이어지게 했다.
+- 125%에서는 Chrome 렌더러 창이 반올림으로 1px 넓게 잡혔다. 검사는 1px 차이를 허용한다.
+- 가려진 창은 Chrome이 렌더러를 숨긴다. 백그라운드 확인은 `--disable-features=CalculateNativeWinOcclusion`으로
+  먼저 연 같은 프로필 프로세스에서 했다.
+
+### 작업 표시줄 아이콘
+
+- Chrome app window는 Chrome의 AppUserModelID를 써서 Chrome 아이콘으로 묶였다.
+- `WM_SETICON`의 단일 크기 아이콘만 있으면 작업 표시줄이 크기를 바꿔 흐리게 그렸다.
+  `RelaunchIconResource`가 여러 크기의 `rivet.ico`를 가리키면 선명했다.
+
+### 남은 확인
+
+- 최소화와 최대화 애니메이션의 육안 확인, 한국어 IME, 권한 창, 다운로드, 드래그앤드롭.
+- 첫 정기 CI 실행이 GitHub Windows 실행기에서 화면 검사를 통과하는지.
