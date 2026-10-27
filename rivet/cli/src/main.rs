@@ -112,12 +112,14 @@ fn run_start(options: StartOptions) -> Result<(), String> {
 
     if options.json {
         println!(
-            "{{\"pid\":{},\"display\":\"{}\",\"url\":\"{}\",\"runtime_loaded\":{},\"session_id\":{}}}",
-            task_id,
-            plan.display.as_str(),
-            escape_json(&request.url),
-            runtime.is_some(),
-            session_id.as_ref().map_or("null".to_owned(), |id| format!("\"{}\"", escape_json(id)))
+            "{}",
+            start_json(
+                task_id,
+                plan.display.as_str(),
+                &request.url,
+                runtime.is_some(),
+                session_id.as_deref(),
+            )
         );
     } else {
         println!(
@@ -305,7 +307,7 @@ fn run_close(options: CloseOptions) -> Result<(), String> {
     .map_err(|error| error.to_string())?;
     registry.save(&state).map_err(|error| error.to_string())?;
     if options.json {
-        println!("{{\"closed\":\"{}\"}}", escape_json(&session.id));
+        println!("{}", close_json(&session.id));
     } else {
         println!("closed Rivet session {}", session.id);
     }
@@ -332,8 +334,25 @@ fn next_value(arguments: &[String], index: &mut usize, option: &str) -> Result<S
         .ok_or_else(|| format!("{option} needs a value"))
 }
 
-fn escape_json(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+fn start_json(
+    pid: u32,
+    display: &str,
+    url: &str,
+    runtime_loaded: bool,
+    session_id: Option<&str>,
+) -> String {
+    serde_json::json!({
+        "pid": pid,
+        "display": display,
+        "url": url,
+        "runtime_loaded": runtime_loaded,
+        "session_id": session_id,
+    })
+    .to_string()
+}
+
+fn close_json(id: &str) -> String {
+    serde_json::json!({ "closed": id }).to_string()
 }
 
 #[cfg(test)]
@@ -391,6 +410,21 @@ mod tests {
         assert_eq!(options.id, "123-abc");
         assert_eq!(options.state, Some(PathBuf::from("C:/Rivet/sessions.json")));
         assert!(options.json);
+    }
+
+    #[test]
+    fn fr4_json_output_escapes_control_characters() {
+        let url = "https://example.test/\"a\"\nb\t\u{1}";
+        let parsed: serde_json::Value =
+            serde_json::from_str(&start_json(7, "visible", url, true, Some("id\n\"x\""))).unwrap();
+        assert_eq!(parsed["url"], url);
+        assert_eq!(parsed["session_id"], "id\n\"x\"");
+        assert_eq!(parsed["pid"], 7);
+        let parsed: serde_json::Value = serde_json::from_str(&close_json("a\nb\"c")).unwrap();
+        assert_eq!(parsed["closed"], "a\nb\"c");
+        let none: serde_json::Value =
+            serde_json::from_str(&start_json(1, "hidden", "u", false, None)).unwrap();
+        assert!(none["session_id"].is_null());
     }
 
     #[test]
