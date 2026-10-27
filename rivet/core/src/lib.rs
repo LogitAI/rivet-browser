@@ -113,9 +113,9 @@ pub fn build_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchEr
     }
     match display {
         DisplayMode::Visible => {
+            // An app window has no tab strip or address bar. The runtime adds the Rivet sidebar
+            // to this window, so it stays a normal resizable window rather than fullscreen.
             arguments.push(format!("--app={}", request.url));
-            // Chromium must omit its own Views title layout before the native host embeds it.
-            arguments.push("--start-fullscreen".to_owned());
         }
         DisplayMode::Hidden => {
             arguments.push("--headless=new".to_owned());
@@ -168,13 +168,6 @@ mod tests {
     }
 
     #[test]
-    fn fr2_current_demo_requests_fullscreen_layout() {
-        let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
-        assert!(plan.arguments.contains(&"--start-fullscreen".into()));
-    }
-
-    #[test]
-    #[ignore = "Chrome currently uses fullscreen layout and exposes its exit control"]
     fn fr2_browser_frame_does_not_require_fullscreen() {
         let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
         assert!(!plan.arguments.contains(&"--start-fullscreen".into()));

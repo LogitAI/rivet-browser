@@ -12,3 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 windows-sys.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+windows-numerics.workspace = true

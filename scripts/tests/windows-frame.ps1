@@ -1,17 +1,17 @@
-param([switch]$InspectOnly, [switch]$ExpectWindowed)
+param([Parameter(Mandatory = $true)][string]$State, [switch]$InspectOnly)
 
 $ErrorActionPreference = 'Stop'
-# Read native window geometry without moving windows or accessing page content.
+# Reads native window geometry of the Rivet sessions in a state file, without moving windows or
+# reading page content. The sidebar is a composition visual of the browser window, so the check
+# looks at where the browser placed its own web content.
 Add-Type -TypeDefinition @'
 using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class RivetFrameCheck {
     public delegate bool Visit(IntPtr hwnd, IntPtr data);
     [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
-    [StructLayout(LayoutKind.Sequential)] public struct MonitorInfo { public uint Size; public Rect Monitor, Work; public uint Flags; }
     [DllImport("user32.dll")] static extern bool EnumWindows(Visit callback, IntPtr data);
     [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr hwnd, Visit callback, IntPtr data);
     [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hwnd);
@@ -21,74 +21,50 @@ public static class RivetFrameCheck {
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
     [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
-    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll")] static extern long GetWindowLongPtr(IntPtr hwnd, int index);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
-    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
-    [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
-    [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
-    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, uint key, out Rect value, uint size);
     static string Class(IntPtr hwnd) { var text=new StringBuilder(256); GetClassName(hwnd,text,256); return text.ToString(); }
     public class Observation {
-        public long Host, Browser, Renderer; public uint ProcessId, Dpi;
-        public int HostClientTop, HostClientLeft, BrowserWidth, BrowserHeight;
-        public int RendererInsetLeft, RendererInsetTop, RendererInsetRight, RendererInsetBottom;
-        public int CaptionButtonsWidth; public bool CaptionButtonsExposed, BrowserInsideHost;
-        public int HostWidth, HostHeight, WorkWidth, WorkHeight; public bool HostIsWindowed;
+        public long Browser; public uint Dpi; public bool RivetWindowExists, BrowserIsTopLevel, BrowserIsResizable;
+        public int ClientLeft, ClientRight, ContentLeft, ContentRight, ExpectedSidebar;
     }
-    public static Observation[] Read() {
+    public static Observation Read(long handle) {
         var prior=SetThreadDpiAwarenessContext(new IntPtr(-4));
         try {
-            var result=new List<Observation>();
-            EnumWindows((host,p)=> {
-                if(Class(host)!="RivetHostWindow" || !IsWindowVisible(host) || IsIconic(host)) return true;
-                IntPtr browser=IntPtr.Zero, renderer=IntPtr.Zero;
-                EnumChildWindows(host,(child,q)=> {
-                    if(Class(child)=="Chrome_WidgetWin_1" && GetParent(child)==host) browser=child;
-                    return true;
-                },IntPtr.Zero);
-                if(browser!=IntPtr.Zero) EnumChildWindows(browser,(child,q)=> {
-                    if(Class(child)=="Chrome_RenderWidgetHostHWND" && IsWindowVisible(child)) renderer=child;
-                    return true;
-                },IntPtr.Zero);
-                if(browser==IntPtr.Zero || renderer==IntPtr.Zero) return true;
-                GetWindowRect(host,out var h); GetClientRect(host,out var client);
-                var monitor=new MonitorInfo { Size=(uint)Marshal.SizeOf(typeof(MonitorInfo)) };
-                GetMonitorInfo(MonitorFromWindow(host,2),ref monitor);
-                var origin=new Point(); ClientToScreen(host,ref origin);
-                GetWindowRect(browser,out var b); GetWindowRect(renderer,out var r);
-                DwmGetWindowAttribute(host,5,out var buttons,16);
-                GetWindowThreadProcessId(host,out var pid);
-                result.Add(new Observation {
-                    Host=host.ToInt64(),Browser=browser.ToInt64(),Renderer=renderer.ToInt64(),ProcessId=pid,Dpi=GetDpiForWindow(host),
-                    HostClientTop=origin.Y-h.Top,HostClientLeft=origin.X-h.Left,
-                    BrowserWidth=b.Right-b.Left,BrowserHeight=b.Bottom-b.Top,
-                    RendererInsetLeft=r.Left-b.Left,RendererInsetTop=r.Top-b.Top,
-                    RendererInsetRight=b.Right-r.Right,RendererInsetBottom=b.Bottom-r.Bottom,
-                    CaptionButtonsWidth=buttons.Right-buttons.Left,
-                    CaptionButtonsExposed=buttons.Bottom<=b.Top-h.Top && buttons.Right>buttons.Left,
-                    BrowserInsideHost=b.Left>=origin.X && b.Top>=origin.Y && b.Right<=origin.X+client.Right && b.Bottom<=origin.Y+client.Bottom,
-                    HostWidth=h.Right-h.Left,HostHeight=h.Bottom-h.Top,
-                    WorkWidth=monitor.Work.Right-monitor.Work.Left,WorkHeight=monitor.Work.Bottom-monitor.Work.Top,
-                    HostIsWindowed=h.Left>monitor.Work.Left && h.Top>monitor.Work.Top && h.Right<monitor.Work.Right && h.Bottom<monitor.Work.Bottom
-                });
+            var browser=new IntPtr(handle);
+            bool rivet=false;
+            EnumWindows((window,p)=> { if(Class(window).StartsWith("Rivet") && IsWindowVisible(window)) rivet=true; return true; },IntPtr.Zero);
+            IntPtr content=IntPtr.Zero;
+            EnumChildWindows(browser,(child,q)=> {
+                if(Class(child)=="Chrome_RenderWidgetHostHWND" && IsWindowVisible(child)) content=child;
                 return true;
             },IntPtr.Zero);
-            return result.ToArray();
+            Rect c; GetClientRect(browser,out c);
+            var origin=new Point(); ClientToScreen(browser,ref origin);
+            var r=new Rect(); if(content!=IntPtr.Zero) GetWindowRect(content,out r);
+            long style=GetWindowLongPtr(browser,-16);
+            uint dpi=GetDpiForWindow(browser);
+            return new Observation {
+                Browser=handle, Dpi=dpi, RivetWindowExists=rivet,
+                BrowserIsTopLevel=GetParent(browser)==IntPtr.Zero && (style&0x40000000)==0,
+                BrowserIsResizable=(style&0x00040000)!=0,
+                ClientLeft=origin.X, ClientRight=origin.X+c.Right, ContentLeft=r.Left, ContentRight=r.Right,
+                ExpectedSidebar=(int)((292*dpi+48)/96)
+            };
         } finally { SetThreadDpiAwarenessContext(prior); }
     }
 }
 '@
-$observations = @([RivetFrameCheck]::Read())
-$observations | ConvertTo-Json -Depth 4
-if ($InspectOnly) { return }
-if ($observations.Count -eq 0) { throw 'FR-2: No visible Rivet host with a web renderer.' }
-foreach ($item in $observations) {
-    if ($item.HostClientTop -ne 0 -or $item.HostClientLeft -ne 0) { throw 'FR-2: Rivet client does not extend to the window edges.' }
-    if ($item.RendererInsetLeft -ne 0 -or $item.RendererInsetTop -ne 0 -or $item.RendererInsetRight -ne 0 -or $item.RendererInsetBottom -ne 0) {
-        throw 'FR-2: Chrome still reserves a title or border outside the web renderer.'
-    }
-    if (!$item.BrowserInsideHost) { throw 'FR-2: Chrome extends outside the Rivet client.' }
-    if (!$item.CaptionButtonsExposed) { throw 'FR-2: Native caption buttons overlap browser content or are absent.' }
-    if ($ExpectWindowed -and !$item.HostIsWindowed) { throw 'FR-2: The initial Rivet window fills the monitor work area.' }
+$sessions = (Get-Content -LiteralPath $State | ConvertFrom-Json).sessions.PSObject.Properties.Value
+if (@($sessions).Count -eq 0) { throw 'FR-2: The state file has no Rivet session.' }
+foreach ($session in $sessions) {
+    $item = [RivetFrameCheck]::Read($session.window_handle)
+    $item | ConvertTo-Json
+    if ($InspectOnly) { continue }
+    if ($item.RivetWindowExists) { throw 'FR-2: Rivet created a window of its own beside the browser.' }
+    if (!$item.BrowserIsTopLevel) { throw 'FR-2: The browser window was reparented into another window.' }
+    if (!$item.BrowserIsResizable) { throw 'FR-2: The browser window is fullscreen or lost its native frame.' }
+    if ($item.ContentLeft - $item.ClientLeft -ne $item.ExpectedSidebar) { throw 'FR-2: The browser did not lay its content out beside the sidebar.' }
+    if ($item.ContentRight -ne $item.ClientRight) { throw 'FR-2: The browser content does not reach the window edge.' }
 }
-Write-Output 'FR-2 native frame geometry: PASS'
+if (!$InspectOnly) { Write-Output 'FR-2 native frame geometry: PASS' }
