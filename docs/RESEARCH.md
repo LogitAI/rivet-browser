@@ -58,6 +58,10 @@
 - PDB 공개 심볼에서 `BrowserFrameViewWin::GetTopInset`, `GetBoundsForClientView`,
   `GetBrowserLayoutParams`, `Layout`, `views::HWNDForView`를 찾았다. 주소는 해당 빌드의 결과일 뿐이며
   다른 Chrome 버전에 그대로 적용할 수 없다.
+- 같은 PDB에서 `DesktopWindowTreeHostWin::GetContentWindowForHWND`,
+  `views::Widget::GetWidgetForNativeWindow`, `BrowserWidget::GetFrameView`도 찾았다. 함수 이름과 선언을
+  기준으로 하면 HWND에서 프레임 객체를 찾고 `HWNDForView`로 역확인하는 경로를 실험할 수 있다.
+  아직 실행하지 않았으므로 반환 객체의 정확한 타입, 스레드 조건, 실패 동작은 검증되지 않았다.
 - `Layout`의 x64 기계어는 여러 배치 경로를 인라인한다. `GetTopInset` 심볼 하나만 변경하면 모든 레이아웃이
   바뀐다고 가정할 수 없다. 콘텐츠 크기, 페인팅, 입력 위치를 함께 검증해야 한다.
 - 현재 회귀 검사 `fr2_browser_frame_does_not_require_fullscreen`은 의도적으로 건너뛰며, 명시 실행 시
