@@ -1,4 +1,4 @@
-//! Subclasses the browser window to show the sidebar and route the sidebar strip's input.
+//! Subclasses the browser window to show the appbar and route the appbar strip's input.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -22,21 +22,21 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
 };
 
+use super::appbar::Appbar;
 use super::chrome_layout;
-use super::sidebar::Sidebar;
 use super::taskbar;
-use super::{layout_scale_dpi, scale, strip_hit, title_bar_top, StripHit, SIDEBAR_WIDTH};
+use super::{layout_scale_dpi, scale, strip_hit, title_bar_top, StripHit, APPBAR_WIDTH};
 
 const BROWSER_CLASS: &str = "Chrome_WidgetWin_1";
 const ORIGINAL_PROC: &str = "Rivet.OriginalWindowProc";
-const ATTACH_MESSAGE: &str = "Rivet.AttachSidebar";
-/// Hit-test code for the sidebar's own content. Windows gives it no default behaviour, and the
+const ATTACH_MESSAGE: &str = "Rivet.AttachAppbar";
+/// Hit-test code for the appbar's own content. Windows gives it no default behaviour, and the
 /// browser never receives the non-client mouse messages that carry it.
-const SIDEBAR_HIT: u32 = HTBORDER;
+const APPBAR_HIT: u32 = HTBORDER;
 
 thread_local! {
-    /// Sidebars of the browser windows owned by this UI thread.
-    static SIDEBARS: RefCell<HashMap<isize, Sidebar>> = RefCell::new(HashMap::new());
+    /// Appbars of the browser windows owned by this UI thread.
+    static APPBARS: RefCell<HashMap<isize, Appbar>> = RefCell::new(HashMap::new());
 }
 
 fn wide(value: &str) -> Vec<u16> {
@@ -54,7 +54,7 @@ unsafe fn attach_message() -> u32 {
 }
 
 unsafe fn attached(window: HWND) -> bool {
-    SIDEBARS.with(|sidebars| sidebars.borrow().contains_key(&(window as isize)))
+    APPBARS.with(|appbars| appbars.borrow().contains_key(&(window as isize)))
 }
 
 unsafe fn framed(window: HWND) -> bool {
@@ -152,25 +152,25 @@ unsafe fn call_browser(window: HWND, message: u32, wparam: WPARAM, lparam: LPARA
     CallWindowProcW(original, window, message, wparam, lparam)
 }
 
-unsafe fn create_sidebar(window: HWND) {
+unsafe fn create_appbar(window: HWND) {
     if attached(window) {
         return;
     }
-    // Without the layout hook the browser would draw underneath the sidebar, so an unknown
+    // Without the layout hook the browser would draw underneath the appbar, so an unknown
     // browser build keeps working without Rivet instead.
     if let Err(error) = chrome_layout::install(reserved_width) {
         log(&format!("rivet: not attaching to this browser: {error}"));
         return;
     }
-    let sidebar = match Sidebar::new(window as isize) {
-        Ok(sidebar) => sidebar,
+    let appbar = match Appbar::new(window as isize) {
+        Ok(appbar) => appbar,
         Err(error) => {
             // The browser keeps working without Rivet when composition is unavailable.
-            log(&format!("rivet: could not compose the sidebar: {error}"));
+            log(&format!("rivet: could not compose the appbar: {error}"));
             return;
         }
     };
-    SIDEBARS.with(|sidebars| sidebars.borrow_mut().insert(window as isize, sidebar));
+    APPBARS.with(|appbars| appbars.borrow_mut().insert(window as isize, appbar));
     if let Err(error) = taskbar::apply(window as isize, runtime_directory().as_deref()) {
         log(&format!(
             "rivet: could not set the taskbar identity: {error}"
@@ -187,26 +187,26 @@ unsafe fn create_sidebar(window: HWND) {
         0,
         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
     );
-    update_sidebar(window);
+    update_appbar(window);
 }
 
-/// Places the sidebar visual over the strip the browser's layout left free and redraws it when its
+/// Places the appbar visual over the strip the browser's layout left free and redraws it when its
 /// size or DPI changed.
-unsafe fn update_sidebar(window: HWND) {
+unsafe fn update_appbar(window: HWND) {
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
     let dpi = layout_dpi(window);
-    let width = scale(SIDEBAR_WIDTH, dpi);
+    let width = scale(APPBAR_WIDTH, dpi);
     let visible = framed(window);
     // A window's composition target is positioned at its client origin, which is also where the
     // browser's layout leaves the strip free. The window's own top border runs across the whole
-    // window, so the sidebar starts below it exactly like the browser's title bar.
+    // window, so the appbar starts below it exactly like the browser's title bar.
     let top = top_border(window);
-    SIDEBARS.with(|sidebars| {
-        if let Some(sidebar) = sidebars.borrow_mut().get_mut(&(window as isize)) {
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
             let height = client.bottom - top;
-            if let Err(error) = sidebar.update(visible, 0, top, width, height, dpi) {
-                log(&format!("rivet: could not draw the sidebar: {error}"));
+            if let Err(error) = appbar.update(visible, 0, top, width, height, dpi) {
+                log(&format!("rivet: could not draw the appbar: {error}"));
             }
         }
     });
@@ -234,7 +234,7 @@ thread_local! {
 }
 
 /// The DPI the browser actually laid the window out at. While a window crosses monitors, the
-/// browser and Windows can briefly disagree, and the sidebar must match the browser's layout.
+/// browser and Windows can briefly disagree, and the appbar must match the browser's layout.
 unsafe fn layout_dpi(window: HWND) -> u32 {
     LAYOUT_DPI
         .with(|layouts| layouts.borrow().get(&(window as isize)).copied())
@@ -256,10 +256,10 @@ fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
             let changed = LAYOUT_DPI
                 .with(|layouts| layouts.borrow_mut().insert(window as isize, dpi) != Some(dpi));
             if changed {
-                update_sidebar(window);
+                update_appbar(window);
             }
         }
-        Some(SIDEBAR_WIDTH)
+        Some(APPBAR_WIDTH)
     }
 }
 
@@ -300,19 +300,19 @@ unsafe extern "system" fn browser_proc(
             StripHit::Caption => HTCAPTION as LRESULT,
             StripHit::Top => HTTOP as LRESULT,
             StripHit::TopLeft => HTTOPLEFT as LRESULT,
-            StripHit::Sidebar => SIDEBAR_HIT as LRESULT,
+            StripHit::Appbar => APPBAR_HIT as LRESULT,
         },
-        // Clicks on the sidebar's content never reach the browser, which would otherwise see
+        // Clicks on the appbar's content never reach the browser, which would otherwise see
         // non-client input it did not lay out.
         WM_NCLBUTTONDOWN | WM_NCLBUTTONUP | WM_NCLBUTTONDBLCLK | WM_NCRBUTTONDOWN
         | WM_NCRBUTTONUP
-            if wparam as u32 == SIDEBAR_HIT && attached(window) =>
+            if wparam as u32 == APPBAR_HIT && attached(window) =>
         {
             0
         }
         WM_WINDOWPOSCHANGED if attached(window) => {
             let result = call_browser(window, message, wparam, lparam);
-            update_sidebar(window);
+            update_appbar(window);
             result
         }
         // The browser sets its own or the page's icon. A Rivet window keeps Rivet's.
@@ -329,7 +329,7 @@ unsafe extern "system" fn browser_proc(
             if attached(window) {
                 taskbar::clear(window as isize);
             }
-            SIDEBARS.with(|sidebars| sidebars.borrow_mut().remove(&(window as isize)));
+            APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
             LAYOUT_DPI.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             let key = wide(ORIGINAL_PROC);
             let original = GetPropW(window, key.as_ptr());
@@ -339,7 +339,7 @@ unsafe extern "system" fn browser_proc(
             CallWindowProcW(original, window, message, wparam, lparam)
         }
         _ if message == attach_message() => {
-            create_sidebar(window);
+            create_appbar(window);
             0
         }
         _ => call_browser(window, message, wparam, lparam),

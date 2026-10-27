@@ -49,7 +49,7 @@ public static class RivetFrameCheck {
                 BrowserIsTopLevel=GetParent(browser)==IntPtr.Zero && (style&0x40000000)==0,
                 BrowserIsResizable=(style&0x00040000)!=0,
                 ClientLeft=origin.X, ClientRight=origin.X+c.Right, ContentLeft=r.Left, ContentRight=r.Right,
-                ExpectedSidebar=(int)((292*dpi+48)/96)
+                ExpectedSidebar=(int)((268*dpi+48)/96)
             };
         } finally { SetThreadDpiAwarenessContext(prior); }
     }

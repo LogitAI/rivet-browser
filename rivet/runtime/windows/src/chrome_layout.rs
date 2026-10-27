@@ -1,8 +1,8 @@
-//! Makes Chromium's own frame layout leave room for the Rivet sidebar.
+//! Makes Chromium's own frame layout leave room for the Rivet appbar.
 //!
 //! Chromium's Windows browser frame asks its frame view where the client view goes. Rivet
 //! replaces that one virtual function in the frame view's vtable. For windows that carry a Rivet
-//! sidebar it moves the client view right by the sidebar width. Chromium then lays out, paints,
+//! appbar it moves the client view right by the appbar width. Chromium then lays out, paints,
 //! hit-tests and positions menus, IME windows and accessibility bounds for the narrower view
 //! itself, so nothing has to be translated after the fact.
 //!
@@ -43,7 +43,7 @@ type ClientViewBounds = unsafe extern "system" fn(*const c_void, *mut Rect) -> *
 type HwndForView = unsafe extern "system" fn(*const c_void) -> HWND;
 
 /// Decides the width to reserve for a window from the client-view bounds the browser chose, or
-/// returns `None` when the window carries no Rivet sidebar.
+/// returns `None` when the window carries no Rivet appbar.
 pub type Reserve = fn(HWND, Rect) -> Option<i32>;
 
 struct Hook {
@@ -137,7 +137,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fr2_client_view_moves_right_by_the_sidebar_width() {
+    fn fr2_client_view_moves_right_by_the_appbar_width() {
         let bounds = Rect {
             x: 0,
             y: 32,
