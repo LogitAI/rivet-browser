@@ -42,6 +42,16 @@
             <Component Id="RivetLicense" Directory="LICENSESFOLDER" Guid="*">
                 <File Id="RivetLicense" Source="$(SourceDir)\LICENSE" KeyPath="yes" />
             </Component>
+            <!-- The runtime embeds these fonts. The Open Font License travels with them. -->
+            <Component Id="FontLicenseNewsreader" Directory="LICENSESFOLDER" Guid="*">
+                <File Id="FontLicenseNewsreader" Source="$(SourceDir)\OFL-Newsreader.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="FontLicenseManrope" Directory="LICENSESFOLDER" Guid="*">
+                <File Id="FontLicenseManrope" Source="$(SourceDir)\OFL-Manrope.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="FontLicenseDMMono" Directory="LICENSESFOLDER" Guid="*">
+                <File Id="FontLicenseDMMono" Source="$(SourceDir)\OFL-DMMono.txt" KeyPath="yes" />
+            </Component>
             <Component Id="RivetStartMenu" Directory="RivetStartMenuFolder" Guid="*">
                 <Shortcut Id="RivetStartMenuShortcut"
                           Name="Rivet Browser"
