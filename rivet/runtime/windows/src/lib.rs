@@ -27,6 +27,12 @@ fn scale(value: i32, dpi: u32) -> i32 {
     (value * dpi as i32 + 48) / 96
 }
 
+/// The DPI that maps a browser layout width in device-independent pixels onto its client width
+/// in physical pixels.
+fn layout_scale_dpi(client_pixels: i32, layout_width: i32) -> u32 {
+    ((client_pixels as i64 * 96 + layout_width as i64 / 2) / layout_width.max(1) as i64) as u32
+}
+
 /// What a point in the reserved strip does, given client coordinates of the browser window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StripHit {
@@ -85,6 +91,13 @@ mod tests {
     #[test]
     fn fr2_runtime_exposes_the_expected_abi() {
         assert_eq!(rivet_runtime_abi_version(), RUNTIME_ABI_VERSION);
+    }
+
+    #[test]
+    fn fr2_sidebar_follows_the_scale_the_browser_laid_out_at() {
+        assert_eq!(layout_scale_dpi(2400, 1200), 192);
+        assert_eq!(layout_scale_dpi(1500, 1200), 120);
+        assert_eq!(layout_scale_dpi(1200, 1200), 96);
     }
 
     #[test]

@@ -4,6 +4,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Dwm::{
+    DwmGetWindowAttribute, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS,
+};
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
 use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
@@ -22,7 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use super::chrome_layout;
 use super::sidebar::Sidebar;
 use super::taskbar;
-use super::{scale, strip_hit, StripHit, SIDEBAR_WIDTH};
+use super::{layout_scale_dpi, scale, strip_hit, StripHit, SIDEBAR_WIDTH};
 
 const BROWSER_CLASS: &str = "Chrome_WidgetWin_1";
 const ORIGINAL_PROC: &str = "Rivet.OriginalWindowProc";
@@ -192,24 +195,75 @@ unsafe fn create_sidebar(window: HWND) {
 unsafe fn update_sidebar(window: HWND) {
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
-    let dpi = dpi(window);
+    let dpi = layout_dpi(window);
     let width = scale(SIDEBAR_WIDTH, dpi);
     let visible = framed(window);
     // A window's composition target is positioned at its client origin, which is also where the
-    // browser's layout leaves the strip free.
-    let (left, top) = (0, 0);
+    // browser's layout leaves the strip free. The window's own top border runs across the whole
+    // window, so the sidebar starts below it exactly like the browser's title bar.
+    let top = top_border(window);
     SIDEBARS.with(|sidebars| {
         if let Some(sidebar) = sidebars.borrow_mut().get_mut(&(window as isize)) {
-            if let Err(error) = sidebar.update(visible, left, top, width, client.bottom, dpi) {
+            let height = client.bottom - top;
+            if let Err(error) = sidebar.update(visible, 0, top, width, height, dpi) {
                 log(&format!("rivet: could not draw the sidebar: {error}"));
             }
         }
     });
 }
 
-/// The strip the browser's layout leaves free, in device-independent pixels.
-fn reserved_width(window: HWND) -> Option<i32> {
-    unsafe { (attached(window) && framed(window)).then_some(SIDEBAR_WIDTH) }
+/// The thickness of the visible window border along the top edge. A maximized window has none.
+unsafe fn top_border(window: HWND) -> i32 {
+    if IsZoomed(window) != 0 {
+        return 0;
+    }
+    let mut thickness: u32 = 0;
+    let found = DwmGetWindowAttribute(
+        window,
+        DWMWA_VISIBLE_FRAME_BORDER_THICKNESS as u32,
+        (&mut thickness as *mut u32).cast(),
+        std::mem::size_of::<u32>() as u32,
+    );
+    if found == 0 {
+        thickness as i32
+    } else {
+        0
+    }
+}
+
+thread_local! {
+    /// The scale each browser window last laid itself out at, as a DPI.
+    static LAYOUT_DPI: RefCell<HashMap<isize, u32>> = RefCell::new(HashMap::new());
+}
+
+/// The DPI the browser actually laid the window out at. While a window crosses monitors, the
+/// browser and Windows can briefly disagree, and the sidebar must match the browser's layout.
+unsafe fn layout_dpi(window: HWND) -> u32 {
+    LAYOUT_DPI
+        .with(|layouts| layouts.borrow().get(&(window as isize)).copied())
+        .unwrap_or_else(|| dpi(window))
+}
+
+/// The strip the browser's layout leaves free, in device-independent pixels. Also records the
+/// scale of this layout, which is the browser's client width over its layout width.
+fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
+    unsafe {
+        if !attached(window) || !framed(window) {
+            return None;
+        }
+        let mut client: RECT = std::mem::zeroed();
+        GetClientRect(window, &mut client);
+        let layout_width = bounds.x + bounds.width;
+        if layout_width > 0 && client.right > 0 {
+            let dpi = layout_scale_dpi(client.right, layout_width);
+            let changed = LAYOUT_DPI
+                .with(|layouts| layouts.borrow_mut().insert(window as isize, dpi) != Some(dpi));
+            if changed {
+                update_sidebar(window);
+            }
+        }
+        Some(SIDEBAR_WIDTH)
+    }
 }
 
 fn log(message: &str) {
@@ -226,7 +280,7 @@ unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
         y: ((lparam >> 16) & 0xffff) as i16 as i32,
     };
     ScreenToClient(window, &mut point);
-    let dpi = dpi(window);
+    let dpi = layout_dpi(window);
     let border = if IsZoomed(window) != 0 {
         0
     } else {
@@ -279,6 +333,7 @@ unsafe extern "system" fn browser_proc(
                 taskbar::clear(window as isize);
             }
             SIDEBARS.with(|sidebars| sidebars.borrow_mut().remove(&(window as isize)));
+            LAYOUT_DPI.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             let key = wide(ORIGINAL_PROC);
             let original = GetPropW(window, key.as_ptr());
             SetWindowLongPtrW(window, GWLP_WNDPROC, original as isize);

@@ -64,7 +64,8 @@ foreach ($session in $sessions) {
     if ($item.RivetWindowExists) { throw 'FR-2: Rivet created a window of its own beside the browser.' }
     if (!$item.BrowserIsTopLevel) { throw 'FR-2: The browser window was reparented into another window.' }
     if (!$item.BrowserIsResizable) { throw 'FR-2: The browser window is fullscreen or lost its native frame.' }
-    if ($item.ContentLeft - $item.ClientLeft -ne $item.ExpectedSidebar) { throw 'FR-2: The browser did not lay its content out beside the sidebar.' }
-    if ($item.ContentRight -ne $item.ClientRight) { throw 'FR-2: The browser content does not reach the window edge.' }
+    # Fractional monitor scales round the browser's child window by up to one pixel.
+    if ([Math]::Abs($item.ContentLeft - $item.ClientLeft - $item.ExpectedSidebar) -gt 1) { throw 'FR-2: The browser did not lay its content out beside the sidebar.' }
+    if ([Math]::Abs($item.ContentRight - $item.ClientRight) -gt 1) { throw 'FR-2: The browser content does not reach the window edge.' }
 }
 if (!$InspectOnly) { Write-Output 'FR-2 native frame geometry: PASS' }
