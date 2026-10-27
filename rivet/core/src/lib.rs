@@ -112,7 +112,11 @@ pub fn build_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchEr
         arguments.push(format!("--user-data-dir={value}"));
     }
     match display {
-        DisplayMode::Visible => arguments.push(format!("--app={}", request.url)),
+        DisplayMode::Visible => {
+            arguments.push(format!("--app={}", request.url));
+            // Chromium must omit its own Views title layout before the native host embeds it.
+            arguments.push("--start-fullscreen".to_owned());
+        }
         DisplayMode::Hidden => {
             arguments.push("--headless=new".to_owned());
             arguments.push(request.url.clone());
@@ -161,6 +165,12 @@ mod tests {
             .arguments
             .iter()
             .any(|argument| argument.starts_with("--remote-debugging")));
+    }
+
+    #[test]
+    fn fr2_embedded_browser_starts_without_its_own_title_layout() {
+        let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
+        assert!(plan.arguments.contains(&"--start-fullscreen".into()));
     }
 
     #[test]
