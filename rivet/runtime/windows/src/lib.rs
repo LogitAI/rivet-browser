@@ -33,6 +33,13 @@ fn layout_scale_dpi(client_pixels: i32, layout_width: i32) -> u32 {
     ((client_pixels as i64 * 96 + layout_width as i64 / 2) / layout_width.max(1) as i64) as u32
 }
 
+/// The first row of the browser's title bar in a restored window, in physical pixels. The browser
+/// keeps one device-independent pixel, rounded up, for the top edge. The window's own border can
+/// be thicker and then covers it.
+fn title_bar_top(window_border: i32, dpi: u32) -> i32 {
+    window_border.max(dpi.div_ceil(96) as i32)
+}
+
 /// What a point in the reserved strip does, given client coordinates of the browser window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StripHit {
@@ -98,6 +105,14 @@ mod tests {
         assert_eq!(layout_scale_dpi(2400, 1200), 192);
         assert_eq!(layout_scale_dpi(1500, 1200), 120);
         assert_eq!(layout_scale_dpi(1200, 1200), 96);
+    }
+
+    #[test]
+    fn fr2_sidebar_starts_with_the_browser_title_bar() {
+        // Measured on Chrome 156: the title bar colour starts at row 2 at 125% and at 200%.
+        assert_eq!(title_bar_top(1, 120), 2);
+        assert_eq!(title_bar_top(2, 192), 2);
+        assert_eq!(title_bar_top(1, 96), 1);
     }
 
     #[test]

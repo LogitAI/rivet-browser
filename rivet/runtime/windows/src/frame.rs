@@ -25,7 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use super::chrome_layout;
 use super::sidebar::Sidebar;
 use super::taskbar;
-use super::{layout_scale_dpi, scale, strip_hit, StripHit, SIDEBAR_WIDTH};
+use super::{layout_scale_dpi, scale, strip_hit, title_bar_top, StripHit, SIDEBAR_WIDTH};
 
 const BROWSER_CLASS: &str = "Chrome_WidgetWin_1";
 const ORIGINAL_PROC: &str = "Rivet.OriginalWindowProc";
@@ -224,11 +224,8 @@ unsafe fn top_border(window: HWND) -> i32 {
         (&mut thickness as *mut u32).cast(),
         std::mem::size_of::<u32>() as u32,
     );
-    if found == 0 {
-        thickness as i32
-    } else {
-        0
-    }
+    let border = if found == 0 { thickness as i32 } else { 0 };
+    title_bar_top(border, layout_dpi(window))
 }
 
 thread_local! {
