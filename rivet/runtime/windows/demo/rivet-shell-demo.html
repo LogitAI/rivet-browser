@@ -2,13 +2,19 @@
 <!--
   Rivet shell study, Windows first.
 
-  Assumptions:
-  - Rivet is attached to a browser the user already trusts. The shell should feel like a calm
-    workspace, not a new browser competing with that browser.
-  - The first visual reference is Crest's editorial restraint: warm ground, strong type,
-    small identity mark, and one colour that belongs to a space.
-  - This is a visual and interaction study for the injected native panel. It does not imply a
-    webview or a replacement rendering engine.
+  - Rivet frames the browser the user already trusts. Each page sits in its own rounded panel
+    inside a light frosted frame, as in Dia. The current space tints the frame from its lower
+    corner and sets the accent, as in Crest.
+  - A panel's top row is its title bar: navigation, the address with its connection state and,
+    on the right-most panel, the Windows caption buttons at the row's full height.
+  - The appbar carries the Rivet mark, pinned tabs, folders, today's tabs and split groups.
+    Spaces switch from the appbar foot. Each space names its browser and profile.
+  - Dragging a tab, or the Mini Window, to a side of the page splits the view. Dropping it in the
+    middle opens it there.
+  - Interface icons come from Segoe Fluent Icons, the font Windows 11 draws its caption buttons
+    with. The Rivet mark is one design everywhere: an ink ring, a claret pin and the rivet's tail.
+  - Feature names are generic so they read the same next to Chrome, Edge, Brave and Whale.
+  - This is a visual and interaction study for the native frame. It does not imply a webview.
 -->
 <html lang="en">
 <head>
@@ -20,144 +26,926 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap" rel="stylesheet">
   <style>
     :root {
-      --paper: #f2eee5;
-      --paper-deep: #e7e0d3;
       --ink: #1f2024;
-      --muted: #77746f;
-      --line: rgba(31, 32, 36, .13);
-      --space: #7c2d4f;
-      --space-wash: #ead7de;
-      --night: #252332;
-      --side: 292px;
+      --soft-ink: #4a4850;
+      --muted: #8a8690;
+      --paper: #fbfaf7;
+      --frame: #ece8e2;
+      --tint: #d08a52;
+      --accent: #9a5424;
+      --glass: rgba(255, 255, 255, .5);
+      --glass-strong: rgba(255, 255, 255, .86);
+      --hairline: rgba(31, 32, 36, .08);
+      --side: 268px;
+      --gap: 8px;
+      --radius: 12px;
+      --bar: 44px;
     }
-
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      padding: 28px;
-      background: #d7d2c8;
-      color: var(--ink);
-      font-family: Manrope, sans-serif;
-    }
+    body { margin: 0; min-height: 100vh; padding: 28px 28px 92px; background: #cfcac4; font-family: Manrope, sans-serif; color: var(--ink); }
+    /* Pressing, as in Toss: the button sinks quickly and darkens a little, stays down for at least
+       a beat even on a short tap, and springs back slowly with a small overshoot when released.
+       Windows owns the caption buttons, so they keep the native behaviour. */
+    button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
+      --press: .96;
+      transition: transform .36s cubic-bezier(.3, 1.45, .55, 1), filter .3s ease, background-color .15s; }
+    button.pressed { transform: scale(var(--press)); filter: brightness(.96); transition: transform .12s cubic-bezier(.25, .7, .35, 1), filter .12s ease, background-color .15s; }
+    .row, .where, .features button, .ask { --press: .98; }
+    .caption button, .caption button.pressed { transform: none; filter: none; }
+    .g { font: normal 16px/1 "Segoe Fluent Icons", "Segoe MDL2 Assets"; font-style: normal; }
 
     .window {
-      max-width: 1370px;
-      min-height: 800px;
-      margin: auto;
-      overflow: hidden;
-      display: grid;
-      grid-template-columns: var(--side) 1fr;
-      border: 1px solid rgba(31, 32, 36, .25);
-      border-radius: 15px;
-      background: var(--paper);
-      box-shadow: 0 22px 70px rgba(38, 30, 30, .2), 0 2px 7px rgba(38, 30, 30, .08);
+      position: relative; max-width: 1380px; height: min(820px, calc(100vh - 120px)); min-height: 620px; margin: auto;
+      /* One row the height of the window, so a long page scrolls inside its panel instead of
+         stretching the window. */
+      display: grid; grid-template-columns: var(--side) 1fr; grid-template-rows: minmax(0, 1fr); border-radius: 9px; overflow: hidden;
+      background:
+        radial-gradient(80% 60% at 0% 100%, color-mix(in srgb, var(--tint) 34%, transparent) 0%, transparent 70%),
+        radial-gradient(60% 50% at 100% 0%, rgba(255,255,255,.55) 0%, transparent 70%),
+        var(--frame);
+      box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 30px 80px rgba(40, 28, 30, .28);
+      transition: grid-template-columns .25s, background .35s;
     }
+    .window.dragging, .window.dragging * { cursor: grabbing !important; user-select: none; }
 
-    .sidebar {
-      position: relative;
-      padding: 22px 15px 18px;
-      border-right: 1px solid var(--line);
-      background: var(--paper-deep);
+    /* Appbar */
+    .appbar { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; padding: 10px 8px 10px 10px; font-size: 12.5px; }
+    .top { display: flex; align-items: center; gap: 2px; height: 32px; padding-left: 4px; margin-bottom: 10px; }
+    .top .grow { flex: 1; }
+    .icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--soft-ink); }
+    .icon:hover { background: var(--glass); color: var(--ink); }
+    .icon:disabled { opacity: .35; cursor: default; }
+    .mark { width: 22px; height: 22px; }
+    .pinned { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 12px; }
+    .pin { height: 42px; border-radius: 11px; background: var(--glass); box-shadow: inset 0 0 0 1px var(--hairline); display: grid; place-items: center; }
+    .pin:hover { background: var(--glass-strong); }
+    .space-head { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; }
+    .space-head strong { font: 600 14px Newsreader, Georgia, serif; letter-spacing: -.01em; }
+    .space-head .grow { flex: 1; }
+    .badge { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: 6px; background: var(--glass); color: var(--soft-ink); font: 500 10px/1 "DM Mono", monospace; }
+    .badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+    /* The list scrolls and clips what it draws outside itself. Inset it by the selected tab's ring
+       and cancel the inset with a negative margin, so rows keep their place and their edges. */
+    .tabs { flex: 1; min-height: 0; overflow: auto; scrollbar-width: none; margin: 0 -3px; padding: 2px 3px 3px; }
+    .row { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; padding: 0 8px; border-radius: 9px; color: var(--soft-ink); text-align: left; user-select: none; touch-action: none; }
+    .row:hover { background: var(--glass); color: var(--ink); }
+    .row.active { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 0 0 1px var(--hairline); }
+    .row.lifted { opacity: .4; }
+    .row > .g { width: 16px; text-align: center; color: var(--soft-ink); }
+    .row.child { padding-left: 34px; }
+    .fav { flex: none; width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; color: #fff; font: 700 9px/1 Manrope, sans-serif; }
+    .row .label { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .row .meta { color: var(--muted); font: 10px/1 "DM Mono", monospace; }
+    /* As in Dia, a tab's close button sits at its right end. It shows on hover and always on the
+       selected tab. */
+    .row .x { display: grid; place-items: center; width: 22px; height: 22px; margin-right: -4px; border-radius: 6px; opacity: 0; color: var(--muted); font: 10px/1 "Segoe Fluent Icons", "Segoe MDL2 Assets"; }
+    .row:hover .x, .row.active .x { opacity: 1; }
+    .row .x:hover { background: rgba(31,32,36,.08); color: var(--ink); }
+    .row .hold { position: absolute; left: 10px; bottom: 2px; height: 2px; width: 0; border-radius: 2px; background: var(--accent); }
+    .divider { height: 1px; margin: 8px 10px; background: var(--hairline); }
+    .group { margin: 4px 0; padding: 4px; border-radius: 12px; background: var(--glass); box-shadow: inset 0 0 0 1px var(--hairline); }
+    .group .title { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; color: var(--muted); font: 500 10px/1 "DM Mono", monospace; letter-spacing: .08em; }
+    .group .title .g { font-size: 12px; }
+    .toast { position: absolute; left: 10px; right: 10px; bottom: 50px; display: none; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 10px; background: var(--ink); color: #fff; font-size: 12px; z-index: 3; }
+    .toast.open { display: flex; }
+    .toast span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .toast button { color: color-mix(in srgb, var(--tint) 55%, white); font-weight: 600; }
+    .foot { display: flex; align-items: center; gap: 4px; padding-top: 8px; }
+    .foot .spaces { flex: 1; display: flex; justify-content: center; gap: 4px; }
+    .space-dot { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; }
+    .space-dot:hover { background: var(--glass); }
+    .space-dot b { width: 9px; height: 9px; border-radius: 50%; opacity: .5; transition: transform .2s, opacity .2s; }
+    .space-dot.on { background: var(--glass-strong); box-shadow: 0 0 0 1px var(--hairline); }
+    .space-dot.on b { opacity: 1; transform: scale(1.25); }
+
+    /* Appbar width and the hidden appbar */
+    .resizer { position: absolute; z-index: 4; top: 0; bottom: 0; left: calc(var(--side) - 4px); width: 8px; cursor: col-resize; }
+    .resizer::after { content: ""; position: absolute; top: 50%; left: 3px; width: 2px; height: 36px; margin-top: -18px; border-radius: 2px; background: rgba(31,32,36,.18); opacity: 0; transition: opacity .15s; }
+    .resizer:hover::after, .resizing .resizer::after { opacity: 1; }
+    .window.resizing { transition: none; cursor: col-resize; user-select: none; }
+    .window.collapsed { grid-template-columns: 0 1fr; }
+    .window.collapsed .resizer { display: none; }
+    .window.collapsed .appbar {
+      position: absolute; z-index: 9; top: 8px; bottom: 8px; left: 8px; width: var(--side);
+      border-radius: 14px; background: color-mix(in srgb, var(--frame) 88%, white);
+      box-shadow: 0 0 0 1px rgba(0,0,0,.07), 0 24px 60px rgba(40, 28, 30, .28);
+      transform: translateX(calc(-100% - 16px)); transition: transform .22s ease;
     }
+    .window.collapsed.peek .appbar { transform: none; }
+    .edge { display: none; position: absolute; z-index: 8; left: 0; top: 0; bottom: 0; width: 10px; }
+    .window.collapsed .edge { display: block; }
+    .window.collapsed .main { padding-left: var(--gap); }
 
-    .brand { display: flex; align-items: center; gap: 10px; padding: 2px 7px 25px; }
-    .mark {
-      width: 24px; height: 24px; position: relative; flex: 0 0 auto;
-      border: 5px solid var(--ink); border-radius: 50%;
-    }
-    .mark::after {
-      content: ""; position: absolute; right: -6px; bottom: -6px; width: 11px; height: 11px;
-      background: var(--paper-deep); border-left: 5px solid var(--ink); transform: rotate(-45deg);
-    }
-    .brand span { font-family: Newsreader, Georgia, serif; font-size: 25px; line-height: 1; letter-spacing: -.04em; }
-    .brand small { margin-left: auto; font: 500 9px/1 "DM Mono", monospace; color: var(--muted); letter-spacing: .08em; }
+    /* Pages. Every page is its own rounded panel, and split pages keep a gap between them. */
+    .main { grid-column: 2; position: relative; min-width: 0; padding: var(--gap) var(--gap) var(--gap) 0; }
 
-    .space-switcher { display: flex; gap: 4px; padding: 0 3px 23px; }
-    .space-dot {
-      border: 0; width: 36px; height: 7px; cursor: pointer; padding: 0;
-      background: #c5bdb4; transition: width .25s, background .25s;
-    }
-    .space-dot:first-child { width: 76px; background: var(--space); }
-    .space-dot:nth-child(2) { background: #405f73; }
-    .space-dot:nth-child(3) { background: #bd7444; }
+    .panes { display: flex; height: 100%; }
+    .split-box { display: flex; gap: var(--gap); }
+    .split-box.split-row { flex-direction: row; }
+    .split-box.split-column { flex-direction: column; }
+    .panes > *, .split-box > * { flex: 1 1 0; min-width: 0; min-height: 0; }
+    .panel { position: relative; display: grid; grid-template-rows: var(--bar) 1fr; min-width: 0; min-height: 0; overflow: hidden; border-radius: var(--radius); background: var(--paper); box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 1px 3px rgba(0,0,0,.05), 0 12px 32px rgba(40, 28, 30, .08); animation: settle .22s ease; }
+    /* As in Dia, the page you are working in rises a little and the others step back. No colour
+       ring marks it. */
+    .panel { transition: box-shadow .2s ease; }
+    .panel .toolbar, .panel .page { transition: opacity .2s ease, filter .2s ease; }
+    .grip { cursor: grab; }
+    .grip .g { font-size: 13px; }
+    .panel.lifted { opacity: .45; }
+    .panes.split .panel.focused { box-shadow: 0 0 0 1px rgba(0,0,0,.07), 0 2px 6px rgba(0,0,0,.06), 0 18px 44px rgba(40, 28, 30, .16); }
+    .panes.split .panel:not(.focused) { box-shadow: 0 0 0 1px rgba(0,0,0,.04), 0 6px 18px rgba(40, 28, 30, .05); }
+    .panes.split .panel:not(.focused) .toolbar { opacity: .55; }
+    .panes.split .panel:not(.focused) .page { filter: saturate(.85) brightness(.985); }
+    @keyframes settle { from { opacity: 0; transform: scale(.985); } }
+    /* The address row sets the title bar height. The caption buttons fill that whole height, as
+       in Dia, and the close button's hover reaches the panel's rounded corner. */
+    .toolbar { display: flex; align-items: center; gap: 2px; padding: 0 0 0 8px; border-bottom: 1px solid var(--hairline); min-width: 0; }
+    .toolbar .icon:hover { background: rgba(31,32,36,.06); }
+    .where { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; height: 28px; margin: 0 4px 0 8px; padding: 0 10px; border-radius: 8px; color: var(--muted); font-size: 12px; text-align: left; }
+    .where:hover { background: rgba(31,32,36,.05); }
+    .where .text { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .where b { color: var(--soft-ink); font-weight: 600; }
+    /* Connection state leads the address, as in Chrome and Edge: a lock for HTTPS, a warning and
+       "Not secure" for plain HTTP. */
+    .security { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 6px; margin-left: -4px; border-radius: 6px; color: var(--soft-ink); font-size: 11.5px; font-weight: 600; }
+    .security .g { font-size: 13px; }
+    .security.insecure { color: #b3261e; background: rgba(179, 38, 30, .08); }
+    /* Windows draws these buttons. The study uses the same Windows 11 glyphs, size and hover colours
+       to stand in for them, and the native frame never replaces them with its own art. */
+    .caption { display: flex; align-self: stretch; margin-left: 4px; }
+    .caption button { width: 46px; height: 100%; display: grid; place-items: center; color: #1a1a1a; font: 10px/1 "Segoe Fluent Icons", "Segoe MDL2 Assets"; }
+    .caption button:hover { background: rgba(0,0,0,.0373); }
+    .caption button.close:hover { background: #c42b1c; color: #fff; }
+    .body { position: relative; min-height: 0; overflow: hidden; }
+    .page { height: 100%; overflow: auto; padding: 56px clamp(28px, 6vw, 104px); }
+    .page.start { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; padding-bottom: 72px; background: linear-gradient(180deg, var(--paper), color-mix(in srgb, var(--tint) 9%, var(--paper))); }
+    .ask { width: min(560px, 100%); margin: 0 0 6vh; border-radius: 16px; background: #fff; box-shadow: 0 0 0 1px rgba(31,32,36,.06), 0 10px 30px color-mix(in srgb, var(--tint) 14%, transparent); }
+    .ask .line { display: flex; align-items: center; gap: 10px; padding: 14px 16px 6px; color: var(--muted); }
+    .ask .line .g { font-size: 14px; }
+    .ask input { flex: 1; min-width: 0; border: 0; outline: 0; padding: 0; background: transparent; font: 500 15px Manrope, sans-serif; color: var(--ink); }
+    .ask input::placeholder { color: #a09ea7; }
+    .ask .tools { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; }
+    .ask .attach { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 8px; color: #75737c; font-size: 12.5px; }
+    .ask .attach .g { font-size: 12px; }
+    .ask .attach:hover { background: rgba(31,32,36,.05); }
+    .ask .where-to { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 8px; background: color-mix(in srgb, var(--tint) 10%, #fff); color: var(--soft-ink); font: 500 10.5px/1 "DM Mono", monospace; }
+    .ask .where-to i { width: 6px; height: 6px; border-radius: 50%; background: var(--tint); }
+    .ask .send { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--tint) 22%, #fff); color: var(--accent); }
+    .ask .send .g { font-size: 13px; }
+    .ask .send.ready { background: var(--accent); color: #fff; }
+    /* The space line sits centred at the foot of the page and stays there while the page scrolls. */
+    .workspace-info { position: absolute; left: 0; right: 0; bottom: 18px; display: flex; justify-content: center; gap: 6px; color: #8d8b94; font-size: 12px; pointer-events: none; }
+    .workspace-info b { color: #5d5b64; font-weight: 600; }
+    .eyebrow { color: var(--accent); font: 500 10px/1 "DM Mono", monospace; letter-spacing: .16em; }
+    h2 { margin: 18px 0 12px; font: 500 clamp(30px, 3.4vw, 44px)/1 Newsreader, Georgia, serif; letter-spacing: -.03em; }
+    .intro { max-width: 480px; margin: 24px 0 36px; color: #5c5854; font-size: 15px; line-height: 1.65; }
+    /* Developer mode marks the title bar with a dark striped ground, a monospaced address and the
+       developer actions next to the caption buttons. Local pages enter it on their own. */
+    .toolbar.dev { background: repeating-linear-gradient(135deg, #2a2c31 0 9px, #30323a 9px 18px); border-bottom-color: #17181b; color: #d7d9de; }
+    .toolbar.dev .icon { color: #c4c7ce; }
+    .toolbar.dev .icon:hover { background: rgba(255,255,255,.09); color: #fff; }
+    .toolbar.dev .icon.on { background: rgba(255,255,255,.14); color: #fff; }
+    .toolbar.dev .where { color: #aeb2ba; font: 12px "DM Mono", monospace; }
+    .toolbar.dev .where:hover { background: rgba(255,255,255,.07); }
+    .toolbar.dev .where b { color: #eef0f3; font-weight: 500; }
+    .toolbar.dev .security { color: #c4c7ce; }
+    .toolbar.dev .caption button { color: #fff; }
+    .toolbar.dev .caption button:hover { background: rgba(255,255,255,.09); }
+    .toolbar.dev .caption button.close:hover { background: #c42b1c; }
+    .devbar { display: flex; align-items: center; gap: 0; margin-left: 2px; }
+    .devbar .icon { width: 30px; }
+    .devbar .icon .g { font-size: 14px; }
+    .devbar .sep { width: 1px; height: 16px; margin: 0 4px; background: rgba(255,255,255,.14); }
+    .flash { position: absolute; inset: 0; z-index: 4; background: #fff; pointer-events: none; animation: flash .35s ease forwards; }
+    @keyframes flash { from { opacity: .85; } to { opacity: 0; } }
+    .note { position: absolute; z-index: 5; top: 10px; right: 12px; padding: 6px 10px; border-radius: 8px; background: #1f2024; color: #fff; font-size: 11.5px; box-shadow: 0 8px 20px rgba(0,0,0,.2); animation: note 1.6s ease forwards; }
+    @keyframes note { 0% { opacity: 0; transform: translateY(-4px); } 12%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+    .devtools nav span, .devtools nav b { cursor: pointer; }
+    .devtools { display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 36%; padding: 10px 16px; background: #1f2024; color: #c9c5bd; font: 11px/1.7 "DM Mono", monospace; }
+    .devtools.open { display: block; }
+    .devtools nav { display: flex; gap: 16px; margin-bottom: 8px; color: #8f8b84; }
+    .devtools nav b { color: #fff; font-weight: 500; }
 
-    .new-tab {
-      width: 100%; display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px;
-      padding: 10px 10px 10px 11px; border: 1px solid var(--line); border-radius: 7px;
-      color: var(--ink); background: rgba(255,255,255,.42); font: 600 11px/1 Manrope, sans-serif; text-align: left;
-    }
-    .new-tab kbd { color: var(--muted); font: 10px/1 "DM Mono", monospace; }
-    .label { padding: 0 8px 8px; color: var(--muted); font: 500 9px/1 "DM Mono", monospace; letter-spacing: .12em; }
-    .tabs { margin-bottom: 25px; }
-    .tab { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 0 8px; border-radius: 5px; color: #515056; font-size: 11px; }
-    .tab.active { color: var(--ink); background: rgba(255,255,255,.7); font-weight: 600; }
-    .site-dot { width: 8px; height: 8px; border-radius: 50%; background: #d6c9d0; }
-    .tab.active .site-dot { background: var(--space); }
-    .tab em { margin-left: auto; color: var(--muted); font: 10px/1 "DM Mono", monospace; font-style: normal; }
+    /* Drop targets shown while a tab or the Mini Window is dragged over the pages. */
+    .drop { position: absolute; z-index: 7; display: none; place-items: center; border-radius: var(--radius); border: 1.5px dashed color-mix(in srgb, var(--accent) 70%, transparent); background: color-mix(in srgb, var(--tint) 14%, rgba(255,255,255,.35)); backdrop-filter: blur(2px); color: var(--accent); font-size: 13px; font-weight: 600; transition: left .14s ease, top .14s ease, width .14s ease, height .14s ease; pointer-events: none; }
+    .drop.on { display: grid; }
+    .drop span { padding: 7px 12px; border-radius: 9px; background: rgba(255,255,255,.9); box-shadow: 0 6px 18px rgba(40, 28, 30, .12); }
+    .ghost { position: fixed; z-index: 30; display: none; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 9px; border-radius: 9px; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 12px 30px rgba(40, 28, 30, .25); font-size: 12.5px; font-weight: 600; pointer-events: none; transform: rotate(-1.5deg); }
+    .ghost.on { display: flex; }
 
-    .agent-note { position: absolute; left: 15px; right: 15px; bottom: 18px; padding: 13px; border-top: 2px solid var(--ink); }
-    .agent-note p { margin: 0 0 6px; font-family: Newsreader, Georgia, serif; font-size: 16px; line-height: 1.05; }
-    .agent-note span { color: var(--muted); font-size: 10px; }
+    /* Overlays */
+    .scrim { position: absolute; inset: 0; display: none; place-items: start center; padding-top: 110px; background: rgba(40, 32, 36, .18); backdrop-filter: blur(3px); z-index: 10; }
+    .scrim.open { display: grid; }
+    .command { width: min(580px, 90%); border-radius: 16px; background: var(--paper); box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 30px 80px rgba(40, 28, 30, .3); overflow: hidden; }
+    .command .field { display: flex; align-items: center; gap: 10px; padding: 0 18px; color: var(--muted); }
+    .command input { flex: 1; height: 56px; border: 0; outline: 0; background: transparent; font: 500 16px Manrope, sans-serif; color: var(--ink); }
+    .command ul { list-style: none; margin: 0; padding: 6px; border-top: 1px solid var(--hairline); }
+    .command li { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 9px; font-size: 13px; color: var(--soft-ink); }
+    .command li:first-child { background: color-mix(in srgb, var(--accent) 9%, transparent); color: var(--ink); }
+    .command kbd { margin-left: auto; color: var(--muted); font: 10px "DM Mono", monospace; }
+    .command .mode { display: flex; gap: 6px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 11px; }
+    .command .mode button { padding: 4px 9px; border-radius: 7px; box-shadow: inset 0 0 0 1px var(--hairline); }
+    .command .mode button.on { background: var(--ink); color: #fff; box-shadow: none; }
 
-    main { min-width: 0; display: grid; grid-template-rows: 53px 1fr; }
-    .chrome { display: flex; align-items: center; gap: 14px; padding: 0 21px; border-bottom: 1px solid var(--line); }
-    .crumb { color: var(--muted); font: 10px/1 "DM Mono", monospace; letter-spacing: .02em; }
-    .url { flex: 1; overflow: hidden; color: #55525a; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
-    .status { display: flex; align-items: center; gap: 7px; color: var(--muted); font: 10px/1 "DM Mono", monospace; }
-    .status i { display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--space); }
+    .floating { display: none; position: absolute; border-radius: 14px; overflow: hidden; background: var(--paper); box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 30px 90px rgba(40, 28, 30, .3); }
+    .floating.open { display: grid; grid-template-rows: 40px 1fr; }
+    .floating header { display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--hairline); font-size: 12px; color: var(--soft-ink); }
+    .floating header b { flex: 1; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .chip { padding: 5px 10px; border-radius: 7px; background: rgba(31,32,36,.05); font-size: 11px; }
+    .chip:hover { background: rgba(31,32,36,.09); }
+    .floating .page { padding: 28px 32px; }
+    .floating p { color: #5c5854; line-height: 1.6; font-size: 14px; }
+    #preview { inset: 60px 64px 40px 64px; z-index: 6; }
+    #mini { position: fixed; right: 44px; bottom: 104px; width: 360px; height: 270px; z-index: 20; }
+    #mini header { cursor: grab; touch-action: none; }
+    #mini.lifted { opacity: .92; box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 40px 100px rgba(40, 28, 30, .4); }
+    #mini .page { padding: 18px 22px; }
+    #rules { right: 18px; top: 52px; width: 350px; z-index: 7; padding: 16px; font-size: 12px; color: var(--soft-ink); }
+    #rules.open { display: block; }
+    #rules h3 { margin: 0 0 4px; font: 500 18px Newsreader, Georgia, serif; color: var(--ink); }
+    #rules p { margin: 0 0 10px; color: var(--muted); }
+    #rules div { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid var(--hairline); }
+    #rules code { font: 11px "DM Mono", monospace; color: var(--ink); }
 
-    .content { padding: 58px clamp(36px, 8vw, 118px) 54px; background: linear-gradient(100deg, var(--paper) 72%, var(--space-wash)); }
-    .eyebrow { margin-bottom: 24px; color: var(--space); font: 500 10px/1 "DM Mono", monospace; letter-spacing: .12em; }
-    h1 { max-width: 650px; margin: 0; font: 500 clamp(44px, 5vw, 76px)/.9 Newsreader, Georgia, serif; letter-spacing: -.052em; text-wrap: pretty; }
-    .intro { max-width: 460px; margin: 27px 0 47px; color: #5c5854; font-size: 15px; line-height: 1.65; }
-    .sheet { max-width: 690px; border-top: 1px solid var(--ink); }
-    .row { display: grid; grid-template-columns: 120px 1fr auto; gap: 15px; align-items: center; min-height: 67px; border-bottom: 1px solid var(--line); }
-    .row-id { color: var(--muted); font: 10px/1 "DM Mono", monospace; }
-    .row-title { font-family: Newsreader, Georgia, serif; font-size: 21px; letter-spacing: -.025em; }
-    .row-meta { color: var(--muted); font-size: 10px; }
-    .agent { position: fixed; right: 48px; bottom: 43px; width: min(362px, calc(100vw - 64px)); border: 1px solid rgba(31,32,36,.23); border-radius: 10px; overflow: hidden; background: #fbfaf6; box-shadow: 0 18px 45px rgba(38,30,30,.16); }
-    .agent-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-    .agent-head .mark { width: 16px; height: 16px; border-width: 3px; }
-    .agent-head .mark::after { right: -4px; bottom: -4px; width: 7px; height: 7px; border-left-width: 3px; background: #fbfaf6; }
-    .agent-head b { font-size: 11px; }
-    .agent-head span { margin-left: auto; color: var(--space); font: 10px/1 "DM Mono", monospace; }
-    .agent-body { padding: 15px 14px 13px; }
-    .agent-body p { margin: 0 0 14px; color: #46434a; font: 13px/1.5 Newsreader, Georgia, serif; }
-    .ask { display: flex; align-items: center; gap: 8px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 6px; color: #858079; font-size: 11px; }
-    .ask b { color: var(--space); font-size: 16px; font-weight: 500; }
-    @media (max-width: 760px) { body { padding: 0; } .window { min-height: 100vh; border: 0; border-radius: 0; grid-template-columns: 67px 1fr; } .sidebar { padding-inline: 9px; } .brand span, .brand small, .new-tab span, .new-tab kbd, .label, .tab span, .tab em, .agent-note { display: none; } .brand { padding-bottom: 25px; justify-content: center; } .space-switcher { flex-direction: column; align-items: center; } .space-dot, .space-dot:first-child { width: 7px; height: 31px; } .tab { padding: 0; justify-content: center; } .content { padding-top: 50px; } .agent { right: 18px; bottom: 18px; } }
+    /* Feature bar */
+    .features { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 2px; padding: 5px; border-radius: 14px; background: rgba(255,255,255,.55); backdrop-filter: blur(14px); box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 10px 30px rgba(40, 28, 30, .12); }
+    .features button { height: 34px; padding: 0 14px; border-radius: 10px; color: var(--soft-ink); font-size: 13px; white-space: nowrap; }
+    .features button:hover { background: rgba(255,255,255,.8); color: var(--ink); }
+    .hint { position: fixed; left: 50%; bottom: 70px; transform: translateX(-50%); color: rgba(31,32,36,.55); font-size: 12px; white-space: nowrap; }
   </style>
 </head>
 <body>
-  <section class="window" aria-label="Rivet Browser shell study">
-    <aside class="sidebar">
-      <div class="brand"><i class="mark"></i><span>Rivet</span><small>01</small></div>
-      <div class="space-switcher" aria-label="Spaces"><button class="space-dot" data-space="work" aria-label="Work"></button><button class="space-dot" data-space="research" aria-label="Research"></button><button class="space-dot" data-space="personal" aria-label="Personal"></button></div>
-      <button class="new-tab"><span>New tab</span><kbd>⌘ T</kbd></button>
-      <div class="tabs"><div class="label">TODAY</div><div class="tab active"><i class="site-dot"></i><span>Agent brief</span><em>↗</em></div><div class="tab"><i class="site-dot"></i><span>Ember workspace</span></div><div class="tab"><i class="site-dot"></i><span>Release notes</span></div></div>
-      <div class="tabs"><div class="label">SAVED</div><div class="tab"><i class="site-dot"></i><span>Research queue</span></div><div class="tab"><i class="site-dot"></i><span>Design references</span></div></div>
-      <div class="agent-note"><p>One browser,<br>wherever you work.</p><span>RIVET / EMBER LINK</span></div>
+  <!-- The Rivet mark. The taskbar icon draws the same shapes on a paper tile. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="rivet-mark" viewBox="0 0 96 96">
+      <rect width="96" height="96" rx="24" fill="#f2eee5"/>
+      <path d="M58 58 L74 74" stroke="#1f2024" stroke-width="13" stroke-linecap="round"/>
+      <circle cx="44" cy="44" r="25" fill="none" stroke="#1f2024" stroke-width="12"/>
+      <circle cx="44" cy="44" r="8.5" fill="#7c2d4f"/>
+    </symbol>
+  </svg>
+
+  <section class="window" aria-label="Rivet window">
+    <div class="edge" aria-hidden="true"></div>
+    <div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize appbar" title="Drag to resize. Double click to reset."></div>
+    <aside class="appbar">
+      <div class="top">
+        <svg class="mark" role="img" aria-label="Rivet"><use href="#rivet-mark"/></svg>
+        <span class="grow"></span>
+        <button class="icon" title="Space menu"><i class="g">&#xE70D;</i></button>
+      </div>
+      <div class="pinned" aria-label="Pinned tabs">
+        <button class="pin" title="Mail"><span class="fav" style="background:#d4513b;width:20px;height:20px">M</span></button>
+        <button class="pin" title="Calendar"><span class="fav" style="background:#3b6fd4;width:20px;height:20px">31</span></button>
+        <button class="pin" title="Docs"><span class="fav" style="background:#2f8f6b;width:20px;height:20px">D</span></button>
+        <button class="pin" title="Notes"><span class="fav" style="background:#1f2024;width:20px;height:20px">N</span></button>
+      </div>
+      <div class="space-head">
+        <strong class="space-name">Work</strong>
+        <span class="grow"></span>
+        <span class="badge" title="Browser and profile for this space"><i></i><span class="profile">Chrome · Work</span></span>
+      </div>
+      <div class="tabs">
+        <button class="row"><i class="g">&#xE8B7;</i><span class="label">Launch Atlas</span><span class="meta">3</span></button>
+        <button class="row child"><span class="fav" style="background:#c0577f">L</span><span class="label">Launch plan</span></button>
+        <button class="row child"><span class="fav" style="background:#7a5bd1">F</span><span class="label">Design review</span></button>
+        <div class="divider"></div>
+        <button class="row" id="new-tab" data-open="command"><i class="g">&#xE710;</i><span class="label">New tab</span><span class="meta">Ctrl T</span></button>
+        <div id="today"></div>
+      </div>
+      <div class="toast" id="toast"><span id="toast-text">Closed tab</span><button id="undo" title="Ctrl Shift T">Reopen</button></div>
+      <div class="foot">
+        <button class="icon" title="Library"><i class="g">&#xE8F1;</i></button>
+        <div class="spaces" aria-label="Spaces"></div>
+        <button class="icon" title="New space"><i class="g">&#xE710;</i></button>
+      </div>
     </aside>
-    <main>
-      <header class="chrome"><span class="crumb">WORK / AGENT BRIEF</span><span class="url">thisisthepy.org/ember/rivet</span><span class="status"><i></i> ATTACHED</span></header>
-      <article class="content">
-        <div class="eyebrow">RIVET IS READY</div>
-        <h1>Your browser stays yours.</h1>
-        <p class="intro">Rivet gives your existing browser a focused workspace and an agent surface. Profiles, passkeys, extensions, and sync remain exactly where you left them.</p>
-        <div class="sheet"><div class="row"><span class="row-id">01 / LIVE</span><span class="row-title">Chrome profile attached</span><span class="row-meta">LOCAL</span></div><div class="row"><span class="row-id">02 / READY</span><span class="row-title">Agent context is private</span><span class="row-meta">EMBER</span></div><div class="row"><span class="row-id">03 / YOURS</span><span class="row-title">Nothing moves without you</span><span class="row-meta">CONTROL</span></div></div>
-      </article>
+
+    <main class="main">
+      <div class="panes" id="panes"></div>
+      <div class="drop" id="drop"><span id="drop-label">Split left</span></div>
+      <div class="floating" id="preview">
+        <header><b>Link Preview · ember.thisisthepy.org/brief</b><button class="chip" id="preview-open">Open as tab</button><button class="chip" data-close="preview">Esc</button></header>
+        <div class="page"><div class="eyebrow">LINK PREVIEW</div><h2>Agent brief</h2><p>A long press opens the link over the page you were reading. Open it as a tab in this space, or press Esc to go back.</p></div>
+      </div>
+      <div class="floating" id="rules">
+        <h3>Link Rules</h3>
+        <p>Where links from other apps and sites open.</p>
+        <div><code>github.com/*</code><span>Work</span></div>
+        <div><code>*.notion.so</code><span>Research</span></div>
+        <div><code>Links from Slack</code><span>Mini Window</span></div>
+        <div><code>Everything else</code><span>Current space, new tab</span></div>
+      </div>
     </main>
+
+    <div class="scrim" id="command">
+      <div class="command" role="dialog" aria-label="Command Bar">
+        <div class="field"><i class="g">&#xE721;</i><input placeholder="Search, enter an address, or ask Rivet"></div>
+        <ul>
+          <li><i class="g">&#xE721;</i>Search the web for "launch plan"<kbd>Enter</kbd></li>
+          <li><span class="fav" style="background:#d07a3a">E</span>Switch to tab: Ember workspace<kbd>Tab</kbd></li>
+          <li><svg class="mark" style="width:16px;height:16px" aria-hidden="true"><use href="#rivet-mark"/></svg>Ask Rivet about this page<kbd>Ctrl Enter</kbd></li>
+          <li><i class="g">&#xECA5;</i>Open beside this tab in Split View</li>
+        </ul>
+        <div class="mode">Ctrl T opens <button class="on" data-mode>Command Bar</button><button data-mode>New tab page</button></div>
+      </div>
+    </div>
   </section>
-  <aside class="agent"><div class="agent-head"><i class="mark"></i><b>Rivet</b><span>READY</span></div><div class="agent-body"><p>I can research, navigate, or keep this task ready for the next Ember machine.</p><div class="ask"><b>+</b> Ask Rivet about this page</div></div></aside>
+
+  <div class="floating" id="mini">
+    <header title="Drag to a side of the page to split, or to its middle to open it there"><b>Mini Window · calendar.google.com</b><button class="chip" id="mini-open">Open in space</button><button class="icon" data-close="mini" title="Close"><i class="g" style="font-size:10px">&#xE8BB;</i></button></header>
+    <div class="page"><div class="eyebrow">MINI WINDOW</div><h2 style="font-size:30px">Standup</h2><p>A link from another app lands here first. Drag this window onto the page to split, or close it.</p></div>
+  </div>
+
+  <div class="ghost" id="ghost"></div>
+  <div class="hint">Drag a tab or the Mini Window to any edge of a page to split it, up to four pages. Press and hold a tab to preview it.</div>
+  <nav class="features" aria-label="Features">
+    <button data-feature="spaces">Spaces</button>
+    <button data-feature="appbar">Appbar</button>
+    <button data-feature="split">Split View</button>
+    <button data-feature="preview">Link Preview</button>
+    <button data-feature="mini">Mini Window</button>
+    <button data-feature="rules">Link Rules</button>
+    <button data-feature="command">Command Bar</button>
+    <button data-feature="devtools" title="Developer mode for the current tab. Local pages start in it.">Developer Tools</button>
+  </nav>
+
   <script>
     const root = document.documentElement;
-    const themes = { work: ['#7c2d4f', '#ead7de'], research: ['#405f73', '#d7e3e9'], personal: ['#bd7444', '#f0dbc9'] };
-    document.querySelectorAll('.space-dot').forEach((button) => button.addEventListener('click', () => {
-      const [space, wash] = themes[button.dataset.space]; root.style.setProperty('--space', space); root.style.setProperty('--space-wash', wash);
-      document.querySelectorAll('.space-dot').forEach((dot) => { dot.style.width = '36px'; dot.style.background = '#c5bdb4'; });
-      button.style.width = '76px'; button.style.background = space;
+
+    // Press feedback. A short tap still shows the press for a beat before springing back.
+    const PRESS_HOLD = 90;
+    document.addEventListener('pointerdown', (event) => {
+      const button = event.target.closest('button');
+      if (!button || button.disabled || button.closest('.caption') || event.button !== 0) return;
+      const pressedAt = performance.now();
+      button.classList.add('pressed');
+      const release = () => {
+        const wait = Math.max(0, PRESS_HOLD - (performance.now() - pressedAt));
+        setTimeout(() => button.classList.remove('pressed'), wait);
+        window.removeEventListener('pointerup', release);
+        window.removeEventListener('pointercancel', release);
+        button.removeEventListener('pointerleave', release);
+      };
+      window.addEventListener('pointerup', release);
+      window.addEventListener('pointercancel', release);
+      button.addEventListener('pointerleave', release);
+    });
+    const frame = document.querySelector('.window');
+    const $ = (selector) => document.querySelector(selector);
+
+    /* Spaces */
+    const spaces = [
+      { name: 'Work', frame: '#ece8e2', tint: '#d08a52', accent: '#9a5424', profile: 'Chrome · Work' },
+      { name: 'Research', frame: '#e6e9ec', tint: '#5b8bab', accent: '#2f5f80', profile: 'Edge · Lab' },
+      { name: 'Personal', frame: '#ece9e6', tint: '#c0577f', accent: '#8a2f56', profile: 'Whale · Personal' },
+    ];
+    let currentSpace = 0;
+    function setSpace(index) {
+      currentSpace = index;
+      const space = spaces[index];
+      root.style.setProperty('--frame', space.frame);
+      root.style.setProperty('--tint', space.tint);
+      root.style.setProperty('--accent', space.accent);
+      $('.space-name').textContent = space.name;
+      $('.profile').textContent = space.profile;
+      // The start page names the space, so it follows a change once the pages exist.
+      if (window.rivetReady) renderPanes();
+      [...$('.spaces').children].forEach((dot, i) => dot.classList.toggle('on', i === index));
+    }
+    spaces.forEach((space, index) => {
+      const dot = document.createElement('button');
+      dot.className = 'space-dot';
+      dot.title = `${space.name} · ${space.profile}`;
+      dot.innerHTML = `<b style="background:${space.tint}"></b>`;
+      dot.onclick = () => setSpace(index);
+      $('.spaces').append(dot);
+    });
+    setSpace(0);
+
+    /* Tabs. One list drives the appbar and the pages. */
+    let nextId = 1;
+    const tab = (title, url, color, letter, body) => ({ id: nextId++, title, url, color, letter, body });
+    const tabs = [
+      tab('New tab', 'rivet://start', '#7c2d4f', 'R', 'hero'),
+      tab('Ember workspace', 'https://ember.thisisthepy.org/projects', '#d07a3a', 'E', 'Projects, machines and the agents working in them, in one place.'),
+      tab('Release notes', 'https://github.com/LogitAI/rivet-browser/releases', '#24292f', 'G', 'What changed in the latest Rivet build, and what is coming next.'),
+      tab('Launch notes', 'https://notes.thisisthepy.org/launch', '#2f8f6b', 'N', 'Two pages side by side keep their own history. Drag a tab to a side of the page to pair them.'),
+      tab('Local preview', 'http://localhost:4321/demos/source/', '#3a3d45', '&lt;/&gt;', 'A local server page. Rivet turns on developer mode for it, and the title bar says so.'),
+    ];
+    // Developer mode is per tab. Local pages start in it, as in Arc.
+    const isLocal = (url) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(url);
+    tabs.forEach((item) => { item.dev = isLocal(item.url); });
+    // The developer tools drawer of each tab, by the panel it shows, or absent when closed.
+    const drawers = {};
+    // The pages form a tree. A leaf shows one tab. A split holds two children side by side ("row")
+    // or stacked ("column"), so up to four pages can share the window in any grid.
+    const MAX_PANES = 4;
+    let layout = { id: tabs[0].id };
+    let focus = tabs[0].id;
+    const byId = (id) => tabs.find((item) => item.id === id);
+    const focusedId = () => focus;
+    const isLeaf = (node) => node.id !== undefined;
+    const leaves = (node = layout) => isLeaf(node) ? [node.id] : [...leaves(node.a), ...leaves(node.b)];
+    const isSplit = () => !isLeaf(layout);
+    // The page that touches a corner of the window, used for the appbar toggle and caption buttons.
+    function corner(node, horizontal, vertical) {
+      if (isLeaf(node)) return node.id;
+      if (node.dir === 'row') return corner(horizontal === 'left' ? node.a : node.b, horizontal, vertical);
+      return corner(vertical === 'top' ? node.a : node.b, horizontal, vertical);
+    }
+    function replaceLeaf(node, id, make) {
+      if (isLeaf(node)) return node.id === id ? make(node) : node;
+      return { ...node, a: replaceLeaf(node.a, id, make), b: replaceLeaf(node.b, id, make) };
+    }
+    function removeLeaf(node, id) {
+      if (isLeaf(node)) return node.id === id ? null : node;
+      const a = removeLeaf(node.a, id);
+      const b = removeLeaf(node.b, id);
+      return a && b ? { ...node, a, b } : a || b;
+    }
+
+    function pageHtml(item) {
+      if (item.body === 'hero') {
+        return `<div class="ask">
+            <label class="line"><i class="g">&#xE721;</i><input class="ask-input" placeholder="Search or ask Rivet"></label>
+            <div class="tools">
+              <button class="attach"><i class="g">&#xE710;</i>Add tabs or files</button>
+              <span class="where-to" title="Opens in this space's browser and profile"><i></i>${spaces[currentSpace].profile}</span>
+              <button class="send" title="Send (Enter)"><i class="g">&#xE74A;</i></button>
+            </div>
+          </div>`;
+      }
+      return `<div class="eyebrow">${item.title.toUpperCase()}</div><h2>${item.title}</h2><p class="intro">${item.body}</p>`;
+    }
+
+    function security(url) {
+      if (url.startsWith('rivet://')) return `<span class="security" title="Rivet page"><i class="g">&#xE946;</i></span>`;
+      if (url.startsWith('https://')) return `<span class="security" title="Connection is secure"><i class="g">&#xE72E;</i></span>`;
+      if (isLocal(url)) return `<span class="security" title="Local page"><i class="g">&#xE946;</i></span>`;
+      return `<span class="security insecure" title="Your connection to this site is not secure"><i class="g">&#xE7BA;</i>Not secure</span>`;
+    }
+
+    const DEV_ACTIONS = [
+      ['link', '&#xE71B;', 'Copy link'],
+      ['window', '&#xE8A7;', 'Open in Mini Window'],
+      ['shot', '&#xE722;', 'Capture screenshot'],
+      ['sep'],
+      ['Elements', '&#xE7C9;', 'Inspect element'],
+      ['Console', '&#xE756;', 'Console'],
+      ['Network', '&#xE774;', 'Network'],
+      ['Performance', '&#xE9D9;', 'Performance'],
+    ];
+    function devbarHtml(item) {
+      return `<div class="devbar">${DEV_ACTIONS.map(([action, glyph, title]) => action === 'sep'
+        ? '<span class="sep"></span>'
+        : `<button class="icon${drawers[item.id] === action ? ' on' : ''}" data-dev="${action}" title="${title}"><i class="g">${glyph}</i></button>`).join('')}</div>`;
+    }
+    function drawerHtml(item) {
+      const active = drawers[item.id];
+      const tabsHtml = ['Elements', 'Console', 'Network', 'Performance'].map((name) => name === active ? `<b>${name}</b>` : `<span data-drawer="${name}">${name}</span>`).join('');
+      const bodies = {
+        Elements: `&lt;main class="page"&gt;<br>&nbsp;&nbsp;&lt;h2&gt;${item.title}&lt;/h2&gt;<br>&lt;/main&gt;`,
+        Console: `&gt; location.host<br>'${item.url.replace(/^https?:\/\//, '').split('/')[0]}'<br>&gt; <span style="color:#8f8b84">|</span>`,
+        Network: `200&nbsp;&nbsp;GET&nbsp;&nbsp;document&nbsp;&nbsp;${item.url.replace(/^https?:\/\//, '')}<br>200&nbsp;&nbsp;GET&nbsp;&nbsp;script&nbsp;&nbsp;&nbsp;&nbsp;/app.js&nbsp;&nbsp;&nbsp;&nbsp;18 kB&nbsp;&nbsp;42 ms`,
+        Performance: `LCP 0.8 s&nbsp;&nbsp;&nbsp;INP 48 ms&nbsp;&nbsp;&nbsp;CLS 0.01`,
+      };
+      return `<div class="devtools${active ? ' open' : ''}"><nav>${tabsHtml}</nav>${active ? bodies[active] : ''}</div>`;
+    }
+
+    function buildPanel(id) {
+      const item = byId(id);
+      const first = id === corner(layout, 'left', 'top');
+      const last = id === corner(layout, 'right', 'top');
+      const panel = document.createElement('section');
+      panel.className = 'panel' + (id === focus ? ' focused' : '');
+      panel.dataset.id = id;
+      panel.innerHTML = `
+        <div class="toolbar${item.dev ? ' dev' : ''}">
+          ${first ? `<button class="icon" data-feature="appbar" title="Hide or show the appbar (Ctrl Shift S)"><i class="g">&#xE90C;</i></button>` : ''}
+          ${isSplit() ? `<button class="icon grip" title="Drag to move this page. Drop it outside the pages to make a Mini Window."><i class="g">&#xE7C2;</i></button>` : ''}
+          <button class="icon" title="Back (Alt Left)"><i class="g">&#xE72B;</i></button>
+          <button class="icon" title="Forward (Alt Right)" disabled><i class="g">&#xE72A;</i></button>
+          <button class="icon" title="Reload (Ctrl R)"><i class="g">&#xE72C;</i></button>
+          <button class="where" data-open="command" title="Address and Command Bar (Ctrl L)">${security(item.url)}<span class="text"><b>${item.title}</b> · ${item.url.replace(/^https?:\/\//, '')}</span></button>
+          ${item.dev ? devbarHtml(item) : ''}
+          ${isSplit() ? `<button class="icon popout" title="Move to Mini Window"><i class="g" style="font-size:13px">&#xEE47;</i></button>` : ''}
+          ${isSplit() ? `<button class="icon unsplit" title="Close this page of the split"><i class="g" style="font-size:12px">&#xE711;</i></button>` : ''}
+          ${last ? `<div class="caption"><button title="Minimize">&#xE921;</button><button title="Maximize">&#xE922;</button><button class="close" title="Close">&#xE8BB;</button></div>` : '<span style="width:6px"></span>'}
+        </div>
+        <div class="body"><div class="page${item.body === 'hero' ? ' start' : ''}">${pageHtml(item)}</div>${item.body === 'hero' ? `<div class="workspace-info">Opened in <b>${spaces[currentSpace].profile}</b></div>` : ''}${drawerHtml(item)}</div>`;
+      panel.addEventListener('pointerdown', (event) => { if (focus !== id && !event.target.closest('input')) { focus = id; render(); } });
+      const ask = panel.querySelector('.ask-input');
+      if (ask) {
+        const send = panel.querySelector('.send');
+        ask.addEventListener('input', () => send.classList.toggle('ready', !!ask.value.trim()));
+        ask.addEventListener('keydown', (event) => {
+          const typed = ask.value.trim();
+          if (event.key !== 'Enter' || !typed) return;
+          const url = /^https?:\/\//.test(typed) ? typed : 'https://' + typed;
+          openTab(addTab(typed.replace(/^https?:\/\//, ''), url, '#5b6472', 'S', 'Opened from the start page search.').id, id);
+        });
+      }
+      panel.querySelectorAll('[data-dev]').forEach((button) => button.addEventListener('click', (event) => { event.stopPropagation(); devAction(item, button.dataset.dev, panel); }));
+      panel.querySelectorAll('[data-drawer]').forEach((name) => name.addEventListener('click', () => { drawers[item.id] = name.dataset.drawer; renderPanes(); }));
+      const popout = panel.querySelector('.popout');
+      if (popout) popout.addEventListener('click', (event) => { event.stopPropagation(); popOut(id); });
+      const grip = panel.querySelector('.grip');
+      if (grip) grip.addEventListener('pointerdown', (event) => {
+        event.stopPropagation();
+        focus = id;
+        startDrag(event, {
+          label: rowHtml(item).replace(/<span class="x".*$/, ''),
+          onMove: () => panel.classList.add('lifted'),
+          // Dropped on another page it moves there, or swaps places in the middle. Dropped outside
+          // the pages it leaves the split as a Mini Window.
+          onDrop: (zone) => {
+            panel.classList.remove('lifted');
+            if (zone.target === id) return;
+            zone.side === 'center' ? swap(id, zone.target) : split(id, zone.side, zone.target);
+          },
+          onCancel: () => popOut(id),
+        });
+      });
+      const unsplit = panel.querySelector('.unsplit');
+      if (unsplit) unsplit.addEventListener('click', (event) => { event.stopPropagation(); closePane(id); });
+      return panel;
+    }
+
+    function buildNode(node) {
+      if (isLeaf(node)) return buildPanel(node.id);
+      const box = document.createElement('div');
+      box.className = 'split-box split-' + node.dir;
+      box.append(buildNode(node.a), buildNode(node.b));
+      return box;
+    }
+
+    function renderPanes() {
+      const container = $('#panes');
+      container.classList.toggle('split', isSplit());
+      container.innerHTML = '';
+      container.append(buildNode(layout));
+      container.querySelectorAll('[data-feature]').forEach((button) => button.addEventListener('click', () => toggles[button.dataset.feature]()));
+      container.querySelectorAll('[data-open]').forEach((button) => button.addEventListener('click', () => toggles[button.dataset.open]()));
+    }
+
+    function rowHtml(item) {
+      return `<span class="fav" style="background:${item.color}">${item.letter}</span><span class="label">${item.title}</span><span class="x" title="Close tab (Ctrl W)">&#xE711;</span><span class="hold"></span>`;
+    }
+
+    function renderAppbar() {
+      const list = $('#today');
+      list.innerHTML = '';
+      let group = null;
+      tabs.forEach((item) => {
+        const row = document.createElement('button');
+        row.className = 'row' + (item.id === focusedId() ? ' active' : '');
+        row.dataset.id = item.id;
+        row.innerHTML = rowHtml(item);
+        wireRow(row, item);
+        // Split pages sit together in one group at the place of the first of them.
+        if (isSplit() && leaves().includes(item.id)) {
+          if (!group) {
+            group = document.createElement('div');
+            group.className = 'group';
+            group.innerHTML = `<div class="title"><i class="g">&#xECA5;</i>SPLIT VIEW</div>`;
+            list.append(group);
+          }
+          group.append(row);
+        } else {
+          list.append(row);
+        }
+      });
+      // The group lists its pages in reading order on screen.
+      if (group) leaves().forEach((id) => group.append(group.querySelector(`[data-id="${id}"]`)));
+    }
+
+    function render() { renderPanes(); renderAppbar(); window.rivetReady = true; }
+
+    function openTab(id, target = focus) {
+      if (leaves().includes(id)) { focus = id; render(); return; }
+      layout = replaceLeaf(layout, target, () => ({ id }));
+      focus = id;
+      render();
+    }
+
+    // Puts a tab beside the target page. left and right split it into a row, top and bottom into
+    // a column. A tab already on screen moves from its old place.
+    function split(id, side, target = focus) {
+      if (id === target) {
+        if (isSplit()) return;
+        const other = tabs.find((item) => item.id !== id);
+        if (!other) return;
+        layout = { id: other.id };
+        target = other.id;
+      } else if (leaves().includes(id)) {
+        layout = removeLeaf(layout, id);
+      } else if (leaves().length >= MAX_PANES) {
+        openTab(id, target);
+        return;
+      }
+      const dir = side === 'left' || side === 'right' ? 'row' : 'column';
+      const first = side === 'left' || side === 'top';
+      layout = replaceLeaf(layout, target, (old) => ({ dir, a: first ? { id } : old, b: first ? old : { id } }));
+      focus = id;
+      render();
+    }
+
+    function swap(one, two) {
+      const marker = -1;
+      layout = replaceLeaf(layout, one, () => ({ id: marker }));
+      layout = replaceLeaf(layout, two, () => ({ id: one }));
+      layout = replaceLeaf(layout, marker, () => ({ id: two }));
+      focus = one;
+      render();
+    }
+
+    // Takes a page out of the split and shows it as the Mini Window. The tab stays in the list,
+    // and dropping the Mini Window back on the pages brings that same tab back.
+    function popOut(id) {
+      const item = byId(id);
+      if (!isSplit() || !item) return;
+      closePane(id);
+      showMini(item);
+    }
+
+    function closePane(id) {
+      layout = removeLeaf(layout, id) || { id: tabs[0].id };
+      if (!leaves().includes(focus)) focus = leaves()[0];
+      render();
+    }
+
+    /* Closing a tab, Dia style: the tab below takes over, or the one above when it was last. */
+    const closed = [];
+    function closeTab(id) {
+      const index = tabs.findIndex((item) => item.id === id);
+      if (index < 0) return;
+      const [item] = tabs.splice(index, 1);
+      closed.push({ item, index });
+      const replacement = tabs[index] || tabs[index - 1];
+      if (leaves().includes(id)) {
+        if (isSplit()) layout = removeLeaf(layout, id);
+        else if (replacement) layout = { id: replacement.id };
+        else {
+          tabs.push(tab('New tab', 'https://www.google.com/', '#5b6472', 'S', 'Search, enter an address, or ask Rivet.'));
+          layout = { id: tabs[tabs.length - 1].id };
+        }
+        if (!leaves().includes(focus)) focus = leaves()[0];
+      }
+      render();
+      $('#toast-text').textContent = 'Closed ' + item.title;
+      $('#toast').classList.add('open');
+      clearTimeout(closeTab.timer);
+      closeTab.timer = setTimeout(() => $('#toast').classList.remove('open'), 4000);
+    }
+    function reopen() {
+      const last = closed.pop();
+      if (!last) return;
+      tabs.splice(last.index, 0, last.item);
+      openTab(last.item.id);
+      $('#toast').classList.remove('open');
+    }
+    $('#undo').addEventListener('click', reopen);
+
+    function addTab(title, url, color, letter, body) {
+      const item = tab(title, url, color, letter, body);
+      tabs.unshift(item);
+      return item;
+    }
+
+    /* Long press opens Link Preview. Moving the pointer turns the press into a drag instead. */
+    function holdToPreview(element, bar) {
+      let timer;
+      element.addEventListener('pointerdown', () => {
+        if (bar) { bar.style.transition = 'width .5s linear'; bar.style.width = 'calc(100% - 20px)'; }
+        timer = setTimeout(() => $('#preview').classList.add('open'), 500);
+      });
+      const stop = () => { clearTimeout(timer); if (bar) { bar.style.transition = 'none'; bar.style.width = '0'; } };
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach((type) => element.addEventListener(type, stop));
+      element.cancelHold = stop;
+    }
+
+    /* Dragging. A tab or the Mini Window dropped on a side of the pages splits the view; dropped
+       in the middle it opens there. */
+    function zoneAt(x, y) {
+      const main = $('.main').getBoundingClientRect();
+      if (x < main.left || x > main.right || y < main.top || y > main.bottom) return null;
+      const panel = [...document.querySelectorAll('#panes .panel')].find((element) => {
+        const rect = element.getBoundingClientRect();
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      }) || document.querySelector(`#panes .panel[data-id="${focus}"]`);
+      const rect = panel.getBoundingClientRect();
+      const distance = {
+        left: (x - rect.left) / rect.width,
+        right: (rect.right - x) / rect.width,
+        top: (y - rect.top) / rect.height,
+        bottom: (rect.bottom - y) / rect.height,
+      };
+      const [nearest, amount] = Object.entries(distance).sort((one, two) => one[1] - two[1])[0];
+      const full = leaves().length >= MAX_PANES;
+      const side = amount < .28 && !full ? nearest : 'center';
+      return { target: Number(panel.dataset.id), side, rect, full };
+    }
+    function showZone(zone) {
+      const drop = $('#drop');
+      drop.classList.toggle('on', !!zone);
+      if (!zone) return;
+      const main = $('.main').getBoundingClientRect();
+      const { rect, side } = zone;
+      const half = { width: (rect.width - 8) / 2, height: (rect.height - 8) / 2 };
+      const box = {
+        left: rect.left - main.left + (side === 'right' ? half.width + 8 : 0),
+        top: rect.top - main.top + (side === 'bottom' ? half.height + 8 : 0),
+        width: side === 'left' || side === 'right' ? half.width : rect.width,
+        height: side === 'top' || side === 'bottom' ? half.height : rect.height,
+      };
+      Object.entries(box).forEach(([key, value]) => { drop.style[key] = value + 'px'; });
+      drop.style.bottom = 'auto';
+      const labels = { left: 'Split left', right: 'Split right', top: 'Split top', bottom: 'Split bottom', center: zone.full ? 'Up to four pages. Open here' : 'Open here' };
+      $('#drop-label').textContent = labels[side];
+    }
+    function dropTab(id, zone) {
+      zone.side === 'center' ? openTab(id, zone.target) : split(id, zone.side, zone.target);
+    }
+    function startDrag(event, { label, onDrop, onMove, onCancel }) {
+      const start = { x: event.clientX, y: event.clientY };
+      let dragging = false;
+      const ghost = $('#ghost');
+      const move = (moved) => {
+        if (!dragging && Math.hypot(moved.clientX - start.x, moved.clientY - start.y) < 6) return;
+        if (!dragging) {
+          dragging = true;
+          frame.classList.add('dragging');
+          if (label) { ghost.innerHTML = label; ghost.classList.add('on'); }
+        }
+        if (label) { ghost.style.left = moved.clientX + 12 + 'px'; ghost.style.top = moved.clientY + 8 + 'px'; }
+        if (onMove) onMove(moved);
+        showZone(zoneAt(moved.clientX, moved.clientY));
+      };
+      const end = (ended) => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', end);
+        ghost.classList.remove('on');
+        frame.classList.remove('dragging');
+        showZone(null);
+        if (!dragging) return;
+        const zone = zoneAt(ended.clientX, ended.clientY);
+        if (zone) onDrop(zone); else if (onCancel) onCancel();
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', end);
+      return () => dragging;
+    }
+
+    function wireRow(row, item) {
+      holdToPreview(row, row.querySelector('.hold'));
+      let wasDrag = () => false;
+      row.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 || event.target.closest('.x')) return;
+        wasDrag = startDrag(event, {
+          label: rowHtml(item).replace(/<span class="x".*$/, ''),
+          onMove: () => { row.cancelHold(); row.classList.add('lifted'); },
+          onDrop: (zone) => { row.classList.remove('lifted'); dropTab(item.id, zone); },
+          onCancel: () => row.classList.remove('lifted'),
+        });
+      });
+      row.addEventListener('click', (event) => {
+        if (event.target.closest('.x')) { closeTab(item.id); return; }
+        if (wasDrag()) return;
+        openTab(item.id);
+      });
+      row.addEventListener('auxclick', (event) => { if (event.button === 1) closeTab(item.id); });
+    }
+
+    // The Mini Window moves with its title bar. Over the pages it offers the same drop targets.
+    const mini = $('#mini');
+    function showMini(item) {
+      mini.style.cssText = '';
+      mini.dataset.tab = item ? item.id : '';
+      mini.querySelector('header b').textContent = 'Mini Window · ' + (item ? item.url.replace(/^https?:\/\//, '') : 'calendar.google.com');
+      mini.querySelector('.page').innerHTML = item
+        ? `<div class="eyebrow">MINI WINDOW</div><h2 style="font-size:30px">${item.title}</h2><p>Drag this window onto the pages to put it back, or close it.</p>`
+        : `<div class="eyebrow">MINI WINDOW</div><h2 style="font-size:30px">Standup</h2><p>A link from another app lands here first. Drag this window onto the page to split, or close it.</p>`;
+      mini.classList.add('open');
+    }
+    function miniToTab() {
+      mini.classList.remove('open');
+      const carried = byId(Number(mini.dataset.tab));
+      mini.dataset.tab = '';
+      return carried || addTab('Standup', 'https://calendar.google.com/standup', '#3b6fd4', '31', 'A meeting link from another app, now a tab in this space.');
+    }
+    mini.querySelector('header').addEventListener('pointerdown', (event) => {
+      if (event.target.closest('button')) return;
+      const rect = mini.getBoundingClientRect();
+      const offset = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      mini.classList.add('lifted');
+      startDrag(event, {
+        onMove: (moved) => {
+          mini.style.left = moved.clientX - offset.x + 'px';
+          mini.style.top = moved.clientY - offset.y + 'px';
+          mini.style.right = 'auto';
+          mini.style.bottom = 'auto';
+        },
+        onDrop: (zone) => {
+          mini.classList.remove('lifted');
+          dropTab(miniToTab().id, zone);
+        },
+        onCancel: () => mini.classList.remove('lifted'),
+      });
+      window.addEventListener('pointerup', () => mini.classList.remove('lifted'), { once: true });
+    });
+    $('#mini-open').addEventListener('click', () => openTab(miniToTab().id));
+    $('#preview-open').addEventListener('click', () => {
+      $('#preview').classList.remove('open');
+      openTab(addTab('Agent brief notes', 'https://ember.thisisthepy.org/brief', '#7c2d4f', 'R', 'Opened from Link Preview as a tab in this space.').id);
+    });
+
+    function devAction(item, action, panel) {
+      const note = (text) => { const element = document.createElement('div'); element.className = 'note'; element.textContent = text; panel.querySelector('.body').append(element); setTimeout(() => element.remove(), 1700); };
+      if (action === 'link') { try { navigator.clipboard.writeText(item.url); } catch (error) {} note('Link copied'); return; }
+      if (action === 'shot') { const flash = document.createElement('div'); flash.className = 'flash'; panel.querySelector('.body').append(flash); setTimeout(() => flash.remove(), 400); note('Screenshot saved'); return; }
+      if (action === 'window') { isSplit() ? popOut(item.id) : showMini(item); return; }
+      drawers[item.id] = drawers[item.id] === action ? undefined : action;
+      renderPanes();
+    }
+
+    /* Features */
+    const toggle = (id) => $('#' + id).classList.toggle('open');
+    const toggles = {
+      split: () => {
+        if (isSplit()) { layout = { id: focus }; render(); return; }
+        const other = tabs.find((item) => item.id !== focusedId());
+        if (other) split(other.id, 'right');
+      },
+      preview: () => toggle('preview'),
+      mini: () => { if (mini.classList.contains('open')) mini.classList.remove('open'); else showMini(null); },
+      rules: () => toggle('rules'),
+      command: () => { toggle('command'); $('#command input').focus(); },
+      devtools: () => {
+        const item = byId(focusedId());
+        item.dev = !item.dev;
+        if (!item.dev) drawers[item.id] = undefined;
+        renderPanes();
+      },
+      spaces: () => setSpace((currentSpace + 1) % spaces.length),
+      // Hiding keeps the appbar one edge away. Pinning from the floating appbar restores it.
+      appbar: () => { frame.classList.toggle('collapsed'); frame.classList.remove('peek'); },
+    };
+    document.querySelectorAll('[data-feature]').forEach((button) => button.addEventListener('click', () => toggles[button.dataset.feature]()));
+    document.querySelectorAll('[data-open]').forEach((button) => button.addEventListener('click', () => toggles[button.dataset.open]()));
+    document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $('#' + button.dataset.close).classList.remove('open')));
+    document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', () => {
+      document.querySelectorAll('[data-mode]').forEach((other) => other.classList.toggle('on', other === button));
     }));
+    $('#command').addEventListener('click', (event) => { if (event.target.id === 'command') toggles.command(); });
+
+    // Entering text in the Command Bar opens it in a new tab right below New tab.
+    $('#command input').addEventListener('keydown', (event) => {
+      const typed = event.target.value.trim();
+      if (event.key !== 'Enter' || !typed) return;
+      const url = /^https?:\/\//.test(typed) ? typed : 'https://' + typed;
+      const item = addTab(typed.replace(/^https?:\/\//, ''), url, '#5b6472', 'S', 'Opened from the Command Bar.');
+      event.target.value = '';
+      toggles.command();
+      openTab(item.id);
+    });
+
+    document.addEventListener('keydown', (event) => {
+      const key = event.key.toLowerCase();
+      if (event.ctrlKey && event.shiftKey && key === 't') { event.preventDefault(); reopen(); return; }
+      if (event.ctrlKey && event.shiftKey && key === 's') { event.preventDefault(); toggles.appbar(); return; }
+      if (event.ctrlKey && !event.shiftKey && key === 't') { event.preventDefault(); toggles.command(); return; }
+      if (event.ctrlKey && !event.shiftKey && key === 'w') { event.preventDefault(); closeTab(focusedId()); return; }
+      if (event.key === 'Escape') document.querySelectorAll('.open').forEach((element) => element.classList.remove('open'));
+    });
+
+    /* Appbar width. Drag the seam to resize, double click to reset. */
+    const SIDE_MIN = 200, SIDE_MAX = 420, SIDE_DEFAULT = 268;
+    function setSide(width) {
+      const clamped = Math.round(Math.min(SIDE_MAX, Math.max(SIDE_MIN, width)));
+      root.style.setProperty('--side', clamped + 'px');
+      try { localStorage.setItem('rivet.appbar', String(clamped)); } catch (error) {}
+    }
+    try { const saved = Number(localStorage.getItem('rivet.appbar')); if (saved) setSide(saved); } catch (error) {}
+    const resizer = $('.resizer');
+    resizer.addEventListener('pointerdown', (event) => {
+      resizer.setPointerCapture(event.pointerId);
+      frame.classList.add('resizing');
+      const left = frame.getBoundingClientRect().left;
+      const move = (moved) => setSide(moved.clientX - left);
+      const end = () => {
+        frame.classList.remove('resizing');
+        resizer.removeEventListener('pointermove', move);
+        resizer.removeEventListener('pointerup', end);
+      };
+      resizer.addEventListener('pointermove', move);
+      resizer.addEventListener('pointerup', end);
+    });
+    resizer.addEventListener('dblclick', () => setSide(SIDE_DEFAULT));
+    $('.edge').addEventListener('pointerenter', () => frame.classList.add('peek'));
+    $('.appbar').addEventListener('pointerleave', () => frame.classList.remove('peek'));
+
+    render();
   </script>
 </body>
 </html>
