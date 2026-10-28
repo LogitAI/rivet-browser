@@ -431,6 +431,7 @@ dependencies = [
 name = "rivet-runtime-windows"
 version = "0.1.0"
 dependencies = [
+ "rivet-core",
  "rivet-platform-windows",
  "windows",
  "windows-numerics",

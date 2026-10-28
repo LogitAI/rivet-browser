@@ -8,6 +8,38 @@ use std::path::PathBuf;
 
 pub mod session;
 
+/// URL of the local start page shipped alongside Rivet binaries.
+pub fn start_page_url(directory: &std::path::Path, space: &str) -> String {
+    fn encode(value: &str, path: bool) -> String {
+        let mut result = String::new();
+        for b in value.bytes() {
+            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) || (path && b"/:".contains(&b)) {
+                result.push(b as char);
+            } else {
+                use std::fmt::Write;
+                write!(result, "%{b:02X}").unwrap();
+            }
+        }
+        result
+    }
+    let path = directory
+        .join("start.html")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let prefix = if path.starts_with("//") {
+        "file:"
+    } else if path.starts_with('/') {
+        "file://"
+    } else {
+        "file:///"
+    };
+    format!(
+        "{prefix}{}?space={}",
+        encode(&path, true),
+        encode(space, false)
+    )
+}
+
 /// Whether a browser task creates a visible Rivet surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayMode {
@@ -76,7 +108,10 @@ impl fmt::Display for LaunchError {
                 write!(f, "a browser executable is required; pass --browser <path>")
             }
             Self::InvalidUrl(value) => {
-                write!(f, "URL must use https://, http:// or about:, not {value:?}")
+                write!(
+                    f,
+                    "URL must use https://, http://, file:// or about:, not {value:?}"
+                )
             }
             Self::UnsafeArgument(value) => {
                 write!(f, "value contains a control character: {value:?}")
@@ -131,7 +166,10 @@ pub fn build_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchEr
 }
 
 fn is_supported_url(value: &str) -> bool {
-    value.starts_with("https://") || value.starts_with("http://") || value.starts_with("about:")
+    value.starts_with("https://")
+        || value.starts_with("http://")
+        || value.starts_with("file://")
+        || value.starts_with("about:")
 }
 
 fn reject_control_characters(value: &str) -> Result<(), LaunchError> {
@@ -153,6 +191,14 @@ mod tests {
             user_data_dir: Some(PathBuf::from("C:/Profiles/rivet")),
             display,
         }
+    }
+
+    #[test]
+    fn fr3_start_page_url_encodes_path_and_space() {
+        assert_eq!(
+            start_page_url(std::path::Path::new("C:/Rivet files"), "Work & Play"),
+            "file:///C:/Rivet%20files/start.html?space=Work%20%26%20Play"
+        );
     }
 
     #[test]
@@ -188,7 +234,7 @@ mod tests {
     #[test]
     fn fr1_rejects_an_unsupported_navigation_target() {
         let mut input = request(DisplayMode::Visible);
-        input.url = "file:///sensitive-data".into();
+        input.url = "javascript:alert(1)".into();
         assert_eq!(
             build_launch_plan(&input),
             Err(LaunchError::InvalidUrl(input.url))

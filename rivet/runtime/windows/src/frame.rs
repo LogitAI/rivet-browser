@@ -10,20 +10,22 @@ use windows_sys::Win32::Graphics::Dwm::{
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
 use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT,
-    TRACKMOUSEEVENT,
+    GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
+    TME_NONCLIENT, TRACKMOUSEEVENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, GetClassNameW, GetClientRect, GetPropW, GetWindowLongPtrW,
-    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW,
-    RegisterWindowMessageW, RemovePropW, SetPropW, SetWindowLongPtrW, SetWindowPos, GWLP_WNDPROC,
-    GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT, ICON_BIG, ICON_SMALL, SM_CXICON,
-    SM_CXPADDEDBORDER, SM_CXSMICON, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, WM_CAPTURECHANGED, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN,
-    WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_SETICON,
+    CallNextHookEx, CallWindowProcW, GetAncestor, GetClassNameW, GetClientRect, GetPropW,
+    GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+    PostMessageW, RegisterWindowMessageW, RemovePropW, SetPropW, SetWindowLongPtrW, SetWindowPos,
+    SetWindowsHookExW, GA_ROOT, GWLP_WNDPROC, GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT,
+    ICON_BIG, ICON_SMALL, MSG, PM_REMOVE, SM_CXICON, SM_CXPADDEDBORDER, SM_CXSMICON,
+    SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    WH_GETMESSAGE, WM_CAPTURECHANGED, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+    WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_SETICON,
     WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
 };
 
@@ -58,6 +60,65 @@ thread_local! {
     static APPBARS: RefCell<HashMap<isize, Appbar>> = RefCell::new(HashMap::new());
     static MENUS: RefCell<HashMap<isize, isize>> = RefCell::new(HashMap::new());
     static APPBAR_STATE: RefCell<HashMap<isize, (Option<AppbarHit>, Option<AppbarHit>, u32)>> = RefCell::new(HashMap::new());
+    static KEYBOARD_HOOK: RefCell<isize> = const { RefCell::new(0) };
+}
+
+unsafe fn start_page(window: HWND) {
+    let tint = APPBAR_STATE
+        .with(|states| states.borrow().get(&(window as isize)).map(|state| state.2))
+        .unwrap_or(0xd08a52);
+    let space = match tint {
+        0x5b8bab => "Personal",
+        0xc0577f => "Research",
+        _ => "Work",
+    };
+    if let Some(directory) = runtime_directory() {
+        let url = rivet_core::start_page_url(&directory, space);
+        if crate::chrome_tabs::new_tab(window) {
+            crate::chrome_navigation::open(window, &url);
+        }
+    }
+}
+
+unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 && wparam == PM_REMOVE as usize {
+        let message = &mut *(lparam as *mut MSG);
+        if message.message == WM_KEYDOWN
+            && message.wParam == b'T' as usize
+            && GetKeyState(0x11) < 0
+            && GetKeyState(0x10) >= 0
+            && GetKeyState(0x12) >= 0
+        {
+            let window = GetAncestor(message.hwnd, GA_ROOT);
+            if attached(window) {
+                PostMessageW(
+                    window,
+                    RegisterWindowMessageW(wide("Rivet.NewStartPage").as_ptr()),
+                    0,
+                    0,
+                );
+                message.message = WM_NULL;
+            }
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+unsafe fn install_keyboard_hook() {
+    KEYBOARD_HOOK.with(|hook| {
+        if *hook.borrow() == 0 {
+            let installed = SetWindowsHookExW(
+                WH_GETMESSAGE,
+                Some(keyboard_hook),
+                std::ptr::null_mut(),
+                GetCurrentThreadId(),
+            );
+            if installed.is_null() {
+                log("rivet: could not install keyboard hook");
+            }
+            *hook.borrow_mut() = installed as isize;
+        }
+    });
 }
 
 fn workspace_menu_hit(x: f32, y: f32, width: f32) -> Option<AppbarHit> {
@@ -192,7 +253,7 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
             crate::chrome_tabs::close_tab(window, index);
         }
         AppbarHit::NewTab => {
-            crate::chrome_tabs::new_tab(window);
+            start_page(window);
         }
         AppbarHit::Pinned(index) => {
             const URLS: [&str; 4] = [
@@ -380,7 +441,9 @@ unsafe fn create_appbar(window: HWND) {
     if let Err(error) = chrome_layout::install_caption_layout(|window| {
         attached(window).then_some(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP)
     }) {
-        log(&format!("rivet: could not lay out caption buttons: {error}"));
+        log(&format!(
+            "rivet: could not lay out caption buttons: {error}"
+        ));
     }
     // Experiment, off unless asked for: Chromium's vertical-tab frame for Rivet windows.
     if runtime_directory().is_some_and(|dir| dir.join("rivet-nav.log").exists()) {
@@ -428,6 +491,7 @@ unsafe fn create_appbar(window: HWND) {
         }
     };
     APPBARS.with(|appbars| appbars.borrow_mut().insert(window as isize, appbar));
+    install_keyboard_hook();
     APPBAR_STATE.with(|states| {
         states
             .borrow_mut()
@@ -612,6 +676,10 @@ unsafe extern "system" fn browser_proc(
 }
 
 unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if message == RegisterWindowMessageW(wide("Rivet.NewStartPage").as_ptr()) && attached(window) {
+        start_page(window);
+        return 0;
+    }
     match message {
         WM_KEYDOWN if attached(window) && menu_open(window) && wparam == 0x1b => {
             close_menu(window);

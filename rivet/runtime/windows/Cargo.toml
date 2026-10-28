@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
+rivet-core.workspace = true
 rivet-platform-windows = { path = "../../platform/windows" }
 windows-sys.workspace = true
 

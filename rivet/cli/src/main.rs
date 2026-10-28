@@ -17,7 +17,7 @@ use rivet_platform_windows::{
 
 const USAGE: &str = "\
 Usage:
-  rivet session start --browser <path> --url <url> [--user-data-dir <path>] \\
+  rivet session start --browser <path> [--url <url>] [--user-data-dir <path>] \\
       [--display visible|hidden|auto] [--runtime <path>] [--state <path>] [--json]
   rivet session list [--state <path>] [--json]
   rivet session close --id <id> [--state <path>] [--json]
@@ -193,7 +193,22 @@ fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
     }
     Ok(StartOptions {
         browser: browser.ok_or_else(|| "--browser is required".to_owned())?,
-        url: url.ok_or_else(|| "--url is required".to_owned())?,
+        url: match url {
+            Some(url) => url,
+            None => {
+                let exe = env::current_exe()
+                    .map_err(|e| format!("could not locate Rivet executable: {e}"))?;
+                let directory = exe
+                    .parent()
+                    .ok_or("Rivet executable has no parent directory")?;
+                let directory = if directory.file_name().is_some_and(|name| name == "deps") {
+                    directory.parent().unwrap_or(directory)
+                } else {
+                    directory
+                };
+                rivet_core::start_page_url(directory, "Work")
+            }
+        },
         user_data_dir,
         display,
         runtime,
@@ -358,6 +373,26 @@ fn close_json(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr3_session_start_defaults_to_local_page() {
+        let options = parse_start(vec![
+            "session".into(),
+            "start".into(),
+            "--browser".into(),
+            "chrome.exe".into(),
+        ])
+        .unwrap();
+        assert!(options.url.starts_with("file:///"));
+        assert!(options.url.ends_with("/start.html?space=Work"));
+        assert!(build_launch_plan(&LaunchRequest {
+            browser: options.browser,
+            url: options.url,
+            user_data_dir: None,
+            display: DisplayMode::Visible
+        })
+        .is_ok());
+    }
 
     #[test]
     fn fr4_parses_machine_readable_hidden_start() {
