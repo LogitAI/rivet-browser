@@ -259,3 +259,19 @@
   영역 색은 그대로였다. 이 색은 Windows가 아니라 Chrome이 칠한다.
 - Chrome 156의 앱 창 제목 줄은 프레임 색 함수가 아니라 색 공급자(`ui::ColorProvider`)의 프레임 색을 바로 쓰는 것으로
   보인다. 다음 후보는 이 창의 색 공급자 또는 색 믹서다.
+
+## 2026-10-28: Rivet 창에만 캡션 영역 색 적용
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Google Chrome `156.0.8078.48`, 192 DPI 모니터, `--app` 창, 별도 프로필 `.scratch/vt-rivet`.
+
+### 결과
+
+- `BrowserFrameViewWin::OnPaint`(`0x11B5610`, 프레임 뷰 vtable 89번 칸)는 `views::View::GetColorProvider`
+  (`0x4AA27D0`)로 색 공급자를 얻고, `ui::ColorProvider::GetColor`(`0x4AA24F0`)로 활성 `0x13C`, 비활성 `0x141` 색을
+  읽어 제목 줄을 칠한다. 색 공급자는 `+0x18`의 트리에 색을 두며 노드의 `+0x20`이 색 ID, `+0x24`가 색이다.
+- 이 값을 그대로 바꾸면 같은 프로필의 일반 창 탭 줄도 바뀌었다(`#d3e3fd`에서 `#fbfaf7`). 색 공급자를 창끼리 공유한다.
+- `OnPaint` 칸을 감싸 Rivet 창이 그리는 동안에만 두 색을 바꾸고 그린 뒤 되돌리자, Rivet 창은 활성과 비활성 모두 캡션
+  영역이 `#fbfaf7`이 되었고 같은 프로필의 일반 창은 `#d3e3fd` 그대로였다. 캡션 버튼은 Windows 기본 모양 그대로다.
+- `GetFrameColor` vtable 칸과 `GetTitlebarColor`를 바꾸는 방법은 그리기에 쓰이지 않아 효과가 없었다.
