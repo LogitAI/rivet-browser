@@ -62,6 +62,22 @@ const UPDATE_LOCATION_ICON: usize = 0x00EE_4220;
 const UPDATE_LOCATION_ICON_PROLOGUE: [u8; 16] = [
     0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0, 0, 0, 0x48, 0x89, 0xCE,
 ];
+/// `GetLayoutInsets(out, LayoutInset)` answers the padding around a toolbar button's icon, which
+/// with the icon makes the button 28 DIPs wide, like its height.
+const LAYOUT_INSETS: usize = 0x03EE_A610;
+const LAYOUT_INSETS_PROLOGUE: [u8; 13] = [
+    0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x89, 0xD7, 0x48, 0x89, 0xCE,
+];
+/// `LayoutInset::TOOLBAR_BUTTON` of this build.
+const TOOLBAR_BUTTON_INSET: i32 = 6;
+/// The padding, in DIPs: a 26 DIP button around an 18 DIP icon, which Chrome pads to 28.
+const TOOLBAR_BUTTON_PADDING: i32 = 4;
+/// `ToolbarButton::UpdateIcon` rebuilds a button's images. The reload button does it when a page
+/// starts or stops loading, outside any paint, so it needs its own scope.
+const UPDATE_ICON: usize = 0x009F_C150;
+const UPDATE_ICON_PROLOGUE: [u8; 17] = [
+    0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x80, 0xB9, 0xD8, 0x06, 0, 0, 0x01,
+];
 /// `LocationBarView::RefreshBackground` bakes the field's fill colour into a background. Hover
 /// and focus refresh it outside any paint, so it needs its own scope.
 const LOCATION_BAR_VIEW_BASE: usize = 0x100;
@@ -156,7 +172,7 @@ const OVERRIDES: [(i32, i32); 7] = [
     (16, 28), // kLocationBarHeight
     (29, 12), // kMainBackgroundRegionCornerRadius
     (46, 28), // kToolbarButtonHeight
-    (47, 16), // kToolbarButtonIconSize
+    (47, 18), // kToolbarButtonIconSize
     (55, 8),  // kToolbarCornerRadius
     (60, 0),  // kVerticalTabMinWidth
 ];
@@ -164,10 +180,11 @@ const OVERRIDES: [(i32, i32); 7] = [
 const PAPER: u32 = 0xFFFB_FAF7;
 const HAIRLINE: u32 = 0xFFE9_E9E6;
 /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
-const COLOURS: [(i32, u32); 16] = [
+const COLOURS: [(i32, u32); 17] = [
     (0x13C, PAPER),      // kColorFrameActive
     (796, PAPER),        // kColorLocationBarBackground
     (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
+    (1003, PAPER),       // Page info chip background in a normal state
     (1013, PAPER),       // Location bar background in the alternate state
     (1055, 0xFF4A_4850), // kColorOmniboxText
     (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
@@ -209,6 +226,8 @@ static ORIGINAL_SET_VISIBLE: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_UPDATE_LOCATION: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_UPDATE_LOCATION_ICON: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_REFRESH_BACKGROUND: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_UPDATE_ICON: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_LAYOUT_INSETS: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_CHIP_TEXT: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_TEXTFIELD_THEME: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
@@ -345,6 +364,14 @@ unsafe extern "system" fn layout_constant(constant: i32) -> i32 {
     original::<LayoutConstant>(&ORIGINAL_LAYOUT_CONSTANT)(constant)
 }
 
+unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut [i32; 4] {
+    if active() && inset == TOOLBAR_BUTTON_INSET {
+        out.write([TOOLBAR_BUTTON_PADDING; 4]);
+        return out;
+    }
+    original::<unsafe extern "system" fn(*mut [i32; 4], i32) -> *mut [i32; 4]>(&ORIGINAL_LAYOUT_INSETS)(out, inset)
+}
+
 unsafe extern "system" fn theme_changed(widget: *mut c_void) {
     let run: WidgetCall = match ORIGINAL_THEME_CHANGED.load(Ordering::Acquire) {
         0 => std::mem::transmute(hooks().map_or(0, |hooks| hooks.base) + THEME_CHANGED),
@@ -380,6 +407,12 @@ unsafe extern "system" fn widget_layout(widget: *mut c_void) {
 unsafe extern "system" fn update_location_icon(view: *mut c_void) {
     let top = window_top(view);
     let run: WidgetCall = original(&ORIGINAL_UPDATE_LOCATION_ICON);
+    scoped(top, || run(view));
+}
+
+unsafe extern "system" fn update_icon(view: *mut c_void) {
+    let top = widget_holding(view);
+    let run: WidgetCall = original(&ORIGINAL_UPDATE_ICON);
     scoped(top, || run(view));
 }
 
@@ -752,6 +785,8 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(DERIVE_SIZE, &DERIVE_SIZE_BYTES)
         || !prologue(UPDATE_LOCATION_ICON, &UPDATE_LOCATION_ICON_PROLOGUE)
         || !prologue(CHIP_TEXT, &CHIP_TEXT_PROLOGUE)
+        || !prologue(LAYOUT_INSETS, &LAYOUT_INSETS_PROLOGUE)
+        || !prologue(UPDATE_ICON, &UPDATE_ICON_PROLOGUE)
         || !prologue(REFRESH_BACKGROUND, &REFRESH_BACKGROUND_PROLOGUE)
         || !prologue(GURL_DESTRUCTOR, &GURL_DESTRUCTOR_BYTES)
         || !prologue(ANCHOR_RECT, &ANCHOR_RECT_PROLOGUE)
@@ -811,6 +846,16 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
             &ORIGINAL_LAYOUT_CONSTANT,
         )?;
     }
+    if !skip.contains("insets") {
+        detour(
+            base,
+            LAYOUT_INSETS,
+            &LAYOUT_INSETS_PROLOGUE,
+            false,
+            layout_insets as *const () as usize,
+            &ORIGINAL_LAYOUT_INSETS,
+        )?;
+    }
     if !skip.contains("theme") {
         detour(
             base,
@@ -868,6 +913,14 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         false,
         refresh_background as *const () as usize,
         &ORIGINAL_REFRESH_BACKGROUND,
+    )?;
+    detour(
+        base,
+        UPDATE_ICON,
+        &UPDATE_ICON_PROLOGUE,
+        false,
+        update_icon as *const () as usize,
+        &ORIGINAL_UPDATE_ICON,
     )?;
     detour(
         base,
@@ -992,97 +1045,61 @@ static INFO_PATH: [PathElement; 20] = [
     op(LINE_TO), at(8.0), at(5.2),
 ];
 
-/// The Rivet back arrow: a thin stroked arrow on a 16 DIP canvas.
-static BACK_PATH: [PathElement; 19] = [
-    op(CANVAS_DIMENSIONS),
-    at(16.0),
-    op(STROKE),
-    at(1.5),
-    op(MOVE_TO),
-    at(12.8),
-    at(8.0),
-    op(LINE_TO),
-    at(3.6),
-    at(8.0),
-    op(MOVE_TO),
-    at(7.6),
-    at(4.0),
-    op(LINE_TO),
-    at(3.6),
-    at(8.0),
-    op(LINE_TO),
-    at(7.6),
-    at(12.0),
-];
+/// The navigation icons are drawn on an 18 DIP canvas with 1.5 DIP strokes, and
+/// `kToolbarButtonIconSize` is 18 so that one canvas unit is one DIP.
+const NAV_CANVAS: f32 = 18.0;
+
+/// A line from `(x1, y)` to `(x2, y)` and the two strokes of a head at `tip_x`.
+fn arrow(line_from: f32, line_to: f32, tip_x: f32, head_x: f32) -> Vec<PathElement> {
+    vec![
+        op(CANVAS_DIMENSIONS), at(NAV_CANVAS),
+        op(STROKE), at(1.5),
+        op(MOVE_TO), at(line_from), at(9.0),
+        op(LINE_TO), at(line_to), at(9.0),
+        op(MOVE_TO), at(head_x), at(2.5),
+        op(LINE_TO), at(tip_x), at(9.0),
+        op(LINE_TO), at(head_x), at(15.5),
+    ]
+}
+
+/// The Rivet back arrow.
+fn back_path() -> Vec<PathElement> {
+    arrow(16.5, 1.5, 1.5, 8.5)
+}
 
 /// The Rivet forward arrow, the back arrow mirrored.
-static FORWARD_PATH: [PathElement; 19] = [
-    op(CANVAS_DIMENSIONS),
-    at(16.0),
-    op(STROKE),
-    at(1.5),
-    op(MOVE_TO),
-    at(3.2),
-    at(8.0),
-    op(LINE_TO),
-    at(12.4),
-    at(8.0),
-    op(MOVE_TO),
-    at(8.4),
-    at(4.0),
-    op(LINE_TO),
-    at(12.4),
-    at(8.0),
-    op(LINE_TO),
-    at(8.4),
-    at(12.0),
-];
+fn forward_path() -> Vec<PathElement> {
+    arrow(1.5, 16.5, 16.5, 9.5)
+}
 
-/// The Rivet reload arrow: three quarters of a circle drawn as short strokes, with a head.
+/// The Rivet reload mark: an open circle with its gap on the right and a head at the top right
+/// that points into the gap. It uses the same move and line commands as the arrows, because a
+/// generated arc produced a malformed vector path in Chrome 156.
 fn reload_path() -> Vec<PathElement> {
-    // Keep this as the same move/line grammar used by the verified back and forward paths.
-    // The previous generated arc produced a malformed vector path in Chrome 156.
-    [
-        op(CANVAS_DIMENSIONS),
-        at(16.0),
-        op(STROKE),
-        at(1.5),
-        op(MOVE_TO),
-        at(12.8),
-        at(3.0),
-        op(LINE_TO),
-        at(12.8),
-        at(6.4),
-        op(LINE_TO),
-        at(9.4),
-        at(6.4),
-        op(MOVE_TO),
-        at(12.8),
-        at(6.4),
-        op(LINE_TO),
-        at(11.5),
-        at(4.2),
-        op(LINE_TO),
-        at(9.5),
-        at(3.0),
-        op(LINE_TO),
-        at(7.2),
-        at(2.8),
-        op(LINE_TO),
-        at(4.9),
-        at(3.6),
-        op(LINE_TO),
-        at(3.3),
-        at(5.5),
-        op(LINE_TO), at(2.8), at(7.8),
-        op(LINE_TO), at(3.3), at(10.1),
-        op(LINE_TO), at(4.9), at(12.0),
-        op(LINE_TO), at(7.2), at(12.9),
-        op(LINE_TO), at(9.5), at(12.7),
-        op(LINE_TO), at(11.5), at(11.5),
-        op(LINE_TO), at(12.6), at(9.5),
-    ]
-    .to_vec()
+    let (centre, radius, arm) = (9.0f32, 7.25f32, 4.0f32);
+    let point = |degrees: f32| {
+        let angle = degrees.to_radians();
+        (centre + radius * angle.cos(), centre + radius * angle.sin())
+    };
+    let mut path = vec![op(CANVAS_DIMENSIONS), at(NAV_CANVAS), op(STROKE), at(1.5)];
+    // From the head counter-clockwise on screen to just below the right side.
+    let (start, sweep, steps) = (-25.0f32, -310.0f32, 31);
+    for step in 0..=steps {
+        let (x, y) = point(start + sweep * step as f32 / steps as f32);
+        path.push(op(if step == 0 { MOVE_TO } else { LINE_TO }));
+        path.push(at(x));
+        path.push(at(y));
+    }
+    // The head: two arms that run back from the tip, at 45 degrees either side of the arc.
+    let (tip_x, tip_y) = point(start);
+    let heading = (start + 90.0).to_radians();
+    let back = (-heading.cos(), -heading.sin());
+    for turn in [45.0f32, -45.0] {
+        let (sin, cos) = turn.to_radians().sin_cos();
+        let (x, y) = (back.0 * cos - back.1 * sin, back.0 * sin + back.1 * cos);
+        path.extend([op(MOVE_TO), at(tip_x + x * arm), at(tip_y + y * arm), op(LINE_TO), at(tip_x), at(tip_y)]);
+    }
+    path
 }
 
 #[repr(C)]
@@ -1116,11 +1133,11 @@ static ICONS: OnceLock<Vec<(usize, Box<VectorIcon>)>> = OnceLock::new();
 
 unsafe fn build_icons(base: usize) {
     ICONS.get_or_init(|| {
-        let reload: &'static [PathElement] = Box::leak(reload_path().into_boxed_slice());
+        let leak = |path: Vec<PathElement>| -> &'static [PathElement] { Box::leak(path.into_boxed_slice()) };
         [
-            (BACK_ICON, &BACK_PATH[..]),
-            (FORWARD_ICON, &FORWARD_PATH[..]),
-            (RELOAD_ICON, reload),
+            (BACK_ICON, leak(back_path())),
+            (FORWARD_ICON, leak(forward_path())),
+            (RELOAD_ICON, leak(reload_path())),
             (PAGE_INFO_ICON, &INFO_PATH[..]),
         ]
         .into_iter()
@@ -1189,7 +1206,7 @@ mod tests {
             .map(|element| unsafe { element.value })
             .filter(|value| value.is_finite() && *value < 100.0)
             .collect();
-        assert!(values.iter().all(|value| (0.0..=16.0).contains(value)));
+        assert!(values.iter().all(|value| (0.0..=NAV_CANVAS).contains(value)));
     }
 
     #[test]
@@ -1215,6 +1232,21 @@ mod tests {
         // Seven pushes, then `sub rsp, 0x60`, and no relative operand within the copy.
         assert_eq!(REFRESH_BACKGROUND_PROLOGUE.len(), 14);
         assert_eq!(&REFRESH_BACKGROUND_PROLOGUE[10..], &[0x48, 0x83, 0xEC, 0x60]);
+    }
+
+    #[test]
+    fn fr12_navigation_buttons_use_a_fixed_pitch() {
+        assert_eq!(LAYOUT_INSETS_PROLOGUE.len(), 13);
+        assert_eq!(NAV_CANVAS as i32, 18);
+        assert!(OVERRIDES.contains(&(47, 18)));
+        assert!(UPDATE_ICON_PROLOGUE.len() >= 12);
+    }
+
+    #[test]
+    fn fr12_reload_icon_has_a_gap_and_a_head() {
+        let path = reload_path();
+        let moves = path.iter().filter(|element| unsafe { element.command } == MOVE_TO).count();
+        assert_eq!(moves, 3);
     }
 
     #[test]
