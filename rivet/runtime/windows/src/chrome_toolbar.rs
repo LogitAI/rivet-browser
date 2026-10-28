@@ -52,6 +52,25 @@ const FROM_VECTOR_ICON: usize = 0x009F_C510;
 const FROM_VECTOR_ICON_PROLOGUE: [u8; 14] = [
     0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
 ];
+/// `BubbleDialogDelegate::GetAnchorRect`, `View::IsDrawn` and `View::GetBoundsInScreen`.
+const ANCHOR_RECT: usize = 0x0ACA_C450;
+const ANCHOR_RECT_PROLOGUE: [u8; 18] = [
+    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC,
+    0xD0, 0, 0, 0,
+];
+const ANCHOR_VIEW_ACCESS: [u8; 21] = [
+    0x48, 0x8B, 0x81, 0, 3, 0, 0, 0x48, 0x85, 0xC0, 0x74, 0x56, 0x48, 0x8B, 0x58, 0x18,
+    0x48, 0x85, 0xDB, 0x74, 0x4D,
+];
+const IS_DRAWN: usize = 0x00CA_89C0;
+const IS_DRAWN_BYTES: [u8; 32] = [
+    0x80, 0xB9, 0xD8, 1, 0, 0, 1, 0x75, 0x1D, 0x48, 0x8B, 0x89, 0x98, 1, 0, 0,
+    0x48, 0x85, 0xC9, 0x74, 0x11, 0x48, 0x8B, 1, 0x48, 0x8B, 0x80, 0x98, 0, 0, 0, 0x48,
+];
+const BOUNDS_IN_SCREEN: usize = 0x0086_1140;
+const BOUNDS_BYTES: [u8; 13] = [0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF];
+const PARENT_OFFSET: usize = 0x198;
+const IS_DRAWN_SLOT: usize = 19;
 /// Both prologues with a stack cookie copy their first nine bytes and reload the cookie, which
 /// ends at sixteen bytes.
 const COOKIE_COPIED: usize = 9;
@@ -130,6 +149,7 @@ static ORIGINAL_THEME_CHANGED: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_PAINT_LAYER: AtomicUsize = AtomicUsize::new(0);
 static LAYER_LOGGED: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_SET_VISIBLE: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
 static COLOUR_LOGGED: AtomicBool = AtomicBool::new(false);
 /// The widgets of Rivet windows.
 static WIDGETS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
@@ -318,6 +338,60 @@ unsafe extern "system" fn hidden_theme_changed(view: *mut c_void) {
     }
 }
 
+fn drawn_ancestor(
+    mut view: usize,
+    parent: impl Fn(usize) -> usize,
+    drawn: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    while view != 0 {
+        if drawn(view) {
+            return Some(view);
+        }
+        view = parent(view);
+    }
+    None
+}
+
+/// Preserve Chrome's bubble state and change only the returned screen rectangle.
+unsafe extern "system" fn anchor_rect(
+    delegate: *mut u8,
+    result: *mut [i32; 4],
+) -> *mut [i32; 4] {
+    type RectCall = unsafe extern "system" fn(*mut u8, *mut [i32; 4]) -> *mut [i32; 4];
+    type Drawn = unsafe extern "system" fn(*mut c_void) -> bool;
+    let run: RectCall = original(&ORIGINAL_ANCHOR_RECT);
+    let ret = run(delegate, result);
+    let observer = *(delegate.add(0x300) as *const *mut u8);
+    if observer.is_null() {
+        return ret;
+    }
+    let view = *(observer.add(0x18) as *const *mut c_void);
+    if view.is_null() {
+        return ret;
+    }
+    let table = *(view as *const *const usize);
+    let get_widget: Pointer = std::mem::transmute(*table.add(GET_WIDGET_SLOT));
+    if !is_rivet(get_widget(view) as usize) {
+        return ret;
+    }
+    let drawn = |v: usize| {
+        let table = *(v as *const *const usize);
+        let call: Drawn = std::mem::transmute(*table.add(IS_DRAWN_SLOT));
+        call(v as *mut c_void)
+    };
+    if drawn(view as usize) {
+        return ret;
+    }
+    let parent = |v: usize| *((v + PARENT_OFFSET) as *const usize);
+    if let Some(ancestor) = drawn_ancestor(parent(view as usize), parent, drawn) {
+        if let Some(hooks) = hooks() {
+            let bounds: RectCall = std::mem::transmute(hooks.base + BOUNDS_IN_SCREEN);
+            bounds(ancestor as *mut u8, result);
+        }
+    }
+    ret
+}
+
 /// Chooses the icon a button image is built from.
 unsafe extern "system" fn choose_icon(icon: usize) -> usize {
     if !active() {
@@ -475,6 +549,10 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(PAINT_LAYER, &PAINT_LAYER_PROLOGUE)
         || !prologue(SET_VISIBLE, &SET_VISIBLE_PROLOGUE)
         || !prologue(FROM_VECTOR_ICON, &FROM_VECTOR_ICON_PROLOGUE)
+        || !prologue(ANCHOR_RECT, &ANCHOR_RECT_PROLOGUE)
+        || !prologue(ANCHOR_RECT + 0x2a, &ANCHOR_VIEW_ACCESS)
+        || !prologue(IS_DRAWN, &IS_DRAWN_BYTES)
+        || !prologue(BOUNDS_IN_SCREEN, &BOUNDS_BYTES)
     {
         return Err("this browser build has other toolbar functions".into());
     }
@@ -499,6 +577,16 @@ unsafe fn patch() -> Result<Hooks, String> {
 unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
     build_icons(base);
     crate::vertical_tabs::trace(&format!("toolbar skip: {skip:?}"));
+    if !skip.contains("anchor") {
+        detour(
+            base,
+            ANCHOR_RECT,
+            &ANCHOR_RECT_PROLOGUE,
+            false,
+            anchor_rect as *const () as usize,
+            &ORIGINAL_ANCHOR_RECT,
+        )?;
+    }
     if !skip.contains("constant") {
         detour(
             base,
@@ -801,6 +889,15 @@ unsafe fn build_icons(base: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_hidden_bubble_anchor_uses_nearest_drawn_ancestor() {
+        let parent = |view| match view { 1 => 2, 2 => 3, _ => 0 };
+        let drawn = |view| view == 3;
+        assert_eq!(drawn_ancestor(1, parent, drawn), Some(3));
+        assert_eq!(drawn_ancestor(3, parent, drawn), Some(3));
+        assert_eq!(drawn_ancestor(1, parent, |_| false), None);
+    }
 
     #[test]
     fn fr12_toolbar_colours_use_distinct_stock_keys() {
