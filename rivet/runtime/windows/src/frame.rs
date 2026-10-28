@@ -745,23 +745,20 @@ unsafe fn create_appbar(window: HWND) {
             "rivet: could not lay out caption buttons: {error}"
         ));
     }
-    // Experiment, off unless asked for: Chromium's vertical-tab frame for Rivet windows.
+    // The caption height and the top inset size the panel's top row, so they never depend on the
+    // trace file. Failures show in the trace when it is on.
+    let caption = chrome_layout::install_caption_height(|window| {
+        attached(window).then_some(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP)
+    });
+    crate::vertical_tabs::trace(&format!("caption height: {caption:?}"));
+    let top = chrome_layout::install_top_inset(|window| {
+        attached(window).then_some(chrome_layout::PANEL_TOP)
+    });
+    crate::vertical_tabs::trace(&format!("top inset: {top:?}"));
     if runtime_directory().is_some_and(|dir| dir.join("rivet-nav.log").exists()) {
         if let Some(dir) = runtime_directory() {
             crate::vertical_tabs::set_trace(dir.join("rivet-nav.log"));
         }
-        let caption = chrome_layout::install_caption_height(|window| {
-            attached(window).then_some(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP)
-        });
-        crate::vertical_tabs::trace(&format!("caption height: {caption:?}"));
-        let top = chrome_layout::install_top_inset(|window| {
-            attached(window).then_some(chrome_layout::PANEL_TOP)
-        });
-        crate::vertical_tabs::trace(&format!("top inset: {top:?}"));
-        let layout = chrome_layout::install_caption_layout(|window| {
-            attached(window).then_some(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP)
-        });
-        crate::vertical_tabs::trace(&format!("caption layout: {layout:?}"));
     }
     let hide = runtime_directory().map(|dir| dir.join("rivet-hide-tab-strip.log"));
     if let Some(path) = hide.filter(|path| path.exists()) {
