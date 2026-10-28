@@ -414,7 +414,7 @@ impl Appbar {
                 if hot || effect.is_some() {
                     canvas.fill_rounded(area, 8.0, rgba(INK, 0.06))?;
                 }
-                canvas.icon('\u{E90C}', area, 18.0, SOFT_INK)
+                canvas.icon('\u{E90C}', area, crate::TOGGLE_GLYPH, SOFT_INK)
             });
             surface.EndDraw()?;
             result?;

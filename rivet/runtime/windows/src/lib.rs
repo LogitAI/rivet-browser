@@ -35,8 +35,10 @@ const EDGE_WIDTH: i32 = 10;
 const FLOAT_INSET: i32 = 8;
 
 /// The empty leading space of the toolbar row, and the toggle button drawn in it.
-const TOGGLE_SLOT: i32 = 32;
 const TOGGLE_SIZE: i32 = 28;
+/// The toggle's distance from the page panel's leading edge, and the size of its glyph.
+const TOGGLE_LEFT: i32 = 8;
+const TOGGLE_GLYPH: f32 = 16.0;
 /// Where the toggle sits, from the window's top edge in device-independent pixels.
 const TOGGLE_TOP: i32 = 16;
 
@@ -121,7 +123,7 @@ fn reserved_for_strip(leading: i32, strip: i32) -> i32 {
 /// window's client area, for a page panel that begins at `leading`.
 fn toggle_rect(leading: i32) -> (i32, i32, i32, i32) {
     (
-        leading + (TOGGLE_SLOT - TOGGLE_SIZE) / 2,
+        leading + TOGGLE_LEFT,
         TOGGLE_TOP,
         TOGGLE_SIZE,
         TOGGLE_SIZE,
@@ -353,9 +355,10 @@ mod tests {
 
     #[test]
     fn fr3_toggle_sits_in_the_leading_space_of_the_toolbar_row() {
-        assert_eq!(toggle_rect(268), (270, TOGGLE_TOP, 28, 28));
+        assert_eq!(toggle_rect(268), (276, TOGGLE_TOP, 28, 28));
         let (x, _, width, _) = toggle_rect(FLOAT_INSET);
-        assert!(x >= FLOAT_INSET && x + width <= FLOAT_INSET + TOGGLE_SLOT);
+        assert_eq!(x, FLOAT_INSET + TOGGLE_LEFT);
+        assert_eq!(width, TOGGLE_SIZE);
     }
 
     #[cfg(windows)]
