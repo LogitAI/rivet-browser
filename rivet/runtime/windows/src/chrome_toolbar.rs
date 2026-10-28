@@ -78,6 +78,20 @@ const UPDATE_ICON: usize = 0x009F_C150;
 const UPDATE_ICON_PROLOGUE: [u8; 17] = [
     0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x80, 0xB9, 0xD8, 0x06, 0, 0, 0x01,
 ];
+/// `LocationBarModelImpl::GetFormattedURL(this, out, flags)` returns the address text, and
+/// `LocationBarModelImpl::GetURL(this, out)` the page address.
+const FORMATTED_URL: usize = 0x0160_9DB0;
+const FORMATTED_URL_PROLOGUE: [u8; 18] = [
+    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x80, 0x01, 0, 0,
+];
+const MODEL_URL: usize = 0x04F5_BBB0;
+const MODEL_URL_PROLOGUE: [u8; 16] = [
+    0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xB8, 0, 0, 0,
+];
+/// The flags `GetFormattedFullURL` passes: the text Chrome puts in the field for editing.
+const FULL_URL_FLAGS: u32 = 7;
+/// What Rivet windows show in place of the address of Rivet's own start page.
+const START_PAGE_DISPLAY: &str = "rivet://start";
 /// `LocationBarView::RefreshBackground` bakes the field's fill colour into a background. Hover
 /// and focus refresh it outside any paint, so it needs its own scope.
 const LOCATION_BAR_VIEW_BASE: usize = 0x100;
@@ -230,6 +244,7 @@ static ORIGINAL_UPDATE_LOCATION_ICON: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_REFRESH_BACKGROUND: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_UPDATE_ICON: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_LAYOUT_INSETS: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_FORMATTED_URL: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_CHIP_TEXT: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_TEXTFIELD_THEME: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
@@ -416,6 +431,68 @@ unsafe extern "system" fn update_icon(view: *mut c_void) {
     let top = widget_holding(view);
     let run: WidgetCall = original(&ORIGINAL_UPDATE_ICON);
     scoped(top, || run(view));
+}
+
+/// The text of Rivet's start page is shown as `rivet://start` while the field is not being
+/// edited. The text for editing, which has other flags, stays the real address, so what a person
+/// edits and submits is always a page address the browser can open.
+unsafe extern "system" fn formatted_url(model: *mut c_void, out: *mut [u64; 3], flags: u32) -> *mut [u64; 3] {
+    let run: unsafe extern "system" fn(*mut c_void, *mut [u64; 3], u32) -> *mut [u64; 3] =
+        original(&ORIGINAL_FORMATTED_URL);
+    let result = run(model, out, flags);
+    if flags != FULL_URL_FLAGS && has_rivet_window() && model_shows_start_page(model) {
+        show_start_page(out);
+    }
+    result
+}
+
+fn has_rivet_window() -> bool {
+    !WIDGETS.lock().unwrap_or_else(|error| error.into_inner()).is_empty()
+}
+
+/// Whether `spec` is a local file named `start.html`, ignoring any query or fragment.
+fn is_start_page(spec: &[u8]) -> bool {
+    let end = spec.iter().position(|&byte| byte == b'?' || byte == b'#').unwrap_or(spec.len());
+    let path = &spec[..end];
+    path.len() > 5
+        && path[..5].eq_ignore_ascii_case(b"file:")
+        && path.len() >= 11
+        && path[path.len() - 11..].eq_ignore_ascii_case(b"/start.html")
+}
+
+unsafe fn model_shows_start_page(model: *mut c_void) -> bool {
+    let Some(hooks) = hooks() else { return false };
+    let get_url: unsafe extern "system" fn(*mut c_void, *mut u8) -> *mut u8 =
+        std::mem::transmute(hooks.base + MODEL_URL);
+    let mut gurl = [0u64; 24];
+    let gurl = gurl.as_mut_ptr() as *mut u8;
+    get_url(model, gurl);
+    let long = (*gurl.add(0x17)) & 0x80 != 0;
+    let (data, size) = if long {
+        (*(gurl as *const *const u8), *(gurl.add(8) as *const usize))
+    } else {
+        (gurl as *const u8, *gurl.add(0x17) as usize)
+    };
+    let shows = is_start_page(std::slice::from_raw_parts(data, size));
+    let destroy: unsafe extern "system" fn(*mut u8) = std::mem::transmute(hooks.base + GURL_DESTRUCTOR);
+    destroy(gurl);
+    shows
+}
+
+/// Overwrites the text of a heap `std::u16string` in place when it has room for the new text.
+/// The field's text for a file page is always long enough, so nothing is allocated or freed.
+unsafe fn show_start_page(text: *mut [u64; 3]) {
+    let words = &mut *text;
+    let new: Vec<u16> = START_PAGE_DISPLAY.encode_utf16().collect();
+    let long = words[2] >> 63 == 1;
+    let capacity = (words[2] & !(1 << 63)) as usize;
+    if !long || capacity < new.len() + 1 {
+        return;
+    }
+    let data = words[0] as *mut u16;
+    std::ptr::copy_nonoverlapping(new.as_ptr(), data, new.len());
+    data.add(new.len()).write(0);
+    words[1] = new.len() as u64;
 }
 
 unsafe extern "system" fn refresh_background(view: *mut c_void) {
@@ -787,6 +864,8 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(DERIVE_SIZE, &DERIVE_SIZE_BYTES)
         || !prologue(UPDATE_LOCATION_ICON, &UPDATE_LOCATION_ICON_PROLOGUE)
         || !prologue(CHIP_TEXT, &CHIP_TEXT_PROLOGUE)
+        || !prologue(FORMATTED_URL, &FORMATTED_URL_PROLOGUE)
+        || !prologue(MODEL_URL, &MODEL_URL_PROLOGUE)
         || !prologue(LAYOUT_INSETS, &LAYOUT_INSETS_PROLOGUE)
         || !prologue(UPDATE_ICON, &UPDATE_ICON_PROLOGUE)
         || !prologue(REFRESH_BACKGROUND, &REFRESH_BACKGROUND_PROLOGUE)
@@ -923,6 +1002,14 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         false,
         update_icon as *const () as usize,
         &ORIGINAL_UPDATE_ICON,
+    )?;
+    detour(
+        base,
+        FORMATTED_URL,
+        &FORMATTED_URL_PROLOGUE,
+        false,
+        formatted_url as *const () as usize,
+        &ORIGINAL_FORMATTED_URL,
     )?;
     detour(
         base,
@@ -1253,6 +1340,16 @@ mod tests {
         let path = reload_path();
         let moves = path.iter().filter(|element| unsafe { element.command } == MOVE_TO).count();
         assert_eq!(moves, 3);
+    }
+
+    #[test]
+    fn fr12_only_the_start_page_is_shown_as_rivet_start() {
+        assert!(is_start_page(b"file:///D:/rivet/start.html?space=Work"));
+        assert!(is_start_page(b"FILE:///C:/Program%20Files/Rivet/start.html"));
+        assert!(!is_start_page(b"file:///D:/notes/other.html?x=/start.html"));
+        assert!(!is_start_page(b"https://example.com/start.html"));
+        assert!(!is_start_page(b"file:///start.htm"));
+        assert_eq!(START_PAGE_DISPLAY.encode_utf16().count(), 13);
     }
 
     #[test]
