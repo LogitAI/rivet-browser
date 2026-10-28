@@ -530,6 +530,48 @@ unsafe extern "system" fn on_paint(view: *const c_void, canvas: *const c_void) {
     }
 }
 
+/// Experiment, Chrome 156.0.8078.48 only. `CustomFloatingCorner::OnPaint`: the browser view's two
+/// corner views at the page's left edge fill a wedge with the browser's frame colour, which
+/// rounds the page's corners against the frame. In a Rivet window the frame is Rivet's, so the
+/// wedge is painted with Rivet's frame colour instead of Chrome's blue.
+const CORNER_VTABLE: usize = 0x0FEC_AFC8;
+const CORNER_PAINT: usize = 0x0A4C_73A0;
+static CORNER_ORIGINAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+unsafe extern "system" fn corner_paint(view: *const c_void, canvas: *const c_void) {
+    let original: OnPaint = std::mem::transmute(CORNER_ORIGINAL.load(std::sync::atomic::Ordering::Relaxed));
+    let colour = match (HOOK.get(), PAINT.get()) {
+        (Some(Ok(hook)), Some((_, provider_of, _, paint))) => {
+            paint((hook.hwnd_for_view)(view)).map(|colour| (colour, provider_of(view)))
+        }
+        _ => None,
+    };
+    let Some((colour, provider)) = colour.filter(|(_, provider)| !provider.is_null()) else {
+        return original(view, canvas);
+    };
+    let saved: Vec<(*mut u32, u32)> = FRAME_IDS
+        .iter()
+        .filter_map(|id| colour_slot(provider, *id))
+        .map(|slot| (slot, slot.read()))
+        .collect();
+    for (slot, _) in &saved {
+        slot.write(colour);
+    }
+    original(view, canvas);
+    for (slot, value) in saved {
+        slot.write(value);
+    }
+}
+
+unsafe fn install_corner_paint(image: &Image) -> Result<(), String> {
+    let slot_rva = CORNER_VTABLE + ON_PAINT_SLOT * 8;
+    if !image.has(CORNER_PAINT, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]) {
+        return Err("this browser build has no recorded corner paint".into());
+    }
+    CORNER_ORIGINAL.store(image.base + CORNER_PAINT, std::sync::atomic::Ordering::Relaxed);
+    replace_vtable_slot(image, slot_rva, CORNER_PAINT, corner_paint as *const () as usize, "corner view vtable")
+}
+
 /// Experiment: lets Rivet choose the title bar colour of its own windows only.
 pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
     if PAINT.get().is_some() {
@@ -557,7 +599,8 @@ pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
         std::mem::transmute::<usize, DrawColor>(base + DRAW_COLOR),
         paint,
     ));
-    replace_vtable_slot(&image, slot_rva, ON_PAINT, on_paint as *const () as usize, "frame view vtable")
+    replace_vtable_slot(&image, slot_rva, ON_PAINT, on_paint as *const () as usize, "frame view vtable")?;
+    install_corner_paint(&image)
 }
 
 /// Decides the title bar colour of a window as `0xAARRGGBB`, or `None` to keep the browser's.
