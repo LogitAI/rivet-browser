@@ -2,7 +2,7 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::HWND;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use crate::chrome_layout::image;
 const CONTENT_WINDOW_FOR_HWND: usize = 0x00D5_64A0;
 const BROWSER_VIEW_FOR_WINDOW: usize = 0x0BC8_1E10;
 const ACTIVE_WEB_CONTENTS: usize = 0x0BC8_2340;
@@ -33,10 +33,7 @@ type ChangeGroup = unsafe extern "system" fn(*mut c_void, *const u8, *const u8, 
 static BASE: OnceLock<Option<usize>> = OnceLock::new();
 fn base() -> Option<usize> {
     *BASE.get_or_init(|| unsafe {
-        let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
-        if base == 0 {
-            return None;
-        }
+        let image = image::recorded()?;
         let signatures: &[(usize, &[u8])] = &[
             (
                 GET_GROUP,
@@ -77,12 +74,12 @@ fn base() -> Option<usize> {
             (NEW_TAB, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57]),
         ];
         for (rva, bytes) in signatures {
-            if std::slice::from_raw_parts((base + rva) as *const u8, bytes.len()) != *bytes {
+            if !image.has(*rva, bytes) {
                 crate::vertical_tabs::trace(&format!("tabs: signature mismatch {rva:#x}"));
                 return None;
             }
         }
-        Some(base)
+        Some(image.base)
     })
 }
 unsafe fn function<T: Copy>(base: usize, rva: usize) -> T {
@@ -280,10 +277,8 @@ pub unsafe fn probe_group(window: HWND) {
             ],
         ),
     ];
-    if checks
-        .iter()
-        .any(|(r, b)| std::slice::from_raw_parts((base + *r) as *const u8, b.len()) != *b)
-    {
+    let Some(image) = image::recorded() else { return };
+    if checks.iter().any(|(r, b)| !image.has(*r, b)) {
         crate::vertical_tabs::trace("group probe: signature mismatch");
         return;
     }

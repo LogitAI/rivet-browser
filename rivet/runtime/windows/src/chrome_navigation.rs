@@ -7,7 +7,7 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::HWND;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use crate::chrome_layout::image;
 
 /// `views::DesktopWindowTreeHostWin::GetContentWindowForHWND`.
 const CONTENT_WINDOW_FOR_HWND: usize = 0x00D5_64A0;
@@ -82,17 +82,11 @@ const SIGNATURES: &[(usize, &[u8])] = &[
 
 fn base() -> Option<usize> {
     *BASE.get_or_init(|| unsafe {
-        let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
-        if base == 0 {
-            return None;
-        }
+        let image = image::recorded()?;
         SIGNATURES
             .iter()
-            .all(|(rva, expected)| {
-                let code = std::slice::from_raw_parts((base + rva) as *const u8, expected.len());
-                code == *expected
-            })
-            .then_some(base)
+            .all(|(rva, expected)| image.has(*rva, expected))
+            .then_some(image.base)
     })
 }
 
