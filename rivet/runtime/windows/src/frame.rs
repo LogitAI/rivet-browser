@@ -24,7 +24,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WindowFromPoint, GA_ROOT, GWLP_WNDPROC, GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT,
     ICON_BIG, ICON_SMALL, IDC_SIZEWE, MSG, PM_REMOVE, SM_CXICON, SM_CXPADDEDBORDER, SM_CXSMICON,
     SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, WH_GETMESSAGE, WM_CAPTURECHANGED, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
+    SWP_NOZORDER, WH_GETMESSAGE, WM_CAPTURECHANGED, WM_CLOSE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN,
     WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL,
     WM_SETCURSOR, WM_SETICON, WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
@@ -293,7 +293,13 @@ unsafe fn switch_space(window: HWND, index: usize) {
             entry.2 = tint;
         }
     });
-    for tab in &restore {
+    show_tabs(window, old, &restore);
+}
+
+/// Opens `restore` as the window's tabs and closes the tabs `old`, which are the ones shown now,
+/// only afterwards so the window never has zero tabs.
+unsafe fn show_tabs(window: HWND, old: Vec<usize>, restore: &[SavedTab]) {
+    for tab in restore {
         if crate::chrome_tabs::new_tab(window) && !tab.url.is_empty() {
             crate::chrome_navigation::open(window, &tab.url);
         }
@@ -323,6 +329,133 @@ unsafe fn switch_space(window: HWND, index: usize) {
             crate::chrome_tabs::activate_tab(window, position);
         }
     }
+}
+
+/// What the persistence of spaces knows between timer ticks.
+#[derive(Default)]
+struct Persist {
+    /// The one window of this process that saves and restores. A second window of the same
+    /// profile would only overwrite the file with its own tabs.
+    owner: isize,
+    /// The text last written, so an unchanged state costs no write.
+    last: String,
+    /// The tabs of the current space the file held, until the window shows them once.
+    pending: Option<Vec<SavedTab>>,
+    /// Saves stay off until then, after the window was asked to close, because closing empties the
+    /// tab list one tab at a time and that must not become the saved state.
+    quiet_until: Option<std::time::Instant>,
+}
+
+thread_local! {
+    static PERSIST: RefCell<Persist> = RefCell::new(Persist::default());
+}
+
+/// The file of this process's browser profile, under `%LOCALAPPDATA%\Rivet`.
+fn spaces_file() -> Option<(std::path::PathBuf, String)> {
+    let root = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
+    let dir = crate::spaces::user_data_dir_of(
+        std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()),
+    );
+    Some((
+        crate::spaces::store_path(&root, dir.as_deref()),
+        dir.unwrap_or_default(),
+    ))
+}
+
+/// Restores the saved spaces, the appbar width and its hidden state when a window attaches.
+/// Missing or corrupt files leave the defaults. A corrupt file is kept under another name.
+unsafe fn load_persisted(window: HWND) {
+    let owns = PERSIST.with(|persist| {
+        let mut persist = persist.borrow_mut();
+        let free = persist.owner == 0;
+        if free {
+            persist.owner = window as isize;
+        }
+        free
+    });
+    let Some((path, _)) = spaces_file().filter(|_| owns) else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Some(mut stored) = Spaces::from_json(&text) else {
+        let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
+        return;
+    };
+    let pending = stored.spaces.take_current_tabs();
+    let tint = stored.spaces.list()[stored.spaces.current()].tint;
+    edit_layout(window, |layout| {
+        layout.set_width(stored.width);
+        layout.collapsed = stored.hidden;
+    });
+    SPACES.with(|all| all.borrow_mut().insert(window as isize, stored.spaces));
+    APPBAR_STATE.with(|states| {
+        states
+            .borrow_mut()
+            .entry(window as isize)
+            .or_insert((None, None, tint))
+            .2 = tint;
+    });
+    PERSIST.with(|persist| persist.borrow_mut().pending = Some(pending));
+}
+
+/// Shows the tabs the file held for the current space, once and only over a window that shows
+/// nothing of its own, then writes the state whenever it changed.
+unsafe fn persist_tick(window: HWND) {
+    if PERSIST.with(|persist| persist.borrow().owner) != window as isize {
+        return;
+    }
+    let Some(open) = crate::chrome_tabs::open_tabs(window) else {
+        return;
+    };
+    if let Some(tabs) = PERSIST.with(|persist| persist.borrow_mut().pending.take()) {
+        if !tabs.is_empty() && open.iter().all(|tab| crate::spaces::is_blank_tab(&tab.saved.url)) {
+            show_tabs(window, open.iter().map(|tab| tab.id).collect(), &tabs);
+            return;
+        }
+    }
+    let quiet = PERSIST.with(|persist| {
+        persist
+            .borrow()
+            .quiet_until
+            .is_some_and(|until| std::time::Instant::now() < until)
+    });
+    if quiet {
+        return;
+    }
+    save_spaces(window, open.into_iter().map(|tab| tab.saved).collect());
+}
+
+/// Writes the spaces with `open` as the tabs of the current space, unless nothing changed.
+unsafe fn save_spaces(window: HWND, open: Vec<SavedTab>) {
+    let Some((path, dir)) = spaces_file() else {
+        return;
+    };
+    let layout = layout_of(window);
+    let text = with_spaces(window, |spaces| {
+        spaces.to_json(&open, layout.side, layout.collapsed, &dir)
+    });
+    let changed = PERSIST.with(|persist| persist.borrow().last != text);
+    if !changed {
+        return;
+    }
+    match crate::spaces::write_atomic(&path, &text) {
+        Ok(()) => PERSIST.with(|persist| persist.borrow_mut().last = text),
+        Err(error) => log(&format!("rivet: could not save the spaces: {error}")),
+    }
+}
+
+/// The window was asked to close: keep what it shows now, and stop saving while it empties.
+unsafe fn persist_closing(window: HWND) {
+    if PERSIST.with(|persist| persist.borrow().owner) != window as isize {
+        return;
+    }
+    persist_tick(window);
+    PERSIST.with(|persist| {
+        persist.borrow_mut().quiet_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(5))
+    });
 }
 
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -1061,6 +1194,7 @@ unsafe fn create_appbar(window: HWND) {
     };
     APPBARS.with(|appbars| appbars.borrow_mut().insert(window as isize, appbar));
     install_keyboard_hook();
+    load_persisted(window);
     sync_strip(window);
     APPBAR_STATE.with(|states| {
         states
@@ -1524,7 +1658,17 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             set_rivet_icons(window);
             result
         }
+        WM_CLOSE if attached(window) => {
+            persist_closing(window);
+            call_browser(window, message, wparam, lparam)
+        }
         WM_NCDESTROY => {
+            PERSIST.with(|persist| {
+                let mut persist = persist.borrow_mut();
+                if persist.owner == window as isize {
+                    persist.owner = 0;
+                }
+            });
             if attached(window) {
                 taskbar::clear(window as isize);
             }
@@ -1566,6 +1710,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
             crate::chrome_side_panel::tick(window, runtime_directory().as_deref());
+            persist_tick(window);
             update_appbar(window);
             0
         }
