@@ -209,6 +209,8 @@ mod chrome_tabs;
 mod chrome_toolbar;
 #[cfg(windows)]
 mod frame;
+mod press;
+mod spaces;
 #[cfg(windows)]
 #[cfg(windows)]
 mod taskbar;
