@@ -275,3 +275,20 @@
 - `OnPaint` 칸을 감싸 Rivet 창이 그리는 동안에만 두 색을 바꾸고 그린 뒤 되돌리자, Rivet 창은 활성과 비활성 모두 캡션
   영역이 `#fbfaf7`이 되었고 같은 프로필의 일반 창은 `#d3e3fd` 그대로였다. 캡션 버튼은 Windows 기본 모양 그대로다.
 - `GetFrameColor` vtable 칸과 `GetTitlebarColor`를 바꾸는 방법은 그리기에 쓰이지 않아 효과가 없었다.
+
+## 2026-10-28: 둥근 페이지 패널과 44 DIP 상단 줄
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Google Chrome `156.0.8078.48`, 192 DPI 모니터, `--app` 창.
+
+### 결과
+
+- 프레임 뷰 vtable 127번 칸 `BrowserFrameViewWin::GetTopInset`(`0xA4033E0`)에 12 DIP를 더하자 Chrome이 페이지를
+  44 DIP 아래에서 시작했다. 레이아웃 훅은 오른쪽과 아래에 8 DIP 여백만 뺀다.
+- 세 번째 DirectComposition 비주얼에 두께가 여백의 두 배인 둥근 사각형 선을 패널 바깥 한 여백 위치에 그려, 여백을
+  프레임 색으로 칠하면서 패널 모양(반지름 12 DIP)만 비웠다. Appbar와 캡션 버튼 위는 잘라 내고 칠하지 않았다.
+  1 DIP 테두리 선도 함께 그렸다.
+- 캡션 버튼은 32 DIP 높이 그대로 위에 붙어 있다. 버튼 선호 크기(`WindowsCaptionButton::CalculatePreferredSize`,
+  vtable `0xFF025C8` 74번 칸)를 바꿔도 효과가 없었다. `BrowserFrameViewWin::Layout`은 캡션 컨테이너 높이를
+  `BrowserView::GetFrameElementInfo`(`0x824EF0`)에서 계산하며, 이 경로는 가상 함수가 아니다.
