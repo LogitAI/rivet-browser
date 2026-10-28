@@ -353,6 +353,77 @@ unsafe extern "system" fn region_preferred_size(
     result
 }
 
+/// `VerticalTabStripRegionView::GetMinimumSize`. The browser lays the page out after at least
+/// this width, 126 DIPs while the strip is expanded, however little the strip asks for, so a
+/// hidden appbar would leave that much of the frame bare. The class is final, so callers reach
+/// the function directly and its vtable slot is never used. Rivet detours the function instead:
+/// its first instructions are copied to a trampoline and replaced by a jump to Rivet's version.
+const REGION_MINIMUM_SIZE: usize = 0x0BC7_F9F0;
+/// `push rsi; push rdi; sub rsp, 0x28; mov rsi, rdx; mov rdi, rcx; mov qword ptr [rdx], 0`.
+const REGION_MINIMUM_PROLOGUE: [u8; 19] = [
+    0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7, 0x02, 0, 0,
+    0, 0,
+];
+static REGION_MINIMUM_ORIGINAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A Rivet window's strip is never required to be wider than the width Rivet gives it.
+unsafe extern "system" fn region_minimum_size(view: *mut c_void, out: *mut [i32; 2]) -> *mut c_void {
+    type Original = unsafe extern "system" fn(*mut c_void, *mut [i32; 2]) -> *mut c_void;
+    let original: Original = std::mem::transmute(REGION_MINIMUM_ORIGINAL.load(Ordering::Acquire));
+    let result = original(view, out);
+    if !locked(&STRIP_WIDTHS).is_empty() {
+        if let Some(Ok(hook)) = HOOK.get() {
+            if let Some(width) = strip_override((hook.hwnd_for_view)(view)) {
+                (*out)[0] = (*out)[0].min(width);
+            }
+        }
+    }
+    result
+}
+
+/// `jmp qword ptr [rip + 0]` followed by the absolute target.
+fn absolute_jump(target: usize) -> [u8; 14] {
+    let mut code = [0u8; 14];
+    code[..6].copy_from_slice(&[0xff, 0x25, 0, 0, 0, 0]);
+    code[6..].copy_from_slice(&target.to_le_bytes());
+    code
+}
+
+unsafe fn patch_region_minimum(image: &image::Image) -> Result<(), String> {
+    use windows_sys::Win32::System::Memory::{
+        VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
+    };
+    let length = REGION_MINIMUM_PROLOGUE.len();
+    if !image.has(REGION_MINIMUM_SIZE, &REGION_MINIMUM_PROLOGUE) {
+        return Err("the region view's minimum size is not the recorded function".into());
+    }
+    let function = image.at(REGION_MINIMUM_SIZE, length).ok_or("function outside the image")? as *mut u8;
+    let trampoline = VirtualAlloc(std::ptr::null(), 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
+        as *mut u8;
+    if trampoline.is_null() {
+        return Err("could not allocate the minimum size trampoline".into());
+    }
+    let resume = absolute_jump(function as usize + REGION_MINIMUM_PROLOGUE.len());
+    std::ptr::copy_nonoverlapping(REGION_MINIMUM_PROLOGUE.as_ptr(), trampoline, REGION_MINIMUM_PROLOGUE.len());
+    std::ptr::copy_nonoverlapping(resume.as_ptr(), trampoline.add(REGION_MINIMUM_PROLOGUE.len()), resume.len());
+    REGION_MINIMUM_ORIGINAL.store(trampoline as usize, Ordering::Release);
+    let mut previous: PAGE_PROTECTION_FLAGS = 0;
+    if VirtualProtect(function.cast(), 19, PAGE_EXECUTE_READWRITE, &mut previous) == 0 {
+        return Err("could not unprotect the region view's minimum size".into());
+    }
+    let jump = absolute_jump(region_minimum_size as *const () as usize);
+    std::ptr::copy_nonoverlapping(jump.as_ptr(), function, jump.len());
+    // Pad the rest of the replaced instructions with nops.
+    std::ptr::write_bytes(function.add(jump.len()), 0x90, REGION_MINIMUM_PROLOGUE.len() - jump.len());
+    VirtualProtect(function.cast(), 19, previous, &mut previous);
+    windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache(
+        windows_sys::Win32::System::Threading::GetCurrentProcess(),
+        function.cast(),
+        REGION_MINIMUM_PROLOGUE.len(),
+    );
+    Ok(())
+}
+
 unsafe fn patch_region_size(image: &image::Image) -> Result<(), String> {
     if !image.points_to(REGION_PREFERRED_SIZE_SLOT, REGION_PREFERRED_SIZE) {
         return Err("the region view's size slot is not the recorded function".into());
@@ -365,6 +436,7 @@ unsafe fn patch_region_size(image: &image::Image) -> Result<(), String> {
     }
     slot.write(region_preferred_size as *const () as usize);
     VirtualProtect(slot.cast(), 8, previous, &mut previous);
+    patch_region_minimum(image)?;
     Ok(())
 }
 
@@ -426,5 +498,13 @@ mod tests {
         note_destroyed(controller);
         assert!(locked(&SWITCHED).as_ref().unwrap().get(&0x77).is_none());
         assert_eq!(layout_width(0x77 as HWND), None);
+    }
+
+    #[test]
+    fn fr12_minimum_size_detour_jumps_through_an_absolute_address() {
+        let jump = absolute_jump(0x1122_3344_5566_7788);
+        assert_eq!(&jump[..6], &[0xff, 0x25, 0, 0, 0, 0]);
+        assert_eq!(&jump[6..], &0x1122_3344_5566_7788usize.to_le_bytes());
+        assert!(jump.len() <= REGION_MINIMUM_PROLOGUE.len());
     }
 }
