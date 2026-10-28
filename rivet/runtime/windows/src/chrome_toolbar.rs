@@ -333,7 +333,7 @@ fn hooks() -> Option<&'static Hooks> {
     HOOKS.get()?.as_ref().ok()
 }
 
-fn is_rivet(widget: usize) -> bool {
+pub(crate) fn is_rivet(widget: usize) -> bool {
     widget != 0
         && WIDGETS
             .lock()
@@ -777,7 +777,7 @@ unsafe fn window_top(view: *mut c_void) -> usize {
 }
 
 /// The widget that holds `view`, which must point at a `views::View`.
-unsafe fn widget_holding(view: *mut c_void) -> usize {
+pub(crate) unsafe fn widget_holding(view: *mut c_void) -> usize {
     let table = *(view as *const usize);
     let get_widget: Pointer = std::mem::transmute(*(table as *const usize).add(GET_WIDGET_SLOT));
     get_widget(view) as usize

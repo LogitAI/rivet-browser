@@ -897,7 +897,7 @@ unsafe fn dpi(window: HWND) -> u32 {
     GetDpiForWindow(window).max(96)
 }
 
-unsafe fn runtime_directory() -> Option<std::path::PathBuf> {
+pub(crate) unsafe fn runtime_directory() -> Option<std::path::PathBuf> {
     use windows_sys::Win32::System::LibraryLoader::{
         GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -1044,6 +1044,10 @@ unsafe fn create_appbar(window: HWND) {
         log(&format!("rivet: could not install the toolbar: {error}"));
         return;
     }
+    let split = crate::chrome_split::install();
+    crate::vertical_tabs::trace(&format!("split: {split:?}"));
+    let panels = crate::chrome_split::install_panels();
+    crate::vertical_tabs::trace(&format!("split panels: {panels:?}"));
     let vertical_tabs = crate::vertical_tabs::install(report_vertical_tabs)
         .map_err(|error| crate::vertical_tabs::trace(&format!("unavailable: {error}")))
         .is_ok();
