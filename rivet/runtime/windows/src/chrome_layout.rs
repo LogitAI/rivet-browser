@@ -463,7 +463,51 @@ const PANEL_SHADOWS: [(i32, f32, u32, f32); 2] = [
 /// Paints the panel's shadows into the frame around `panel`. The panel's own layer covers the
 /// middle, so only the part that reaches into the gap shows.
 unsafe fn paint_panel_shadow(canvas: *const c_void, fill: FillRect, panel: Rect) {
-    for (offset, blur, colour, peak) in PANEL_SHADOWS {
+    paint_shadows(canvas, fill, panel, &PANEL_SHADOWS);
+}
+
+/// The shadows of the raised page in a split, which the shell study gives as
+/// `0 0 0 1px rgba(0,0,0,.07), 0 2px 6px rgba(0,0,0,.06), 0 18px 44px rgba(40,28,30,.16)`.
+/// A blur of 0 is the 1 DIP ring.
+const FOCUSED_PANE_SHADOWS: [(i32, f32, u32, f32); 3] = [
+    (0, 0.0, 0x0000_0000, 0.07),
+    (2, 6.0, 0x0000_0000, 0.06),
+    (18, 44.0, 0x0028_1c1e, 0.16),
+];
+/// The other pages of a split sit lower: `0 0 0 1px rgba(0,0,0,.04), 0 6px 18px rgba(40,28,30,.05)`.
+const OTHER_PANE_SHADOWS: [(i32, f32, u32, f32); 2] =
+    [(0, 0.0, 0x0000_0000, 0.04), (6, 18.0, 0x0028_1c1e, 0.05)];
+
+/// The colour of the gap between the pages of a split, the shell study's paper.
+const SPLIT_PAPER: u32 = 0xfffb_faf7;
+
+/// Paints the gap of a split and the shadows of its pages into the canvas of the view that holds
+/// them. The pages' own layers cover their middles.
+pub unsafe fn paint_split(canvas: *const c_void, panes: &[Rect], active: usize) {
+    let Some(fill) = FILL_RECT_FN.get().copied() else { return };
+    // The canvas clips to the view, so one very large fill covers it.
+    fill(canvas, &Rect { x: -8192, y: -8192, width: 16384, height: 16384 }, SPLIT_PAPER);
+    // The raised page goes last so its deeper shadow is not dimmed by the others.
+    for pane in panes.iter().enumerate().filter(|(index, _)| *index != active).map(|(_, pane)| pane) {
+        paint_shadows(canvas, fill, *pane, &OTHER_PANE_SHADOWS);
+    }
+    if let Some(pane) = panes.get(active) {
+        paint_shadows(canvas, fill, *pane, &FOCUSED_PANE_SHADOWS);
+    }
+}
+
+unsafe fn paint_shadows(canvas: *const c_void, fill: FillRect, panel: Rect, shadows: &[(i32, f32, u32, f32)]) {
+    for &(offset, blur, colour, peak) in shadows {
+        if blur == 0.0 {
+            let rect = Rect {
+                x: panel.x - 1,
+                y: panel.y + offset - 1,
+                width: panel.width + 2,
+                height: panel.height + 2,
+            };
+            fill(canvas, &rect, (((peak * 255.0).round() as u32) << 24) | colour);
+            continue;
+        }
         for (grow, alpha) in shadow_layers(blur, peak) {
             let rect = Rect {
                 x: panel.x - grow,
@@ -1129,4 +1173,23 @@ pub unsafe fn install_caption_layout(height: CaptionHeight) -> Result<(), String
         height,
     ));
     replace_vtable_slot(&image, slot_rva, LAYOUT, frame_layout as *const () as usize, "frame view vtable")
+}
+
+
+#[cfg(test)]
+mod split_shadow_tests {
+    use super::{shadow_layers, FOCUSED_PANE_SHADOWS, OTHER_PANE_SHADOWS};
+
+    #[test]
+    fn fr9_focused_page_is_raised_above_the_others() {
+        let reach = |shadows: &[(i32, f32, u32, f32)]| {
+            shadows
+                .iter()
+                .filter(|(_, blur, _, _)| *blur > 0.0)
+                .map(|(offset, blur, _, _)| offset + blur.ceil() as i32)
+                .max()
+        };
+        assert!(reach(&FOCUSED_PANE_SHADOWS) > reach(&OTHER_PANE_SHADOWS));
+        assert!(!shadow_layers(44.0, 0.16).is_empty());
+    }
 }
