@@ -770,22 +770,23 @@ unsafe fn create_appbar(window: HWND) {
             crate::vertical_tabs::trace(&format!("hide failed: {error}"));
         }
     }
-    let experiment = runtime_directory().map(|dir| dir.join("rivet-vertical-tabs.log"));
-    let vertical_tabs = match experiment.filter(|path| path.exists()) {
-        Some(path) => {
-            crate::vertical_tabs::set_trace(path);
-            let toolbar = crate::chrome_toolbar::install(runtime_directory());
-            crate::vertical_tabs::trace(&format!("toolbar: {toolbar:?}"));
-            if let Err(error) = toolbar {
-                log(&format!("rivet: could not install the toolbar: {error}"));
-                return;
-            }
-            crate::vertical_tabs::install(report_vertical_tabs)
-                .map_err(|error| crate::vertical_tabs::trace(&format!("unavailable: {error}")))
-                .is_ok()
-        }
-        None => false,
-    };
+    // The file next to the runtime only switches the trace on. The toolbar and the vertical-tab
+    // frame are what the top row needs, so they never depend on it.
+    if let Some(path) = runtime_directory()
+        .map(|dir| dir.join("rivet-vertical-tabs.log"))
+        .filter(|path| path.exists())
+    {
+        crate::vertical_tabs::set_trace(path);
+    }
+    let toolbar = crate::chrome_toolbar::install(runtime_directory());
+    crate::vertical_tabs::trace(&format!("toolbar: {toolbar:?}"));
+    if let Err(error) = toolbar {
+        log(&format!("rivet: could not install the toolbar: {error}"));
+        return;
+    }
+    let vertical_tabs = crate::vertical_tabs::install(report_vertical_tabs)
+        .map_err(|error| crate::vertical_tabs::trace(&format!("unavailable: {error}")))
+        .is_ok();
     let appbar = match Appbar::new(window as isize) {
         Ok(appbar) => appbar,
         Err(error) => {
