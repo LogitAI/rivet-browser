@@ -83,6 +83,7 @@ pub extern "system" fn rivet_runtime_start_for_window(window: isize) -> u32 {
 }
 
 #[cfg(windows)]
+mod address_display;
 #[cfg(windows)]
 mod appbar;
 #[cfg(windows)]

@@ -18,6 +18,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use crate::address_display;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -88,8 +89,23 @@ const MODEL_URL: usize = 0x04F5_BBB0;
 const MODEL_URL_PROLOGUE: [u8; 16] = [
     0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xB8, 0, 0, 0,
 ];
-/// The flags `GetFormattedFullURL` passes: the text Chrome puts in the field for editing.
-const FULL_URL_FLAGS: u32 = 7;
+/// `OmniboxViewViews::Update`, `OmniboxViewViews::RevertAll` and `OmniboxViewViews::OnTabChanged`
+/// refresh the text of the address field. The omnibox object starts with `OmniboxView`, which is
+/// 0x10 bytes long, and its `views::Textfield` follows. They take the object as their first
+/// argument and need the Rivet scope, because they run outside any paint or layout.
+const OMNIBOX_UPDATE: usize = 0x00ED_FB30;
+const OMNIBOX_UPDATE_PROLOGUE: [u8; 15] = [
+    0x56, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x01, 0x25, 0xC9, 0x10,
+];
+const OMNIBOX_REVERT_ALL: usize = 0x00EE_8630;
+const OMNIBOX_REVERT_ALL_PROLOGUE: [u8; 15] = [
+    0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x01, 0x9A, 0xC8, 0x10,
+];
+const OMNIBOX_TAB_CHANGED: usize = 0x00EE_D110;
+const OMNIBOX_TAB_CHANGED_PROLOGUE: [u8; 13] = [
+    0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD7, 0x48, 0x89, 0xCE,
+];
+const OMNIBOX_TEXTFIELD: usize = 0x10;
 /// What Rivet windows show in place of the address of Rivet's own start page.
 const START_PAGE_DISPLAY: &str = "rivet://start";
 /// `LocationBarView::RefreshBackground` bakes the field's fill colour into a background. Hover
@@ -154,9 +170,6 @@ const BOUNDS_IN_SCREEN: usize = 0x0086_1140;
 const BOUNDS_BYTES: [u8; 13] = [0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF];
 const PARENT_OFFSET: usize = 0x198;
 const IS_DRAWN_SLOT: usize = 19;
-/// Both prologues with a stack cookie copy their first nine bytes and reload the cookie, which
-/// ends at sixteen bytes.
-const COOKIE_COPIED: usize = 9;
 
 /// `BrowserWidget`'s vtable, with `OnNativeWidgetPaint` and `LayoutRootViewIfNecessary`.
 const BROWSER_WIDGET_VTABLE: usize = 0x0FBC_AD10;
@@ -248,6 +261,9 @@ static ORIGINAL_FORMATTED_URL: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_CHIP_TEXT: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_TEXTFIELD_THEME: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_OMNIBOX_UPDATE: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_OMNIBOX_REVERT_ALL: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_OMNIBOX_TAB_CHANGED: AtomicUsize = AtomicUsize::new(0);
 /// The provider caches a colour when it is first asked for, so a colour can be swapped only after
 /// that. This remembers which ones have been seen, for the trace.
 static COLOURS_SEEN: Mutex<Vec<i32>> = Mutex::new(Vec::new());
@@ -434,20 +450,38 @@ unsafe extern "system" fn update_icon(view: *mut c_void) {
 }
 
 /// The text of Rivet's start page is shown as `rivet://start` while the field is not being
-/// edited. The text for editing, which has other flags, stays the real address, so what a person
-/// edits and submits is always a page address the browser can open.
+/// edited, in Rivet windows only. The text for editing, which has other flags, stays the real
+/// address, so what a person edits and submits is always a page address the browser can open.
 unsafe extern "system" fn formatted_url(model: *mut c_void, out: *mut [u64; 3], flags: u32) -> *mut [u64; 3] {
     let run: unsafe extern "system" fn(*mut c_void, *mut [u64; 3], u32) -> *mut [u64; 3] =
         original(&ORIGINAL_FORMATTED_URL);
     let result = run(model, out, flags);
-    if flags != FULL_URL_FLAGS && has_rivet_window() && model_shows_start_page(model) {
+    if address_display::applies(flags, active()) && model_shows_start_page(model) {
         show_start_page(out);
     }
     result
 }
 
-fn has_rivet_window() -> bool {
-    !WIDGETS.lock().unwrap_or_else(|error| error.into_inner()).is_empty()
+/// The omnibox refreshes its text outside any paint or layout, so the Rivet scope is found from
+/// its text field.
+unsafe fn in_omnibox_scope<R>(omnibox: *mut c_void, work: impl FnOnce() -> R) -> R {
+    let widget = widget_holding((omnibox as usize + OMNIBOX_TEXTFIELD) as *mut c_void);
+    scoped(widget, work)
+}
+
+unsafe extern "system" fn omnibox_update(omnibox: *mut c_void) {
+    let run: WidgetCall = original(&ORIGINAL_OMNIBOX_UPDATE);
+    in_omnibox_scope(omnibox, || run(omnibox));
+}
+
+unsafe extern "system" fn omnibox_revert_all(omnibox: *mut c_void) {
+    let run: WidgetCall = original(&ORIGINAL_OMNIBOX_REVERT_ALL);
+    in_omnibox_scope(omnibox, || run(omnibox));
+}
+
+unsafe extern "system" fn omnibox_tab_changed(omnibox: *mut c_void, state: *mut c_void) {
+    let run: unsafe extern "system" fn(*mut c_void, *mut c_void) = original(&ORIGINAL_OMNIBOX_TAB_CHANGED);
+    in_omnibox_scope(omnibox, || run(omnibox, state));
 }
 
 /// Whether `spec` is a local file named `start.html`, ignoring any query or fragment.
@@ -762,8 +796,8 @@ fn jump(code: &mut Vec<u8>, to: usize) {
 
 /// Replaces the start of a function with a jump to `hook` and returns a trampoline that runs the
 /// original. `prologue` is checked first and is copied whole, unless the function reloads its
-/// stack cookie relative to itself right after `COOKIE_COPIED` bytes: then the trampoline loads
-/// the same cookie from its absolute address.
+/// stack cookie relative to itself: then `prologue` ends with that seven byte load, and the
+/// trampoline copies what comes before it and loads the same cookie from its absolute address.
 unsafe fn detour(
     base: usize,
     rva: usize,
@@ -778,8 +812,9 @@ unsafe fn detour(
     }
     let mut trampoline = Vec::new();
     if cookie {
-        trampoline.extend_from_slice(&prologue[..COOKIE_COPIED]);
-        let displacement = i32::from_le_bytes(prologue[12..16].try_into().unwrap());
+        // The load is the last seven bytes: its opcode and its four byte displacement.
+        trampoline.extend_from_slice(&prologue[..prologue.len() - 7]);
+        let displacement = i32::from_le_bytes(prologue[prologue.len() - 4..].try_into().unwrap());
         let address = (base + rva + prologue.len()).wrapping_add_signed(displacement as isize);
         // mov rax, [address]
         trampoline.extend_from_slice(&[0x48, 0xA1]);
@@ -866,6 +901,9 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(CHIP_TEXT, &CHIP_TEXT_PROLOGUE)
         || !prologue(FORMATTED_URL, &FORMATTED_URL_PROLOGUE)
         || !prologue(MODEL_URL, &MODEL_URL_PROLOGUE)
+        || !prologue(OMNIBOX_UPDATE, &OMNIBOX_UPDATE_PROLOGUE)
+        || !prologue(OMNIBOX_REVERT_ALL, &OMNIBOX_REVERT_ALL_PROLOGUE)
+        || !prologue(OMNIBOX_TAB_CHANGED, &OMNIBOX_TAB_CHANGED_PROLOGUE)
         || !prologue(LAYOUT_INSETS, &LAYOUT_INSETS_PROLOGUE)
         || !prologue(UPDATE_ICON, &UPDATE_ICON_PROLOGUE)
         || !prologue(REFRESH_BACKGROUND, &REFRESH_BACKGROUND_PROLOGUE)
@@ -1011,6 +1049,31 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         formatted_url as *const () as usize,
         &ORIGINAL_FORMATTED_URL,
     )?;
+    for (rva, prologue, cookie, hook, store) in [
+        (
+            OMNIBOX_UPDATE,
+            &OMNIBOX_UPDATE_PROLOGUE[..],
+            true,
+            omnibox_update as *const () as usize,
+            &ORIGINAL_OMNIBOX_UPDATE,
+        ),
+        (
+            OMNIBOX_REVERT_ALL,
+            &OMNIBOX_REVERT_ALL_PROLOGUE[..],
+            true,
+            omnibox_revert_all as *const () as usize,
+            &ORIGINAL_OMNIBOX_REVERT_ALL,
+        ),
+        (
+            OMNIBOX_TAB_CHANGED,
+            &OMNIBOX_TAB_CHANGED_PROLOGUE[..],
+            false,
+            omnibox_tab_changed as *const () as usize,
+            &ORIGINAL_OMNIBOX_TAB_CHANGED,
+        ),
+    ] {
+        detour(base, rva, prologue, cookie, hook, store)?;
+    }
     detour(
         base,
         CHIP_TEXT,
@@ -1350,6 +1413,15 @@ mod tests {
         assert!(!is_start_page(b"https://example.com/start.html"));
         assert!(!is_start_page(b"file:///start.htm"));
         assert_eq!(START_PAGE_DISPLAY.encode_utf16().count(), 13);
+    }
+
+    #[test]
+    fn fr12_cookie_hooks_end_with_the_cookie_load() {
+        for prologue in [&OMNIBOX_UPDATE_PROLOGUE[..], &OMNIBOX_REVERT_ALL_PROLOGUE[..]] {
+            assert_eq!(&prologue[prologue.len() - 7..prologue.len() - 4], [0x48, 0x8B, 0x05]);
+            assert!(prologue.len() >= 12);
+        }
+        assert!(OMNIBOX_TAB_CHANGED_PROLOGUE.len() >= 12);
     }
 
     #[test]
