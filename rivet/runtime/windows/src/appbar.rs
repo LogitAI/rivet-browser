@@ -8,7 +8,8 @@
 //! the runtime and loaded into a private font collection.
 
 use windows::core::{Interface, Result, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{HMODULE, HWND, POINT};
+use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
+use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D1_GRADIENT_STOP, D2D_RECT_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1RenderTarget,
@@ -25,7 +26,8 @@ use windows::Win32::Graphics::DirectComposition::{
     IDCompositionTarget, IDCompositionVisual, IDCompositionVisual2,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory5, IDWriteFontCollection1, IDWriteTextLayout1,
+    DWriteCreateFactory, IDWriteFactory5, IDWriteFontCollection1, IDWriteTextFormat3,
+    IDWriteTextLayout1, DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE, DWRITE_FONT_AXIS_VALUE,
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_RANGE,
@@ -148,10 +150,12 @@ struct Painted {
     width: i32,
     height: i32,
     dpi: u32,
+    span: i32,
 }
 
 /// The composition objects of one browser window's appbar.
 pub struct Appbar {
+    window: HWND,
     device: IDCompositionDesktopDevice,
     dwrite: IDWriteFactory5,
     fonts: IDWriteFontCollection1,
@@ -201,6 +205,7 @@ impl Appbar {
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
         Ok(Self {
+            window: hwnd,
             device,
             dwrite,
             fonts,
@@ -257,10 +262,14 @@ impl Appbar {
         }
         self.visual.SetOffsetX2(left as f32)?;
         self.visual.SetOffsetY2(top as f32)?;
+        // The ground rises across the whole window, so its width is part of what was painted.
+        let mut client = RECT::default();
+        let _ = GetClientRect(self.window, &mut client);
+        let span = client.right - client.left;
         let stale = self
             .painted
             .as_ref()
-            .is_none_or(|p| (p.width, p.height, p.dpi) != (width, height, dpi));
+            .is_none_or(|p| (p.width, p.height, p.dpi, p.span) != (width, height, dpi, span));
         if stale {
             let surface = self.device.CreateSurface(
                 width as u32,
@@ -268,9 +277,14 @@ impl Appbar {
                 DXGI_FORMAT_B8G8R8A8_UNORM,
                 DXGI_ALPHA_MODE_PREMULTIPLIED,
             )?;
-            self.paint(&surface, width, height, dpi)?;
+            self.paint(&surface, width, height, dpi, span)?;
             self.visual.SetContent(&surface)?;
-            self.painted = Some(Painted { width, height, dpi });
+            self.painted = Some(Painted {
+                width,
+                height,
+                dpi,
+                span,
+            });
         }
         self.device.Commit()
     }
@@ -320,7 +334,12 @@ impl Appbar {
             surface.EndDraw()?;
             result?;
             self.panel.SetContent(&surface)?;
-            self.panel_painted = Some(Painted { width, height, dpi });
+            self.panel_painted = Some(Painted {
+                width,
+                height,
+                dpi,
+                span: width,
+            });
         }
         self.device.Commit()
     }
@@ -331,6 +350,7 @@ impl Appbar {
         width: i32,
         height: i32,
         dpi: u32,
+        span: i32,
     ) -> Result<()> {
         let mut offset = POINT::default();
         let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
@@ -349,6 +369,7 @@ impl Appbar {
         let result = canvas.draw(
             width as f32 / scale,
             height as f32 / scale,
+            span as f32 / scale,
             self.tint,
             &self.tabs,
             self.hover,
@@ -456,6 +477,15 @@ impl Canvas<'_> {
             PCWSTR(locale.as_ptr()),
         )?;
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        if style.family == "Newsreader" {
+            // A browser sets the optical size axis to the font size. DirectWrite keeps the default.
+            let format: IDWriteTextFormat3 = format.cast()?;
+            let axes = [DWRITE_FONT_AXIS_VALUE {
+                axisTag: DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE,
+                value: style.size,
+            }];
+            format.SetFontAxisValues(&axes)?;
+        }
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         format.SetTextAlignment(if right {
             DWRITE_TEXT_ALIGNMENT_TRAILING
@@ -630,7 +660,7 @@ impl Canvas<'_> {
             &D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
                 center: Vector2 { X: 0.0, Y: h },
                 gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 },
-                radiusX: w * 1.6,
+                radiusX: w * 0.8,
                 radiusY: h * 0.6,
             },
             None,
@@ -645,13 +675,14 @@ impl Canvas<'_> {
         &self,
         w: f32,
         h: f32,
+        span: f32,
         tint: u32,
         tabs: &[crate::tab_rows::Row],
         hover: Option<crate::frame::AppbarHit>,
         pressed: Option<crate::frame::AppbarHit>,
         menu_open: bool,
     ) -> Result<()> {
-        self.ground(w, h, tint)?;
+        self.ground(span, h, tint)?;
         let left = 10.0;
         let inner = w - 18.0;
 
@@ -824,7 +855,8 @@ impl Canvas<'_> {
                 let area = rect(x, foot, 28.0, 28.0);
                 self.fill_rounded(area, 9.0, rgba(WHITE, if active { 0.86 } else { 0.5 }))?;
                 if active {
-                    self.ring(area, 9.0, rgba(INK, 0.08))?;
+                    let outer = rect(x - 1.0, foot - 1.0, 30.0, 30.0);
+                    self.ring(outer, 10.0, rgba(INK, 0.08))?;
                 }
             }
             let size = if active { 11.0 } else { 9.0 };
@@ -989,7 +1021,9 @@ impl Canvas<'_> {
             // The selected tab is a white pill with a hairline ring and a soft shadow.
             self.fill_rounded(rect(left, top + 1.0, inner, 34.0), 9.0, rgba(INK, 0.06))?;
             self.fill_rounded(area, 9.0, color(WHITE))?;
-            self.ring(area, 9.0, rgba(INK, 0.08))?;
+            // The selected tab's ring sits outside its box, like a CSS box shadow with a 1px spread.
+            let outer = rect(left - 1.0, top - 1.0, inner + 2.0, 36.0);
+            self.ring(outer, 10.0, rgba(INK, 0.08))?;
         }
         let lead_x = left + if item.child { 34.0 } else { 8.0 };
         match item.lead {
