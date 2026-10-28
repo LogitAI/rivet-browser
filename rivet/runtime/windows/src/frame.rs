@@ -597,9 +597,6 @@ fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
         if !attached(window) || !framed(window) {
             return None;
         }
-        if let Some(strip) = crate::vertical_tabs::strip_width(window) {
-            return Some((crate::APPBAR_WIDTH - strip).max(0));
-        }
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(window, &mut client);
         let layout_width = bounds.x + bounds.width;
@@ -610,6 +607,10 @@ fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
             if changed {
                 update_appbar(window);
             }
+        }
+        // The scale is recorded above for both tab layouts. The strip is only subtracted here.
+        if let Some(strip) = crate::vertical_tabs::strip_width(window) {
+            return Some((crate::APPBAR_WIDTH - strip).max(0));
         }
         Some(APPBAR_WIDTH)
     }
@@ -835,6 +836,9 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         },
         WM_DPICHANGED if attached(window) => {
             let result = call_browser(window, message, wparam, lparam);
+            // The browser relays out inside this call and reports its scale through the layout
+            // hook. Repaint so the appbar follows it.
+            update_appbar(window);
             set_rivet_icons(window);
             result
         }
