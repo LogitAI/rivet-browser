@@ -116,7 +116,7 @@ const COLOURS: [(i32, u32); 13] = [
     (796, PAPER),        // kColorLocationBarBackground
     (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
     (1013, PAPER),       // Location bar background in the alternate state
-    (1055, 0xFF1F_2024), // kColorOmniboxText
+    (1055, 0xFF4A_4850), // kColorOmniboxText
     (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
     (1590, PAPER),       // kColorToolbar
     (1595, 0xFF4A_4850), // kColorToolbarButtonIcon
@@ -886,6 +886,8 @@ mod tests {
     #[test]
     fn fr12_toolbar_colours_use_distinct_stock_keys() {
         let colour = |id| COLOURS.iter().find(|(key, _)| *key == id).map(|(_, value)| *value);
+        assert_eq!(colour(1055), Some(0xFF4A_4850));
+        assert_eq!(colour(1056), Some(0xFF8A_8690));
         assert_eq!(colour(1590), Some(PAPER));
         assert_eq!(colour(1595), Some(0xFF4A_4850));
         assert_eq!(colour(796), Some(PAPER));
