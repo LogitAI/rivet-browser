@@ -80,8 +80,9 @@ const ON_PAINT_SLOT: usize = 89;
 const ON_PAINT: usize = 0x011B_5610;
 const GET_COLOR_PROVIDER: usize = 0x04AA_27D0;
 const DRAW_COLOR: usize = 0x036B_AD80;
-/// The active and inactive frame colour ids.
-const FRAME_IDS: [i32; 2] = [0x13C, 0x140];
+/// The active, inactive and unthemed-inactive frame colour ids. The last one fills the band
+/// behind the top row, which the panel's rounded corners now reveal.
+const FRAME_IDS: [i32; 3] = [0x13C, 0x140, 321];
 type OnPaint = unsafe extern "system" fn(*const c_void, *const c_void);
 type GetProvider = unsafe extern "system" fn(*const c_void) -> *const u8;
 type DrawColor = unsafe extern "system" fn(*const c_void, u32);
@@ -262,6 +263,11 @@ mod tests {
     #[test]
     fn fr12_caption_ink_is_independent_of_window_activation() {
         assert_eq!(caption_ink(), 0xff1a_1a1a);
+    }
+
+    #[test]
+    fn fr2_panel_clips_each_corner_at_twelve_dips() {
+        assert_eq!(panel_radii(), [12.0; 4]);
     }
 
     #[test]
@@ -473,6 +479,43 @@ const VIEW_BOUNDS_OFFSET: usize = 0x1C8;
 type Layout = unsafe extern "system" fn(*mut c_void);
 type SetBoundsRect = unsafe extern "system" fn(*mut c_void, *const [i32; 4]);
 static LAYOUT_HOOK: OnceLock<(Layout, SetBoundsRect, CaptionHeight)> = OnceLock::new();
+type SetPaintToLayer = unsafe extern "system" fn(*mut c_void, i32);
+type SetRadius = unsafe extern "system" fn(*mut c_void, *const [f32; 4]);
+type SetMasks = unsafe extern "system" fn(*mut c_void, bool);
+static PANEL_LAYER: OnceLock<(SetPaintToLayer, SetRadius, SetMasks)> = OnceLock::new();
+
+fn panel_radii() -> [f32; 4] {
+    [12.0; 4]
+}
+
+/// The vtable of the `views::View` part of `BrowserView`, which sits behind other base classes.
+const BROWSER_VIEW_VIEW_VTABLE: usize = 0x0FE7_BF68;
+
+unsafe fn clip_panel(frame: *mut c_void) {
+    let Some((set_layer, set_radius, set_masks)) = PANEL_LAYER.get() else { return };
+    // BrowserFrameViewWin holds BrowserView's BrowserWindow subobject at +0x340.
+    let browser_window = *(frame.cast::<u8>().add(0x340) as *const *mut u8);
+    if browser_window.is_null() {
+        return;
+    }
+    let browser = browser_window.sub(0x1f0).cast::<usize>();
+    let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
+    let Some(index) = (0..0x100).find(|index| *browser.add(*index) == base + BROWSER_VIEW_VIEW_VTABLE)
+    else {
+        return;
+    };
+    let view = browser.add(index).cast::<c_void>();
+    // `views::View` keeps its `ui::Layer` at +0x20.
+    let layer_of = || *(view.cast::<u8>().add(0x20) as *const *mut c_void);
+    if layer_of().is_null() {
+        set_layer(view, 1);
+    }
+    let layer = layer_of();
+    if !layer.is_null() {
+        set_masks(layer, true);
+        set_radius(layer, &panel_radii());
+    }
+}
 
 fn panel_caption_bounds(bounds: [i32; 4], height: i32) -> [i32; 4] {
     [bounds[0], PANEL_GAP, bounds[2], height.max(0)]
@@ -485,6 +528,7 @@ unsafe extern "system" fn frame_layout(view: *mut c_void) {
     let Some(bottom) = height((hook.hwnd_for_view)(view)) else {
         return;
     };
+    clip_panel(view);
     let container = *(view.cast::<u8>().add(CAPTION_CONTAINER_OFFSET) as *const *mut c_void);
     if container.is_null() {
         return;
@@ -513,6 +557,16 @@ pub unsafe fn install_caption_layout(height: CaptionHeight) -> Result<(), String
     {
         return Err("this browser build has no recorded caption layout helpers".into());
     }
+    const SET_LAYER: usize = 0x00F0_5F10;
+    const SET_RADIUS: usize = 0x01D3_AB80;
+    const SET_MASKS: usize = 0x0316_7C40;
+    if std::slice::from_raw_parts((base + SET_LAYER) as *const u8, 6) != [0x56, 0x57, 0x48, 0x83, 0xec, 0x28]
+        || std::slice::from_raw_parts((base + SET_RADIUS) as *const u8, 7) != [0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x30]
+        || std::slice::from_raw_parts((base + SET_MASKS) as *const u8, 7) != [0x48, 0x8b, 0x89, 0x70, 0x01, 0x00, 0x00]
+    { return Err("this browser build has no recorded panel layer helpers".into()); }
+    let _ = PANEL_LAYER.set((std::mem::transmute::<usize, SetPaintToLayer>(base + SET_LAYER),
+        std::mem::transmute::<usize, SetRadius>(base + SET_RADIUS),
+        std::mem::transmute::<usize, SetMasks>(base + SET_MASKS)));
     let _ = LAYOUT_HOOK.set((
         std::mem::transmute::<usize, Layout>(slot.read()),
         std::mem::transmute::<usize, SetBoundsRect>(base + SET_BOUNDS_RECT),
