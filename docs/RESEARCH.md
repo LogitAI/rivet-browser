@@ -220,3 +220,26 @@
 
 - 세로 탭 방식은 Chrome이 한 줄 배치를 직접 만들고, Rivet은 vtable 칸 하나와 Chrome 내부 함수 호출 두 개만 쓴다.
 - 탭바 숨기기 방식은 함수 코드 덮어쓰기와 추가 레이아웃 변경이 필요하고, 지금 상태로는 두 줄 배치가 된다.
+
+## 2026-10-28: Rivet이 패널 상단 줄을 직접 그리는 실험
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Google Chrome `156.0.8078.48`, 192 DPI 모니터, `--app` 창, 별도 프로필 `.scratch/vt-rivet`.
+
+### 결과
+
+- Appbar와 같은 DirectComposition 대상에 두 번째 비주얼을 붙여, Appbar 오른쪽부터 캡션 버튼 왼쪽까지의 제목 줄에
+  뒤로, 앞으로, 새로고침, 보안 표시, 제목을 그렸다. Chrome의 제목 글자는 이 비주얼에 가려진다.
+- 버튼 자리는 `WM_NCHITTEST`에서 Rivet 영역으로, 나머지는 `HTCAPTION`으로 돌려 창 끌기를 유지했다.
+- 버튼은 Windows 표준 `WM_APPCOMMAND`(`APPCOMMAND_BROWSER_BACKWARD`, `FORWARD`, `REFRESH`)를 창에 보낸다. 링크로 이동한
+  뒤 뒤로를 누르면 이전 페이지로, 앞으로를 누르면 다시 다음 페이지로 갔다. Chrome 내부 함수는 쓰지 않았다.
+- 창 제목이 바뀔 때(`WM_SETTEXT`) 다시 그려 제목이 따라 바뀌었다.
+
+### 목업과 남은 차이
+
+- 캡션 버튼 영역은 Chrome의 제목 줄 색이라 Rivet 줄과 색이 다르다. 프레임 뷰의 가상 함수
+  `BrowserFrameViewWin::GetTitlebarColor`(`0xA403B30`)가 후보다.
+- 줄 높이가 Chrome 제목 줄(32 DIP)이다. 목업은 44 DIP다.
+- 둥근 패널, 패널 둘레 여백, 그림자가 없다.
+- 주소 대신 페이지 제목만 보인다. URL 읽기, 주소 입력, 자동완성, 뒤로/앞으로 가능 여부 표시는 아직 없다.
