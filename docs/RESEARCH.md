@@ -308,3 +308,34 @@
 - Chrome 내부 주소나 함수 위치에 기대지 않으므로 Chrome 버전이 바뀌어도 그대로 동작할 가능성이 높다.
 - 대신 UI Automation 클라이언트가 붙으면 Chrome이 접근성 트리를 계속 만든다. 이 비용은 아직 재지 않았다.
 - 제목이 바뀌지 않는 이동(같은 문서 안의 해시 이동 등)은 아직 따라가지 못한다.
+
+## 2026-10-28: 상단 줄의 주소 입력, 이동 상태, 44 DIP 캡션 버튼
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Google Chrome `156.0.8078.48`, 192 DPI 모니터, `--app` 창.
+
+### 결과
+
+- 창에서 활성 페이지까지는 `views::DesktopWindowTreeHostWin::GetContentWindowForHWND`(`0xD564A0`),
+  `BrowserView::GetBrowserViewForNativeWindow`(`0xBC81E10`), `BrowserView::GetActiveWebContents`(`0xBC82340`)로
+  닿는다. 모두 UI 스레드에서 부른다.
+- 뒤로 가능 여부는 `chrome::CanGoBack(WebContents*)`(`0xA0B7C00`), 앞으로 가능 여부는 `WebContents` vtable 6번 칸
+  `GetController`로 얻은 컨트롤러에 `NavigationControllerImpl::CanGoForward`(`0x82F3C50`)를 불러 얻었다. 첫 페이지에서는
+  뒤로가 흐리게, 이동 뒤에는 진하게, 뒤로 간 뒤에는 앞으로가 진하게 그려졌다.
+- 표시 주소는 `WebContentsImpl::GetVisibleURL`(`0x5CF8BA0`)에서 바로 읽었다. GURL의 첫 필드는 libc++ 문자열이며
+  Chromium 배치에서는 마지막 바이트의 최상위 비트가 긴 형식을 뜻한다. 짧은 형식은 글자가 제자리에 있고 길이는 마지막
+  바이트에 있다. 접근성 트리로 읽은 주소는 제목이 바뀐 직후 이전 오류 페이지 주소로 남는 경우가 있어 대체 경로로만 남겼다.
+  제목이 바뀌지 않는 이동을 위해 상단 줄은 0.5초마다 다시 확인하고, 바뀐 것이 없으면 그리지 않는다.
+- 주소 입력은 `GURL(std::string_view)`(`0x42BC7A0`), `content::OpenURLParams` 생성자(`0x72E8660`),
+  `WebContentsImpl::OpenURL`(`0x366BC50`)로 현재 탭에서 연다. 전이는 `TYPED | FROM_ADDRESS_BAR`다. `iana.org`와
+  `www.iana.org/domains/root`를 입력해 해당 페이지로 이동했고 상단 줄 주소도 바뀌었다. 점이 없거나 공백이 있는 입력은
+  검색 주소로 바꾼다. GURL 크기는 기본 생성자에서 `0x78`로 읽었다.
+- 상단 줄은 키보드 입력을 받을 수 없어 주소를 누르면 소유 팝업 EDIT 창을 그 위에 연다. 클릭 처리 중에 열면 Chrome이 곧바로
+  포커스를 되가져가 닫혔다. 클릭이 끝난 뒤 메시지로 열고, 포커스가 브라우저 창 자신으로 넘어갈 때만 되찾게 하자 유지되었다.
+  입력하는 동안 브라우저 창은 비활성 상태로 그려진다(캡션 버튼이 흐려짐).
+- 캡션 버튼 컨테이너는 `BrowserFrameViewWin::Layout`(프레임 뷰 vtable 23번 칸)이 탭 줄 정보로 크기를 정한다. 이 칸을 감싸
+  원래 레이아웃 뒤 Rivet 창에서만 컨테이너(`+0x3C8`) 높이를 44 DIP까지 `views::View::SetBoundsRect`(`0x4F42540`)로 다시
+  정하자, 닫기 버튼 hover 영역이 상단 줄 전체 높이가 되고 기호가 세로 가운데에 왔다. 뷰 경계는 `+0x1C8`에 있다.
+- 남은 차이: 최소화·최대화 버튼 아래 32~44 DIP 구간에 페이지 배경색 띠가 보인다. Rivet 비주얼은 버튼 위에 그려지므로 그
+  구간을 덮으면 버튼 hover 아래쪽도 가려진다.
