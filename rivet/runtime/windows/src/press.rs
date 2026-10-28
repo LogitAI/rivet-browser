@@ -107,16 +107,18 @@ impl<K: Copy + PartialEq> Press<K> {
 }
 
 /// The presses of one window's controls.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Presses<K> {
     list: Vec<Press<K>>,
 }
 
-impl<K: Copy + PartialEq> Presses<K> {
-    pub const fn new() -> Self {
+impl<K> Default for Presses<K> {
+    fn default() -> Self {
         Self { list: Vec::new() }
     }
+}
 
+impl<K: Copy + PartialEq> Presses<K> {
     /// A control goes down. A control that is still springing back sinks again from where it is.
     pub fn press(&mut self, key: K, now: f32) {
         let from = self
@@ -134,6 +136,7 @@ impl<K: Copy + PartialEq> Presses<K> {
     }
 
     /// The control comes up, or the pointer leaves it.
+    #[cfg(test)]
     pub fn release(&mut self, key: K, now: f32) {
         if let Some(press) = self
             .list
@@ -173,7 +176,7 @@ mod tests {
 
     #[test]
     fn fr3_press_sinks_in_120_ms_and_springs_back_in_360_ms() {
-        let mut presses = Presses::new();
+        let mut presses = Presses::default();
         presses.press(1, 0.0);
         let (scale, bright) = presses.list[0].amounts(SINK_MS);
         assert!((scale - 1.0).abs() < 0.01 && (bright - 1.0).abs() < 0.01);
@@ -187,7 +190,7 @@ mod tests {
 
     #[test]
     fn fr3_press_has_a_small_overshoot_when_it_springs_back() {
-        let mut presses = Presses::new();
+        let mut presses = Presses::default();
         presses.press(1, 0.0);
         presses.release(1, 300.0);
         let lowest = (0..=36)
@@ -199,7 +202,7 @@ mod tests {
 
     #[test]
     fn fr3_short_tap_still_holds_the_press_for_a_beat() {
-        let mut presses = Presses::new();
+        let mut presses = Presses::default();
         presses.press(1, 0.0);
         presses.release(1, 10.0);
         let (scale, _) = presses.list[0].amounts(HOLD_MS);
@@ -211,7 +214,7 @@ mod tests {
 
     #[test]
     fn fr3_pressing_again_while_springing_back_starts_from_where_it_is() {
-        let mut presses = Presses::new();
+        let mut presses = Presses::default();
         presses.press(1, 0.0);
         presses.release(1, 200.0);
         let mid = presses.list[0].amounts(300.0).0;
@@ -222,7 +225,7 @@ mod tests {
 
     #[test]
     fn fr3_settled_presses_leave_the_list() {
-        let mut presses = Presses::new();
+        let mut presses = Presses::default();
         presses.press(1, 0.0);
         presses.release(1, 0.0);
         assert!(presses.settle(100.0));

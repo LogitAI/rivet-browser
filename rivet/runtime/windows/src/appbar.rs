@@ -7,6 +7,7 @@
 //! Direct2D and DirectWrite paint the visual with the shell study's fonts, which are embedded in
 //! the runtime and loaded into a private font collection.
 
+use crate::spaces::{SpaceInfo, Spaces};
 use windows::core::{Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D1_GRADIENT_STOP, D2D_RECT_F};
@@ -134,7 +135,6 @@ const PINNED: [(u32, &str); 4] = [
     (0x2f8f6b, "D"),
     (0x1f2024, "N"),
 ];
-const SPACE_DOTS: [u32; 3] = [TINT, 0x5b8bab, 0xc0577f];
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> D2D_RECT_F {
     D2D_RECT_F {
@@ -166,18 +166,56 @@ pub struct Appbar {
     panel: IDCompositionVisual2,
     panel_painted: Option<Painted>,
     tabs: Vec<crate::tab_rows::Row>,
-    tint: u32,
+    spaces: Vec<SpaceInfo>,
+    current: usize,
     hover: Option<crate::frame::AppbarHit>,
-    pressed: Option<crate::frame::AppbarHit>,
-    menu_open: bool,
+    /// The press feedback of the controls: scale and brightness amounts at this moment.
+    effects: Vec<Effect>,
+    menu: Option<crate::frame::Menu>,
     /// False while the appbar is hidden: the column then only carries the ground of the frame.
     docked: bool,
     /// Whether the resizer is being dragged, which keeps its grip showing.
     dragging: bool,
     toggle: IDCompositionVisual2,
-    toggle_painted: Option<(i32, u32, bool, bool)>,
+    toggle_painted: Option<(i32, u32, bool, i32, i32)>,
     peek: IDCompositionVisual2,
     peek_painted: Option<Painted>,
+}
+
+/// The scale and brightness amounts of one control's press at this moment.
+pub(crate) type Effect = (crate::frame::AppbarHit, f32, f32);
+
+/// What the appbar shows: the tab rows, the spaces, the pointer and the controls in motion.
+#[derive(Clone, Copy)]
+struct Scene<'a> {
+    tabs: &'a [crate::tab_rows::Row],
+    spaces: &'a [SpaceInfo],
+    current: usize,
+    hover: Option<crate::frame::AppbarHit>,
+    effects: &'a [Effect],
+    menu: Option<crate::frame::Menu>,
+}
+
+impl Scene<'_> {
+    fn space(&self) -> SpaceInfo {
+        self.spaces
+            .get(self.current)
+            .or(self.spaces.first())
+            .cloned()
+            .unwrap_or_else(|| Spaces::new().list()[0].clone())
+    }
+
+    fn tint(&self) -> u32 {
+        self.spaces.get(self.current).map_or(TINT, |s| s.tint)
+    }
+
+    /// The press feedback of the first of `hits` that is in motion.
+    fn effect(&self, hits: &[crate::frame::AppbarHit]) -> Option<(f32, f32)> {
+        self.effects
+            .iter()
+            .find(|effect| hits.contains(&effect.0))
+            .map(|effect| (effect.1, effect.2))
+    }
 }
 
 /// What a painted surface shows of the appbar.
@@ -251,10 +289,11 @@ impl Appbar {
             panel,
             panel_painted: None,
             tabs: Vec::new(),
-            tint: TINT,
+            spaces: Spaces::new().list().to_vec(),
+            current: 0,
             hover: None,
-            pressed: None,
-            menu_open: false,
+            effects: Vec::new(),
+            menu: None,
             docked: true,
             dragging: false,
             toggle,
@@ -277,25 +316,39 @@ impl Appbar {
     pub fn set_state(
         &mut self,
         tabs: Vec<crate::tab_rows::Row>,
-        tint: u32,
+        spaces: &[SpaceInfo],
+        current: usize,
         hover: Option<crate::frame::AppbarHit>,
-        pressed: Option<crate::frame::AppbarHit>,
-        menu_open: bool,
+        effects: Vec<Effect>,
+        menu: Option<crate::frame::Menu>,
     ) {
-        if self.menu_open != menu_open
+        if self.menu != menu
             || self.tabs != tabs
-            || self.tint != tint
+            || self.spaces != spaces
+            || self.current != current
             || self.hover != hover
-            || self.pressed != pressed
+            || self.effects != effects
         {
-            self.menu_open = menu_open;
+            self.menu = menu;
             self.tabs = tabs;
-            self.tint = tint;
+            self.spaces = spaces.to_vec();
+            self.current = current;
             self.hover = hover;
-            self.pressed = pressed;
+            self.effects = effects;
             self.painted = None;
             self.peek_painted = None;
             self.toggle_painted = None;
+        }
+    }
+
+    fn scene(&self) -> Scene<'_> {
+        Scene {
+            tabs: &self.tabs,
+            spaces: &self.spaces,
+            current: self.current,
+            hover: self.hover,
+            effects: &self.effects,
+            menu: self.menu,
         }
     }
 
@@ -317,8 +370,15 @@ impl Appbar {
         self.toggle.SetOffsetX2(x as f32)?;
         self.toggle.SetOffsetY2(y as f32)?;
         let hot = self.hover == Some(crate::frame::AppbarHit::Toggle);
-        let down = self.pressed == Some(crate::frame::AppbarHit::Toggle);
-        if self.toggle_painted != Some((size, dpi, hot, down)) {
+        let effect = self.scene().effect(&[crate::frame::AppbarHit::Toggle]);
+        let key = (
+            size,
+            dpi,
+            hot,
+            (effect.map_or(0.0, |e| e.0) * 1000.0) as i32,
+            (effect.map_or(0.0, |e| e.1) * 1000.0) as i32,
+        );
+        if self.toggle_painted != Some(key) {
             let surface = self.device.CreateSurface(
                 size as u32,
                 size as u32,
@@ -340,16 +400,16 @@ impl Appbar {
                 fonts: &self.fonts,
             };
             let area = rect(0.0, 0.0, size as f32 / scale, size as f32 / scale);
-            let result = (|| {
-                if hot || down {
-                    canvas.fill_rounded(area, 8.0, rgba(INK, if down { 0.1 } else { 0.06 }))?;
+            let result = canvas.pressed(area, 8.0, 0.96, effect, || {
+                if hot || effect.is_some() {
+                    canvas.fill_rounded(area, 8.0, rgba(INK, 0.06))?;
                 }
                 canvas.icon('\u{E90C}', area, 18.0, SOFT_INK)
-            })();
+            });
             surface.EndDraw()?;
             result?;
             self.toggle.SetContent(&surface)?;
-            self.toggle_painted = Some((size, dpi, hot, down));
+            self.toggle_painted = Some(key);
         }
         self.device.Commit()
     }
@@ -412,11 +472,7 @@ impl Appbar {
                     side as f32,
                     height as f32,
                     span,
-                    self.tint,
-                    &self.tabs,
-                    self.hover,
-                    self.pressed,
-                    self.menu_open,
+                    &self.scene(),
                     Surface::Floating,
                 )
             })();
@@ -558,11 +614,7 @@ impl Appbar {
             width as f32 / scale,
             height as f32 / scale,
             span as f32 / scale,
-            self.tint,
-            &self.tabs,
-            self.hover,
-            self.pressed,
-            self.menu_open,
+            &self.scene(),
             if self.docked {
                 Surface::Docked
             } else {
@@ -863,19 +915,69 @@ impl Canvas<'_> {
         Ok(())
     }
 
+    /// Runs `body` with a control's press feedback applied: the control sinks to `press` of its
+    /// size about its centre and darkens by up to 4%, like `button.pressed` in the shell study.
+    /// `effect` holds the scale and brightness amounts, where 1 is fully pressed and a negative
+    /// scale amount is the spring's overshoot.
+    unsafe fn pressed(
+        &self,
+        area: D2D_RECT_F,
+        radius: f32,
+        press: f32,
+        effect: Option<(f32, f32)>,
+        body: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let Some((sink, dim)) = effect else {
+            return body();
+        };
+        let mut original = Matrix3x2::default();
+        self.context.GetTransform(&mut original);
+        let factor = 1.0 - (1.0 - press) * sink;
+        let center = Vector2 {
+            X: (area.left + area.right) / 2.0,
+            Y: (area.top + area.bottom) / 2.0,
+        };
+        self.context
+            .SetTransform(&(Matrix3x2::scale_around(factor, factor, center) * original));
+        let mut result = body();
+        if result.is_ok() && dim > 0.001 {
+            // Black over opaque pixels is exactly `filter: brightness(.96)`.
+            result = self.fill_rounded(area, radius, rgba(0x000000, 0.04 * dim));
+        }
+        self.context.SetTransform(&original);
+        result
+    }
+
+    /// A 28 DIP icon button: glass under the pointer, and the ink darkens with it.
+    unsafe fn icon_button(
+        &self,
+        scene: &Scene,
+        hit: crate::frame::AppbarHit,
+        area: D2D_RECT_F,
+        enabled: bool,
+        body: impl FnOnce(bool) -> Result<()>,
+    ) -> Result<()> {
+        let hot = enabled && scene.hover == Some(hit);
+        let effect = scene.effect(&[hit]).filter(|_| enabled);
+        self.pressed(area, 8.0, 0.96, effect, || {
+            if hot || effect.is_some() {
+                self.fill_rounded(area, 8.0, rgba(WHITE, 0.5))?;
+            }
+            body(hot)
+        })
+    }
+
     /// Paints the Appbar in device-independent pixels, after the shell study.
     unsafe fn draw(
         &self,
         w: f32,
         h: f32,
         span: f32,
-        tint: u32,
-        tabs: &[crate::tab_rows::Row],
-        hover: Option<crate::frame::AppbarHit>,
-        pressed: Option<crate::frame::AppbarHit>,
-        menu_open: bool,
+        scene: &Scene,
         surface: Surface,
     ) -> Result<()> {
+        use crate::frame::AppbarHit;
+        let tint = scene.tint();
         // A floating appbar is drawn over its own fill, and a hidden one leaves only the ground.
         match surface {
             Surface::Docked => self.ground(span, h, tint)?,
@@ -884,77 +986,74 @@ impl Canvas<'_> {
         }
         let left = 10.0;
         let inner = w - 18.0;
+        let hover = scene.hover;
 
-        // The mark and the space menu.
-        self.mark(left + 4.0, 15.0, 22.0)?;
-        self.icon('\u{E70D}', rect(w - 36.0, 12.0, 28.0, 28.0), 16.0, SOFT_INK)?;
+        // The mark, which opens the start page, and the space menu.
+        self.icon_button(
+            scene,
+            AppbarHit::Mark,
+            rect(left + 1.0, 12.0, 28.0, 28.0),
+            true,
+            |_| self.mark(left + 4.0, 15.0, 22.0),
+        )?;
+        self.icon_button(
+            scene,
+            AppbarHit::WorkspaceMenu,
+            rect(w - 36.0, 12.0, 28.0, 28.0),
+            true,
+            |hot| {
+                self.icon(
+                    '\u{E70D}',
+                    rect(w - 36.0, 12.0, 28.0, 28.0),
+                    16.0,
+                    if hot { INK } else { SOFT_INK },
+                )
+            },
+        )?;
 
         // Pinned tabs.
         let tile = (inner - 18.0) / 4.0;
         for (index, (rgb, letter)) in PINNED.iter().enumerate() {
             let area = rect(left + index as f32 * (tile + 6.0), 52.0, tile, 42.0);
-            let hot = hover == Some(crate::frame::AppbarHit::Pinned(index));
-            let down = pressed == Some(crate::frame::AppbarHit::Pinned(index));
-            let mut original = Matrix3x2::default();
-            self.context.GetTransform(&mut original);
-            if down {
-                let center = Vector2 {
-                    X: area.left + tile / 2.0,
-                    Y: area.top + 21.0,
-                };
-                self.context
-                    .SetTransform(&(Matrix3x2::scale_around(0.96, 0.96, center) * original));
-            }
-            self.fill_rounded(
-                area,
-                11.0,
-                rgba(
-                    WHITE,
-                    if down {
-                        0.72
-                    } else if hot {
-                        0.86
-                    } else {
-                        0.5
-                    },
-                ),
-            )?;
-            self.ring(area, 11.0, rgba(INK, 0.08))?;
-            self.favicon(area.left + tile / 2.0 - 10.0, 63.0, 20.0, *rgb, letter)?;
-            self.context.SetTransform(&original);
+            let hit = AppbarHit::Pinned(index);
+            let hot = hover == Some(hit);
+            let effect = scene.effect(&[hit]);
+            self.pressed(area, 11.0, 0.96, effect, || {
+                let strong = hot || effect.is_some();
+                self.fill_rounded(area, 11.0, rgba(WHITE, if strong { 0.86 } else { 0.5 }))?;
+                self.ring(area, 11.0, rgba(INK, 0.08))?;
+                self.favicon(area.left + tile / 2.0 - 10.0, 63.0, 20.0, *rgb, letter)
+            })?;
         }
 
         // The space, with the browser and profile it opens in.
-        let space_index = SPACE_DOTS.iter().position(|rgb| *rgb == tint).unwrap_or(0);
-        let names = ["Work", "Personal", "Research"];
-        let profiles = ["Chrome · Work", "Chrome · Default", "Chrome · Default"];
+        let space = scene.space();
         self.text(
             SPACE_NAME,
             rect(left + 8.0, 106.0, 120.0, 30.0),
-            names[space_index],
+            &space.name,
             INK,
             false,
         )?;
-        let badge_width = if space_index == 0 { 104.0 } else { 122.0 };
+        let badge_width = 26.0 + 6.0 * space.profile.chars().count() as f32;
         let badge = rect(w - 8.0 - 8.0 - badge_width, 111.0, badge_width, 20.0);
         self.fill_rounded(badge, 6.0, rgba(WHITE, 0.5))?;
         self.dot(
             badge.left + 7.0,
             118.0,
             6.0,
-            if space_index == 0 { ACCENT } else { tint },
+            if scene.current == 0 { ACCENT } else { tint },
         )?;
         self.text(
             BADGE,
             rect(badge.left + 18.0, 111.0, badge_width - 22.0, 20.0),
-            profiles[space_index],
+            &space.profile,
             SOFT_INK,
             false,
         )?;
 
         let mut top = 138.0;
-        for item in tabs {
-            use crate::frame::AppbarHit;
+        for item in scene.tabs {
             use crate::tab_rows::Row as TabRow;
             if matches!(item, TabRow::NewTab) && top > 138.0 {
                 self.fill(rect(left + 10.0, top + 8.0, inner - 20.0, 1.0), 0xd9d3cb)?;
@@ -963,39 +1062,43 @@ impl Canvas<'_> {
             match item {
                 TabRow::Group(group) => {
                     let hit = AppbarHit::Folder(group.id);
-                    if hover == Some(hit) || pressed == Some(hit) {
-                        self.fill_rounded(rect(left, top, inner, 34.0), 9.0, rgba(WHITE, 0.4))?;
-                    }
-                    let colours = [
-                        0x9aa0a6, 0x8ab4f8, 0xf28b82, 0xfdd663, 0x81c995, 0xf6aea9, 0xc58af9,
-                        0x78d9ec, 0xffb26b,
-                    ];
-                    let color = colours
-                        .get(group.color as usize)
-                        .copied()
-                        .unwrap_or(colours[0]);
-                    self.dot(left + 10.0, top + 13.0, 8.0, color)?;
-                    self.text(
-                        TAB,
-                        rect(left + 34.0, top, inner - 62.0, 34.0),
-                        if group.title.is_empty() {
-                            "Untitled group"
-                        } else {
-                            &group.title
-                        },
-                        SOFT_INK,
-                        false,
-                    )?;
-                    self.icon(
-                        if group.collapsed {
-                            '\u{E76C}'
-                        } else {
-                            '\u{E70D}'
-                        },
-                        rect(left + inner - 26.0, top + 4.0, 24.0, 24.0),
-                        12.0,
-                        MUTED,
-                    )?;
+                    let area = rect(left, top, inner, 34.0);
+                    let effect = scene.effect(&[hit]);
+                    self.pressed(area, 9.0, 0.98, effect, || {
+                        if hover == Some(hit) || effect.is_some() {
+                            self.fill_rounded(area, 9.0, rgba(WHITE, 0.5))?;
+                        }
+                        let colours = [
+                            0x9aa0a6, 0x8ab4f8, 0xf28b82, 0xfdd663, 0x81c995, 0xf6aea9, 0xc58af9,
+                            0x78d9ec, 0xffb26b,
+                        ];
+                        let color = colours
+                            .get(group.color as usize)
+                            .copied()
+                            .unwrap_or(colours[0]);
+                        self.dot(left + 10.0, top + 13.0, 8.0, color)?;
+                        self.text(
+                            TAB,
+                            rect(left + 34.0, top, inner - 62.0, 34.0),
+                            if group.title.is_empty() {
+                                "Untitled group"
+                            } else {
+                                &group.title
+                            },
+                            if hover == Some(hit) { INK } else { SOFT_INK },
+                            false,
+                        )?;
+                        self.icon(
+                            if group.collapsed {
+                                '\u{E76C}'
+                            } else {
+                                '\u{E70D}'
+                            },
+                            rect(left + inner - 26.0, top + 4.0, 24.0, 24.0),
+                            12.0,
+                            MUTED,
+                        )
+                    })?;
                 }
                 TabRow::NewTab => {
                     let row = row(Lead::Glyph('\u{E710}'), "New tab", "Ctrl T");
@@ -1005,7 +1108,7 @@ impl Canvas<'_> {
                         top,
                         &row,
                         hover == Some(AppbarHit::NewTab),
-                        pressed == Some(AppbarHit::NewTab),
+                        scene.effect(&[AppbarHit::NewTab]),
                     )?;
                 }
                 TabRow::Tab {
@@ -1021,121 +1124,171 @@ impl Canvas<'_> {
                         child: *child,
                         active: *active,
                     };
-                    self.tab_row_text(left,inner,top,&row,title,
-                        matches!(hover,Some(AppbarHit::Tab(i)|AppbarHit::CloseTab(i)) if i==*index),
-                        matches!(pressed,Some(AppbarHit::Tab(i)|AppbarHit::CloseTab(i)) if i==*index),
-                        hover==Some(AppbarHit::CloseTab(*index)))?;
+                    self.tab_row_text(
+                        left,
+                        inner,
+                        top,
+                        &row,
+                        title,
+                        matches!(hover, Some(AppbarHit::Tab(i) | AppbarHit::CloseTab(i)) if i == *index),
+                        scene.effect(&[AppbarHit::Tab(*index), AppbarHit::CloseTab(*index)]),
+                        hover == Some(AppbarHit::CloseTab(*index)),
+                    )?;
                 }
             }
             top += 34.0;
         }
 
-        // The foot: the library, the spaces and a new space.
+        // The foot: the settings, the spaces and a new space.
         let foot = h - 38.0;
-        self.icon('\u{E8F1}', rect(left, foot, 28.0, 28.0), 16.0, SOFT_INK)?;
-        self.icon('\u{E710}', rect(w - 36.0, foot, 28.0, 28.0), 16.0, SOFT_INK)?;
-        let dots = SPACE_DOTS.len() as f32 * 32.0 - 4.0;
+        self.icon_button(
+            scene,
+            AppbarHit::Settings,
+            rect(left, foot, 28.0, 28.0),
+            true,
+            |hot| {
+                self.icon(
+                    '\u{E713}',
+                    rect(left, foot, 28.0, 28.0),
+                    16.0,
+                    if hot { INK } else { SOFT_INK },
+                )
+            },
+        )?;
+        let can_add = scene.spaces.len() < crate::spaces::MAX_SPACES;
+        self.icon_button(
+            scene,
+            AppbarHit::NewSpace,
+            rect(w - 36.0, foot, 28.0, 28.0),
+            can_add,
+            |hot| {
+                self.icon(
+                    '\u{E710}',
+                    rect(w - 36.0, foot, 28.0, 28.0),
+                    16.0,
+                    if !can_add {
+                        // A disabled icon is faded, like `.icon:disabled`.
+                        0xb9b6bb
+                    } else if hot {
+                        INK
+                    } else {
+                        SOFT_INK
+                    },
+                )
+            },
+        )?;
+        let dots = scene.spaces.len() as f32 * 32.0 - 4.0;
         let mut x = left + 28.0 + (inner - 56.0 - dots) / 2.0;
-        for (index, rgb) in SPACE_DOTS.iter().enumerate() {
-            let active = tint == *rgb;
-            let hot = hover == Some(crate::frame::AppbarHit::Space(index));
-            let down = pressed == Some(crate::frame::AppbarHit::Space(index));
-            let mut original = Matrix3x2::default();
-            self.context.GetTransform(&mut original);
-            if down {
-                let center = Vector2 {
-                    X: x + 14.0,
-                    Y: foot + 14.0,
-                };
-                self.context
-                    .SetTransform(&(Matrix3x2::scale_around(0.96, 0.96, center) * original));
-            }
-            if active || hot || down {
-                let area = rect(x, foot, 28.0, 28.0);
-                self.fill_rounded(area, 9.0, rgba(WHITE, if active { 0.86 } else { 0.5 }))?;
-                if active {
-                    let outer = rect(x - 1.0, foot - 1.0, 30.0, 30.0);
-                    self.ring(outer, 10.0, rgba(INK, 0.08))?;
+        for (index, info) in scene.spaces.iter().enumerate() {
+            let active = index == scene.current;
+            let hit = AppbarHit::Space(index);
+            let hot = hover == Some(hit);
+            let area = rect(x, foot, 28.0, 28.0);
+            let effect = scene.effect(&[hit]);
+            self.pressed(area, 9.0, 0.96, effect, || {
+                if active || hot || effect.is_some() {
+                    self.fill_rounded(area, 9.0, rgba(WHITE, if active { 0.86 } else { 0.5 }))?;
+                    if active {
+                        let outer = rect(x - 1.0, foot - 1.0, 30.0, 30.0);
+                        self.ring(outer, 10.0, rgba(INK, 0.08))?;
+                    }
                 }
-            }
-            let size = if active { 11.0 } else { 9.0 };
-            let dot = rgba(*rgb, if active { 1.0 } else { 0.5 });
-            let ellipse = D2D1_ELLIPSE {
-                point: Vector2 {
-                    X: x + 14.0,
-                    Y: foot + 14.0,
-                },
-                radiusX: size / 2.0,
-                radiusY: size / 2.0,
-            };
-            self.context.FillEllipse(&ellipse, &self.paint_brush(dot)?);
-            self.context.SetTransform(&original);
+                let size = if active { 11.0 } else { 9.0 };
+                let dot = rgba(info.tint, if active { 1.0 } else { 0.5 });
+                let ellipse = D2D1_ELLIPSE {
+                    point: Vector2 {
+                        X: x + 14.0,
+                        Y: foot + 14.0,
+                    },
+                    radiusX: size / 2.0,
+                    radiusY: size / 2.0,
+                };
+                self.context.FillEllipse(&ellipse, &self.paint_brush(dot)?);
+                Ok(())
+            })?;
             x += 32.0;
         }
-        if menu_open {
-            use crate::frame::AppbarHit;
-            let area = rect(left, 138.0, inner, 246.0);
-            self.fill_rounded(area, 11.0, color(WHITE))?;
-            self.ring(area, 11.0, rgba(INK, 0.12))?;
-            for index in 0..3 {
-                let y = 138.0 + index as f32 * 48.0;
-                let item = rect(left + 4.0, y + 2.0, inner - 8.0, 44.0);
-                if hover == Some(AppbarHit::Space(index)) || index == space_index {
-                    self.fill_rounded(
-                        item,
-                        8.0,
-                        rgba(INK, if index == space_index { 0.06 } else { 0.04 }),
-                    )?;
-                }
-                self.dot(left + 13.0, y + 13.0, 9.0, SPACE_DOTS[index])?;
-                self.text(
-                    ACTIVE,
-                    rect(left + 30.0, y + 4.0, inner - 44.0, 19.0),
-                    names[index],
-                    INK,
-                    false,
-                )?;
-                self.text(
-                    META,
-                    rect(left + 30.0, y + 23.0, inner - 44.0, 17.0),
-                    profiles[index],
-                    MUTED,
-                    false,
-                )?;
-            }
-            self.fill(rect(left + 10.0, 281.0, inner - 20.0, 1.0), 0xe5e1dc)?;
-            for (index, (title, hit)) in [
-                ("Profile settings", Some(AppbarHit::ProfileSettings)),
-                ("Manage profiles", Some(AppbarHit::ManageProfiles)),
-                ("Rivet settings", None),
-            ]
-            .iter()
-            .enumerate()
-            {
-                let y = 282.0 + index as f32 * 34.0;
-                if hit.is_some() && hover == *hit {
-                    self.fill_rounded(
-                        rect(left + 4.0, y, inner - 8.0, 34.0),
-                        8.0,
-                        rgba(INK, 0.04),
-                    )?;
-                }
-                self.text(
-                    TAB,
-                    rect(left + 13.0, y, inner - 26.0, 34.0),
-                    title,
-                    if hit.is_some() { SOFT_INK } else { MUTED },
-                    false,
-                )?;
-            }
+        if let Some(menu) = scene.menu {
+            self.menu(scene, menu, left, inner, h)?;
         }
         // The grip of the resizer shows while the pointer is on the seam or drags it.
-        if matches!(surface, Surface::Docked) && hover == Some(crate::frame::AppbarHit::Resizer) {
+        if matches!(surface, Surface::Docked) && hover == Some(AppbarHit::Resizer) {
             self.fill_rounded(
                 rect(w - 4.0, h / 2.0 - 18.0, 2.0, 36.0),
                 1.0,
                 rgba(INK, 0.18),
             )?;
+        }
+        Ok(())
+    }
+
+    /// The workspace menu under the space header, or the settings menu above the footer.
+    unsafe fn menu(
+        &self,
+        scene: &Scene,
+        menu: crate::frame::Menu,
+        left: f32,
+        inner: f32,
+        h: f32,
+    ) -> Result<()> {
+        use crate::frame::{AppbarHit, Menu};
+        let (_, top, _, height) =
+            crate::frame::menu_area(menu, inner + 18.0, h, scene.spaces.len());
+        let area = rect(left, top, inner, height);
+        self.fill_rounded(area, 11.0, color(WHITE))?;
+        self.ring(area, 11.0, rgba(INK, 0.12))?;
+        match menu {
+            Menu::Workspace => {
+                for (index, info) in scene.spaces.iter().enumerate() {
+                    let y = top + index as f32 * 48.0;
+                    let hit = AppbarHit::MenuSpace(index);
+                    let current = index == scene.current;
+                    let item = rect(left + 4.0, y + 2.0, inner - 8.0, 44.0);
+                    self.pressed(item, 8.0, 0.98, scene.effect(&[hit]), || {
+                        if scene.hover == Some(hit) || current {
+                            self.fill_rounded(
+                                item,
+                                8.0,
+                                rgba(INK, if current { 0.06 } else { 0.04 }),
+                            )?;
+                        }
+                        self.dot(left + 13.0, y + 13.0, 9.0, info.tint)?;
+                        self.text(
+                            ACTIVE,
+                            rect(left + 30.0, y + 4.0, inner - 44.0, 19.0),
+                            &info.name,
+                            INK,
+                            false,
+                        )?;
+                        self.text(
+                            META,
+                            rect(left + 30.0, y + 23.0, inner - 44.0, 17.0),
+                            &info.profile,
+                            MUTED,
+                            false,
+                        )
+                    })?;
+                }
+            }
+            Menu::Settings => {
+                for (index, (title, hit)) in crate::frame::SETTINGS_ITEMS.iter().enumerate() {
+                    let y = top + 4.0 + index as f32 * 34.0;
+                    let item = rect(left + 4.0, y, inner - 8.0, 34.0);
+                    let effect = hit.and_then(|hit| scene.effect(&[hit]));
+                    self.pressed(item, 8.0, 0.98, effect, || {
+                        if hit.is_some() && scene.hover == *hit {
+                            self.fill_rounded(item, 8.0, rgba(INK, 0.04))?;
+                        }
+                        self.text(
+                            TAB,
+                            rect(left + 13.0, y, inner - 26.0, 34.0),
+                            title,
+                            if hit.is_some() { SOFT_INK } else { MUTED },
+                            false,
+                        )
+                    })?;
+                }
+            }
         }
         Ok(())
     }
@@ -1213,9 +1366,9 @@ impl Canvas<'_> {
         top: f32,
         item: &Row,
         hovered: bool,
-        pressed: bool,
+        effect: Option<(f32, f32)>,
     ) -> Result<()> {
-        self.tab_row_text(left, inner, top, item, item.title, hovered, pressed, false)
+        self.tab_row_text(left, inner, top, item, item.title, hovered, effect, false)
     }
 
     unsafe fn tab_row_text(
@@ -1226,76 +1379,73 @@ impl Canvas<'_> {
         item: &Row,
         title: &str,
         hovered: bool,
-        pressed: bool,
+        effect: Option<(f32, f32)>,
         close_hovered: bool,
     ) -> Result<()> {
         let area = rect(left, top, inner, 34.0);
-        let mut original = Matrix3x2::default();
-        self.context.GetTransform(&mut original);
-        if pressed {
-            let center = Vector2 {
-                X: left + inner / 2.0,
-                Y: top + 17.0,
-            };
-            self.context
-                .SetTransform(&(Matrix3x2::scale_around(0.98, 0.98, center) * original));
-        }
-        if hovered || pressed {
-            self.fill_rounded(area, 9.0, rgba(WHITE, if pressed { 0.65 } else { 0.4 }))?;
-        }
-        if item.active {
-            // The selected tab is a white pill with a hairline ring and a soft shadow.
-            self.fill_rounded(rect(left, top + 1.0, inner, 34.0), 9.0, rgba(INK, 0.06))?;
-            self.fill_rounded(area, 9.0, color(WHITE))?;
-            // The selected tab's ring sits outside its box, like a CSS box shadow with a 1px spread.
-            let outer = rect(left - 1.0, top - 1.0, inner + 2.0, 36.0);
-            self.ring(outer, 10.0, rgba(INK, 0.08))?;
-        }
-        let lead_x = left + if item.child { 34.0 } else { 8.0 };
-        match item.lead {
-            Lead::Glyph(glyph) => {
-                self.icon(glyph, rect(lead_x, top, 16.0, 34.0), 16.0, SOFT_INK)?
+        let pressed = effect.is_some();
+        self.pressed(area, 9.0, 0.98, effect, || {
+            if (hovered || pressed) && !item.active {
+                self.fill_rounded(area, 9.0, rgba(WHITE, 0.5))?;
             }
-            Lead::Favicon(rgb, letter) => self.favicon(lead_x, top + 9.0, 16.0, rgb, letter)?,
-        }
-        let label_x = lead_x + 26.0;
-        let (style, ink) = if item.active {
-            (ACTIVE, INK)
-        } else {
-            (TAB, SOFT_INK)
-        };
-        self.text(
-            style,
-            rect(label_x, top, left + inner - label_x - 30.0, 34.0),
-            title,
-            ink,
-            false,
-        )?;
-        if !item.meta.is_empty() {
+            if item.active {
+                // The selected tab is a white pill with a hairline ring and a soft shadow.
+                self.fill_rounded(rect(left, top + 1.0, inner, 34.0), 9.0, rgba(INK, 0.06))?;
+                self.fill_rounded(area, 9.0, color(WHITE))?;
+                // The selected tab's ring sits outside its box, like a CSS box shadow with a 1px spread.
+                let outer = rect(left - 1.0, top - 1.0, inner + 2.0, 36.0);
+                self.ring(outer, 10.0, rgba(INK, 0.08))?;
+            }
+            let lead_x = left + if item.child { 34.0 } else { 8.0 };
+            match item.lead {
+                Lead::Glyph(glyph) => {
+                    self.icon(glyph, rect(lead_x, top, 16.0, 34.0), 16.0, SOFT_INK)?
+                }
+                Lead::Favicon(rgb, letter) => {
+                    self.favicon(lead_x, top + 9.0, 16.0, rgb, letter)?
+                }
+            }
+            let label_x = lead_x + 26.0;
+            let (style, ink) = if item.active {
+                (ACTIVE, INK)
+            } else if hovered || pressed {
+                (TAB, INK)
+            } else {
+                (TAB, SOFT_INK)
+            };
             self.text(
-                META,
-                rect(left + inner - 70.0, top, 62.0, 34.0),
-                item.meta,
-                MUTED,
-                true,
+                style,
+                rect(label_x, top, left + inner - label_x - 30.0, 34.0),
+                title,
+                ink,
+                false,
             )?;
-        }
-        if item.active || hovered || pressed {
-            if close_hovered {
-                self.fill_rounded(
-                    rect(left + inner - 26.0, top + 6.0, 22.0, 22.0),
-                    6.0,
-                    rgba(INK, 0.08),
+            if !item.meta.is_empty() {
+                self.text(
+                    META,
+                    rect(left + inner - 70.0, top, 62.0, 34.0),
+                    item.meta,
+                    MUTED,
+                    true,
                 )?;
             }
-            self.icon(
-                '\u{E711}',
-                rect(left + inner - 26.0, top + 6.0, 22.0, 22.0),
-                10.0,
-                if close_hovered { INK } else { MUTED },
-            )?;
-        }
-        self.context.SetTransform(&original);
-        Ok(())
+            let closable = matches!(item.lead, Lead::Favicon(..));
+            if closable && (item.active || hovered || pressed) {
+                if close_hovered {
+                    self.fill_rounded(
+                        rect(left + inner - 26.0, top + 6.0, 22.0, 22.0),
+                        6.0,
+                        rgba(INK, 0.08),
+                    )?;
+                }
+                self.icon(
+                    '\u{E711}',
+                    rect(left + inner - 26.0, top + 6.0, 22.0, 22.0),
+                    10.0,
+                    if close_hovered { INK } else { MUTED },
+                )?;
+            }
+            Ok(())
+        })
     }
 }

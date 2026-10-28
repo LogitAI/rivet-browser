@@ -15,6 +15,9 @@ const ACTIVATE_TAB: usize = 0x0311_2220;
 const CLOSE_TAB: usize = 0x0A20_11B0;
 const TITLE: usize = 0x00D7_8440;
 const NEW_TAB: usize = 0x0A0B_8F50;
+/// `WebContentsImpl::GetLastCommittedURL` and `GetVisibleURL`, which return a `const GURL&`.
+const LAST_COMMITTED_URL: usize = 0x058A_48A0;
+const VISIBLE_URL: usize = 0x05CF_8BA0;
 type Count = unsafe extern "system" fn(*mut c_void) -> i32;
 type TabAt = unsafe extern "system" fn(*mut c_void, i32) -> *mut c_void;
 type Activate = unsafe extern "system" fn(*mut c_void, i32, *const [u8; 16]);
@@ -72,6 +75,8 @@ fn base() -> Option<usize> {
             (CLOSE_TAB, &[0x56, 0x57, 0x48, 0x83, 0xec, 0x28]),
             (TITLE, &[0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x81]),
             (NEW_TAB, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57]),
+            (LAST_COMMITTED_URL, &[0x48, 0x63, 0x81, 0xd4, 0x02, 0, 0]),
+            (VISIBLE_URL, &[0x48, 0x8b, 0x81, 0xb0, 0x02, 0, 0]),
         ];
         for (rva, bytes) in signatures {
             if !image.has(*rva, bytes) {
@@ -201,6 +206,71 @@ pub unsafe fn tabs(window: HWND) -> Option<Vec<crate::tab_rows::Tab>> {
         });
     }
     Some(tabs)
+}
+
+/// A tab of the window as a space keeps it, with the identity of its page.
+pub struct OpenTab {
+    /// The page object, which stays the same while the tab moves in the strip.
+    pub id: usize,
+    pub saved: crate::spaces::SavedTab,
+}
+
+/// The text of a `std::string` of bytes inside a `GURL`.
+unsafe fn narrow_string(value: *const u8) -> Option<String> {
+    let last = *value.add(23);
+    let (data, size) = if last & 0x80 != 0 {
+        (*(value as *const *const u8), *(value.add(8) as *const usize))
+    } else {
+        (value, last as usize)
+    };
+    if size > 1 << 16 {
+        return None;
+    }
+    Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, size)).into_owned())
+}
+
+/// The window's tabs with their addresses and titles, in strip order.
+pub unsafe fn open_tabs(window: HWND) -> Option<Vec<OpenTab>> {
+    let base = base()?;
+    let model = tab_model(base, window)?;
+    let titles = tabs(window)?;
+    let mut result = Vec::with_capacity(titles.len());
+    for tab in titles {
+        let contents = function::<TabAt>(base, TAB_AT)(model, tab.index as i32);
+        if contents.is_null() {
+            return None;
+        }
+        let mut url = String::new();
+        for rva in [LAST_COMMITTED_URL, VISIBLE_URL] {
+            let gurl = function::<Pointer>(base, rva)(contents).cast::<u8>();
+            if !gurl.is_null() {
+                url = narrow_string(gurl).unwrap_or_default();
+            }
+            if !url.is_empty() {
+                break;
+            }
+        }
+        result.push(OpenTab {
+            id: contents as usize,
+            saved: crate::spaces::SavedTab {
+                url,
+                title: tab.title,
+                active: tab.active,
+            },
+        });
+    }
+    Some(result)
+}
+
+/// Closes the tab whose page is `id`, wherever it is in the strip now.
+pub unsafe fn close_tab_by_id(window: HWND, id: usize) -> bool {
+    let Some(tabs) = open_tabs(window) else {
+        return false;
+    };
+    match tabs.iter().position(|tab| tab.id == id) {
+        Some(index) => close_tab(window, index),
+        None => false,
+    }
 }
 
 pub unsafe fn activate_tab(window: HWND, index: usize) -> bool {

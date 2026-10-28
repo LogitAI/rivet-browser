@@ -37,6 +37,8 @@ use super::{
     layout_scale_dpi, scale, strip_hit, title_bar_top, toggle_rect, AppbarLayout, StripHit,
     APPBAR_WIDTH, FLOAT_INSET, RESIZER_WIDTH,
 };
+use crate::press::Presses;
+use crate::spaces::{SavedTab, Spaces, MAX_SPACES};
 use crate::tab_rows::{self, Row};
 
 const BROWSER_CLASS: &str = "Chrome_WidgetWin_1";
@@ -49,13 +51,25 @@ const APPBAR_HIT: u32 = HTBORDER;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AppbarHit {
+    /// The Rivet mark, which opens the start page.
+    Mark,
     Pinned(usize),
     Folder([u8; 16]),
     NewTab,
     Tab(usize),
     CloseTab(usize),
+    /// A space dot in the footer.
     Space(usize),
+    /// The chevron beside the mark, which opens the workspace menu.
     WorkspaceMenu,
+    /// The name and badge of the current space, which open the workspace menu as well.
+    SpaceHeader,
+    /// A space in the workspace menu.
+    MenuSpace(usize),
+    /// The footer button that opens the Rivet settings menu.
+    Settings,
+    /// The footer button that adds a space.
+    NewSpace,
     ProfileSettings,
     ManageProfiles,
     /// The button in the toolbar row that hides and shows the appbar.
@@ -64,10 +78,77 @@ pub(crate) enum AppbarHit {
     Resizer,
 }
 
+/// A menu drawn on the appbar's own surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Menu {
+    /// The spaces, under the space header.
+    Workspace,
+    /// The Rivet settings, above the footer.
+    Settings,
+}
+
+/// The entries of the settings menu. An entry without an action is shown dimmed.
+pub(crate) const SETTINGS_ITEMS: [(&str, Option<AppbarHit>); 3] = [
+    ("Profile settings", Some(AppbarHit::ProfileSettings)),
+    ("Manage profiles", Some(AppbarHit::ManageProfiles)),
+    ("Rivet settings", None),
+];
+
+const WORKSPACE_MENU_TOP: f32 = 138.0;
+const WORKSPACE_ROW: f32 = 48.0;
+const SETTINGS_ROW: f32 = 34.0;
+const SETTINGS_PAD: f32 = 4.0;
+const FOOT_HEIGHT: f32 = 38.0;
+
+/// The rectangle of a menu as (x, y, width, height) in the appbar's own coordinates, for an
+/// appbar of `width` by `height` DIPs with `spaces` spaces.
+pub(crate) fn menu_area(menu: Menu, width: f32, height: f32, spaces: usize) -> (f32, f32, f32, f32) {
+    let (x, w) = (10.0, width - 18.0);
+    match menu {
+        Menu::Workspace => (x, WORKSPACE_MENU_TOP, w, spaces as f32 * WORKSPACE_ROW),
+        Menu::Settings => {
+            let h = SETTINGS_ITEMS.len() as f32 * SETTINGS_ROW + 2.0 * SETTINGS_PAD;
+            (x, height - FOOT_HEIGHT - 6.0 - h, w, h)
+        }
+    }
+}
+
+/// Whether a point is inside the menu, and which entry it is on.
+fn menu_hit(
+    menu: Menu,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    spaces: usize,
+) -> (bool, Option<AppbarHit>) {
+    let (ax, ay, aw, ah) = menu_area(menu, width, height, spaces);
+    if x < ax || x >= ax + aw || y < ay || y >= ay + ah {
+        return (false, None);
+    }
+    let hit = match menu {
+        Menu::Workspace => Some(AppbarHit::MenuSpace(((y - ay) / WORKSPACE_ROW) as usize)),
+        Menu::Settings => {
+            let row = ((y - ay - SETTINGS_PAD) / SETTINGS_ROW).floor();
+            if row < 0.0 {
+                None
+            } else {
+                SETTINGS_ITEMS.get(row as usize).and_then(|(_, hit)| *hit)
+            }
+        }
+    };
+    (true, hit)
+}
+
 thread_local! {
     /// Appbars of the browser windows owned by this UI thread.
     static APPBARS: RefCell<HashMap<isize, Appbar>> = RefCell::new(HashMap::new());
-    static MENUS: RefCell<HashMap<isize, isize>> = RefCell::new(HashMap::new());
+    /// The open menu of each window, with the window that had the focus before it opened.
+    static MENUS: RefCell<HashMap<isize, (isize, Menu)>> = RefCell::new(HashMap::new());
+    /// The spaces of each window and the tabs they keep.
+    static SPACES: RefCell<HashMap<isize, Spaces>> = RefCell::new(HashMap::new());
+    /// The controls of each window that are being pressed or springing back.
+    static PRESSES: RefCell<HashMap<isize, Presses<AppbarHit>>> = RefCell::new(HashMap::new());
     static APPBAR_STATE: RefCell<HashMap<isize, (Option<AppbarHit>, Option<AppbarHit>, u32)>> = RefCell::new(HashMap::new());
     static KEYBOARD_HOOK: RefCell<isize> = const { RefCell::new(0) };
     /// The width and the hidden or peeking state of each window's appbar. It lives as long as the
@@ -82,6 +163,18 @@ thread_local! {
 /// `WM_MOUSELEAVE`, which `windows-sys` does not export.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const PEEK_TIMER: usize = 0x5249_5650;
+/// One frame of a control's press or release, at about 60 Hz.
+const PRESS_TIMER: usize = 0x5249_5652;
+
+/// Milliseconds on a clock that all press feedback of this process shares.
+fn now_ms() -> f32 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f32()
+        * 1000.0
+}
 /// One frame of the slide, of about 220 ms from out to in.
 const SLIDE_STEP: f32 = 16.0 / 220.0;
 
@@ -148,19 +241,86 @@ unsafe fn appbar_height(window: HWND) -> f32 {
     }
 }
 
+fn with_spaces<R>(window: HWND, edit: impl FnOnce(&mut Spaces) -> R) -> R {
+    SPACES.with(|all| edit(all.borrow_mut().entry(window as isize).or_insert_with(Spaces::new)))
+}
+
+/// The address of the Rivet start page for the space called `space`.
+unsafe fn start_url(space: &str) -> Option<String> {
+    runtime_directory().map(|directory| rivet_core::start_page_url(&directory, space))
+}
+
 unsafe fn start_page(window: HWND) {
-    let tint = APPBAR_STATE
-        .with(|states| states.borrow().get(&(window as isize)).map(|state| state.2))
-        .unwrap_or(0xd08a52);
-    let space = match tint {
-        0x5b8bab => "Personal",
-        0xc0577f => "Research",
-        _ => "Work",
-    };
-    if let Some(directory) = runtime_directory() {
-        let url = rivet_core::start_page_url(&directory, space);
+    let space = with_spaces(window, |spaces| spaces.list()[spaces.current()].name.clone());
+    if let Some(url) = start_url(&space) {
         if crate::chrome_tabs::new_tab(window) {
             crate::chrome_navigation::open(window, &url);
+        }
+    }
+}
+
+/// Shows the tabs of another space. The current space keeps its tabs, the window opens the ones
+/// the target kept, or a start page when it kept none, and only then closes the old ones, so the
+/// window never has zero tabs.
+unsafe fn switch_space(window: HWND, index: usize) {
+    let Some(open) = crate::chrome_tabs::open_tabs(window) else {
+        return;
+    };
+    let Some(name) = with_spaces(window, |spaces| {
+        spaces
+            .list()
+            .get(index)
+            .filter(|_| index != spaces.current())
+            .map(|space| space.name.clone())
+    }) else {
+        return;
+    };
+    let Some(start) = start_url(&name) else {
+        return;
+    };
+    let old: Vec<usize> = open.iter().map(|tab| tab.id).collect();
+    let saved: Vec<SavedTab> = open.into_iter().map(|tab| tab.saved).collect();
+    let Some(restore) = with_spaces(window, |spaces| spaces.switch_to(index, saved, &start)) else {
+        return;
+    };
+    crate::vertical_tabs::trace(&format!(
+        "space: to {name}, restoring {:?}",
+        restore.iter().map(|tab| tab.url.as_str()).collect::<Vec<_>>()
+    ));
+    let tint = with_spaces(window, |spaces| spaces.list()[spaces.current()].tint);
+    APPBAR_STATE.with(|states| {
+        if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+            entry.2 = tint;
+        }
+    });
+    for tab in &restore {
+        if crate::chrome_tabs::new_tab(window) && !tab.url.is_empty() {
+            crate::chrome_navigation::open(window, &tab.url);
+        }
+    }
+    let shown: Vec<usize> = crate::chrome_tabs::open_tabs(window)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|tab| tab.id)
+        .filter(|id| !old.contains(id))
+        .collect();
+    for id in old {
+        crate::chrome_tabs::close_tab_by_id(window, id);
+    }
+    crate::vertical_tabs::trace(&format!(
+        "space: now showing {:?}",
+        crate::chrome_tabs::open_tabs(window)
+            .unwrap_or_default()
+            .iter()
+            .map(|tab| (tab.saved.url.clone(), tab.saved.active))
+            .collect::<Vec<_>>()
+    ));
+    let wanted = restore.iter().position(|tab| tab.active).unwrap_or(0);
+    if let Some(id) = shown.get(wanted) {
+        let position = crate::chrome_tabs::open_tabs(window)
+            .and_then(|tabs| tabs.iter().position(|tab| tab.id == *id));
+        if let Some(position) = position {
+            crate::chrome_tabs::activate_tab(window, position);
         }
     }
 }
@@ -218,27 +378,53 @@ unsafe fn install_keyboard_hook() {
     });
 }
 
-fn workspace_menu_hit(x: f32, y: f32, width: f32) -> Option<AppbarHit> {
-    if x < 10.0 || x >= width - 8.0 {
-        return None;
-    }
-    match y {
-        y if (138.0..186.0).contains(&y) => Some(AppbarHit::Space(0)),
-        y if (186.0..234.0).contains(&y) => Some(AppbarHit::Space(1)),
-        y if (234.0..282.0).contains(&y) => Some(AppbarHit::Space(2)),
-        y if (282.0..316.0).contains(&y) => Some(AppbarHit::ProfileSettings),
-        y if (316.0..350.0).contains(&y) => Some(AppbarHit::ManageProfiles),
-        _ => None,
-    }
+fn menu_open(window: HWND) -> bool {
+    open_menu_kind(window).is_some()
 }
 
-fn menu_open(window: HWND) -> bool {
-    MENUS.with(|menus| menus.borrow().contains_key(&(window as isize)))
+fn open_menu_kind(window: HWND) -> Option<Menu> {
+    MENUS.with(|menus| menus.borrow().get(&(window as isize)).map(|menu| menu.1))
+}
+
+/// Opens a menu. It takes the keyboard and the pointer until it closes.
+unsafe fn open_menu(window: HWND, menu: Menu) {
+    let previous = GetFocus();
+    MENUS.with(|menus| {
+        menus
+            .borrow_mut()
+            .insert(window as isize, (previous as isize, menu))
+    });
+    SetFocus(window);
+    SetCapture(window);
+}
+
+/// Whether a client point is inside the open menu, and the entry it is on.
+unsafe fn menu_pointer(window: HWND, lparam: LPARAM) -> (bool, Option<AppbarHit>) {
+    let Some(menu) = open_menu_kind(window) else {
+        return (false, None);
+    };
+    let x = (lparam & 0xffff) as i16 as i32;
+    let y = ((lparam >> 16) & 0xffff) as i16 as i32;
+    let (lx, ly) = local_dip(window, x, y);
+    menu_hit(
+        menu,
+        lx,
+        ly,
+        layout_of(window).side as f32,
+        appbar_height(window),
+        with_spaces(window, |spaces| spaces.list().len()),
+    )
 }
 
 unsafe fn close_menu(window: HWND) {
     let previous = MENUS.with(|menus| menus.borrow_mut().remove(&(window as isize)));
-    if let Some(previous) = previous {
+    if let Some((previous, _)) = previous {
+        // The pointer was on the menu, so nothing under it is known until it moves again.
+        APPBAR_STATE.with(|states| {
+            if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+                entry.0 = None;
+            }
+        });
         ReleaseCapture();
         if previous != 0 {
             SetFocus(previous as HWND);
@@ -246,16 +432,27 @@ unsafe fn close_menu(window: HWND) {
     }
 }
 
-fn appbar_hit(x: f32, y: f32, width: f32, height: f32, rows: &[Row]) -> Option<AppbarHit> {
+fn appbar_hit(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    rows: &[Row],
+    spaces: usize,
+) -> Option<AppbarHit> {
     let left = 10.0;
     let inner = width - 18.0;
     if !(x >= left && x < left + inner) {
         return None;
     }
-    if (106.0..136.0).contains(&y)
-        || (width - 36.0..width - 8.0).contains(&x) && (12.0..40.0).contains(&y)
-    {
+    if (left + 1.0..left + 29.0).contains(&x) && (12.0..40.0).contains(&y) {
+        return Some(AppbarHit::Mark);
+    }
+    if (width - 36.0..width - 8.0).contains(&x) && (12.0..40.0).contains(&y) {
         return Some(AppbarHit::WorkspaceMenu);
+    }
+    if (106.0..136.0).contains(&y) {
+        return Some(AppbarHit::SpaceHeader);
     }
     if (52.0..94.0).contains(&y) {
         let tile = (inner - 18.0) / 4.0;
@@ -278,13 +475,23 @@ fn appbar_hit(x: f32, y: f32, width: f32, height: f32, rows: &[Row]) -> Option<A
         }
         top += 34.0;
     }
-    let foot = height - 38.0;
-    let dots = 3.0 * 32.0 - 4.0;
-    let start = left + 28.0 + (inner - 56.0 - dots) / 2.0;
+    let foot = height - FOOT_HEIGHT;
     if (foot..foot + 28.0).contains(&y) {
-        let index = ((x - start) / 32.0).floor() as usize;
-        if index < 3 && x >= start + index as f32 * 32.0 && x < start + index as f32 * 32.0 + 28.0 {
-            return Some(AppbarHit::Space(index));
+        if (left..left + 28.0).contains(&x) {
+            return Some(AppbarHit::Settings);
+        }
+        if (width - 36.0..width - 8.0).contains(&x) {
+            // A full footer has no room for another space, and the button is dimmed.
+            return (spaces < MAX_SPACES).then_some(AppbarHit::NewSpace);
+        }
+        let dots = spaces as f32 * 32.0 - 4.0;
+        let start = left + 28.0 + (inner - 56.0 - dots) / 2.0;
+        let index = ((x - start) / 32.0).floor();
+        if index >= 0.0 && (index as usize) < spaces {
+            let index = index as usize;
+            if x < start + index as f32 * 32.0 + 28.0 {
+                return Some(AppbarHit::Space(index));
+            }
         }
     }
     None
@@ -301,8 +508,16 @@ unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
     let (x, y) = local_dip(window, point.x, point.y);
-    if menu_open(window) {
-        return workspace_menu_hit(x, y, layout.side as f32);
+    if let Some(menu) = open_menu_kind(window) {
+        return menu_hit(
+            menu,
+            x,
+            y,
+            layout.side as f32,
+            appbar_height(window),
+            with_spaces(window, |spaces| spaces.list().len()),
+        )
+        .1;
     }
     if layout.collapsed {
         if layout.peek && in_floating(layout, x, y, appbar_height(window)) {
@@ -312,6 +527,7 @@ unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
                 layout.side as f32,
                 appbar_height(window),
                 &appbar_model(window),
+                with_spaces(window, |spaces| spaces.list().len()),
             );
         }
         return toggle_at(window, point);
@@ -328,6 +544,7 @@ unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
         layout.side as f32,
         appbar_height(window),
         &appbar_model(window),
+        with_spaces(window, |spaces| spaces.list().len()),
     )
 }
 
@@ -355,18 +572,18 @@ unsafe fn floating_at(window: HWND, point: POINT) -> bool {
 
 unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
     match hit {
-        AppbarHit::WorkspaceMenu => {
-            if menu_open(window) {
+        AppbarHit::Mark => start_page(window),
+        AppbarHit::WorkspaceMenu | AppbarHit::SpaceHeader | AppbarHit::Settings => {
+            let menu = if hit == AppbarHit::Settings {
+                Menu::Settings
+            } else {
+                Menu::Workspace
+            };
+            if open_menu_kind(window) == Some(menu) {
                 close_menu(window);
             } else {
-                let previous = GetFocus();
-                MENUS.with(|menus| {
-                    menus
-                        .borrow_mut()
-                        .insert(window as isize, previous as isize)
-                });
-                SetFocus(window);
-                SetCapture(window);
+                close_menu(window);
+                open_menu(window, menu);
             }
         }
         AppbarHit::ProfileSettings | AppbarHit::ManageProfiles => {
@@ -400,14 +617,14 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
                 crate::chrome_navigation::open(window, URLS[index]);
             }
         }
-        AppbarHit::Space(index) => {
+        AppbarHit::Space(index) | AppbarHit::MenuSpace(index) => {
             close_menu(window);
-            let tint = [0xd08a52, 0x5b8bab, 0xc0577f][index];
-            APPBAR_STATE.with(|states| {
-                let mut all = states.borrow_mut();
-                let entry = all.entry(window as isize).or_insert((None, None, 0xd08a52));
-                entry.2 = tint;
-            });
+            switch_space(window, index);
+        }
+        AppbarHit::NewSpace => {
+            if let Some(index) = with_spaces(window, |spaces| spaces.add()) {
+                switch_space(window, index);
+            }
         }
         AppbarHit::Folder(id) => {
             crate::chrome_tabs::toggle_group(window, &id);
@@ -415,6 +632,52 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
         AppbarHit::Toggle => toggle_appbar(window),
         AppbarHit::Resizer => {}
     }
+}
+
+/// A control goes down: it starts to sink, and keeps being drawn until it has sprung back.
+unsafe fn press_down(window: HWND, hit: Option<AppbarHit>) {
+    let Some(hit) = hit.filter(|hit| *hit != AppbarHit::Resizer) else {
+        return;
+    };
+    PRESSES.with(|all| {
+        all.borrow_mut()
+            .entry(window as isize)
+            .or_default()
+            .press(hit, now_ms())
+    });
+    SetTimer(window, PRESS_TIMER, 16, None);
+}
+
+/// The pointer comes up or leaves the control that was down.
+unsafe fn press_up(window: HWND) {
+    PRESSES.with(|all| {
+        if let Some(presses) = all.borrow_mut().get_mut(&(window as isize)) {
+            presses.release_all(now_ms());
+        }
+    });
+}
+
+/// Advances the press feedback by one frame, and stops the timer when everything has settled.
+unsafe fn press_tick(window: HWND) {
+    let moving = PRESSES.with(|all| {
+        all.borrow_mut()
+            .get_mut(&(window as isize))
+            .is_some_and(|presses| presses.settle(now_ms()))
+    });
+    if !moving {
+        KillTimer(window, PRESS_TIMER);
+    }
+    update_appbar(window);
+}
+
+/// The scale and brightness amounts of the window's controls in motion.
+fn press_effects(window: HWND) -> Vec<crate::appbar::Effect> {
+    PRESSES.with(|all| {
+        all.borrow()
+            .get(&(window as isize))
+            .map(|presses| presses.amounts(now_ms()))
+            .unwrap_or_default()
+    })
 }
 
 unsafe fn toggle_message() -> u32 {
@@ -856,15 +1119,22 @@ unsafe fn update_appbar(window: HWND) {
     let top = top_border(window);
     APPBARS.with(|appbars| {
         if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
-            let (tabs, _, tint, hover, pressed) = APPBAR_STATE.with(|states| {
-                let state = states
+            let hover = APPBAR_STATE.with(|states| {
+                states
                     .borrow()
                     .get(&(window as isize))
-                    .cloned()
-                    .unwrap_or((None, None, 0xd08a52));
-                (appbar_model(window), 0usize, state.2, state.0, state.1)
+                    .and_then(|state| state.0)
             });
-            appbar.set_state(tabs, tint, hover, pressed, menu_open(window));
+            let (spaces, current) =
+                with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()));
+            appbar.set_state(
+                appbar_model(window),
+                &spaces,
+                current,
+                hover,
+                press_effects(window),
+                open_menu_kind(window),
+            );
             appbar.set_layout(!layout.collapsed, dragging(window));
             let height = client.bottom - top;
             if let Err(error) = appbar.update(visible, 0, top, width, height, dpi) {
@@ -1073,12 +1343,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         WM_LBUTTONDOWN if attached(window) && menu_open(window) => {
-            let x = (lparam & 0xffff) as i16 as i32;
-            let y = ((lparam >> 16) & 0xffff) as i16 as i32;
-            let (lx, ly) = local_dip(window, x, y);
-            let hit = workspace_menu_hit(lx, ly, layout_of(window).side as f32);
-            let inside = (10.0..layout_of(window).side as f32 - 8.0).contains(&lx)
-                && (138.0..384.0).contains(&ly);
+            let (inside, hit) = menu_pointer(window, lparam);
             if !inside {
                 close_menu(window);
             } else {
@@ -1087,15 +1352,13 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         entry.1 = hit;
                     }
                 });
+                press_down(window, hit);
             }
             update_appbar(window);
             0
         }
         WM_LBUTTONUP if attached(window) && menu_open(window) => {
-            let x = (lparam & 0xffff) as i16 as i32;
-            let y = ((lparam >> 16) & 0xffff) as i16 as i32;
-            let (lx, ly) = local_dip(window, x, y);
-            let hit = workspace_menu_hit(lx, ly, layout_of(window).side as f32);
+            let (_, hit) = menu_pointer(window, lparam);
             let action = APPBAR_STATE.with(|states| {
                 let mut states = states.borrow_mut();
                 let entry = states.get_mut(&(window as isize)).unwrap();
@@ -1103,6 +1366,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 entry.1 = None;
                 action
             });
+            press_up(window);
             if let Some(hit) = action {
                 appbar_action(window, hit);
             }
@@ -1110,15 +1374,18 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         WM_MOUSEMOVE if attached(window) && menu_open(window) => {
-            let x = (lparam & 0xffff) as i16 as i32;
-            let y = ((lparam >> 16) & 0xffff) as i16 as i32;
-            let (lx, ly) = local_dip(window, x, y);
-            let hit = workspace_menu_hit(lx, ly, layout_of(window).side as f32);
-            APPBAR_STATE.with(|states| {
-                if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
-                    entry.0 = hit;
-                }
+            let (_, hit) = menu_pointer(window, lparam);
+            let left_pressed = APPBAR_STATE.with(|states| {
+                let mut states = states.borrow_mut();
+                let Some(entry) = states.get_mut(&(window as isize)) else {
+                    return false;
+                };
+                entry.0 = hit;
+                entry.1.is_some() && entry.1 != hit
             });
+            if left_pressed {
+                press_up(window);
+            }
             update_appbar(window);
             0
         }
@@ -1131,16 +1398,22 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             };
             TrackMouseEvent(&mut tracking);
             let hit = appbar_point(window, lparam);
-            APPBAR_STATE.with(|states| {
+            let left_pressed = APPBAR_STATE.with(|states| {
                 let mut all = states.borrow_mut();
                 let entry = all.entry(window as isize).or_insert((None, None, 0xd08a52));
                 entry.0 = hit;
+                entry.1.is_some() && entry.1 != hit && !dragging(window)
             });
+            // The pointer left the control it went down on, which lets the control spring back.
+            if left_pressed {
+                press_up(window);
+            }
             update_appbar(window);
             0
         }
         WM_NCMOUSELEAVE if attached(window) => {
             if !dragging(window) {
+                press_up(window);
                 APPBAR_STATE.with(|states| {
                     if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
                         entry.0 = None;
@@ -1179,6 +1452,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 DRAGGING.with(|set| set.borrow_mut().insert(window as isize));
                 SetCapture(window);
             }
+            press_down(window, hit);
             update_appbar(window);
             0
         }
@@ -1193,6 +1467,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 entry.1 = None;
                 action
             });
+            press_up(window);
             if let Some(hit) = action {
                 appbar_action(window, hit);
             }
@@ -1251,6 +1526,9 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             LAYOUTS.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
             DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize)));
+            KillTimer(window, PRESS_TIMER);
+            SPACES.with(|all| all.borrow_mut().remove(&(window as isize)));
+            PRESSES.with(|all| all.borrow_mut().remove(&(window as isize)));
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::vertical_tabs::forget(window);
@@ -1268,6 +1546,12 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             if wparam == PEEK_TIMER && attached(window) =>
         {
             peek_tick(window);
+            0
+        }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
+            if wparam == PRESS_TIMER && attached(window) =>
+        {
+            press_tick(window);
             0
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
@@ -1295,46 +1579,60 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{appbar_hit, AppbarHit};
+    use super::{appbar_hit, menu_hit, AppbarHit, Menu};
 
     #[test]
     fn fr3_workspace_menu_opens_from_header_and_chevron() {
         assert_eq!(
-            appbar_hit(20.0, 120.0, 268.0, 700.0, &[]),
-            Some(AppbarHit::WorkspaceMenu)
+            appbar_hit(20.0, 120.0, 268.0, 700.0, &[], 3),
+            Some(AppbarHit::SpaceHeader)
         );
         assert_eq!(
-            appbar_hit(245.0, 25.0, 268.0, 700.0, &[]),
+            appbar_hit(245.0, 25.0, 268.0, 700.0, &[], 3),
             Some(AppbarHit::WorkspaceMenu)
         );
-        assert_eq!(appbar_hit(100.0, 25.0, 268.0, 700.0, &[]), None);
+        assert_eq!(appbar_hit(100.0, 25.0, 268.0, 700.0, &[], 3), None);
     }
 
     #[test]
-    fn fr3_workspace_menu_hit_testing_respects_rows_and_disabled_entry() {
-        use super::workspace_menu_hit;
+    fn fr3_mark_opens_the_start_page() {
         assert_eq!(
-            workspace_menu_hit(20.0, 145.0, 268.0),
-            Some(AppbarHit::Space(0))
+            appbar_hit(20.0, 25.0, 268.0, 700.0, &[], 3),
+            Some(AppbarHit::Mark)
         );
+        assert_eq!(appbar_hit(41.0, 25.0, 268.0, 700.0, &[], 3), None);
+    }
+
+    #[test]
+    fn fr3_workspace_menu_lists_every_space_and_nothing_else() {
+        let hit = |y| menu_hit(Menu::Workspace, 20.0, y, 268.0, 700.0, 3);
+        assert_eq!(hit(145.0), (true, Some(AppbarHit::MenuSpace(0))));
+        assert_eq!(hit(193.0), (true, Some(AppbarHit::MenuSpace(1))));
+        assert_eq!(hit(241.0), (true, Some(AppbarHit::MenuSpace(2))));
+        assert_eq!(hit(290.0), (false, None));
         assert_eq!(
-            workspace_menu_hit(20.0, 193.0, 268.0),
-            Some(AppbarHit::Space(1))
+            menu_hit(Menu::Workspace, 5.0, 145.0, 268.0, 700.0, 3),
+            (false, None)
         );
+        // A fourth space makes the menu one row longer.
         assert_eq!(
-            workspace_menu_hit(20.0, 241.0, 268.0),
-            Some(AppbarHit::Space(2))
+            menu_hit(Menu::Workspace, 20.0, 290.0, 268.0, 700.0, 4),
+            (true, Some(AppbarHit::MenuSpace(3)))
         );
+    }
+
+    #[test]
+    fn fr3_settings_menu_rises_from_the_footer_with_a_disabled_last_entry() {
+        let (_, top, _, height) = super::menu_area(Menu::Settings, 268.0, 700.0, 3);
+        assert!(top + height <= 700.0 - 38.0, "the menu stays above the footer");
+        let hit = |row: f32| menu_hit(Menu::Settings, 20.0, top + 4.0 + row * 34.0 + 5.0, 268.0, 700.0, 3);
+        assert_eq!(hit(0.0), (true, Some(AppbarHit::ProfileSettings)));
+        assert_eq!(hit(1.0), (true, Some(AppbarHit::ManageProfiles)));
+        assert_eq!(hit(2.0), (true, None), "Rivet settings has no action yet");
         assert_eq!(
-            workspace_menu_hit(20.0, 286.0, 268.0),
-            Some(AppbarHit::ProfileSettings)
+            menu_hit(Menu::Settings, 20.0, top - 1.0, 268.0, 700.0, 3),
+            (false, None)
         );
-        assert_eq!(
-            workspace_menu_hit(20.0, 320.0, 268.0),
-            Some(AppbarHit::ManageProfiles)
-        );
-        assert_eq!(workspace_menu_hit(20.0, 354.0, 268.0), None);
-        assert_eq!(workspace_menu_hit(5.0, 145.0, 268.0), None);
     }
 
     fn test_rows() -> Vec<crate::tab_rows::Row> {
@@ -1370,19 +1668,19 @@ mod tests {
         }];
         let rows = crate::tab_rows::build_rows(&tabs);
         assert_eq!(
-            appbar_hit(40.0, 150.0, 220.0, 700.0, &rows),
+            appbar_hit(40.0, 150.0, 220.0, 700.0, &rows, 3),
             Some(AppbarHit::Folder(group.id))
         );
         assert_eq!(
-            appbar_hit(40.0, 180.0, 220.0, 700.0, &rows),
+            appbar_hit(40.0, 180.0, 220.0, 700.0, &rows, 3),
             Some(AppbarHit::Tab(4))
         );
         assert_eq!(
-            appbar_hit(205.0, 180.0, 220.0, 700.0, &rows),
+            appbar_hit(205.0, 180.0, 220.0, 700.0, &rows, 3),
             Some(AppbarHit::CloseTab(4))
         );
         assert_eq!(
-            appbar_hit(40.0, 230.0, 220.0, 700.0, &rows),
+            appbar_hit(40.0, 230.0, 220.0, 700.0, &rows, 3),
             Some(AppbarHit::NewTab)
         );
     }
@@ -1392,7 +1690,7 @@ mod tests {
         for index in 0..4 {
             let x = 10.0 + index as f32 * (tile + 6.0) + tile / 2.0;
             assert_eq!(
-                appbar_hit(x, 70.0, 220.0, 700.0, &[]),
+                appbar_hit(x, 70.0, 220.0, 700.0, &[], 3),
                 Some(AppbarHit::Pinned(index))
             );
         }
@@ -1401,25 +1699,54 @@ mod tests {
     #[test]
     fn fr3_tab_rows_split_activation_and_close_hit_areas() {
         assert_eq!(
-            appbar_hit(40.0, 207.0, 220.0, 700.0, &test_rows()),
+            appbar_hit(40.0, 207.0, 220.0, 700.0, &test_rows(), 3),
             Some(AppbarHit::Tab(1))
         );
         assert_eq!(
-            appbar_hit(205.0, 207.0, 220.0, 700.0, &test_rows()),
+            appbar_hit(205.0, 207.0, 220.0, 700.0, &test_rows(), 3),
             Some(AppbarHit::CloseTab(1))
         );
-        assert_eq!(appbar_hit(40.0, 300.0, 220.0, 700.0, &test_rows()), None);
+        assert_eq!(
+            appbar_hit(40.0, 300.0, 220.0, 700.0, &test_rows(), 3),
+            None
+        );
     }
 
     #[test]
     fn fr3_new_tab_and_space_targets_are_distinct() {
         assert_eq!(
-            appbar_hit(40.0, 145.0, 220.0, 700.0, &test_rows()),
+            appbar_hit(40.0, 145.0, 220.0, 700.0, &test_rows(), 3),
             Some(AppbarHit::NewTab)
         );
         assert_eq!(
-            appbar_hit(90.0, 670.0, 220.0, 700.0, &test_rows()),
+            appbar_hit(90.0, 670.0, 220.0, 700.0, &test_rows(), 3),
             Some(AppbarHit::Space(0))
         );
+    }
+
+    #[test]
+    fn fr3_footer_has_settings_the_spaces_and_a_new_space_button() {
+        let foot = |x| appbar_hit(x, 675.0, 268.0, 700.0, &[], 3);
+        assert_eq!(foot(20.0), Some(AppbarHit::Settings));
+        assert_eq!(foot(240.0), Some(AppbarHit::NewSpace));
+        // Three dots are centred between the two buttons.
+        let start = 10.0 + 28.0 + (250.0 - 56.0 - 92.0) / 2.0;
+        for index in 0..3 {
+            assert_eq!(
+                foot(start + index as f32 * 32.0 + 14.0),
+                Some(AppbarHit::Space(index))
+            );
+        }
+        assert_eq!(foot(start + 30.0), None, "the gap between two dots");
+    }
+
+    #[test]
+    fn fr3_footer_follows_the_number_of_spaces_and_dims_new_space_when_full() {
+        let foot = |x, spaces| appbar_hit(x, 675.0, 268.0, 700.0, &[], spaces);
+        let start = 10.0 + 28.0 + (250.0 - 56.0 - (6.0 * 32.0 - 4.0)) / 2.0;
+        assert_eq!(foot(start + 5.0 * 32.0 + 14.0, 6), Some(AppbarHit::Space(5)));
+        assert_eq!(foot(start + 5.0 * 32.0 + 14.0, 3), None);
+        assert_eq!(foot(240.0, 6), None, "a full footer has no room for a space");
+        assert_eq!(foot(240.0, 5), Some(AppbarHit::NewSpace));
     }
 }
