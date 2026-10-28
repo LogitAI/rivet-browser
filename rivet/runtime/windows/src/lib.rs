@@ -208,6 +208,8 @@ mod chrome_side_panel;
 #[cfg(windows)]
 mod chrome_split;
 #[cfg(windows)]
+mod side_rail;
+#[cfg(windows)]
 mod chrome_tabs;
 #[cfg(windows)]
 mod chrome_toolbar;

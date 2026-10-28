@@ -161,6 +161,7 @@ pub struct Appbar {
     fonts: IDWriteFontCollection1,
     // The target must outlive the visual tree it shows.
     _target: IDCompositionTarget,
+    root: IDCompositionVisual2,
     visual: IDCompositionVisual2,
     painted: Option<Painted>,
     panel: IDCompositionVisual2,
@@ -284,6 +285,7 @@ impl Appbar {
             dwrite,
             fonts,
             _target: target,
+            root,
             visual,
             painted: None,
             panel,
@@ -301,6 +303,14 @@ impl Appbar {
             peek,
             peek_painted: None,
         })
+    }
+
+    /// The composition device, the root of the visual tree and the text factory, for other parts
+    /// of the window's surface such as the Sidebar's rail.
+    pub(crate) fn composition(
+        &self,
+    ) -> (IDCompositionDesktopDevice, IDCompositionVisual2, IDWriteFactory5) {
+        (self.device.clone(), self.root.clone(), self.dwrite.clone())
     }
 
     /// Whether the column shows the whole appbar, and whether its resizer is being dragged.

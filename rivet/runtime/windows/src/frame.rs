@@ -1104,7 +1104,7 @@ unsafe fn create_appbar(window: HWND) {
 
 /// Places the appbar visual over the strip the browser's layout left free and redraws it when its
 /// size or DPI changed.
-unsafe fn update_appbar(window: HWND) {
+pub(crate) unsafe fn update_appbar(window: HWND) {
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
     let dpi = layout_dpi(window);
@@ -1168,6 +1168,7 @@ unsafe fn update_appbar(window: HWND) {
                     "rivet: could not draw the floating appbar: {error}"
                 ));
             }
+            crate::side_rail::update(window, appbar, visible, dpi);
         }
     });
 }
@@ -1540,6 +1541,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             crate::vertical_tabs::forget(window);
             chrome_layout::forget_view(window);
             crate::chrome_toolbar::forget(window);
+            crate::side_rail::forget(window);
             LAYOUT_DPI.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             let key = wide(ORIGINAL_PROC);
             let original = GetPropW(window, key.as_ptr());

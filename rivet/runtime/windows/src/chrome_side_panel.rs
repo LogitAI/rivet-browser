@@ -130,6 +130,45 @@ fn prologue_is(address: usize, expected: &[u8]) -> bool {
     readable(address & !7, 8) && unsafe { std::slice::from_raw_parts(address as *const u8, expected.len()) } == expected
 }
 
+/// `SidePanelCoordinator::Toggle(this, key*, trigger)` opens an entry or closes it when it is
+/// showing, and `SidePanelUIBase::IsSidePanelEntryShowing(this, key*)` tells which.
+const TOGGLE: usize = 0x0997_F450;
+const TOGGLE_PROLOGUE: [u8; 11] = [0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x60];
+const ENTRY_SHOWING: usize = 0x0369_1A10;
+const ENTRY_SHOWING_PROLOGUE: [u8; 8] = [0x48, 0x8b, 0x49, 0x10, 0x80, 0x79, 0x30, 0x01];
+
+/// A `SidePanelEntryKey` for a built-in entry: the id, and no extension id.
+fn entry_key(entry: u32) -> [u8; 0x28] {
+    let mut key = [0u8; 0x28];
+    key[..4].copy_from_slice(&entry.to_le_bytes());
+    key
+}
+
+/// Whether Chrome's side panel shows this entry in the window.
+pub unsafe fn entry_showing(window: HWND, entry: u32) -> bool {
+    let base = chrome_base();
+    let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else { return false };
+    if !prologue_is(base + ENTRY_SHOWING, &ENTRY_SHOWING_PROLOGUE) {
+        return false;
+    }
+    let showing: unsafe extern "system" fn(*mut c_void, *const u8) -> bool =
+        std::mem::transmute(base + ENTRY_SHOWING);
+    showing(objects.coordinator as *mut c_void, entry_key(entry).as_ptr())
+}
+
+/// Opens an entry, or closes it when it is the one showing.
+pub unsafe fn toggle_entry(window: HWND, entry: u32) -> bool {
+    let base = chrome_base();
+    let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else { return false };
+    if !prologue_is(base + TOGGLE, &TOGGLE_PROLOGUE) {
+        return false;
+    }
+    let toggle: unsafe extern "system" fn(*mut c_void, *const u8, u32) =
+        std::mem::transmute(base + TOGGLE);
+    toggle(objects.coordinator as *mut c_void, entry_key(entry).as_ptr(), 0);
+    true
+}
+
 /// Opens one of Chrome's side panel entries by its id through the coordinator.
 pub unsafe fn open_entry(window: HWND, entry: u32) -> bool {
     let (Some(objects), base) = (objects(window), chrome_base()) else { return false };
@@ -167,6 +206,49 @@ thread_local! {
     static UNFOLDED: RefCell<HashSet<isize>> = RefCell::new(HashSet::new());
     /// The host view each window's browser layout works on, so Rivet can ask for a layout.
     static HOST_VIEWS: RefCell<HashMap<isize, usize>> = RefCell::new(HashMap::new());
+    /// The vertical extent below the top row of each window, as (top, height) in the host view.
+    static AREAS: RefCell<HashMap<isize, (i32, i32)>> = RefCell::new(HashMap::new());
+}
+
+/// Whether the Sidebar of a window is unfolded.
+pub fn is_unfolded(window: HWND) -> bool {
+    UNFOLDED.with(|set| set.borrow().contains(&(window as isize)))
+}
+
+/// Where a window's page area is, in device-independent pixels of the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageGeometry {
+    pub x: i32,
+    pub right: i32,
+    pub top: i32,
+    pub bottom: i32,
+}
+
+/// The page area of a window, below its top row, from the browser view's bounds and the extent
+/// the layout recorded.
+pub unsafe fn page_geometry(window: HWND) -> Option<PageGeometry> {
+    let host = HOST_VIEWS.with(|views| views.borrow().get(&(window as isize)).copied())?;
+    let (top, height) = AREAS.with(|areas| areas.borrow().get(&(window as isize)).copied())?;
+    // Views keep their bounds at +0x1c8 and their parent at +0x198. The page area lies in the
+    // browser view, so its origin is the sum of the bounds of the view and its ancestors.
+    let (mut x, mut y, mut width) = (0, 0, 0);
+    let mut view = host;
+    for depth in 0..16 {
+        if !readable(view + 0x1c8, 16) {
+            return None;
+        }
+        let bounds = *((view + 0x1c8) as *const [i32; 4]);
+        x += bounds[0];
+        y += bounds[1];
+        if depth == 0 {
+            width = bounds[2];
+        }
+        view = *((view + 0x198) as *const usize);
+        if view == 0 || !readable(view, 8) {
+            break;
+        }
+    }
+    Some(PageGeometry { x, right: x + width, top: y + top, bottom: y + top + height })
 }
 
 /// The width the rail takes from the right of a window's page area.
@@ -186,6 +268,8 @@ const PROPOSED: usize = 0x0104_8AB0;
 /// The layout object keeps the host view at +0x38, the contents container at +0xb8, the side
 /// panel at +0xc0 and the content shown while the side panel animates at +0xc8.
 const HOST_VIEW: usize = 0x38;
+/// The view behind the whole area below the top row, which the rail shares the height of.
+const PAGE_AREA: usize = 0x50;
 const CONTENTS_CONTAINER: usize = 0xb8;
 /// The view that draws the outline around the contents, which has the contents' bounds.
 const CONTENTS_OUTLINE: usize = 0x58;
@@ -266,9 +350,13 @@ unsafe extern "system" fn proposed_layout(
         trace("layout dump");
         dump_layout(this, *(out.cast::<u8>().add(0x20) as *const usize), 0);
     }
+    let field = |offset: usize| *(this.cast::<u8>().add(offset) as *const usize);
+    if let Some(area) = bounds_of(out, field(PAGE_AREA)) {
+        let area = *area;
+        AREAS.with(|areas| areas.borrow_mut().insert(window as isize, (area[1], area[3])));
+    }
     let rail = rail_of(window);
     if rail > 0 {
-        let field = |offset: usize| *(this.cast::<u8>().add(offset) as *const usize);
         if let Some(contents) = bounds_of(out, field(CONTENTS_CONTAINER)) {
             let side_panel = bounds_of(out, field(SIDE_PANEL));
             let animation = bounds_of(out, field(SIDE_PANEL_ANIMATION));
