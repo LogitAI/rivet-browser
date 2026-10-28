@@ -1010,6 +1010,16 @@ fn remember_view(window: HWND, view: *mut c_void) {
     }
 }
 
+/// The frame view a window last laid out, if any.
+pub fn frame_view(window: HWND) -> Option<usize> {
+    FRAME_VIEWS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|entry| entry.0 == window as isize)
+        .map(|entry| entry.1)
+}
+
 /// Forgets a window that is going away, so its view is never used again.
 pub fn forget_view(window: HWND) {
     FRAME_VIEWS

@@ -1563,6 +1563,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
             if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
+            crate::chrome_side_panel::tick(window, runtime_directory().as_deref());
             update_appbar(window);
             0
         }
