@@ -162,14 +162,11 @@ unsafe fn attach_message() -> u32 {
     RegisterWindowMessageW(wide(ATTACH_MESSAGE).as_ptr())
 }
 
-static PANEL_EXPERIMENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// The page colour of the shell study, so the native caption buttons sit on the top row.
+/// The frame surrounding the browser's page panel.
 fn nav_frame_color(window: HWND) -> Option<u32> {
-    attached(window).then_some(0xFFFB_FAF7)
+    attached(window).then_some(0xFFECE8E2)
 }
 
-const NAV_CAPTION_WIDTH: i32 = 138;
 const TAB_REFRESH_TIMER: usize = 0x5249_5645;
 
 unsafe fn group_probe_message() -> u32 {
@@ -300,15 +297,16 @@ unsafe fn create_appbar(window: HWND) {
         log(&format!("rivet: not attaching to this browser: {error}"));
         return;
     }
+    if let Err(error) = chrome_layout::install_frame_paint(nav_frame_color) {
+        log(&format!("rivet: could not paint the frame: {error}"));
+        return;
+    }
+    chrome_layout::PANEL.store(true, std::sync::atomic::Ordering::Relaxed);
     // Experiment, off unless asked for: Chromium's vertical-tab frame for Rivet windows.
     if runtime_directory().is_some_and(|dir| dir.join("rivet-nav.log").exists()) {
-        PANEL_EXPERIMENT.store(true, std::sync::atomic::Ordering::Relaxed);
-        chrome_layout::PANEL.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(dir) = runtime_directory() {
             crate::vertical_tabs::set_trace(dir.join("rivet-nav.log"));
         }
-        let installed = chrome_layout::install_frame_paint(nav_frame_color);
-        crate::vertical_tabs::trace(&format!("frame colour: {installed:?}"));
         let caption = chrome_layout::install_caption_height(|window| {
             attached(window).then_some(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP)
         });
@@ -414,18 +412,6 @@ unsafe fn update_appbar(window: HWND) {
             let height = client.bottom - top;
             if let Err(error) = appbar.update(visible, 0, top, width, height, dpi) {
                 log(&format!("rivet: could not draw the appbar: {error}"));
-            }
-            if PANEL_EXPERIMENT.load(std::sync::atomic::Ordering::Relaxed) {
-                if let Err(error) = appbar.update_panel(
-                    visible,
-                    top,
-                    client.right,
-                    client.bottom - top,
-                    dpi,
-                    NAV_CAPTION_WIDTH as f32,
-                ) {
-                    log(&format!("rivet: could not draw the panel: {error}"));
-                }
             }
         }
     });

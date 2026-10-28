@@ -49,9 +49,9 @@ pub const PANEL_GAP: i32 = 8;
 fn inset_panel(bounds: Rect) -> Rect {
     Rect {
         x: bounds.x,
-        y: bounds.y,
+        y: bounds.y + PANEL_GAP,
         width: (bounds.width - PANEL_GAP).max(1),
-        height: (bounds.height - PANEL_GAP).max(1),
+        height: (bounds.height - 2 * PANEL_GAP).max(1),
     }
 }
 
@@ -79,11 +79,13 @@ static HOOK: OnceLock<Result<Hook, String>> = OnceLock::new();
 const ON_PAINT_SLOT: usize = 89;
 const ON_PAINT: usize = 0x011B_5610;
 const GET_COLOR_PROVIDER: usize = 0x04AA_27D0;
+const DRAW_COLOR: usize = 0x036B_AD80;
 /// The active and inactive frame colour ids.
 const FRAME_IDS: [i32; 2] = [0x13C, 0x140];
 type OnPaint = unsafe extern "system" fn(*const c_void, *const c_void);
 type GetProvider = unsafe extern "system" fn(*const c_void) -> *const u8;
-static PAINT: OnceLock<(OnPaint, GetProvider, Paint)> = OnceLock::new();
+type DrawColor = unsafe extern "system" fn(*const c_void, u32);
+static PAINT: OnceLock<(OnPaint, GetProvider, DrawColor, Paint)> = OnceLock::new();
 
 unsafe fn colour_slot(provider: *const u8, id: i32) -> Option<*mut u32> {
     let mut node = *(provider.add(0x18) as *const *mut u8);
@@ -102,7 +104,8 @@ unsafe fn colour_slot(provider: *const u8, id: i32) -> Option<*mut u32> {
 }
 
 unsafe extern "system" fn on_paint(view: *const c_void, canvas: *const c_void) {
-    let (original, provider_of, paint) = PAINT.get().expect("patched after it is stored");
+    let (original, provider_of, draw_color, paint) =
+        PAINT.get().expect("patched after it is stored");
     let colour = match HOOK.get() {
         Some(Ok(hook)) => paint((hook.hwnd_for_view)(view)),
         _ => None,
@@ -111,6 +114,7 @@ unsafe extern "system" fn on_paint(view: *const c_void, canvas: *const c_void) {
     let Some(colour) = colour.filter(|_| !provider.is_null()) else {
         return original(view, canvas);
     };
+    draw_color(canvas, colour);
     let saved: Vec<(*mut u32, u32)> = FRAME_IDS
         .iter()
         .filter_map(|id| colour_slot(provider, *id))
@@ -135,9 +139,19 @@ pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
     if slot.read() != base + ON_PAINT {
         return Err("this browser build has no recorded frame paint".into());
     }
+    if std::slice::from_raw_parts((base + ON_PAINT) as *const u8, 8)
+        != [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]
+        || std::slice::from_raw_parts((base + DRAW_COLOR) as *const u8, 6)
+            != [0x48, 0x83, 0xec, 0x38, 0x48, 0x8b]
+        || std::slice::from_raw_parts((base + GET_COLOR_PROVIDER) as *const u8, 6)
+            != [0x56, 0x57, 0x48, 0x83, 0xec, 0x78]
+    {
+        return Err("this browser build has no recorded frame paint helpers".into());
+    }
     let _ = PAINT.set((
         std::mem::transmute::<usize, OnPaint>(slot.read()),
         std::mem::transmute::<usize, GetProvider>(base + GET_COLOR_PROVIDER),
+        std::mem::transmute::<usize, DrawColor>(base + DRAW_COLOR),
         paint,
     ));
     let mut previous: PAGE_PROTECTION_FLAGS = 0;
@@ -236,6 +250,24 @@ unsafe fn matches(base: usize, build: &ChromeBuild) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_panel_reserves_the_frame_gap() {
+        assert_eq!(
+            inset_panel(Rect {
+                x: 220,
+                y: 0,
+                width: 980,
+                height: 800
+            }),
+            Rect {
+                x: 220,
+                y: 8,
+                width: 972,
+                height: 784
+            }
+        );
+    }
 
     #[test]
     fn fr2_client_view_moves_right_by_the_appbar_width() {
