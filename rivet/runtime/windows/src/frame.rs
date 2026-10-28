@@ -374,6 +374,11 @@ unsafe fn create_appbar(window: HWND) {
         return;
     }
     chrome_layout::PANEL.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Err(error) = chrome_layout::install_caption_layout(|window| {
+        attached(window).then_some(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP)
+    }) {
+        log(&format!("rivet: could not lay out caption buttons: {error}"));
+    }
     // Experiment, off unless asked for: Chromium's vertical-tab frame for Rivet windows.
     if runtime_directory().is_some_and(|dir| dir.join("rivet-nav.log").exists()) {
         if let Some(dir) = runtime_directory() {

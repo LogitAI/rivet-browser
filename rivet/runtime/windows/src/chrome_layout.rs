@@ -252,6 +252,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fr12_caption_fills_the_panel_top_row() {
+        assert_eq!(panel_caption_bounds([900, 0, 138, 32], 44), [900, 8, 138, 44]);
+    }
+
+    #[test]
     fn fr12_panel_reserves_the_frame_gap() {
         assert_eq!(
             inset_panel(Rect {
@@ -400,6 +405,10 @@ type Layout = unsafe extern "system" fn(*mut c_void);
 type SetBoundsRect = unsafe extern "system" fn(*mut c_void, *const [i32; 4]);
 static LAYOUT_HOOK: OnceLock<(Layout, SetBoundsRect, CaptionHeight)> = OnceLock::new();
 
+fn panel_caption_bounds(bounds: [i32; 4], height: i32) -> [i32; 4] {
+    [bounds[0], PANEL_GAP, bounds[2], height.max(0)]
+}
+
 unsafe extern "system" fn frame_layout(view: *mut c_void) {
     let (original, set_bounds, height) = LAYOUT_HOOK.get().expect("patched after it is stored");
     original(view);
@@ -412,7 +421,7 @@ unsafe extern "system" fn frame_layout(view: *mut c_void) {
         return;
     }
     let bounds = *(container.cast::<u8>().add(VIEW_BOUNDS_OFFSET) as *const [i32; 4]);
-    let wanted = [bounds[0], bounds[1], bounds[2], (bottom - bounds[1]).max(0)];
+    let wanted = panel_caption_bounds(bounds, bottom);
     if wanted != bounds {
         set_bounds(container, &wanted);
     }
@@ -427,6 +436,13 @@ pub unsafe fn install_caption_layout(height: CaptionHeight) -> Result<(), String
     let slot = (base + 0x0FE7_3E28 + LAYOUT_SLOT * 8) as *mut usize;
     if slot.read() != base + LAYOUT {
         return Err("this browser build has no recorded frame layout".into());
+    }
+    if std::slice::from_raw_parts((base + LAYOUT) as *const u8, 6)
+        != [0x41, 0x56, 0x56, 0x57, 0x55, 0x53]
+        || std::slice::from_raw_parts((base + SET_BOUNDS_RECT) as *const u8, 8)
+            != [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]
+    {
+        return Err("this browser build has no recorded caption layout helpers".into());
     }
     let _ = LAYOUT_HOOK.set((
         std::mem::transmute::<usize, Layout>(slot.read()),
