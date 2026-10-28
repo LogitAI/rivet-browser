@@ -1280,6 +1280,25 @@ impl Canvas<'_> {
                     })?;
                 }
             }
+            Menu::Tab { index: tab, .. } => {
+                for (row, title) in crate::frame::TAB_ITEMS.iter().enumerate() {
+                    let y = top + 4.0 + row as f32 * 34.0;
+                    let item = rect(left + 4.0, y, inner - 8.0, 34.0);
+                    let hit = AppbarHit::SplitTab(tab);
+                    self.pressed(item, 8.0, 0.98, scene.effect(&[hit]), || {
+                        if scene.hover == Some(hit) {
+                            self.fill_rounded(item, 8.0, rgba(INK, 0.04))?;
+                        }
+                        self.text(
+                            TAB,
+                            rect(left + 13.0, y, inner - 26.0, 34.0),
+                            title,
+                            SOFT_INK,
+                            false,
+                        )
+                    })?;
+                }
+            }
             Menu::Settings => {
                 for (index, (title, hit)) in crate::frame::SETTINGS_ITEMS.iter().enumerate() {
                     let y = top + 4.0 + index as f32 * 34.0;

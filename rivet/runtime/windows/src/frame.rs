@@ -72,6 +72,8 @@ pub(crate) enum AppbarHit {
     NewSpace,
     ProfileSettings,
     ManageProfiles,
+    /// The entry of a tab's menu that shows the tab beside the one after it.
+    SplitTab(usize),
     /// The button in the toolbar row that hides and shows the appbar.
     Toggle,
     /// The seam on the appbar's right edge that drags its width.
@@ -85,7 +87,13 @@ pub(crate) enum Menu {
     Workspace,
     /// The Rivet settings, above the footer.
     Settings,
+    /// The menu of one tab row, opened with the right button. `top` is where the row ends, in the
+    /// appbar's device-independent pixels, which is where the menu begins.
+    Tab { index: usize, top: i32 },
 }
+
+/// The entries of a tab's menu.
+pub(crate) const TAB_ITEMS: [&str; 1] = ["Split with next tab"];
 
 /// The entries of the settings menu. An entry without an action is shown dimmed.
 pub(crate) const SETTINGS_ITEMS: [(&str, Option<AppbarHit>); 3] = [
@@ -109,6 +117,13 @@ pub(crate) fn menu_area(menu: Menu, width: f32, height: f32, spaces: usize) -> (
         Menu::Settings => {
             let h = SETTINGS_ITEMS.len() as f32 * SETTINGS_ROW + 2.0 * SETTINGS_PAD;
             (x, height - FOOT_HEIGHT - 6.0 - h, w, h)
+        }
+        Menu::Tab { top, .. } => {
+            let h = TAB_ITEMS.len() as f32 * SETTINGS_ROW + 2.0 * SETTINGS_PAD;
+            // Below the row, or above it when the menu would run past the appbar's bottom.
+            let below = top as f32 + 4.0;
+            let y = if below + h > height - FOOT_HEIGHT { top as f32 - 34.0 - 4.0 - h } else { below };
+            (x, y, w, h)
         }
     }
 }
@@ -135,6 +150,10 @@ fn menu_hit(
             } else {
                 SETTINGS_ITEMS.get(row as usize).and_then(|(_, hit)| *hit)
             }
+        }
+        Menu::Tab { index, .. } => {
+            let row = ((y - ay - SETTINGS_PAD) / SETTINGS_ROW).floor();
+            (row == 0.0).then_some(AppbarHit::SplitTab(index))
         }
     };
     (true, hit)
@@ -597,6 +616,25 @@ unsafe fn close_menu(window: HWND) {
     }
 }
 
+/// Where the tab row at `y` ends, in the appbar's coordinates, with the tab it shows. Rows are
+/// laid out as `appbar_hit` walks them.
+fn tab_row_end(rows: &[Row], y: f32) -> Option<(usize, i32)> {
+    let mut top = 138.0;
+    for row in rows {
+        if matches!(row, Row::NewTab) && top > 138.0 {
+            top += 17.0;
+        }
+        if (top..top + 34.0).contains(&y) {
+            return match row {
+                Row::Tab { index, .. } => Some((*index, (top + 34.0) as i32)),
+                _ => None,
+            };
+        }
+        top += 34.0;
+    }
+    None
+}
+
 fn appbar_hit(
     x: f32,
     y: f32,
@@ -765,6 +803,13 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
         AppbarHit::Tab(index) => {
             crate::chrome_tabs::activate_tab(window, index);
         }
+        AppbarHit::SplitTab(index) => {
+            close_menu(window);
+            // The split is made from the active tab and the one after it.
+            let activated = crate::chrome_tabs::activate_tab(window, index);
+            let split = activated && crate::chrome_split::split_active(window);
+            crate::vertical_tabs::trace(&format!("tab menu: split tab {index}: {activated} {split}"));
+        }
         AppbarHit::CloseTab(index) => {
             crate::chrome_tabs::close_tab(window, index);
         }
@@ -796,6 +841,21 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
         }
         AppbarHit::Toggle => toggle_appbar(window),
         AppbarHit::Resizer => {}
+    }
+}
+
+/// Opens the menu of the tab row under a right click, in screen coordinates.
+unsafe fn open_tab_menu(window: HWND, lparam: LPARAM) {
+    let point = client_point(window, lparam);
+    let (x, y) = local_dip(window, point.x, point.y);
+    let layout = layout_of(window);
+    if !(10.0..layout.side as f32 - 8.0).contains(&x) {
+        return;
+    }
+    if let Some((index, top)) = tab_row_end(&appbar_model(window), y) {
+        close_menu(window);
+        open_menu(window, Menu::Tab { index, top });
+        update_appbar(window);
     }
 }
 
@@ -1515,6 +1575,13 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             update_appbar(window);
             0
         }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_RBUTTONDOWN
+            if attached(window) && menu_open(window) =>
+        {
+            close_menu(window);
+            update_appbar(window);
+            0
+        }
         WM_LBUTTONDOWN if attached(window) && menu_open(window) => {
             let (inside, hit) = menu_pointer(window, lparam);
             if !inside {
@@ -1661,6 +1728,9 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         WM_NCLBUTTONDBLCLK | WM_NCRBUTTONDOWN | WM_NCRBUTTONUP
             if wparam as u32 == APPBAR_HIT && attached(window) =>
         {
+            if message == WM_NCRBUTTONUP {
+                open_tab_menu(window, lparam);
+            }
             if message == WM_NCLBUTTONDBLCLK
                 && appbar_point(window, lparam) == Some(AppbarHit::Resizer)
             {
@@ -1769,7 +1839,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{appbar_hit, menu_hit, AppbarHit, Menu};
+    use super::{appbar_hit, menu_hit, tab_row_end, AppbarHit, Menu};
 
     #[test]
     fn fr3_workspace_menu_opens_from_header_and_chevron() {
@@ -1938,5 +2008,35 @@ mod tests {
         assert_eq!(foot(start + 5.0 * 32.0 + 14.0, 3), None);
         assert_eq!(foot(240.0, 6), None, "a full footer has no room for a space");
         assert_eq!(foot(240.0, 5), Some(AppbarHit::NewSpace));
+    }
+
+    #[test]
+    fn fr3_tab_menu_offers_split_with_next_tab_under_the_row_it_was_opened_on() {
+        use crate::tab_rows::Row;
+        let rows = vec![
+            Row::NewTab,
+            Row::Tab { index: 0, title: "a".into(), active: true, child: false },
+            Row::Tab { index: 1, title: "b".into(), active: false, child: false },
+        ];
+        // The new tab row has no menu, and the tab rows follow it after the 17 DIP divider.
+        assert_eq!(tab_row_end(&rows, 150.0), None);
+        let (index, top) = tab_row_end(&rows, 138.0 + 34.0 + 17.0 + 34.0 + 5.0).unwrap();
+        assert_eq!(index, 1);
+        let menu = Menu::Tab { index, top };
+        let (_, y, _, h) = super::menu_area(menu, 268.0, 700.0, 3);
+        assert!(y >= top as f32);
+        assert_eq!(
+            menu_hit(menu, 20.0, y + 4.0 + 10.0, 268.0, 700.0, 3),
+            (true, Some(AppbarHit::SplitTab(1)))
+        );
+        assert_eq!(menu_hit(menu, 20.0, y + h + 2.0, 268.0, 700.0, 3), (false, None));
+        assert_eq!(menu_hit(menu, 20.0, y + 1.0, 268.0, 700.0, 3), (true, None));
+    }
+
+    #[test]
+    fn fr3_tab_menu_near_the_footer_opens_above_its_row() {
+        let menu = Menu::Tab { index: 3, top: 640 };
+        let (_, y, _, h) = super::menu_area(menu, 268.0, 700.0, 3);
+        assert!(y + h <= 640.0 - 34.0);
     }
 }
