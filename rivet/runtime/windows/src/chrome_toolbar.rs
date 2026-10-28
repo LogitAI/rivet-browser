@@ -116,7 +116,7 @@ const OVERRIDES: [(i32, i32); 7] = [
 const PAPER: u32 = 0xFFFB_FAF7;
 const HAIRLINE: u32 = 0xFFE9_E9E6;
 /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
-const COLOURS: [(i32, u32); 13] = [
+const COLOURS: [(i32, u32); 16] = [
     (0x13C, PAPER),      // kColorFrameActive
     (796, PAPER),        // kColorLocationBarBackground
     (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
@@ -124,6 +124,9 @@ const COLOURS: [(i32, u32); 13] = [
     (1055, 0xFF4A_4850), // kColorOmniboxText
     (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
     (1590, PAPER),       // kColorToolbar
+    (1645, 0xFF1A_1A1A), // Caption button glyph, active window
+    (1646, 0xFF1A_1A1A), // Caption button glyph, inactive window
+    (1647, 0xFFC4_2B1C), // Close button hover fill
     (1595, 0xFF4A_4850), // kColorToolbarButtonIcon
     (1598, 0xFF1F_2024), // kColorToolbarButtonIconHovered
     (1599, 0xFFC4_C1C8), // kColorToolbarButtonIconInactive
@@ -157,7 +160,9 @@ static LAYER_LOGGED: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_SET_VISIBLE: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_UPDATE_LOCATION_ICON: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
-static COLOUR_LOGGED: AtomicBool = AtomicBool::new(false);
+/// The provider caches a colour when it is first asked for, so a colour can be swapped only after
+/// that. This remembers which ones have been seen, for the trace.
+static COLOURS_SEEN: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 /// The widgets of Rivet windows.
 static WIDGETS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
@@ -200,6 +205,15 @@ unsafe fn colour_slot(provider: *const u8, id: i32) -> Option<*mut u32> {
     None
 }
 
+fn first_swap(id: i32) -> bool {
+    let mut seen = COLOURS_SEEN.lock().unwrap_or_else(|error| error.into_inner());
+    if seen.contains(&id) {
+        return false;
+    }
+    seen.push(id);
+    true
+}
+
 unsafe fn switch_to(hooks: &Hooks, widget: usize) {
     if CURRENT.with(Cell::get) == widget {
         return;
@@ -223,21 +237,15 @@ unsafe fn switch_to(hooks: &Hooks, widget: usize) {
     }
     SWAPPED.with(|swapped| {
         let mut swapped = swapped.borrow_mut();
-        let log_colours = !COLOUR_LOGGED.load(Ordering::Relaxed);
         for (id, colour) in COLOURS {
             if let Some(slot) = colour_slot(provider, id) {
                 let original = slot.read();
-                if log_colours {
+                if first_swap(id) {
                     crate::vertical_tabs::trace(&format!("colour {id:#x} replaced {original:#010x} with {colour:#010x}"));
                 }
                 swapped.push((slot, original));
                 slot.write(colour);
-            } else if log_colours {
-                crate::vertical_tabs::trace(&format!("no colour {id:#x}"));
             }
-        }
-        if log_colours {
-            COLOUR_LOGGED.store(true, Ordering::Relaxed);
         }
     });
 }
@@ -960,6 +968,8 @@ mod tests {
         assert_eq!(colour(796), Some(PAPER));
         assert_eq!(colour(1013), Some(PAPER));
         assert_eq!(colour(1603), Some(HAIRLINE));
+        assert_eq!(colour(1647), Some(0xFFC4_2B1C));
+        assert_eq!(colour(1645), Some(0xFF1A_1A1A));
         for (index, (id, _)) in COLOURS.iter().enumerate() {
             assert!(!COLOURS[..index].iter().any(|(other, _)| other == id));
         }
