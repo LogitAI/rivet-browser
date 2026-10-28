@@ -292,3 +292,19 @@
 - 캡션 버튼은 32 DIP 높이 그대로 위에 붙어 있다. 버튼 선호 크기(`WindowsCaptionButton::CalculatePreferredSize`,
   vtable `0xFF025C8` 74번 칸)를 바꿔도 효과가 없었다. `BrowserFrameViewWin::Layout`은 캡션 컨테이너 높이를
   `BrowserView::GetFrameElementInfo`(`0x824EF0`)에서 계산하며, 이 경로는 가상 함수가 아니다.
+
+## 2026-10-28: 상단 줄의 페이지 주소
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Google Chrome `156.0.8078.48`, 192 DPI 모니터, `--app` 창.
+
+### 결과
+
+- Chrome은 접근성 트리의 문서(Document) 요소 값으로 페이지 주소를 내놓는다. 바깥 프로세스에서 UI Automation으로
+  읽었을 때 `https://example.com/`이 나왔고 42 ms가 걸렸다.
+- 런타임이 작업 스레드에서 같은 방법으로 주소를 읽고, 창에 메시지를 보내 상단 줄을 다시 그리게 했다. 제목이 바뀔 때마다
+  다시 읽는다. 상단 줄에 `example.com`이 표시되었다.
+- Chrome 내부 주소나 함수 위치에 기대지 않으므로 Chrome 버전이 바뀌어도 그대로 동작할 가능성이 높다.
+- 대신 UI Automation 클라이언트가 붙으면 Chrome이 접근성 트리를 계속 만든다. 이 비용은 아직 재지 않았다.
+- 제목이 바뀌지 않는 이동(같은 문서 안의 해시 이동 등)은 아직 따라가지 못한다.
