@@ -19,7 +19,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::address_display;
-use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::Foundation::{HWND, POINT};
+use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetAncestor, GetCursorPos, SetTimer, WindowFromPoint, GA_ROOT,
+};
 use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
 use crate::chrome_layout::image;
 use windows_sys::Win32::System::Memory::{
@@ -177,6 +183,21 @@ const PAINTER_INSETS: usize = 0x20;
 const FIELD_FILL_MARGIN: i32 = 3;
 /// The radius of the field's rectangle, in DIPs.
 const FIELD_RADIUS: f32 = 8.0;
+/// `views::View::SetTransform(this, &gfx::Transform)` and `ui::Layer::SetLayerBrightness(this,
+/// float)`. A transform that is a scale and a translation starts with a zero byte, then holds the
+/// scale at `+8` and the translation at `+0x10`, as floats. A view keeps its layer at `+0x20` and
+/// its size at `+0x1D0`.
+const SET_TRANSFORM: usize = 0x0AC2_1430;
+const SET_TRANSFORM_PROLOGUE: [u8; 14] = [
+    0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x48, 0x89, 0xD6,
+];
+const SET_BRIGHTNESS: usize = 0x0ACC_89D0;
+const SET_BRIGHTNESS_PROLOGUE: [u8; 11] = [
+    0x56, 0x57, 0x48, 0x83, 0xEC, 0x48, 0x0F, 0x29, 0x74, 0x24, 0x30,
+];
+const VIEW_LAYER: usize = 0x20;
+const VIEW_SIZE: usize = 0x1D0;
+const TRANSFORM_BYTES: usize = 256;
 const REFRESH_BACKGROUND: usize = 0x00EE_0120;
 const REFRESH_BACKGROUND_PROLOGUE: [u8; 14] = [
     0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x60,
@@ -315,6 +336,7 @@ struct Hooks {
 static FORCED: AtomicUsize = AtomicUsize::new(0);
 const FORCE_HOVER: usize = 1;
 const FORCE_PRESSED: usize = 2;
+const FORCE_CYCLE: usize = 3;
 
 static HOOKS: OnceLock<Result<Hooks, String>> = OnceLock::new();
 /// Trampolines to the original functions. Each is stored before its function is patched, so a
@@ -760,8 +782,248 @@ unsafe extern "system" fn refresh_background(view: *mut c_void) {
         run(view);
         if active() {
             round_field(view);
+            watch_field(top, view as usize);
         }
     });
+}
+
+/// Pressing the field, as in the design: it sinks quickly to 0.98 of its size and 0.96 of its
+/// brightness, stays down for at least a beat, and springs back slowly with a small overshoot.
+const PRESS_SCALE: f32 = 0.98;
+const PRESS_BRIGHTNESS: f32 = 0.96;
+const PRESS_IN_MS: f64 = 120.0;
+const PRESS_OUT_MS: f64 = 360.0;
+const PRESS_HOLD_MS: f64 = 90.0;
+const PRESS_TICK_MS: u32 = 16;
+
+/// A CSS `cubic-bezier(x1, y1, x2, y2)` timing function: the progress at time `x` in 0..=1.
+fn bezier(x: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
+    let at = |t: f64, a: f64, b: f64| {
+        3.0 * (1.0 - t) * (1.0 - t) * t * a + 3.0 * (1.0 - t) * t * t * b + t * t * t
+    };
+    let x = x.clamp(0.0, 1.0);
+    let (mut low, mut high) = (0.0, 1.0);
+    for _ in 0..40 {
+        let middle = (low + high) / 2.0;
+        if at(middle, x1, x2) < x {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    at((low + high) / 2.0, y1, y2)
+}
+
+/// How far down the field is: 0 at rest, 1 fully pressed, a little below 0 while it springs back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Press {
+    from: f64,
+    down: bool,
+    changed: f64,
+    pressed: f64,
+}
+
+impl Press {
+    const fn new() -> Self {
+        Self { from: 0.0, down: false, changed: 0.0, pressed: 0.0 }
+    }
+
+    /// The depth `now` milliseconds in.
+    fn depth(&self, now: f64) -> f64 {
+        let elapsed = (now - self.changed).max(0.0);
+        if self.down {
+            let progress = bezier(elapsed / PRESS_IN_MS, 0.25, 0.7, 0.35, 1.0);
+            self.from + (1.0 - self.from) * progress
+        } else {
+            let progress = bezier(elapsed / PRESS_OUT_MS, 0.3, 1.45, 0.55, 1.0);
+            self.from * (1.0 - progress)
+        }
+    }
+
+    /// Whether the field is back at rest and stays there.
+    fn at_rest(&self, now: f64) -> bool {
+        !self.down && now - self.changed >= PRESS_OUT_MS
+    }
+
+    /// Feeds the pointer state at `now`. A short tap still keeps the field down for a beat.
+    fn feed(&mut self, held: bool, now: f64) {
+        let held = held || (self.down && now - self.pressed < PRESS_HOLD_MS);
+        if held == self.down {
+            return;
+        }
+        self.from = self.depth(now).clamp(0.0, 1.0);
+        self.down = held;
+        self.changed = now;
+        if held {
+            self.pressed = now;
+        }
+    }
+}
+
+/// A Rivet window's address field and what is known of its press.
+struct Field {
+    widget: usize,
+    view: usize,
+    window: usize,
+    press: Press,
+    /// The pointer went down inside the field and has not been released.
+    latched: bool,
+    was_held: bool,
+    /// The size and depth last applied, to apply only changes.
+    applied: Option<(i32, i32, f32)>,
+}
+
+static FIELDS: Mutex<Vec<Field>> = Mutex::new(Vec::new());
+/// The native window of each Rivet widget.
+static WINDOWS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+static TIMER_STARTED: AtomicBool = AtomicBool::new(false);
+static EPOCH: OnceLock<std::time::Instant> = OnceLock::new();
+
+fn now_ms() -> f64 {
+    EPOCH.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.0
+}
+
+/// Remembers the field of a Rivet window so its press can be shown.
+fn watch_field(widget: usize, view: usize) {
+    let mut fields = FIELDS.lock().unwrap_or_else(|error| error.into_inner());
+    match fields.iter_mut().find(|field| field.widget == widget) {
+        Some(field) => field.view = view,
+        None => fields.push(Field {
+            widget,
+            view,
+            window: 0,
+            press: Press::new(),
+            latched: false,
+            was_held: false,
+            applied: None,
+        }),
+    }
+}
+
+unsafe fn screen_bounds(hooks: &Hooks, view: usize) -> [i32; 4] {
+    let bounds: unsafe extern "system" fn(*mut u8, *mut [i32; 4]) -> *mut [i32; 4] =
+        std::mem::transmute(hooks.base + BOUNDS_IN_SCREEN);
+    let mut rect = [0i32; 4];
+    bounds(view as *mut u8, &mut rect);
+    rect
+}
+
+/// Whether the left button is held, and whether the pointer is on the field of `window`.
+unsafe fn pointer_on_field(hooks: &Hooks, window: usize, widget: usize, view: usize) -> (bool, bool) {
+    let held = GetAsyncKeyState(0x01) < 0;
+    let mut cursor = POINT { x: 0, y: 0 };
+    if window == 0 || GetCursorPos(&mut cursor) == 0 {
+        return (held, false);
+    }
+    let window = window as HWND;
+    if GetAncestor(WindowFromPoint(cursor), GA_ROOT) != window {
+        return (held, false);
+    }
+    ScreenToClient(window, &mut cursor);
+    let scale = GetDpiForWindow(window).max(96) as f64 / 96.0;
+    let root = *((widget + ROOT_VIEW_OFFSET) as *const usize);
+    if root == 0 {
+        return (held, false);
+    }
+    // Both rectangles are in screen DIPs, so their difference is the field's place in the widget.
+    let origin = screen_bounds(hooks, root);
+    let field = screen_bounds(hooks, view + LOCATION_BAR_VIEW_BASE);
+    let (x, y) = (cursor.x as f64 / scale, cursor.y as f64 / scale);
+    let (left, top) = ((field[0] - origin[0]) as f64, (field[1] - origin[1]) as f64);
+    let inside = x >= left && x < left + field[2] as f64 && y >= top && y < top + field[3] as f64;
+    (held, inside)
+}
+
+/// The size of the field, in DIPs.
+unsafe fn field_size(view: usize) -> (i32, i32) {
+    let base = view + LOCATION_BAR_VIEW_BASE;
+    (*((base + VIEW_SIZE) as *const i32), *((base + VIEW_SIZE + 4) as *const i32))
+}
+
+/// Sets the scale and brightness the press gives the field, or clears them at rest.
+unsafe fn show_press(hooks: &Hooks, view: usize, depth: Option<f64>) {
+    let base = view + LOCATION_BAR_VIEW_BASE;
+    let set_transform: unsafe extern "system" fn(*mut c_void, *const u8) =
+        std::mem::transmute(hooks.base + SET_TRANSFORM);
+    let mut transform = [0u8; TRANSFORM_BYTES];
+    let mut write = |at: usize, value: f32| transform[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    let (width, height) = field_size(view);
+    let depth = depth.unwrap_or(0.0) as f32;
+    let scale = 1.0 - (1.0 - PRESS_SCALE) * depth;
+    write(8, scale);
+    write(12, scale);
+    // The layer scales about its top left corner, so the field is moved to scale about its centre.
+    write(0x10, (1.0 - scale) * width as f32 / 2.0);
+    write(0x14, (1.0 - scale) * height as f32 / 2.0);
+    set_transform(base as *mut c_void, transform.as_ptr());
+    let layer = *((base + VIEW_LAYER) as *const usize);
+    if layer != 0 && depth != 0.0 {
+        let brightness: unsafe extern "system" fn(*mut c_void, f32) =
+            std::mem::transmute(hooks.base + SET_BRIGHTNESS);
+        // The compositor adds this to every colour channel, so 0 is unchanged and -0.04 is darker.
+        brightness(layer as *mut c_void, -(1.0 - PRESS_BRIGHTNESS) * depth.clamp(0.0, 1.0));
+    }
+}
+
+/// Runs on the UI thread every few milliseconds: reads the pointer and moves each Rivet field
+/// toward its pressed or resting look.
+unsafe extern "system" fn press_tick(_window: HWND, _message: u32, _id: usize, _time: u32) {
+    let Some(hooks) = hooks() else { return };
+    let now = now_ms();
+    let forced = FORCED.load(Ordering::Relaxed);
+    let windows = WINDOWS.lock().unwrap_or_else(|error| error.into_inner()).clone();
+    let snapshot: Vec<(usize, usize)> = FIELDS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .map(|field| (field.widget, field.view))
+        .collect();
+    for (widget, view) in snapshot {
+        if !is_rivet(widget) {
+            continue;
+        }
+        let window = windows.iter().find(|(known, _)| *known == widget).map_or(0, |(_, hwnd)| *hwnd);
+        let (held, inside) = pointer_on_field(hooks, window, widget, view);
+        let (width, height) = field_size(view);
+        let mut fields = FIELDS.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(field) = fields.iter_mut().find(|field| field.widget == widget) else { continue };
+        // A press counts when it starts on the field and lasts while the button stays down on it.
+        field.latched = match (held, field.was_held) {
+            (false, _) => false,
+            (true, false) => inside,
+            (true, true) => field.latched && inside,
+        };
+        field.was_held = held;
+        let down = match forced {
+            FORCE_PRESSED => true,
+            FORCE_CYCLE => (2000.0..2150.0).contains(&now),
+            _ => field.latched,
+        };
+        field.press.feed(down, now);
+        let depth = field.press.depth(now);
+        let wanted = if field.press.at_rest(now) {
+            None
+        } else {
+            Some((width, height, (depth * 1000.0).round() as f32 / 1000.0))
+        };
+        if field.applied == wanted {
+            continue;
+        }
+        field.applied = wanted;
+        drop(fields);
+        if forced == FORCE_CYCLE {
+            crate::vertical_tabs::trace(&format!("press t={now:.0} depth={depth:.3}"));
+        }
+        show_press(hooks, view, wanted.map(|_| depth));
+    }
+}
+
+/// Starts the press timer on the calling UI thread, once.
+unsafe fn start_press_timer() {
+    if !TIMER_STARTED.swap(true, Ordering::AcqRel) {
+        now_ms();
+        SetTimer(std::ptr::null_mut(), 0, PRESS_TICK_MS, Some(press_tick));
+    }
 }
 
 /// Chrome rounds the field's fill into a pill. Rivet's field is a rectangle with 8 DIP corners,
@@ -1214,6 +1476,8 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(ANCHOR_RECT + 0x2a, &ANCHOR_VIEW_ACCESS)
         || !prologue(IS_DRAWN, &IS_DRAWN_BYTES)
         || !prologue(BOUNDS_IN_SCREEN, &BOUNDS_BYTES)
+        || !prologue(SET_TRANSFORM, &SET_TRANSFORM_PROLOGUE)
+        || !prologue(SET_BRIGHTNESS, &SET_BRIGHTNESS_PROLOGUE)
     {
         return Err("this browser build has other toolbar functions".into());
     }
@@ -1456,6 +1720,7 @@ pub unsafe fn install(directory: Option<std::path::PathBuf>) -> Result<(), Strin
         match read("rivet-toolbar-force.txt").trim() {
             "hover" => FORCE_HOVER,
             "pressed" => FORCE_PRESSED,
+            "cycle" => FORCE_CYCLE,
             _ => 0,
         },
         Ordering::Relaxed,
@@ -1495,6 +1760,12 @@ pub unsafe fn adopt(window: HWND) {
             widgets.push(widget);
         }
     }
+    {
+        let mut windows = WINDOWS.lock().unwrap_or_else(|error| error.into_inner());
+        windows.retain(|(known, _)| *known != widget);
+        windows.push((widget, window as usize));
+    }
+    start_press_timer();
     crate::vertical_tabs::trace("adopt");
     theme_changed(widget as *mut c_void);
     crate::vertical_tabs::trace("adopted");
@@ -1507,6 +1778,8 @@ pub unsafe fn forget(window: HWND) {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .retain(|known| *known != widget);
+    FIELDS.lock().unwrap_or_else(|error| error.into_inner()).retain(|field| field.widget != widget);
+    WINDOWS.lock().unwrap_or_else(|error| error.into_inner()).retain(|(known, _)| *known != widget);
 }
 
 /// One `gfx::PathElement`: a command or a number, both four bytes.
@@ -1854,6 +2127,45 @@ mod tests {
         // The page info chip paints nothing of its own, so no circle shows inside the field.
         assert!(COLOURS.contains(&(1003, 0)));
         assert_eq!(LOCATION_ICON_SHIFT, 2);
+    }
+
+    #[test]
+    fn fr12_press_sinks_fast_and_springs_back_slowly_with_an_overshoot() {
+        let mut press = Press::new();
+        assert_eq!(press.depth(0.0), 0.0);
+        press.feed(true, 100.0);
+        assert!(press.depth(100.0) < 0.01);
+        assert!(press.depth(160.0) > 0.7, "quick in");
+        assert!((press.depth(100.0 + PRESS_IN_MS) - 1.0).abs() < 1e-3);
+        press.feed(false, 400.0);
+        let mid = press.depth(400.0 + PRESS_OUT_MS / 2.0);
+        assert!(mid < 0.5 && mid > -0.5);
+        let lowest = (0..=36)
+            .map(|step| press.depth(400.0 + step as f64 * 10.0))
+            .fold(f64::MAX, f64::min);
+        assert!(lowest < 0.0 && lowest > -0.15, "small overshoot, got {lowest}");
+        assert!(press.at_rest(400.0 + PRESS_OUT_MS));
+        assert!((1.0 - (1.0 - PRESS_SCALE) * 1.0 - 0.98).abs() < 1e-6);
+        assert!((PRESS_BRIGHTNESS - 0.96).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fr12_press_stays_down_for_a_beat_after_a_short_tap() {
+        let mut press = Press::new();
+        press.feed(true, 0.0);
+        press.feed(false, 30.0);
+        assert!(press.down, "still down after 30 ms");
+        press.feed(false, PRESS_HOLD_MS + 1.0);
+        assert!(!press.down);
+    }
+
+    #[test]
+    fn fr12_press_timing_functions_match_css() {
+        assert!(bezier(0.0, 0.25, 0.7, 0.35, 1.0).abs() < 1e-9);
+        assert!((bezier(1.0, 0.25, 0.7, 0.35, 1.0) - 1.0).abs() < 1e-9);
+        assert!(bezier(0.5, 0.3, 1.45, 0.55, 1.0) > 1.0);
+        // `ease` is `cubic-bezier(.25, .1, .25, 1)`: 0.5 of the time is about 0.8 of the way.
+        assert!((bezier(0.5, 0.25, 0.1, 0.25, 1.0) - 0.8024).abs() < 0.01);
     }
 
     #[test]
