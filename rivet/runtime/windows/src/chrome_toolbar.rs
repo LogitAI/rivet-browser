@@ -63,7 +63,8 @@ const UPDATE_LOCATION_ICON_PROLOGUE: [u8; 16] = [
     0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0, 0, 0, 0x48, 0x89, 0xCE,
 ];
 /// `location_bar::GetSecurityChipText(out, delegate, url, flag)` returns the label Chrome puts
-/// before the address of local pages (file, chrome and similar schemes) and of insecure ones.
+/// before the address: "File" for local pages and the connection state of the others.
+/// `GURL::~GURL` frees the page address that the delegate hands out by value.
 const CHIP_TEXT: usize = 0x00E4_D780;
 const CHIP_TEXT_PROLOGUE: [u8; 15] = [
     0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB8, 0, 0, 0,
@@ -92,6 +93,11 @@ const TEXTFIELD_RENDER_TEXT: usize = 0x378;
 const RENDER_TEXT_FONT_LIST: usize = 0x48;
 /// The size of the address text, in DIPs.
 const ADDRESS_FONT_SIZE: i32 = 12;
+const GURL_DESTRUCTOR: usize = 0x03E0_01F0;
+const GURL_DESTRUCTOR_BYTES: [u8; 9] = [0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE];
+/// `GURL` layout of this build: the spec string, then the scheme's begin and length.
+const GURL_SCHEME_BEGIN: usize = 0x20;
+const GURL_SCHEME_LENGTH: usize = 0x24;
 /// `BubbleDialogDelegate::GetAnchorRect`, `View::IsDrawn` and `View::GetBoundsInScreen`.
 const ANCHOR_RECT: usize = 0x0ACA_C450;
 const ANCHOR_RECT_PROLOGUE: [u8; 18] = [
@@ -430,13 +436,50 @@ unsafe extern "system" fn chip_text(
     url: *mut c_void,
     flag: u8,
 ) -> *mut [u64; 3] {
-    if active() {
+    if active() && page_is_local_file(delegate) {
         out.write([0; 3]);
         return out;
     }
     original::<unsafe extern "system" fn(*mut [u64; 3], *mut c_void, *mut c_void, u8) -> *mut [u64; 3]>(
         &ORIGINAL_CHIP_TEXT,
     )(out, delegate, url, flag)
+}
+
+/// Whether `spec[begin..begin + length]` is the `file` scheme.
+fn is_file_scheme(spec: &[u8], begin: i32, length: i32) -> bool {
+    let (Ok(begin), Ok(length)) = (usize::try_from(begin), usize::try_from(length)) else {
+        return false;
+    };
+    spec.get(begin..begin.saturating_add(length))
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case(b"file"))
+}
+
+/// Asks the delegate for the page address, the way `GetSecurityChipText` does, and frees it.
+unsafe fn page_is_local_file(delegate: *mut c_void) -> bool {
+    let Some(hooks) = hooks() else { return false };
+    if delegate.is_null() {
+        return false;
+    }
+    let table = *(delegate as *const *const usize);
+    let get_url: unsafe extern "system" fn(*mut c_void, *mut u8) = std::mem::transmute(*table.add(3));
+    // A `GURL` is smaller than this, and its destructor runs below.
+    let mut gurl = [0u64; 24];
+    let gurl = gurl.as_mut_ptr() as *mut u8;
+    get_url(delegate, gurl);
+    let long = (*gurl.add(0x17)) & 0x80 != 0;
+    let (data, size) = if long {
+        (*(gurl as *const *const u8), *(gurl.add(8) as *const usize))
+    } else {
+        (gurl as *const u8, *gurl.add(0x17) as usize)
+    };
+    let local = is_file_scheme(
+        std::slice::from_raw_parts(data, size),
+        *(gurl.add(GURL_SCHEME_BEGIN) as *const i32),
+        *(gurl.add(GURL_SCHEME_LENGTH) as *const i32),
+    );
+    let destroy: unsafe extern "system" fn(*mut u8) = std::mem::transmute(hooks.base + GURL_DESTRUCTOR);
+    destroy(gurl);
+    local
 }
 
 /// Whether `view` is one of the hidden buttons of a Rivet window.
@@ -687,6 +730,7 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(DERIVE_SIZE, &DERIVE_SIZE_BYTES)
         || !prologue(UPDATE_LOCATION_ICON, &UPDATE_LOCATION_ICON_PROLOGUE)
         || !prologue(CHIP_TEXT, &CHIP_TEXT_PROLOGUE)
+        || !prologue(GURL_DESTRUCTOR, &GURL_DESTRUCTOR_BYTES)
         || !prologue(ANCHOR_RECT, &ANCHOR_RECT_PROLOGUE)
         || !prologue(ANCHOR_RECT + 0x2a, &ANCHOR_VIEW_ACCESS)
         || !prologue(IS_DRAWN, &IS_DRAWN_BYTES)
@@ -1124,6 +1168,15 @@ mod tests {
         assert_eq!(UPDATE_LOCATION_PROLOGUE.len(), 15);
         assert_eq!(&CHIP_TEXT_PROLOGUE[8..11], &[0x48, 0x81, 0xEC]);
         assert_eq!(&UPDATE_LOCATION_PROLOGUE[8..11], &[0x48, 0x81, 0xEC]);
+    }
+
+    #[test]
+    fn fr12_only_file_pages_lose_the_label() {
+        assert!(is_file_scheme(b"file:///C:/start.html", 0, 4));
+        assert!(!is_file_scheme(b"http://example.com/", 0, 4));
+        assert!(!is_file_scheme(b"https://example.com/", 0, 5));
+        assert!(!is_file_scheme(b"filesystem:http://a/", 0, 10));
+        assert!(!is_file_scheme(b"file", -1, -1));
     }
 
     #[test]
