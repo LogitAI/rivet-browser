@@ -12,7 +12,8 @@ use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+    GetFocus, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT,
+    TRACKMOUSEEVENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, GetClassNameW, GetClientRect, GetPropW, GetWindowLongPtrW,
@@ -20,9 +21,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     RegisterWindowMessageW, RemovePropW, SetPropW, SetWindowLongPtrW, SetWindowPos, GWLP_WNDPROC,
     GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT, ICON_BIG, ICON_SMALL, SM_CXICON,
     SM_CXPADDEDBORDER, SM_CXSMICON, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, WM_DPICHANGED, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK,
-    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN,
-    WM_NCRBUTTONUP, WM_SETICON, WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
+    SWP_NOSIZE, SWP_NOZORDER, WM_CAPTURECHANGED, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN,
+    WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_SETICON,
+    WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
 };
 
 use super::appbar::Appbar;
@@ -46,12 +48,44 @@ pub(crate) enum AppbarHit {
     Tab(usize),
     CloseTab(usize),
     Space(usize),
+    WorkspaceMenu,
+    ProfileSettings,
+    ManageProfiles,
 }
 
 thread_local! {
     /// Appbars of the browser windows owned by this UI thread.
     static APPBARS: RefCell<HashMap<isize, Appbar>> = RefCell::new(HashMap::new());
+    static MENUS: RefCell<HashMap<isize, isize>> = RefCell::new(HashMap::new());
     static APPBAR_STATE: RefCell<HashMap<isize, (Option<AppbarHit>, Option<AppbarHit>, u32)>> = RefCell::new(HashMap::new());
+}
+
+fn workspace_menu_hit(x: f32, y: f32, width: f32) -> Option<AppbarHit> {
+    if x < 10.0 || x >= width - 8.0 {
+        return None;
+    }
+    match y {
+        y if (138.0..186.0).contains(&y) => Some(AppbarHit::Space(0)),
+        y if (186.0..234.0).contains(&y) => Some(AppbarHit::Space(1)),
+        y if (234.0..282.0).contains(&y) => Some(AppbarHit::Space(2)),
+        y if (282.0..316.0).contains(&y) => Some(AppbarHit::ProfileSettings),
+        y if (316.0..350.0).contains(&y) => Some(AppbarHit::ManageProfiles),
+        _ => None,
+    }
+}
+
+fn menu_open(window: HWND) -> bool {
+    MENUS.with(|menus| menus.borrow().contains_key(&(window as isize)))
+}
+
+unsafe fn close_menu(window: HWND) {
+    let previous = MENUS.with(|menus| menus.borrow_mut().remove(&(window as isize)));
+    if let Some(previous) = previous {
+        ReleaseCapture();
+        if previous != 0 {
+            SetFocus(previous as HWND);
+        }
+    }
 }
 
 fn appbar_hit(x: f32, y: f32, width: f32, height: f32, rows: &[Row]) -> Option<AppbarHit> {
@@ -59,6 +93,11 @@ fn appbar_hit(x: f32, y: f32, width: f32, height: f32, rows: &[Row]) -> Option<A
     let inner = width - 18.0;
     if !(x >= left && x < left + inner) {
         return None;
+    }
+    if (106.0..136.0).contains(&y)
+        || (width - 36.0..width - 8.0).contains(&x) && (12.0..40.0).contains(&y)
+    {
+        return Some(AppbarHit::WorkspaceMenu);
     }
     if (52.0..94.0).contains(&y) {
         let tile = (inner - 18.0) / 4.0;
@@ -103,6 +142,13 @@ unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
     let dpi = layout_dpi(window) as f32 / 96.0;
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
+    if menu_open(window) {
+        return workspace_menu_hit(
+            point.x as f32 / dpi,
+            (point.y - top_border(window)) as f32 / dpi,
+            APPBAR_WIDTH as f32,
+        );
+    }
     appbar_hit(
         point.x as f32 / dpi,
         (point.y - top_border(window)) as f32 / dpi,
@@ -114,6 +160,31 @@ unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
 
 unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
     match hit {
+        AppbarHit::WorkspaceMenu => {
+            if menu_open(window) {
+                close_menu(window);
+            } else {
+                let previous = GetFocus();
+                MENUS.with(|menus| {
+                    menus
+                        .borrow_mut()
+                        .insert(window as isize, previous as isize)
+                });
+                SetFocus(window);
+                SetCapture(window);
+            }
+        }
+        AppbarHit::ProfileSettings | AppbarHit::ManageProfiles => {
+            close_menu(window);
+            let url = if hit == AppbarHit::ProfileSettings {
+                "chrome://settings/people"
+            } else {
+                "chrome://settings/manageProfile"
+            };
+            if crate::chrome_tabs::new_tab(window) {
+                crate::chrome_navigation::open(window, url);
+            }
+        }
         AppbarHit::Tab(index) => {
             crate::chrome_tabs::activate_tab(window, index);
         }
@@ -135,6 +206,7 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
             }
         }
         AppbarHit::Space(index) => {
+            close_menu(window);
             let tint = [0xd08a52, 0x5b8bab, 0xc0577f][index];
             APPBAR_STATE.with(|states| {
                 let mut all = states.borrow_mut();
@@ -408,7 +480,7 @@ unsafe fn update_appbar(window: HWND) {
                     .unwrap_or((None, None, 0xd08a52));
                 (appbar_model(window), 0usize, state.2, state.0, state.1)
             });
-            appbar.set_state(tabs, tint, hover, pressed);
+            appbar.set_state(tabs, tint, hover, pressed, menu_open(window));
             let height = client.bottom - top;
             if let Err(error) = appbar.update(visible, 0, top, width, height, dpi) {
                 log(&format!("rivet: could not draw the appbar: {error}"));
@@ -500,7 +572,19 @@ unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
     } else {
         GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
     };
-    strip_hit(point.x, point.y, dpi, border)
+    let strip = strip_hit(point.x, point.y, dpi, border);
+    let factor = dpi as f32 / 96.0;
+    let x = point.x as f32 / factor;
+    let y = (point.y - top_border(window)) as f32 / factor;
+    if strip == StripHit::Caption
+        && x >= APPBAR_WIDTH as f32 - 36.0
+        && x < APPBAR_WIDTH as f32 - 8.0
+        && (12.0..40.0).contains(&y)
+    {
+        StripHit::Appbar
+    } else {
+        strip
+    }
 }
 
 unsafe extern "system" fn browser_proc(
@@ -521,6 +605,78 @@ unsafe extern "system" fn browser_proc(
 
 unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match message {
+        WM_KEYDOWN if attached(window) && menu_open(window) && wparam == 0x1b => {
+            close_menu(window);
+            update_appbar(window);
+            0
+        }
+        WM_CAPTURECHANGED if attached(window) && menu_open(window) => {
+            close_menu(window);
+            update_appbar(window);
+            0
+        }
+        WM_LBUTTONDOWN if attached(window) && menu_open(window) => {
+            let x = (lparam & 0xffff) as i16 as i32;
+            let y = ((lparam >> 16) & 0xffff) as i16 as i32;
+            let dpi = layout_dpi(window) as f32 / 96.0;
+            let hit = workspace_menu_hit(
+                x as f32 / dpi,
+                (y - top_border(window)) as f32 / dpi,
+                APPBAR_WIDTH as f32,
+            );
+            let inside = (10.0..APPBAR_WIDTH as f32 - 8.0).contains(&(x as f32 / dpi))
+                && (138.0..384.0).contains(&((y - top_border(window)) as f32 / dpi));
+            if !inside {
+                close_menu(window);
+            } else {
+                APPBAR_STATE.with(|states| {
+                    if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+                        entry.1 = hit;
+                    }
+                });
+            }
+            update_appbar(window);
+            0
+        }
+        WM_LBUTTONUP if attached(window) && menu_open(window) => {
+            let x = (lparam & 0xffff) as i16 as i32;
+            let y = ((lparam >> 16) & 0xffff) as i16 as i32;
+            let dpi = layout_dpi(window) as f32 / 96.0;
+            let hit = workspace_menu_hit(
+                x as f32 / dpi,
+                (y - top_border(window)) as f32 / dpi,
+                APPBAR_WIDTH as f32,
+            );
+            let action = APPBAR_STATE.with(|states| {
+                let mut states = states.borrow_mut();
+                let entry = states.get_mut(&(window as isize)).unwrap();
+                let action = if entry.1 == hit { hit } else { None };
+                entry.1 = None;
+                action
+            });
+            if let Some(hit) = action {
+                appbar_action(window, hit);
+            }
+            update_appbar(window);
+            0
+        }
+        WM_MOUSEMOVE if attached(window) && menu_open(window) => {
+            let x = (lparam & 0xffff) as i16 as i32;
+            let y = ((lparam >> 16) & 0xffff) as i16 as i32;
+            let dpi = layout_dpi(window) as f32 / 96.0;
+            let hit = workspace_menu_hit(
+                x as f32 / dpi,
+                (y - top_border(window)) as f32 / dpi,
+                APPBAR_WIDTH as f32,
+            );
+            APPBAR_STATE.with(|states| {
+                if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+                    entry.0 = hit;
+                }
+            });
+            update_appbar(window);
+            0
+        }
         WM_NCMOUSEMOVE if wparam as u32 == APPBAR_HIT && attached(window) => {
             let mut tracking = TRACKMOUSEEVENT {
                 cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
@@ -610,6 +766,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             if attached(window) {
                 taskbar::clear(window as isize);
             }
+            close_menu(window);
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::vertical_tabs::forget(window);
@@ -648,6 +805,46 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 #[cfg(test)]
 mod tests {
     use super::{appbar_hit, AppbarHit};
+
+    #[test]
+    fn fr3_workspace_menu_opens_from_header_and_chevron() {
+        assert_eq!(
+            appbar_hit(20.0, 120.0, 268.0, 700.0, &[]),
+            Some(AppbarHit::WorkspaceMenu)
+        );
+        assert_eq!(
+            appbar_hit(245.0, 25.0, 268.0, 700.0, &[]),
+            Some(AppbarHit::WorkspaceMenu)
+        );
+        assert_eq!(appbar_hit(100.0, 25.0, 268.0, 700.0, &[]), None);
+    }
+
+    #[test]
+    fn fr3_workspace_menu_hit_testing_respects_rows_and_disabled_entry() {
+        use super::workspace_menu_hit;
+        assert_eq!(
+            workspace_menu_hit(20.0, 145.0, 268.0),
+            Some(AppbarHit::Space(0))
+        );
+        assert_eq!(
+            workspace_menu_hit(20.0, 193.0, 268.0),
+            Some(AppbarHit::Space(1))
+        );
+        assert_eq!(
+            workspace_menu_hit(20.0, 241.0, 268.0),
+            Some(AppbarHit::Space(2))
+        );
+        assert_eq!(
+            workspace_menu_hit(20.0, 286.0, 268.0),
+            Some(AppbarHit::ProfileSettings)
+        );
+        assert_eq!(
+            workspace_menu_hit(20.0, 320.0, 268.0),
+            Some(AppbarHit::ManageProfiles)
+        );
+        assert_eq!(workspace_menu_hit(20.0, 354.0, 268.0), None);
+        assert_eq!(workspace_menu_hit(5.0, 145.0, 268.0), None);
+    }
 
     fn test_rows() -> Vec<crate::tab_rows::Row> {
         vec![

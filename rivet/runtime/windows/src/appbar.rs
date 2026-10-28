@@ -165,6 +165,7 @@ pub struct Appbar {
     tint: u32,
     hover: Option<crate::frame::AppbarHit>,
     pressed: Option<crate::frame::AppbarHit>,
+    menu_open: bool,
 }
 
 impl Appbar {
@@ -212,6 +213,7 @@ impl Appbar {
             tint: TINT,
             hover: None,
             pressed: None,
+            menu_open: false,
         })
     }
 
@@ -221,9 +223,15 @@ impl Appbar {
         tint: u32,
         hover: Option<crate::frame::AppbarHit>,
         pressed: Option<crate::frame::AppbarHit>,
+        menu_open: bool,
     ) {
-        if self.tabs != tabs || self.tint != tint || self.hover != hover || self.pressed != pressed
+        if self.menu_open != menu_open
+            || self.tabs != tabs
+            || self.tint != tint
+            || self.hover != hover
+            || self.pressed != pressed
         {
+            self.menu_open = menu_open;
             self.tabs = tabs;
             self.tint = tint;
             self.hover = hover;
@@ -345,6 +353,7 @@ impl Appbar {
             &self.tabs,
             self.hover,
             self.pressed,
+            self.menu_open,
         );
         surface.EndDraw()?;
         result
@@ -399,37 +408,32 @@ impl Canvas<'_> {
         Ok(())
     }
 
-    /// The Rivet mark: a heavy ring whose lower right is cut by a rotated rivet tail.
-    unsafe fn mark(&self, x: f32, y: f32, size: f32, stroke: f32, ground: u32) -> Result<()> {
-        let radius = (size - stroke) / 2.0;
+    /// The Rivet mark uses the same tile, ring and pin as the shell study.
+    unsafe fn mark(&self, x: f32, y: f32, size: f32) -> Result<()> {
+        let unit = size / 96.0;
+        self.fill_rounded(rect(x, y, size, size), 24.0 * unit, color(0xf2eee5))?;
+        let start = Vector2 {
+            X: x + 58.0 * unit,
+            Y: y + 58.0 * unit,
+        };
+        let end = Vector2 {
+            X: x + 74.0 * unit,
+            Y: y + 74.0 * unit,
+        };
+        self.context
+            .DrawLine(start, end, &self.brush(INK)?, 13.0 * unit, None);
+        self.dot(end.X - 6.5 * unit, end.Y - 6.5 * unit, 13.0 * unit, INK)?;
         let ring = D2D1_ELLIPSE {
             point: Vector2 {
-                X: x + size / 2.0,
-                Y: y + size / 2.0,
+                X: x + 44.0 * unit,
+                Y: y + 44.0 * unit,
             },
-            radiusX: radius,
-            radiusY: radius,
+            radiusX: 25.0 * unit,
+            radiusY: 25.0 * unit,
         };
         self.context
-            .DrawEllipse(&ring, &self.brush(INK)?, stroke, None);
-        // The study places an 11px square 19.5px into the 24px mark and rotates it by -45
-        // degrees. Its left edge is ink and the rest is the ground colour, which opens the ring.
-        let unit = size / 24.0;
-        let tail = 11.0 * unit;
-        let centre = Vector2 {
-            X: x + 19.5 * unit,
-            Y: y + 19.5 * unit,
-        };
-        let mut base = Matrix3x2::default();
-        self.context.GetTransform(&mut base);
-        self.context
-            .SetTransform(&(Matrix3x2::rotation_around(-45.0, centre) * base));
-        let left = centre.X - tail / 2.0;
-        let top = centre.Y - tail / 2.0;
-        self.fill(rect(left, top, tail, tail), ground)?;
-        self.fill(rect(left, top, stroke, tail), INK)?;
-        self.context.SetTransform(&base);
-        Ok(())
+            .DrawEllipse(&ring, &self.brush(INK)?, 12.0 * unit, None);
+        self.dot(x + 35.5 * unit, y + 35.5 * unit, 17.0 * unit, 0x7c2d4f)
     }
 
     /// Draws one line of text vertically centred in a box, optionally aligned to its right edge.
@@ -645,13 +649,14 @@ impl Canvas<'_> {
         tabs: &[crate::tab_rows::Row],
         hover: Option<crate::frame::AppbarHit>,
         pressed: Option<crate::frame::AppbarHit>,
+        menu_open: bool,
     ) -> Result<()> {
         self.ground(w, h, tint)?;
         let left = 10.0;
         let inner = w - 18.0;
 
         // The mark and the space menu.
-        self.mark(left + 4.0, 15.0, 22.0, 4.6, FRAME)?;
+        self.mark(left + 4.0, 15.0, 22.0)?;
         self.icon('\u{E70D}', rect(w - 36.0, 12.0, 28.0, 28.0), 16.0, SOFT_INK)?;
 
         // Pinned tabs.
@@ -690,21 +695,29 @@ impl Canvas<'_> {
         }
 
         // The space, with the browser and profile it opens in.
+        let space_index = SPACE_DOTS.iter().position(|rgb| *rgb == tint).unwrap_or(0);
+        let names = ["Work", "Personal", "Research"];
+        let profiles = ["Chrome · Work", "Chrome · Default", "Chrome · Default"];
         self.text(
             SPACE_NAME,
             rect(left + 8.0, 106.0, 120.0, 30.0),
-            "Work",
+            names[space_index],
             INK,
             false,
         )?;
-        let badge_width = 104.0;
+        let badge_width = if space_index == 0 { 104.0 } else { 122.0 };
         let badge = rect(w - 8.0 - 8.0 - badge_width, 111.0, badge_width, 20.0);
         self.fill_rounded(badge, 6.0, rgba(WHITE, 0.5))?;
-        self.dot(badge.left + 7.0, 118.0, 6.0, ACCENT)?;
+        self.dot(
+            badge.left + 7.0,
+            118.0,
+            6.0,
+            if space_index == 0 { ACCENT } else { tint },
+        )?;
         self.text(
             BADGE,
             rect(badge.left + 18.0, 111.0, badge_width - 22.0, 20.0),
-            "Chrome · Work",
+            profiles[space_index],
             SOFT_INK,
             false,
         )?;
@@ -827,6 +840,63 @@ impl Canvas<'_> {
             self.context.FillEllipse(&ellipse, &self.paint_brush(dot)?);
             self.context.SetTransform(&original);
             x += 32.0;
+        }
+        if menu_open {
+            use crate::frame::AppbarHit;
+            let area = rect(left, 138.0, inner, 246.0);
+            self.fill_rounded(area, 11.0, color(WHITE))?;
+            self.ring(area, 11.0, rgba(INK, 0.12))?;
+            for index in 0..3 {
+                let y = 138.0 + index as f32 * 48.0;
+                let item = rect(left + 4.0, y + 2.0, inner - 8.0, 44.0);
+                if hover == Some(AppbarHit::Space(index)) || index == space_index {
+                    self.fill_rounded(
+                        item,
+                        8.0,
+                        rgba(INK, if index == space_index { 0.06 } else { 0.04 }),
+                    )?;
+                }
+                self.dot(left + 13.0, y + 13.0, 9.0, SPACE_DOTS[index])?;
+                self.text(
+                    ACTIVE,
+                    rect(left + 30.0, y + 4.0, inner - 44.0, 19.0),
+                    names[index],
+                    INK,
+                    false,
+                )?;
+                self.text(
+                    META,
+                    rect(left + 30.0, y + 23.0, inner - 44.0, 17.0),
+                    profiles[index],
+                    MUTED,
+                    false,
+                )?;
+            }
+            self.fill(rect(left + 10.0, 281.0, inner - 20.0, 1.0), 0xe5e1dc)?;
+            for (index, (title, hit)) in [
+                ("Profile settings", Some(AppbarHit::ProfileSettings)),
+                ("Manage profiles", Some(AppbarHit::ManageProfiles)),
+                ("Rivet settings", None),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let y = 282.0 + index as f32 * 34.0;
+                if hit.is_some() && hover == *hit {
+                    self.fill_rounded(
+                        rect(left + 4.0, y, inner - 8.0, 34.0),
+                        8.0,
+                        rgba(INK, 0.04),
+                    )?;
+                }
+                self.text(
+                    TAB,
+                    rect(left + 13.0, y, inner - 26.0, 34.0),
+                    title,
+                    if hit.is_some() { SOFT_INK } else { MUTED },
+                    false,
+                )?;
+            }
         }
         Ok(())
     }
