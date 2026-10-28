@@ -71,6 +71,10 @@ const LAYOUT_INSETS_PROLOGUE: [u8; 13] = [
 ];
 /// `LayoutInset::TOOLBAR_BUTTON` of this build.
 const TOOLBAR_BUTTON_INSET: i32 = 6;
+/// `LayoutInset` that `ToolbarView::LayoutCommon` reads for the space around the whole toolbar,
+/// and the space Rivet windows leave before the back button, in DIPs.
+const TOOLBAR_INSET: i32 = 11;
+const LEADING_SPACE: i32 = 32;
 /// The padding, in DIPs: a 26 DIP button around an 18 DIP icon, which Chrome pads to 28.
 const TOOLBAR_BUTTON_PADDING: i32 = 4;
 /// `ToolbarButton::UpdateIcon` rebuilds a button's images. The reload button does it when a page
@@ -450,7 +454,15 @@ unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut 
         out.write([TOOLBAR_BUTTON_PADDING; 4]);
         return out;
     }
-    original::<unsafe extern "system" fn(*mut [i32; 4], i32) -> *mut [i32; 4]>(&ORIGINAL_LAYOUT_INSETS)(out, inset)
+    let result = original::<unsafe extern "system" fn(*mut [i32; 4], i32) -> *mut [i32; 4]>(
+        &ORIGINAL_LAYOUT_INSETS,
+    )(out, inset);
+    if active() && inset == TOOLBAR_INSET {
+        // The insets are top, left, bottom and right. The left one is where the back button
+        // starts, and the appbar toggle sits in the space added before it.
+        (*out)[1] = (*out)[1].saturating_add(LEADING_SPACE);
+    }
+    result
 }
 
 unsafe extern "system" fn theme_changed(widget: *mut c_void) {
@@ -1625,6 +1637,13 @@ mod tests {
             assert!(prologue.len() >= 12);
         }
         assert!(OMNIBOX_TAB_CHANGED_PROLOGUE.len() >= 12);
+    }
+
+    #[test]
+    fn fr12_rivet_toolbar_leaves_thirty_two_dips_before_the_back_button() {
+        assert_eq!(LEADING_SPACE, 32);
+        assert_ne!(TOOLBAR_INSET, TOOLBAR_BUTTON_INSET);
+        assert_eq!(i32::MAX.saturating_add(LEADING_SPACE), i32::MAX);
     }
 
     #[test]
