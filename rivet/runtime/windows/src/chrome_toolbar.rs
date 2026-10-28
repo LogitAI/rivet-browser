@@ -106,8 +106,52 @@ const OMNIBOX_TAB_CHANGED_PROLOGUE: [u8; 13] = [
     0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD7, 0x48, 0x89, 0xCE,
 ];
 const OMNIBOX_TEXTFIELD: usize = 0x10;
-/// What Rivet windows show in place of the address of Rivet's own start page.
-const START_PAGE_DISPLAY: &str = "rivet://start";
+/// `OmniboxView::UpdateTextStyle(this, text, text_is_url, scheme)` colours the text of the field.
+const UPDATE_TEXT_STYLE: usize = 0x00EE_59C0;
+const UPDATE_TEXT_STYLE_PROLOGUE: [u8; 19] = [
+    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x88,
+    0, 0, 0,
+];
+/// `gfx::RenderText::ApplyColor(this, colour, &range)` and `ApplyWeight(this, weight, &range)`.
+const APPLY_COLOR: usize = 0x0318_5FA0;
+const APPLY_COLOR_BYTES: [u8; 15] = [
+    0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0xA0, 0, 0, 0,
+];
+const APPLY_WEIGHT: usize = 0x0AF1_1D20;
+const APPLY_WEIGHT_BYTES: [u8; 15] = [
+    0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0, 0x01, 0, 0,
+];
+/// `gfx::Font::Weight` values.
+const WEIGHT_NORMAL: u32 = 400;
+const WEIGHT_SEMIBOLD: u32 = 600;
+/// The title and the rest of the address text, as `0xAARRGGBB`.
+const TITLE_COLOUR: u32 = 0xFF4A_4850;
+const ADDRESS_COLOUR: u32 = 0xFF8A_8690;
+/// `OmniboxViewViews::TitleWasSet` is the web contents observer entry of the omnibox, which is
+/// 0x720 bytes into the object. The page title is not part of the text Chrome builds, so a new
+/// title refreshes it.
+const TITLE_WAS_SET: usize = 0x0312_8B70;
+const TITLE_WAS_SET_PROLOGUE: [u8; 13] = [
+    0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x81, 0x80, 0, 0, 0,
+];
+const OBSERVER_OFFSET: usize = 0x720;
+/// `operator new(size)` and `operator delete(pointer, size)`, which own Chrome's strings.
+const OPERATOR_NEW: usize = 0x05D3_D6A0;
+const OPERATOR_NEW_BYTES: [u8; 8] = [0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B];
+const OPERATOR_DELETE: usize = 0x03E0_6930;
+const OPERATOR_DELETE_BYTES: [u8; 14] = [
+    0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD6,
+];
+/// The location bar model keeps its delegate at `+0x40`. The browser's delegate answers the
+/// active web contents in its twentieth virtual function, and `WebContents::GetTitle` is the
+/// fifty-fourth of the web contents.
+const MODEL_DELEGATE: usize = 0x40;
+const BROWSER_DELEGATE_VTABLE: usize = 0x0FDB_7368;
+const ACTIVE_WEB_CONTENTS: usize = 0x057F_48C0;
+const ACTIVE_WEB_CONTENTS_SLOT: usize = 19;
+const WEB_CONTENTS_VTABLE: usize = 0x0FE5_7C10;
+const WEB_CONTENTS_TITLE: usize = 0x00D7_8440;
+const WEB_CONTENTS_TITLE_SLOT: usize = 53;
 /// `LocationBarView::RefreshBackground` bakes the field's fill colour into a background. Hover
 /// and focus refresh it outside any paint, so it needs its own scope.
 const LOCATION_BAR_VIEW_BASE: usize = 0x100;
@@ -261,6 +305,8 @@ static ORIGINAL_FORMATTED_URL: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_CHIP_TEXT: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_TEXTFIELD_THEME: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_UPDATE_TEXT_STYLE: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_TITLE_WAS_SET: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_OMNIBOX_UPDATE: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_OMNIBOX_REVERT_ALL: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_OMNIBOX_TAB_CHANGED: AtomicUsize = AtomicUsize::new(0);
@@ -269,6 +315,8 @@ static ORIGINAL_OMNIBOX_TAB_CHANGED: AtomicUsize = AtomicUsize::new(0);
 static COLOURS_SEEN: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 /// The widgets of Rivet windows.
 static WIDGETS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// The text each Rivet window's address field was last given at rest.
+static DISPLAYS: Mutex<Vec<(usize, address_display::Display)>> = Mutex::new(Vec::new());
 
 thread_local! {
     /// The Rivet widget the UI thread works for, or zero.
@@ -449,39 +497,102 @@ unsafe extern "system" fn update_icon(view: *mut c_void) {
     scoped(top, || run(view));
 }
 
-/// The text of Rivet's start page is shown as `rivet://start` while the field is not being
-/// edited, in Rivet windows only. The text for editing, which has other flags, stays the real
-/// address, so what a person edits and submits is always a page address the browser can open.
+/// In Rivet windows the field at rest shows the page title and the address. The text for editing,
+/// which has other flags, stays the real address, so what a person edits and submits is always a
+/// page address the browser can open.
 unsafe extern "system" fn formatted_url(model: *mut c_void, out: *mut [u64; 3], flags: u32) -> *mut [u64; 3] {
-    let run: unsafe extern "system" fn(*mut c_void, *mut [u64; 3], u32) -> *mut [u64; 3] =
-        original(&ORIGINAL_FORMATTED_URL);
-    let result = run(model, out, flags);
-    if address_display::applies(flags, active()) && model_shows_start_page(model) {
-        show_start_page(out);
+    let result = formatted(model, out, flags);
+    if address_display::applies(flags, active()) {
+        if let Some(display) = rivet_display(model) {
+            write_string(out, &display.text);
+            let widget = CURRENT.with(Cell::get);
+            let mut displays = DISPLAYS.lock().unwrap_or_else(|error| error.into_inner());
+            displays.retain(|(known, _)| *known != widget);
+            displays.push((widget, display));
+        }
     }
     result
 }
 
-/// The omnibox refreshes its text outside any paint or layout, so the Rivet scope is found from
-/// its text field.
-unsafe fn in_omnibox_scope<R>(omnibox: *mut c_void, work: impl FnOnce() -> R) -> R {
-    let widget = widget_holding((omnibox as usize + OMNIBOX_TEXTFIELD) as *mut c_void);
-    scoped(widget, work)
+unsafe fn formatted(model: *mut c_void, out: *mut [u64; 3], flags: u32) -> *mut [u64; 3] {
+    let run: unsafe extern "system" fn(*mut c_void, *mut [u64; 3], u32) -> *mut [u64; 3] =
+        original(&ORIGINAL_FORMATTED_URL);
+    run(model, out, flags)
 }
 
-unsafe extern "system" fn omnibox_update(omnibox: *mut c_void) {
-    let run: WidgetCall = original(&ORIGINAL_OMNIBOX_UPDATE);
-    in_omnibox_scope(omnibox, || run(omnibox));
+unsafe fn rivet_display(model: *mut c_void) -> Option<address_display::Display> {
+    if model_shows_start_page(model) {
+        return Some(address_display::compose(&[], &[], true));
+    }
+    let hooks = hooks()?;
+    let delegate = *((model as usize + MODEL_DELEGATE) as *const usize);
+    if delegate == 0 || *(delegate as *const usize) != hooks.base + BROWSER_DELEGATE_VTABLE {
+        return None;
+    }
+    let active_contents: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(
+        *((hooks.base + BROWSER_DELEGATE_VTABLE) as *const usize).add(ACTIVE_WEB_CONTENTS_SLOT),
+    );
+    let contents = active_contents(delegate);
+    if contents == 0 || *(contents as *const usize) != hooks.base + WEB_CONTENTS_VTABLE {
+        return None;
+    }
+    let title_of: unsafe extern "system" fn(usize) -> *const [u64; 3] = std::mem::transmute(
+        *((hooks.base + WEB_CONTENTS_VTABLE) as *const usize).add(WEB_CONTENTS_TITLE_SLOT),
+    );
+    let title = read_string(title_of(contents));
+    let mut address = [0u64; 3];
+    formatted(model, &mut address, address_display::FULL_URL_FLAGS);
+    let full = read_string(&address);
+    free_string(&mut address);
+    Some(address_display::compose(&title, &full, false))
 }
 
-unsafe extern "system" fn omnibox_revert_all(omnibox: *mut c_void) {
-    let run: WidgetCall = original(&ORIGINAL_OMNIBOX_REVERT_ALL);
-    in_omnibox_scope(omnibox, || run(omnibox));
+/// The text of a `std::u16string`: inline up to ten units, on the heap after that.
+unsafe fn read_string(text: *const [u64; 3]) -> Vec<u16> {
+    if text.is_null() {
+        return Vec::new();
+    }
+    let words = *text;
+    if words[2] >> 63 == 1 {
+        std::slice::from_raw_parts(words[0] as *const u16, words[1] as usize).to_vec()
+    } else {
+        let length = (words[2] >> 56) as usize & 0x7F;
+        std::slice::from_raw_parts(text as *const u16, length.min(11)).to_vec()
+    }
 }
 
-unsafe extern "system" fn omnibox_tab_changed(omnibox: *mut c_void, state: *mut c_void) {
-    let run: unsafe extern "system" fn(*mut c_void, *mut c_void) = original(&ORIGINAL_OMNIBOX_TAB_CHANGED);
-    in_omnibox_scope(omnibox, || run(omnibox, state));
+/// Frees the heap block of a string and leaves it empty.
+unsafe fn free_string(text: &mut [u64; 3]) {
+    if text[2] >> 63 == 1 {
+        if let Some(hooks) = hooks() {
+            let delete: unsafe extern "system" fn(*mut c_void, usize) =
+                std::mem::transmute(hooks.base + OPERATOR_DELETE);
+            delete(text[0] as *mut c_void, (text[2] & !(1 << 63)) as usize * 2);
+        }
+    }
+    *text = [0; 3];
+}
+
+/// Replaces the text of a `std::u16string` with Chrome's own allocator, in the layout the
+/// browser's strings have: a heap block holds `heap_capacity` units and the third word carries
+/// the capacity and a flag in its top bit.
+unsafe fn write_string(out: *mut [u64; 3], text: &[u16]) {
+    let Some(hooks) = hooks() else { return };
+    free_string(&mut *out);
+    if text.len() <= 10 {
+        let mut words = [0u64; 3];
+        let inline = words.as_mut_ptr() as *mut u16;
+        std::ptr::copy_nonoverlapping(text.as_ptr(), inline, text.len());
+        words[2] = (text.len() as u64) << 56;
+        *out = words;
+        return;
+    }
+    let capacity = address_display::heap_capacity(text.len());
+    let allocate: unsafe extern "system" fn(usize) -> *mut u16 = std::mem::transmute(hooks.base + OPERATOR_NEW);
+    let data = allocate(capacity * 2);
+    std::ptr::copy_nonoverlapping(text.as_ptr(), data, text.len());
+    data.add(text.len()).write(0);
+    *out = [data as u64, text.len() as u64, (1 << 63) | capacity as u64];
 }
 
 /// Whether `spec` is a local file named `start.html`, ignoring any query or fragment.
@@ -513,20 +624,85 @@ unsafe fn model_shows_start_page(model: *mut c_void) -> bool {
     shows
 }
 
-/// Overwrites the text of a heap `std::u16string` in place when it has room for the new text.
-/// The field's text for a file page is always long enough, so nothing is allocated or freed.
-unsafe fn show_start_page(text: *mut [u64; 3]) {
-    let words = &mut *text;
-    let new: Vec<u16> = START_PAGE_DISPLAY.encode_utf16().collect();
-    let long = words[2] >> 63 == 1;
-    let capacity = (words[2] & !(1 << 63)) as usize;
-    if !long || capacity < new.len() + 1 {
+/// The omnibox refreshes its text outside any paint or layout, so the Rivet scope is found from
+/// its text field.
+unsafe fn in_omnibox_scope<R>(omnibox: *mut c_void, work: impl FnOnce() -> R) -> R {
+    let widget = widget_holding((omnibox as usize + OMNIBOX_TEXTFIELD) as *mut c_void);
+    scoped(widget, work)
+}
+
+unsafe extern "system" fn omnibox_update(omnibox: *mut c_void) {
+    let run: WidgetCall = original(&ORIGINAL_OMNIBOX_UPDATE);
+    in_omnibox_scope(omnibox, || run(omnibox));
+}
+
+unsafe extern "system" fn omnibox_revert_all(omnibox: *mut c_void) {
+    let run: WidgetCall = original(&ORIGINAL_OMNIBOX_REVERT_ALL);
+    in_omnibox_scope(omnibox, || run(omnibox));
+}
+
+unsafe extern "system" fn omnibox_tab_changed(omnibox: *mut c_void, state: *mut c_void) {
+    let run: unsafe extern "system" fn(*mut c_void, *mut c_void) = original(&ORIGINAL_OMNIBOX_TAB_CHANGED);
+    in_omnibox_scope(omnibox, || run(omnibox, state));
+}
+
+unsafe extern "system" fn title_was_set(observer: *mut c_void, entry: *mut c_void, explicit: usize) {
+    let run: unsafe extern "system" fn(*mut c_void, *mut c_void, usize) = original(&ORIGINAL_TITLE_WAS_SET);
+    run(observer, entry, explicit);
+    let Some(hooks) = hooks() else { return };
+    let omnibox = observer as usize - OBSERVER_OFFSET;
+    if is_rivet(widget_holding((omnibox + OMNIBOX_TEXTFIELD) as *mut c_void)) {
+        let update: WidgetCall = std::mem::transmute(hooks.base + OMNIBOX_UPDATE);
+        update(omnibox as *mut c_void);
+    }
+}
+
+/// After Chrome has styled the text of a Rivet window's field, the title gets the title colour
+/// and weight and the address the dimmer colour, when the text is the one given at rest. Text a
+/// person types keeps Chrome's styling.
+unsafe extern "system" fn update_text_style(
+    omnibox: *mut c_void,
+    text: *const [u64; 3],
+    is_url: usize,
+    scheme: *mut c_void,
+) {
+    let run: unsafe extern "system" fn(*mut c_void, *const [u64; 3], usize, *mut c_void) =
+        original(&ORIGINAL_UPDATE_TEXT_STYLE);
+    run(omnibox, text, is_url, scheme);
+    let Some(hooks) = hooks() else { return };
+    let textfield = omnibox as usize + OMNIBOX_TEXTFIELD;
+    let widget = widget_holding(textfield as *mut c_void);
+    if !is_rivet(widget) {
         return;
     }
-    let data = words[0] as *mut u16;
-    std::ptr::copy_nonoverlapping(new.as_ptr(), data, new.len());
-    data.add(new.len()).write(0);
-    words[1] = new.len() as u64;
+    let shown = read_string(text);
+    let display = DISPLAYS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(known, display)| *known == widget && display.text == shown)
+        .map(|(_, display)| display.clone());
+    let Some(display) = display else { return };
+    let holder = *((textfield + TEXTFIELD_RENDER_TEXT) as *const usize);
+    if holder == 0 {
+        return;
+    }
+    let render_text = *((holder + 0x10) as *const usize);
+    if render_text == 0 {
+        return;
+    }
+    let apply_colour: unsafe extern "system" fn(usize, u32, *const [u32; 2]) =
+        std::mem::transmute(hooks.base + APPLY_COLOR);
+    let apply_weight: unsafe extern "system" fn(usize, u32, *const [u32; 2]) =
+        std::mem::transmute(hooks.base + APPLY_WEIGHT);
+    let all = [0, display.text.len() as u32];
+    apply_colour(render_text, ADDRESS_COLOUR, &all);
+    apply_weight(render_text, WEIGHT_NORMAL, &all);
+    if display.title_len > 0 {
+        let title = [0, display.title_len];
+        apply_colour(render_text, TITLE_COLOUR, &title);
+        apply_weight(render_text, WEIGHT_SEMIBOLD, &title);
+    }
 }
 
 unsafe extern "system" fn refresh_background(view: *mut c_void) {
@@ -877,6 +1053,13 @@ unsafe fn patch() -> Result<Hooks, String> {
     {
         return Err("this browser build has no recorded browser widget".into());
     }
+    if ((base + BROWSER_DELEGATE_VTABLE) as *const usize).add(ACTIVE_WEB_CONTENTS_SLOT).read()
+        != base + ACTIVE_WEB_CONTENTS
+        || ((base + WEB_CONTENTS_VTABLE) as *const usize).add(WEB_CONTENTS_TITLE_SLOT).read()
+            != base + WEB_CONTENTS_TITLE
+    {
+        return Err("this browser build has no recorded web contents".into());
+    }
     for (vtable, theme) in HIDDEN {
         if ((base + vtable) as *const usize).add(THEME_SLOT).read() != base + theme {
             return Err(format!(
@@ -901,6 +1084,12 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(CHIP_TEXT, &CHIP_TEXT_PROLOGUE)
         || !prologue(FORMATTED_URL, &FORMATTED_URL_PROLOGUE)
         || !prologue(MODEL_URL, &MODEL_URL_PROLOGUE)
+        || !prologue(UPDATE_TEXT_STYLE, &UPDATE_TEXT_STYLE_PROLOGUE)
+        || !prologue(APPLY_COLOR, &APPLY_COLOR_BYTES)
+        || !prologue(APPLY_WEIGHT, &APPLY_WEIGHT_BYTES)
+        || !prologue(TITLE_WAS_SET, &TITLE_WAS_SET_PROLOGUE)
+        || !prologue(OPERATOR_NEW, &OPERATOR_NEW_BYTES)
+        || !prologue(OPERATOR_DELETE, &OPERATOR_DELETE_BYTES)
         || !prologue(OMNIBOX_UPDATE, &OMNIBOX_UPDATE_PROLOGUE)
         || !prologue(OMNIBOX_REVERT_ALL, &OMNIBOX_REVERT_ALL_PROLOGUE)
         || !prologue(OMNIBOX_TAB_CHANGED, &OMNIBOX_TAB_CHANGED_PROLOGUE)
@@ -1050,6 +1239,20 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         &ORIGINAL_FORMATTED_URL,
     )?;
     for (rva, prologue, cookie, hook, store) in [
+        (
+            UPDATE_TEXT_STYLE,
+            &UPDATE_TEXT_STYLE_PROLOGUE[..],
+            false,
+            update_text_style as *const () as usize,
+            &ORIGINAL_UPDATE_TEXT_STYLE,
+        ),
+        (
+            TITLE_WAS_SET,
+            &TITLE_WAS_SET_PROLOGUE[..],
+            false,
+            title_was_set as *const () as usize,
+            &ORIGINAL_TITLE_WAS_SET,
+        ),
         (
             OMNIBOX_UPDATE,
             &OMNIBOX_UPDATE_PROLOGUE[..],
@@ -1412,7 +1615,7 @@ mod tests {
         assert!(!is_start_page(b"file:///D:/notes/other.html?x=/start.html"));
         assert!(!is_start_page(b"https://example.com/start.html"));
         assert!(!is_start_page(b"file:///start.htm"));
-        assert_eq!(START_PAGE_DISPLAY.encode_utf16().count(), 13);
+        assert_eq!(address_display::START_PAGE_ADDRESS.encode_utf16().count(), 13);
     }
 
     #[test]
