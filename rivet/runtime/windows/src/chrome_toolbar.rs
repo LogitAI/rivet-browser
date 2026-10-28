@@ -52,10 +52,21 @@ const FROM_VECTOR_ICON: usize = 0x009F_C510;
 const FROM_VECTOR_ICON_PROLOGUE: [u8; 14] = [
     0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
 ];
+/// `LocationIconView::Update(this, bool, bool)` sets the label and then the icon.
+const UPDATE_LOCATION: usize = 0x00EE_3320;
+const UPDATE_LOCATION_PROLOGUE: [u8; 15] = [
+    0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xA8, 0, 0, 0,
+];
 /// `LocationIconView::UpdateIcon` runs after navigation, outside widget painting.
 const UPDATE_LOCATION_ICON: usize = 0x00EE_4220;
 const UPDATE_LOCATION_ICON_PROLOGUE: [u8; 16] = [
     0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0, 0, 0, 0x48, 0x89, 0xCE,
+];
+/// `location_bar::GetSecurityChipText(out, delegate, url, flag)` returns the label Chrome puts
+/// before the address of local pages (file, chrome and similar schemes) and of insecure ones.
+const CHIP_TEXT: usize = 0x00E4_D780;
+const CHIP_TEXT_PROLOGUE: [u8; 15] = [
+    0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB8, 0, 0, 0,
 ];
 /// `BubbleDialogDelegate::GetAnchorRect`, `View::IsDrawn` and `View::GetBoundsInScreen`.
 const ANCHOR_RECT: usize = 0x0ACA_C450;
@@ -158,7 +169,9 @@ static ORIGINAL_THEME_CHANGED: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_PAINT_LAYER: AtomicUsize = AtomicUsize::new(0);
 static LAYER_LOGGED: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_SET_VISIBLE: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_UPDATE_LOCATION: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_UPDATE_LOCATION_ICON: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_CHIP_TEXT: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
 /// The provider caches a colour when it is first asked for, so a colour can be swapped only after
 /// that. This remembers which ones have been seen, for the trace.
@@ -326,6 +339,20 @@ unsafe extern "system" fn widget_layout(widget: *mut c_void) {
 /// The icon is chosen while its view is being updated, which can happen outside any paint or
 /// layout of the window, so the Rivet scope is found from the view's ancestors.
 unsafe extern "system" fn update_location_icon(view: *mut c_void) {
+    let top = window_top(view);
+    let run: WidgetCall = original(&ORIGINAL_UPDATE_LOCATION_ICON);
+    scoped(top, || run(view));
+}
+
+/// The label is built here, which can also happen outside any paint or layout of the window.
+unsafe extern "system" fn update_location(view: *mut c_void, first: usize, second: usize, third: usize) {
+    let top = window_top(view);
+    let run: unsafe extern "system" fn(*mut c_void, usize, usize, usize) = original(&ORIGINAL_UPDATE_LOCATION);
+    scoped(top, || run(view, first, second, third));
+}
+
+/// The topmost ancestor of `view` that is a Rivet widget, or the topmost ancestor.
+unsafe fn window_top(view: *mut c_void) -> usize {
     let mut top = view as usize;
     for _ in 0..32 {
         let parent = *((top + PARENT_OFFSET) as *const usize);
@@ -334,8 +361,25 @@ unsafe extern "system" fn update_location_icon(view: *mut c_void) {
         }
         top = parent;
     }
-    let run: WidgetCall = original(&ORIGINAL_UPDATE_LOCATION_ICON);
-    scoped(top, || run(view));
+    top
+}
+
+/// Rivet windows show the address without a label before it. The label is built while the icon
+/// updates inside the scope of `update_location_icon`, and an empty `std::string` is three zeroed
+/// words, so nothing is allocated.
+unsafe extern "system" fn chip_text(
+    out: *mut [u64; 3],
+    delegate: *mut c_void,
+    url: *mut c_void,
+    flag: u8,
+) -> *mut [u64; 3] {
+    if active() {
+        out.write([0; 3]);
+        return out;
+    }
+    original::<unsafe extern "system" fn(*mut [u64; 3], *mut c_void, *mut c_void, u8) -> *mut [u64; 3]>(
+        &ORIGINAL_CHIP_TEXT,
+    )(out, delegate, url, flag)
 }
 
 /// Whether `view` is one of the hidden buttons of a Rivet window.
@@ -579,7 +623,9 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(PAINT_LAYER, &PAINT_LAYER_PROLOGUE)
         || !prologue(SET_VISIBLE, &SET_VISIBLE_PROLOGUE)
         || !prologue(FROM_VECTOR_ICON, &FROM_VECTOR_ICON_PROLOGUE)
+        || !prologue(UPDATE_LOCATION, &UPDATE_LOCATION_PROLOGUE)
         || !prologue(UPDATE_LOCATION_ICON, &UPDATE_LOCATION_ICON_PROLOGUE)
+        || !prologue(CHIP_TEXT, &CHIP_TEXT_PROLOGUE)
         || !prologue(ANCHOR_RECT, &ANCHOR_RECT_PROLOGUE)
         || !prologue(ANCHOR_RECT + 0x2a, &ANCHOR_VIEW_ACCESS)
         || !prologue(IS_DRAWN, &IS_DRAWN_BYTES)
@@ -670,6 +716,22 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         false,
         update_location_icon as *const () as usize,
         &ORIGINAL_UPDATE_LOCATION_ICON,
+    )?;
+    detour(
+        base,
+        UPDATE_LOCATION,
+        &UPDATE_LOCATION_PROLOGUE,
+        false,
+        update_location as *const () as usize,
+        &ORIGINAL_UPDATE_LOCATION,
+    )?;
+    detour(
+        base,
+        CHIP_TEXT,
+        &CHIP_TEXT_PROLOGUE,
+        false,
+        chip_text as *const () as usize,
+        &ORIGINAL_CHIP_TEXT,
     )?;
     let mut icon_trampoline = FROM_VECTOR_ICON_PROLOGUE.to_vec();
     jump(
@@ -984,6 +1046,15 @@ mod tests {
             .filter(|value| value.is_finite() && *value < 100.0)
             .collect();
         assert!(values.iter().all(|value| (0.0..=16.0).contains(value)));
+    }
+
+    #[test]
+    fn fr12_label_hooks_copy_whole_instructions() {
+        // `sub rsp, imm32` is seven bytes after the eight bytes of pushes.
+        assert_eq!(CHIP_TEXT_PROLOGUE.len(), 15);
+        assert_eq!(UPDATE_LOCATION_PROLOGUE.len(), 15);
+        assert_eq!(&CHIP_TEXT_PROLOGUE[8..11], &[0x48, 0x81, 0xEC]);
+        assert_eq!(&UPDATE_LOCATION_PROLOGUE[8..11], &[0x48, 0x81, 0xEC]);
     }
 
     #[test]
