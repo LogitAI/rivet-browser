@@ -8,11 +8,17 @@
 //! Every address here belongs to Chrome 156.0.8078.48. Each one is checked against recorded
 //! instruction bytes before it is used.
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT};
+use windows_sys::Win32::System::Memory::{
+    VirtualProtect, VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_PROTECTION_FLAGS,
+    PAGE_READWRITE,
+};
 
 use crate::chrome_layout;
 
@@ -22,6 +28,8 @@ const BROWSER_OFFSET: usize = 0x560;
 const FEATURES_OFFSET: usize = 0xd0;
 /// Where `BrowserWindowFeatures` keeps its `SidePanelCoordinator`.
 const FEATURES_COORDINATOR: usize = 0x330;
+/// The vtable of the `views::View` part of `BrowserView`.
+const BROWSER_VIEW_VIEW_VTABLE: usize = 0x0FE7_BF68;
 /// `SidePanelCoordinator`'s vtable.
 const COORDINATOR_VTABLE: usize = 0x0FE5_9440;
 /// `SidePanelUIBase::Show(this, SidePanelEntryId, optional<SidePanelOpenTrigger>, bool)`.
@@ -75,6 +83,8 @@ pub struct Objects {
     pub browser_view: usize,
     pub coordinator: usize,
     pub side_panel: usize,
+    /// The `views::View` part of `BrowserView`, which the browser's layout manager works on.
+    pub view: usize,
 }
 
 /// Finds a window's `BrowserView`, its side panel coordinator and its `SidePanel` from the frame
@@ -109,7 +119,11 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
         0
     };
     let side_panel = find(SIDE_PANEL_VTABLE);
-    Some(Objects { browser_view, coordinator, side_panel })
+    let view = (0..0x400)
+        .map(|index| browser_view + index * 8)
+        .find(|slot| readable(*slot, 8) && *(*slot as *const usize) == base + BROWSER_VIEW_VIEW_VTABLE)
+        .unwrap_or(0);
+    Some(Objects { browser_view, coordinator, side_panel, view })
 }
 
 fn prologue_is(address: usize, expected: &[u8]) -> bool {
@@ -145,11 +159,191 @@ unsafe fn entry_names() -> Vec<String> {
         .collect()
 }
 
+/// How wide the rail is, in device-independent pixels. The mock-up's rail is 40 DIPs.
+pub const RAIL_WIDTH: i32 = 40;
+
+thread_local! {
+    /// Windows whose Sidebar is unfolded: the rail column is reserved beside the page.
+    static UNFOLDED: RefCell<HashSet<isize>> = RefCell::new(HashSet::new());
+    /// The host view each window's browser layout works on, so Rivet can ask for a layout.
+    static HOST_VIEWS: RefCell<HashMap<isize, usize>> = RefCell::new(HashMap::new());
+}
+
+/// The width the rail takes from the right of a window's page area.
+fn rail_of(window: HWND) -> i32 {
+    if UNFOLDED.with(|set| set.borrow().contains(&(window as isize))) {
+        RAIL_WIDTH
+    } else {
+        0
+    }
+}
+
+/// `BrowserViewTabbedLayoutImpl::CalculateProposedLayout`, slot 16 of its vtable. It fills a
+/// `std::map` of view to bounds that the layout then applies.
+const LAYOUT_VTABLE: usize = 0x0FDB_0278;
+const PROPOSED_SLOT: usize = 16;
+const PROPOSED: usize = 0x0104_8AB0;
+/// The layout object keeps the host view at +0x38, the contents container at +0xb8, the side
+/// panel at +0xc0 and the content shown while the side panel animates at +0xc8.
+const HOST_VIEW: usize = 0x38;
+const CONTENTS_CONTAINER: usize = 0xb8;
+/// The view that draws the outline around the contents, which has the contents' bounds.
+const CONTENTS_OUTLINE: usize = 0x58;
+const SIDE_PANEL: usize = 0xc0;
+const SIDE_PANEL_ANIMATION: usize = 0xc8;
+/// `views::View::DeprecatedLayoutImmediately`.
+const LAYOUT_IMMEDIATELY: usize = 0x04BE_C780;
+const LAYOUT_IMMEDIATELY_PROLOGUE: [u8; 12] =
+    [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53];
+
+type ProposedLayout =
+    unsafe extern "system" fn(*mut c_void, *mut c_void, *const c_void) -> *mut c_void;
+static PROPOSED_LAYOUT: OnceLock<ProposedLayout> = OnceLock::new();
+
+/// The bounds Chrome's layout gave one view, from the layout map's red-black tree. The map keeps
+/// its root at +0x20, nodes hold left at +0, right at +8, the view at +0x20 and the bounds as
+/// four ints at +0x28.
+unsafe fn bounds_of(map: *const c_void, view: usize) -> Option<*mut [i32; 4]> {
+    let mut node = *(map.cast::<u8>().add(0x20) as *const usize);
+    while readable(node, 0x38) {
+        let key = *((node + 0x20) as *const usize);
+        if key == view {
+            return Some((node + 0x28) as *mut [i32; 4]);
+        }
+        node = *((node + if view < key { 0 } else { 8 }) as *const usize);
+    }
+    None
+}
+
+/// Leaves `rail` DIPs at the right edge of the page area: the contents get narrower and the side
+/// panel moves left, so the page, the open panel and the rail sit side by side.
+fn make_room(
+    contents: &mut [i32; 4],
+    outline: Option<&mut [i32; 4]>,
+    side_panel: Option<&mut [i32; 4]>,
+    animation: Option<&mut [i32; 4]>,
+    rail: i32,
+) {
+    for bounds in [Some(&mut *contents), outline].into_iter().flatten() {
+        bounds[2] = (bounds[2] - rail).max(1);
+    }
+    for bounds in [side_panel, animation].into_iter().flatten() {
+        bounds[0] -= rail;
+    }
+}
+
+static DUMP_LAYOUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Traces every view the layout placed, with the layout field that holds it, for a recorded build.
+unsafe fn dump_layout(this: *const c_void, node: usize, depth: usize) {
+    if depth > 40 || !readable(node, 0x38) {
+        return;
+    }
+    dump_layout(this, *(node as *const usize), depth + 1);
+    let view = *((node + 0x20) as *const usize);
+    let field = (0..0x140usize)
+        .step_by(8)
+        .find(|offset| *(this.cast::<u8>().add(*offset) as *const usize) == view);
+    let bounds = *((node + 0x28) as *const [i32; 4]);
+    let flags = *((node + 0x38) as *const u16);
+    trace(&format!("layout view {view:x} field {field:x?} bounds {bounds:?} flags {flags:#x}"));
+    dump_layout(this, *((node + 8) as *const usize), depth + 1);
+}
+
+unsafe extern "system" fn proposed_layout(
+    this: *mut c_void,
+    out: *mut c_void,
+    params: *const c_void,
+) -> *mut c_void {
+    let original = *PROPOSED_LAYOUT.get().expect("patched after it is stored");
+    let result = original(this, out, params);
+    let host = *(this.cast::<u8>().add(HOST_VIEW) as *const usize);
+    let Some(window) = chrome_layout::hwnd_of_view(host as *const c_void) else {
+        return result;
+    };
+    HOST_VIEWS.with(|views| views.borrow_mut().insert(window as isize, host));
+    if DUMP_LAYOUT.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        trace("layout dump");
+        dump_layout(this, *(out.cast::<u8>().add(0x20) as *const usize), 0);
+    }
+    let rail = rail_of(window);
+    if rail > 0 {
+        let field = |offset: usize| *(this.cast::<u8>().add(offset) as *const usize);
+        if let Some(contents) = bounds_of(out, field(CONTENTS_CONTAINER)) {
+            let side_panel = bounds_of(out, field(SIDE_PANEL));
+            let animation = bounds_of(out, field(SIDE_PANEL_ANIMATION));
+            let outline = bounds_of(out, field(CONTENTS_OUTLINE));
+            make_room(
+                &mut *contents,
+                outline.map(|bounds| &mut *bounds),
+                side_panel.map(|bounds| &mut *bounds),
+                animation.map(|bounds| &mut *bounds),
+                rail,
+            );
+        }
+    }
+    result
+}
+
+/// Patches the layout once per process. Without the recorded layout the Sidebar stays folded.
+pub unsafe fn install_layout() -> Result<(), String> {
+    if PROPOSED_LAYOUT.get().is_some() {
+        return Ok(());
+    }
+    let base = chrome_base();
+    let slot = (base + LAYOUT_VTABLE + PROPOSED_SLOT * 8) as *mut usize;
+    if slot.read() != base + PROPOSED {
+        return Err("this browser build has no recorded layout for the Sidebar".into());
+    }
+    let _ = PROPOSED_LAYOUT.set(std::mem::transmute::<usize, ProposedLayout>(slot.read()));
+    let mut previous: PAGE_PROTECTION_FLAGS = 0;
+    if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
+        return Err("could not unprotect the layout vtable".into());
+    }
+    slot.write(proposed_layout as *const () as usize);
+    VirtualProtect(slot.cast(), 8, previous, &mut previous);
+    Ok(())
+}
+
+/// Lays the browser view out again, which runs the patched layout.
+pub unsafe fn relayout_page_area(window: HWND) {
+    let base = chrome_base();
+    let host = HOST_VIEWS
+        .with(|views| views.borrow().get(&(window as isize)).copied())
+        .or_else(|| objects(window).map(|found| found.view).filter(|view| *view != 0));
+    if let Some(host) =
+        host.filter(|_| prologue_is(base + LAYOUT_IMMEDIATELY, &LAYOUT_IMMEDIATELY_PROLOGUE))
+    {
+        let layout: unsafe extern "system" fn(*mut c_void) =
+            std::mem::transmute(base + LAYOUT_IMMEDIATELY);
+        layout(host as *mut c_void);
+    }
+}
+
+/// Folds or unfolds the Sidebar of a window and lays its page area out again.
+pub unsafe fn set_unfolded(window: HWND, unfolded: bool) {
+    if let Err(error) = install_layout() {
+        trace(&error);
+        return;
+    }
+    UNFOLDED.with(|set| {
+        let mut set = set.borrow_mut();
+        if unfolded {
+            set.insert(window as isize);
+        } else {
+            set.remove(&(window as isize));
+        }
+    });
+    relayout_page_area(window);
+}
+
 /// What a test flag file asks for.
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
     Dump,
     Open(u32),
+    Rail(bool),
+    DumpLayout,
 }
 
 impl Command {
@@ -157,6 +351,12 @@ impl Command {
         let text = text.trim();
         if text == "dump" {
             return Some(Self::Dump);
+        }
+        match text {
+            "rail on" => return Some(Self::Rail(true)),
+            "rail off" => return Some(Self::Rail(false)),
+            "layout" => return Some(Self::DumpLayout),
+            _ => {}
         }
         text.strip_prefix("open ")?.trim().parse().ok().map(Self::Open)
     }
@@ -179,6 +379,12 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
                 trace(&format!("side panel bounds {bounds:?}"));
             }
         }
+        Some(Command::Rail(on)) => set_unfolded(window, on),
+        Some(Command::DumpLayout) => {
+            let _ = install_layout();
+            DUMP_LAYOUT.store(true, std::sync::atomic::Ordering::Relaxed);
+            relayout_page_area(window);
+        }
         Some(Command::Open(id)) => trace(&format!("open {id} -> {}", open_entry(window, id))),
         None => {}
     }
@@ -187,6 +393,24 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr10_rail_takes_its_width_from_the_contents_and_moves_the_open_panel() {
+        let mut contents = [0, 46, 700, 600];
+        let mut panel = [700, 46, 378, 600];
+        let mut animation = [700, 46, 378, 600];
+        make_room(&mut contents, None, Some(&mut panel), Some(&mut animation), RAIL_WIDTH);
+        assert_eq!(contents, [0, 46, 660, 600]);
+        assert_eq!(panel[0], 660);
+        assert_eq!(animation[0], 660);
+    }
+
+    #[test]
+    fn fr10_rail_never_collapses_the_page() {
+        let mut contents = [0, 0, 20, 100];
+        make_room(&mut contents, None, None, None, RAIL_WIDTH);
+        assert_eq!(contents[2], 1);
+    }
 
     #[test]
     fn fr10_test_flag_opens_an_entry_by_id() {

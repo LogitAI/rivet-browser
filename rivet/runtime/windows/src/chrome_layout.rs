@@ -1010,6 +1010,14 @@ fn remember_view(window: HWND, view: *mut c_void) {
     }
 }
 
+/// The window a view belongs to, once the layout hook is installed.
+pub unsafe fn hwnd_of_view(view: *const c_void) -> Option<HWND> {
+    match HOOK.get() {
+        Some(Ok(hook)) => Some((hook.hwnd_for_view)(view)),
+        _ => None,
+    }
+}
+
 /// The frame view a window last laid out, if any.
 pub fn frame_view(window: HWND) -> Option<usize> {
     FRAME_VIEWS
