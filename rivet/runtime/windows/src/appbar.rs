@@ -54,7 +54,6 @@ mod palette {
     pub const SOFT_INK: u32 = 0x4a4850;
     pub const MUTED: u32 = 0x8a8690;
     /// A top row button that has nothing to do, such as back on the first page.
-    pub const DISABLED_INK: u32 = 0xc4c1c8;
     pub const WHITE: u32 = 0xffffff;
 }
 use palette::*;
@@ -85,13 +84,7 @@ const ACTIVE: Type = style("Manrope", 12.5, 600, 0.0);
 const FAVICON: Type = style("Manrope", 9.0, 700, 0.0);
 /// Interface icons come from the font Windows 11 draws its own caption buttons with.
 const ICONS: &str = "Segoe Fluent Icons";
-const NAV_TITLE: Type = style("Manrope", 12.0, 600, 0.0);
-/// Back, forward and reload, each in a 28 DIP button every `NAV_STEP` DIPs from 8 DIPs in.
-const NAV_GLYPHS: [char; 3] = ['\u{E72B}', '\u{E72A}', '\u{E72C}'];
-pub const NAV_STEP: f32 = 30.0;
-const PAPER: u32 = 0xfbfaf7;
-/// The shell study's gap around the page panel and its corner radius.
-pub const PANEL_GAP: f32 = 8.0;
+const PANEL_GAP: f32 = 8.0;
 const PANEL_RADIUS: f32 = 12.0;
 
 fn color(rgb: u32) -> D2D1_COLOR_F {
@@ -184,10 +177,6 @@ pub struct Appbar {
     _target: IDCompositionTarget,
     visual: IDCompositionVisual2,
     painted: Option<Painted>,
-    // Experiment: the page's top row, painted by Rivet over the browser's title bar.
-    nav: IDCompositionVisual2,
-    nav_painted: Option<(Painted, String, (bool, bool))>,
-    // Experiment: the frame around the page panel, above everything else.
     panel: IDCompositionVisual2,
     panel_painted: Option<Painted>,
     tabs: Vec<TabItem>,
@@ -222,11 +211,9 @@ impl Appbar {
             .or_else(|_| device.CreateTargetForHwnd(hwnd, false))?;
         let root = device.CreateVisual()?;
         let visual = device.CreateVisual()?;
-        let nav = device.CreateVisual()?;
         root.AddVisual(&visual, false, None::<&IDCompositionVisual>)?;
-        root.AddVisual(&nav, true, &visual)?;
         let panel = device.CreateVisual()?;
-        root.AddVisual(&panel, true, &nav)?;
+        root.AddVisual(&panel, true, &visual)?;
         target.SetRoot(&root)?;
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
@@ -237,8 +224,6 @@ impl Appbar {
             _target: target,
             visual,
             painted: None,
-            nav,
-            nav_painted: None,
             panel,
             panel_painted: None,
             tabs: Vec::new(),
@@ -296,65 +281,6 @@ impl Appbar {
             self.paint(&surface, width, height, dpi)?;
             self.visual.SetContent(&surface)?;
             self.painted = Some(Painted { width, height, dpi });
-        }
-        self.device.Commit()
-    }
-
-    /// Experiment: positions and paints the top row of the page, between the appbar and the
-    /// browser's caption buttons.
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe fn update_nav(
-        &mut self,
-        visible: bool,
-        left: i32,
-        top: i32,
-        width: i32,
-        height: i32,
-        dpi: u32,
-        title: &str,
-        history: (bool, bool),
-    ) -> Result<()> {
-        if !visible || width <= 0 || height <= 0 {
-            self.nav.SetContent(None)?;
-            self.nav_painted = None;
-            return self.device.Commit();
-        }
-        self.nav.SetOffsetX2(left as f32)?;
-        self.nav.SetOffsetY2(top as f32)?;
-        let stale = self
-            .nav_painted
-            .as_ref()
-            .is_none_or(|(p, painted_title, painted)| {
-                (p.width, p.height, p.dpi) != (width, height, dpi)
-                    || painted_title != title
-                    || *painted != history
-            });
-        if stale {
-            let surface = self.device.CreateSurface(
-                width as u32,
-                height as u32,
-                DXGI_FORMAT_B8G8R8A8_UNORM,
-                DXGI_ALPHA_MODE_PREMULTIPLIED,
-            )?;
-            let mut offset = POINT::default();
-            let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
-            let scale = dpi as f32 / 96.0;
-            context.SetDpi(dpi as f32, dpi as f32);
-            context.SetTransform(&Matrix3x2::translation(
-                offset.x as f32 / scale,
-                offset.y as f32 / scale,
-            ));
-            let canvas = Canvas {
-                context: &context,
-                dwrite: &self.dwrite,
-                fonts: &self.fonts,
-            };
-            let result =
-                canvas.draw_nav(width as f32 / scale, height as f32 / scale, title, history);
-            surface.EndDraw()?;
-            result?;
-            self.nav.SetContent(&surface)?;
-            self.nav_painted = Some((Painted { width, height, dpi }, title.to_owned(), history));
         }
         self.device.Commit()
     }
@@ -888,41 +814,6 @@ impl Canvas<'_> {
             self.context.SetTransform(&original);
             x += 32.0;
         }
-        Ok(())
-    }
-
-    /// Experiment: the page's top row after the shell study's toolbar: back, forward and reload,
-    /// then the address. The browser's own caption buttons stay to its right.
-    unsafe fn draw_nav(&self, w: f32, h: f32, title: &str, history: (bool, bool)) -> Result<()> {
-        self.context.Clear(Some(&color(PAPER)));
-        self.fill(rect(0.0, h - 1.0, w, 1.0), 0xebeae6)?;
-        let mid = h / 2.0;
-        let mut x = 8.0;
-        let enabled = [history.0, history.1, true];
-        for (glyph, enabled) in NAV_GLYPHS.into_iter().zip(enabled) {
-            let ink = if enabled { SOFT_INK } else { DISABLED_INK };
-            self.icon(glyph, rect(x, mid - 14.0, 28.0, 28.0), 14.0, ink)?;
-            x += NAV_STEP;
-        }
-        let area = rect(x + 8.0, mid - 14.0, w - x - 16.0, 28.0);
-        self.icon(
-            '\u{E72E}',
-            rect(area.left + 4.0, area.top, 20.0, 28.0),
-            12.0,
-            MUTED,
-        )?;
-        self.text(
-            NAV_TITLE,
-            rect(
-                area.left + 28.0,
-                area.top,
-                area.right - area.left - 32.0,
-                28.0,
-            ),
-            title,
-            SOFT_INK,
-            false,
-        )?;
         Ok(())
     }
 

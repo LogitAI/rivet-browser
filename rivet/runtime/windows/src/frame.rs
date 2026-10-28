@@ -20,10 +20,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     RegisterWindowMessageW, RemovePropW, SetPropW, SetWindowLongPtrW, SetWindowPos, GWLP_WNDPROC,
     GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT, ICON_BIG, ICON_SMALL, SM_CXICON,
     SM_CXPADDEDBORDER, SM_CXSMICON, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, WM_APPCOMMAND, WM_DPICHANGED, WM_NCDESTROY, WM_NCHITTEST,
-    WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
-    WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_SETICON, WM_SETTEXT, WM_WINDOWPOSCHANGED, WNDPROC,
-    WS_THICKFRAME,
+    SWP_NOSIZE, SWP_NOZORDER, WM_DPICHANGED, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK,
+    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN,
+    WM_NCRBUTTONUP, WM_SETICON, WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
 };
 
 use super::appbar::{Appbar, TabItem};
@@ -182,94 +181,15 @@ unsafe fn attach_message() -> u32 {
     RegisterWindowMessageW(wide(ATTACH_MESSAGE).as_ptr())
 }
 
-/// Experiment: whether Rivet paints the page's top row. A `rivet-nav.log` file next to the
-/// runtime turns it on.
-static NAV: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// The browser's three caption buttons, which stay native, in DIPs.
-const NAV_CAPTION_WIDTH: i32 = 138;
+static PANEL_EXPERIMENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The page colour of the shell study, so the native caption buttons sit on the top row.
 fn nav_frame_color(window: HWND) -> Option<u32> {
     attached(window).then_some(0xFFFB_FAF7)
 }
 
-fn nav_on() -> bool {
-    NAV.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Where the top row sits in client pixels: left, top, width and height.
-unsafe fn nav_bounds(window: HWND) -> (i32, i32, i32, i32) {
-    let mut client: RECT = std::mem::zeroed();
-    GetClientRect(window, &mut client);
-    let dpi = layout_dpi(window);
-    let left = scale(APPBAR_WIDTH, dpi);
-    let top = top_border(window);
-    let width = client.right - left - scale(NAV_CAPTION_WIDTH, dpi);
-    let height = scale(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP, dpi) - top;
-    (left, top, width, height)
-}
-
-/// The top row button under a client point: 0 back, 1 forward, 2 reload. `None` elsewhere in
-/// the row, which drags the window. The outer `None` means the point is not in the row.
-unsafe fn nav_hit(window: HWND, x: i32, y: i32) -> Option<Option<usize>> {
-    let (left, top, width, height) = nav_bounds(window);
-    if x < left || x >= left + width || y < top || y >= top + height {
-        return None;
-    }
-    let dpi = layout_dpi(window) as f32 / 96.0;
-    let local = (x - left) as f32 / dpi - 8.0;
-    let index = (local / crate::appbar::NAV_STEP).floor();
-    // The address field starts one gap after the three buttons.
-    if local >= 3.0 * crate::appbar::NAV_STEP + 8.0 {
-        return Some(Some(NAV_ADDRESS));
-    }
-    let inside = local >= 0.0 && local - index * crate::appbar::NAV_STEP < 28.0;
-    Some((inside && (0.0..3.0).contains(&index)).then_some(index as usize))
-}
-
-/// The timer that refreshes the top row. Chromium's own timers use other identifiers.
-const NAV_TIMER: usize = 0x5249_5645;
-
-/// The `nav_hit` index of the address field.
-const NAV_ADDRESS: usize = 3;
-
-/// Opens the address editor over the address field of the top row.
-unsafe fn edit_address(window: HWND) {
-    let (left, top, width, height) = nav_bounds(window);
-    let dpi = layout_dpi(window);
-    let text_left = 8.0 + 3.0 * crate::appbar::NAV_STEP + 8.0 + 28.0;
-    let mut origin = POINT {
-        x: left + (text_left * dpi as f32 / 96.0) as i32,
-        y: top + height / 2 - scale(11, dpi),
-    };
-    windows_sys::Win32::Graphics::Gdi::ClientToScreen(window, &mut origin);
-    let text = crate::chrome_navigation::visible_url(window)
-        .or_else(|| crate::page_address::address(window as isize))
-        .unwrap_or_default();
-    crate::address_edit::begin(
-        window,
-        origin.x,
-        origin.y,
-        width - (text_left * dpi as f32 / 96.0) as i32 - scale(16, dpi),
-        scale(22, dpi),
-        dpi,
-        &text,
-    );
-}
-
-unsafe fn window_title(window: HWND) -> String {
-    let mut text = [0u16; 512];
-    let length = windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW(
-        window,
-        text.as_mut_ptr(),
-        text.len() as i32,
-    );
-    String::from_utf16_lossy(&text[..length.max(0) as usize])
-}
-
-unsafe fn edit_address_message() -> u32 {
-    RegisterWindowMessageW(wide("RivetEditAddress").as_ptr())
-}
+const NAV_CAPTION_WIDTH: i32 = 138;
+const TAB_REFRESH_TIMER: usize = 0x5249_5645;
 
 unsafe fn vertical_tabs_message() -> u32 {
     RegisterWindowMessageW(wide("RivetVerticalTabs").as_ptr())
@@ -397,7 +317,7 @@ unsafe fn create_appbar(window: HWND) {
     }
     // Experiment, off unless asked for: Chromium's vertical-tab frame for Rivet windows.
     if runtime_directory().is_some_and(|dir| dir.join("rivet-nav.log").exists()) {
-        NAV.store(true, std::sync::atomic::Ordering::Relaxed);
+        PANEL_EXPERIMENT.store(true, std::sync::atomic::Ordering::Relaxed);
         chrome_layout::PANEL.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(dir) = runtime_directory() {
             crate::vertical_tabs::set_trace(dir.join("rivet-nav.log"));
@@ -455,7 +375,7 @@ unsafe fn create_appbar(window: HWND) {
         crate::chrome_toolbar::adopt(window);
     }
     // Tab titles and selection can change without a window title change.
-    windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(window, NAV_TIMER, 500, None);
+    windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(window, TAB_REFRESH_TIMER, 500, None);
     if vertical_tabs {
         for controller in crate::vertical_tabs::reported() {
             PostMessageW(window, vertical_tabs_message(), controller, 0);
@@ -507,7 +427,7 @@ unsafe fn update_appbar(window: HWND) {
             if let Err(error) = appbar.update(visible, 0, top, width, height, dpi) {
                 log(&format!("rivet: could not draw the appbar: {error}"));
             }
-            if nav_on() {
+            if PANEL_EXPERIMENT.load(std::sync::atomic::Ordering::Relaxed) {
                 if let Err(error) = appbar.update_panel(
                     visible,
                     top,
@@ -517,22 +437,6 @@ unsafe fn update_appbar(window: HWND) {
                     NAV_CAPTION_WIDTH as f32,
                 ) {
                     log(&format!("rivet: could not draw the panel: {error}"));
-                }
-                let (left, top, width, height) = nav_bounds(window);
-                let title = match crate::chrome_navigation::visible_url(window)
-                    .or_else(|| crate::page_address::address(window as isize))
-                {
-                    Some(address) => crate::page_address::display(&address).to_owned(),
-                    None => {
-                        crate::page_address::request(window as isize);
-                        window_title(window)
-                    }
-                };
-                let history = crate::chrome_navigation::history(window).unwrap_or((true, true));
-                if let Err(error) =
-                    appbar.update_nav(visible, left, top, width, height, dpi, &title, history)
-                {
-                    log(&format!("rivet: could not draw the top row: {error}"));
                 }
             }
         }
@@ -643,37 +547,6 @@ unsafe extern "system" fn browser_proc(
 
 unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match message {
-        WM_NCHITTEST
-            if attached(window) && nav_on() && framed(window) && {
-                let point = client_point(window, lparam);
-                nav_hit(window, point.x, point.y).is_some()
-            } =>
-        {
-            let point = client_point(window, lparam);
-            match nav_hit(window, point.x, point.y) {
-                Some(Some(_)) => APPBAR_HIT as LRESULT,
-                _ => HTCAPTION as LRESULT,
-            }
-        }
-        WM_NCLBUTTONUP
-            if wparam as u32 == APPBAR_HIT && attached(window) && nav_on() && {
-                let point = client_point(window, lparam);
-                nav_hit(window, point.x, point.y).is_some()
-            } =>
-        {
-            let point = client_point(window, lparam);
-            if let Some(Some(NAV_ADDRESS)) = nav_hit(window, point.x, point.y) {
-                // The browser takes the focus back while it finishes the click, so the editor
-                // opens once the click is over.
-                PostMessageW(window, edit_address_message(), 0, 0);
-            } else if let Some(Some(index)) = nav_hit(window, point.x, point.y) {
-                // The browser handles Windows' standard browser commands.
-                const COMMANDS: [u32; 3] = [1, 2, 3];
-                let command = (COMMANDS[index] as isize) << 16;
-                PostMessageW(window, WM_APPCOMMAND, window as WPARAM, command);
-            }
-            0
-        }
         WM_NCMOUSEMOVE if wparam as u32 == APPBAR_HIT && attached(window) => {
             let mut tracking = TRACKMOUSEEVENT {
                 cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
@@ -728,13 +601,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             update_appbar(window);
             0
         }
-        WM_SETTEXT if attached(window) && nav_on() => {
-            let result = call_browser(window, message, wparam, lparam);
-            // A new title usually means a new page, so the address is read again.
-            crate::page_address::request(window as isize);
-            update_appbar(window);
-            result
-        }
         WM_NCHITTEST if attached(window) => match hit_test(window, lparam) {
             StripHit::Browser => call_browser(window, message, wparam, lparam),
             // The caption band keeps native dragging, Snap Layouts, double-click maximize and
@@ -774,7 +640,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::vertical_tabs::forget(window);
             crate::chrome_toolbar::forget(window);
-            crate::page_address::forget(window as isize);
             LAYOUT_DPI.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             let key = wide(ORIGINAL_PROC);
             let original = GetPropW(window, key.as_ptr());
@@ -784,16 +649,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             CallWindowProcW(original, window, message, wparam, lparam)
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
-            if wparam == NAV_TIMER && attached(window) =>
+            if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
-            update_appbar(window);
-            0
-        }
-        _ if message == edit_address_message() => {
-            edit_address(window);
-            0
-        }
-        _ if message == crate::page_address::message() => {
             update_appbar(window);
             0
         }
