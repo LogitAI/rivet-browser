@@ -12,9 +12,9 @@ use windows::Win32::Foundation::{HMODULE, HWND, POINT};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D1_GRADIENT_STOP, D2D_RECT_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1RenderTarget,
-    ID2D1SolidColorBrush, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_EXTEND_MODE_CLAMP,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2, D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES,
-    D2D1_ROUNDED_RECT,
+    ID2D1SolidColorBrush, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE,
+    D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
+    D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES, D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -22,7 +22,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice2, IDCompositionDesktopDevice, IDCompositionSurface,
-    IDCompositionTarget, IDCompositionVisual2,
+    IDCompositionTarget, IDCompositionVisual, IDCompositionVisual2,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory5, IDWriteFontCollection1, IDWriteTextLayout1,
@@ -53,6 +53,8 @@ mod palette {
     pub const INK: u32 = 0x1f2024;
     pub const SOFT_INK: u32 = 0x4a4850;
     pub const MUTED: u32 = 0x8a8690;
+    /// A top row button that has nothing to do, such as back on the first page.
+    pub const DISABLED_INK: u32 = 0xc4c1c8;
     pub const WHITE: u32 = 0xffffff;
 }
 use palette::*;
@@ -83,6 +85,14 @@ const ACTIVE: Type = style("Manrope", 12.5, 600, 0.0);
 const FAVICON: Type = style("Manrope", 9.0, 700, 0.0);
 /// Interface icons come from the font Windows 11 draws its own caption buttons with.
 const ICONS: &str = "Segoe Fluent Icons";
+const NAV_TITLE: Type = style("Manrope", 12.0, 600, 0.0);
+/// Back, forward and reload, each in a 28 DIP button every `NAV_STEP` DIPs from 8 DIPs in.
+const NAV_GLYPHS: [char; 3] = ['\u{E72B}', '\u{E72A}', '\u{E72C}'];
+pub const NAV_STEP: f32 = 30.0;
+const PAPER: u32 = 0xfbfaf7;
+/// The shell study's gap around the page panel and its corner radius.
+pub const PANEL_GAP: f32 = 8.0;
+const PANEL_RADIUS: f32 = 12.0;
 
 fn color(rgb: u32) -> D2D1_COLOR_F {
     rgba(rgb, 1.0)
@@ -135,17 +145,6 @@ const FOLDER: [Row; 3] = [
         ..row(Lead::Favicon(0x7a5bd1, "F"), "Design review", "")
     },
 ];
-const TODAY: [Row; 6] = [
-    row(Lead::Glyph('\u{E710}'), "New tab", "Ctrl T"),
-    Row {
-        active: true,
-        ..row(Lead::Favicon(0x7c2d4f, "R"), "New tab", "")
-    },
-    row(Lead::Favicon(0xd07a3a, "E"), "Ember workspace", ""),
-    row(Lead::Favicon(0x24292f, "G"), "Release notes", ""),
-    row(Lead::Favicon(0x2f8f6b, "N"), "Launch notes", ""),
-    row(Lead::Favicon(0x3a3d45, "</>"), "Local preview", ""),
-];
 const PINNED: [(u32, &str); 4] = [
     (0xd4513b, "M"),
     (0x3b6fd4, "31"),
@@ -153,6 +152,12 @@ const PINNED: [(u32, &str); 4] = [
     (0x1f2024, "N"),
 ];
 const SPACE_DOTS: [u32; 3] = [TINT, 0x5b8bab, 0xc0577f];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabItem {
+    pub title: String,
+    pub active: bool,
+}
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> D2D_RECT_F {
     D2D_RECT_F {
@@ -179,6 +184,16 @@ pub struct Appbar {
     _target: IDCompositionTarget,
     visual: IDCompositionVisual2,
     painted: Option<Painted>,
+    // Experiment: the page's top row, painted by Rivet over the browser's title bar.
+    nav: IDCompositionVisual2,
+    nav_painted: Option<(Painted, String, (bool, bool))>,
+    // Experiment: the frame around the page panel, above everything else.
+    panel: IDCompositionVisual2,
+    panel_painted: Option<Painted>,
+    tabs: Vec<TabItem>,
+    tint: u32,
+    hover: Option<crate::frame::AppbarHit>,
+    pressed: Option<crate::frame::AppbarHit>,
 }
 
 impl Appbar {
@@ -205,8 +220,14 @@ impl Appbar {
         let target = device
             .CreateTargetForHwnd(hwnd, true)
             .or_else(|_| device.CreateTargetForHwnd(hwnd, false))?;
+        let root = device.CreateVisual()?;
         let visual = device.CreateVisual()?;
-        target.SetRoot(&visual)?;
+        let nav = device.CreateVisual()?;
+        root.AddVisual(&visual, false, None::<&IDCompositionVisual>)?;
+        root.AddVisual(&nav, true, &visual)?;
+        let panel = device.CreateVisual()?;
+        root.AddVisual(&panel, true, &nav)?;
+        target.SetRoot(&root)?;
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
         Ok(Self {
@@ -216,7 +237,32 @@ impl Appbar {
             _target: target,
             visual,
             painted: None,
+            nav,
+            nav_painted: None,
+            panel,
+            panel_painted: None,
+            tabs: Vec::new(),
+            tint: TINT,
+            hover: None,
+            pressed: None,
         })
+    }
+
+    pub fn set_state(
+        &mut self,
+        tabs: Vec<TabItem>,
+        tint: u32,
+        hover: Option<crate::frame::AppbarHit>,
+        pressed: Option<crate::frame::AppbarHit>,
+    ) {
+        if self.tabs != tabs || self.tint != tint || self.hover != hover || self.pressed != pressed
+        {
+            self.tabs = tabs;
+            self.tint = tint;
+            self.hover = hover;
+            self.pressed = pressed;
+            self.painted = None;
+        }
     }
 
     /// Positions the visual in window coordinates and repaints it when its size or DPI changed.
@@ -254,6 +300,115 @@ impl Appbar {
         self.device.Commit()
     }
 
+    /// Experiment: positions and paints the top row of the page, between the appbar and the
+    /// browser's caption buttons.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn update_nav(
+        &mut self,
+        visible: bool,
+        left: i32,
+        top: i32,
+        width: i32,
+        height: i32,
+        dpi: u32,
+        title: &str,
+        history: (bool, bool),
+    ) -> Result<()> {
+        if !visible || width <= 0 || height <= 0 {
+            self.nav.SetContent(None)?;
+            self.nav_painted = None;
+            return self.device.Commit();
+        }
+        self.nav.SetOffsetX2(left as f32)?;
+        self.nav.SetOffsetY2(top as f32)?;
+        let stale = self
+            .nav_painted
+            .as_ref()
+            .is_none_or(|(p, painted_title, painted)| {
+                (p.width, p.height, p.dpi) != (width, height, dpi)
+                    || painted_title != title
+                    || *painted != history
+            });
+        if stale {
+            let surface = self.device.CreateSurface(
+                width as u32,
+                height as u32,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                DXGI_ALPHA_MODE_PREMULTIPLIED,
+            )?;
+            let mut offset = POINT::default();
+            let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+            let scale = dpi as f32 / 96.0;
+            context.SetDpi(dpi as f32, dpi as f32);
+            context.SetTransform(&Matrix3x2::translation(
+                offset.x as f32 / scale,
+                offset.y as f32 / scale,
+            ));
+            let canvas = Canvas {
+                context: &context,
+                dwrite: &self.dwrite,
+                fonts: &self.fonts,
+            };
+            let result =
+                canvas.draw_nav(width as f32 / scale, height as f32 / scale, title, history);
+            surface.EndDraw()?;
+            result?;
+            self.nav.SetContent(&surface)?;
+            self.nav_painted = Some((Painted { width, height, dpi }, title.to_owned(), history));
+        }
+        self.device.Commit()
+    }
+
+    /// Experiment: paints the frame around the page panel. `caption` is the width of the native
+    /// caption buttons in DIPs, which the frame never covers.
+    pub unsafe fn update_panel(
+        &mut self,
+        visible: bool,
+        top: i32,
+        width: i32,
+        height: i32,
+        dpi: u32,
+        caption: f32,
+    ) -> Result<()> {
+        if !visible || width <= 0 || height <= 0 {
+            self.panel.SetContent(None)?;
+            self.panel_painted = None;
+            return self.device.Commit();
+        }
+        self.panel.SetOffsetY2(top as f32)?;
+        let stale = self
+            .panel_painted
+            .as_ref()
+            .is_none_or(|p| (p.width, p.height, p.dpi) != (width, height, dpi));
+        if stale {
+            let surface = self.device.CreateSurface(
+                width as u32,
+                height as u32,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                DXGI_ALPHA_MODE_PREMULTIPLIED,
+            )?;
+            let mut offset = POINT::default();
+            let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+            let scale = dpi as f32 / 96.0;
+            context.SetDpi(dpi as f32, dpi as f32);
+            context.SetTransform(&Matrix3x2::translation(
+                offset.x as f32 / scale,
+                offset.y as f32 / scale,
+            ));
+            let canvas = Canvas {
+                context: &context,
+                dwrite: &self.dwrite,
+                fonts: &self.fonts,
+            };
+            let result = canvas.draw_panel(width as f32 / scale, height as f32 / scale, caption);
+            surface.EndDraw()?;
+            result?;
+            self.panel.SetContent(&surface)?;
+            self.panel_painted = Some(Painted { width, height, dpi });
+        }
+        self.device.Commit()
+    }
+
     unsafe fn paint(
         &self,
         surface: &IDCompositionSurface,
@@ -275,7 +430,14 @@ impl Appbar {
             dwrite: &self.dwrite,
             fonts: &self.fonts,
         };
-        let result = canvas.draw(width as f32 / scale, height as f32 / scale);
+        let result = canvas.draw(
+            width as f32 / scale,
+            height as f32 / scale,
+            self.tint,
+            &self.tabs,
+            self.hover,
+            self.pressed,
+        );
         surface.EndDraw()?;
         result
     }
@@ -403,6 +565,8 @@ impl Canvas<'_> {
             };
             layout.SetCharacterSpacing(0.0, style.tracking * style.size, 0.0, range)?;
         }
+        self.context
+            .PushAxisAlignedClip(&area, D2D1_ANTIALIAS_MODE_ALIASED);
         self.context.DrawTextLayout(
             Vector2 {
                 X: area.left,
@@ -412,6 +576,7 @@ impl Canvas<'_> {
             &self.brush(rgb)?,
             D2D1_DRAW_TEXT_OPTIONS_NONE,
         );
+        self.context.PopAxisAlignedClip();
         Ok(())
     }
 
@@ -534,16 +699,16 @@ impl Canvas<'_> {
     }
 
     /// The frame ground: the space colour rises from the lower left corner, as in the study.
-    unsafe fn ground(&self, w: f32, h: f32) -> Result<()> {
+    unsafe fn ground(&self, w: f32, h: f32, tint: u32) -> Result<()> {
         self.context.Clear(Some(&color(FRAME)));
         let stops = [
             D2D1_GRADIENT_STOP {
                 position: 0.0,
-                color: rgba(TINT, 0.34),
+                color: rgba(tint, 0.34),
             },
             D2D1_GRADIENT_STOP {
                 position: 0.7,
-                color: rgba(TINT, 0.0),
+                color: rgba(tint, 0.0),
             },
         ];
         let target: &ID2D1RenderTarget = self.context;
@@ -564,8 +729,16 @@ impl Canvas<'_> {
     }
 
     /// Paints the Appbar in device-independent pixels, after the shell study.
-    unsafe fn draw(&self, w: f32, h: f32) -> Result<()> {
-        self.ground(w, h)?;
+    unsafe fn draw(
+        &self,
+        w: f32,
+        h: f32,
+        tint: u32,
+        tabs: &[TabItem],
+        hover: Option<crate::frame::AppbarHit>,
+        pressed: Option<crate::frame::AppbarHit>,
+    ) -> Result<()> {
+        self.ground(w, h, tint)?;
         let left = 10.0;
         let inner = w - 18.0;
 
@@ -577,9 +750,35 @@ impl Canvas<'_> {
         let tile = (inner - 18.0) / 4.0;
         for (index, (rgb, letter)) in PINNED.iter().enumerate() {
             let area = rect(left + index as f32 * (tile + 6.0), 52.0, tile, 42.0);
-            self.fill_rounded(area, 11.0, rgba(WHITE, 0.5))?;
+            let hot = hover == Some(crate::frame::AppbarHit::Pinned(index));
+            let down = pressed == Some(crate::frame::AppbarHit::Pinned(index));
+            let mut original = Matrix3x2::default();
+            self.context.GetTransform(&mut original);
+            if down {
+                let center = Vector2 {
+                    X: area.left + tile / 2.0,
+                    Y: area.top + 21.0,
+                };
+                self.context
+                    .SetTransform(&(Matrix3x2::scale_around(0.96, 0.96, center) * original));
+            }
+            self.fill_rounded(
+                area,
+                11.0,
+                rgba(
+                    WHITE,
+                    if down {
+                        0.72
+                    } else if hot {
+                        0.86
+                    } else {
+                        0.5
+                    },
+                ),
+            )?;
             self.ring(area, 11.0, rgba(INK, 0.08))?;
             self.favicon(area.left + tile / 2.0 - 10.0, 63.0, 20.0, *rgb, letter)?;
+            self.context.SetTransform(&original);
         }
 
         // The space, with the browser and profile it opens in.
@@ -602,16 +801,49 @@ impl Canvas<'_> {
             false,
         )?;
 
-        // Tabs: a folder, then today's tabs below New tab.
+        // Tabs: a folder, then the browser's current tabs below New tab.
         let mut top = 138.0;
-        for item in &FOLDER {
-            self.tab_row(left, inner, top, item)?;
+        for (index, item) in FOLDER.iter().enumerate() {
+            self.tab_row(
+                left,
+                inner,
+                top,
+                item,
+                hover == Some(crate::frame::AppbarHit::Folder(index)),
+                pressed == Some(crate::frame::AppbarHit::Folder(index)),
+            )?;
             top += 34.0;
         }
         self.fill(rect(left + 10.0, top + 8.0, inner - 20.0, 1.0), 0xd9d3cb)?;
         top += 17.0;
-        for item in &TODAY {
-            self.tab_row(left, inner, top, item)?;
+        let new_tab = row(Lead::Glyph('\u{E710}'), "New tab", "Ctrl T");
+        self.tab_row(
+            left,
+            inner,
+            top,
+            &new_tab,
+            hover == Some(crate::frame::AppbarHit::NewTab),
+            pressed == Some(crate::frame::AppbarHit::NewTab),
+        )?;
+        top += 34.0;
+        for (index, item) in tabs.iter().enumerate() {
+            let row = Row {
+                lead: Lead::Favicon(0x7c2d4f, "R"),
+                title: "",
+                meta: "",
+                child: false,
+                active: item.active,
+            };
+            self.tab_row_text(
+                left,
+                inner,
+                top,
+                &row,
+                &item.title,
+                matches!(hover, Some(crate::frame::AppbarHit::Tab(i) | crate::frame::AppbarHit::CloseTab(i)) if i == index),
+                matches!(pressed, Some(crate::frame::AppbarHit::Tab(i) | crate::frame::AppbarHit::CloseTab(i)) if i == index),
+                hover == Some(crate::frame::AppbarHit::CloseTab(index)),
+            )?;
             top += 34.0;
         }
 
@@ -622,11 +854,25 @@ impl Canvas<'_> {
         let dots = SPACE_DOTS.len() as f32 * 32.0 - 4.0;
         let mut x = left + 28.0 + (inner - 56.0 - dots) / 2.0;
         for (index, rgb) in SPACE_DOTS.iter().enumerate() {
-            let active = index == 0;
-            if active {
+            let active = tint == *rgb;
+            let hot = hover == Some(crate::frame::AppbarHit::Space(index));
+            let down = pressed == Some(crate::frame::AppbarHit::Space(index));
+            let mut original = Matrix3x2::default();
+            self.context.GetTransform(&mut original);
+            if down {
+                let center = Vector2 {
+                    X: x + 14.0,
+                    Y: foot + 14.0,
+                };
+                self.context
+                    .SetTransform(&(Matrix3x2::scale_around(0.96, 0.96, center) * original));
+            }
+            if active || hot || down {
                 let area = rect(x, foot, 28.0, 28.0);
-                self.fill_rounded(area, 9.0, rgba(WHITE, 0.86))?;
-                self.ring(area, 9.0, rgba(INK, 0.08))?;
+                self.fill_rounded(area, 9.0, rgba(WHITE, if active { 0.86 } else { 0.5 }))?;
+                if active {
+                    self.ring(area, 9.0, rgba(INK, 0.08))?;
+                }
             }
             let size = if active { 11.0 } else { 9.0 };
             let dot = rgba(*rgb, if active { 1.0 } else { 0.5 });
@@ -639,13 +885,131 @@ impl Canvas<'_> {
                 radiusY: size / 2.0,
             };
             self.context.FillEllipse(&ellipse, &self.paint_brush(dot)?);
+            self.context.SetTransform(&original);
             x += 32.0;
         }
         Ok(())
     }
 
-    unsafe fn tab_row(&self, left: f32, inner: f32, top: f32, item: &Row) -> Result<()> {
+    /// Experiment: the page's top row after the shell study's toolbar: back, forward and reload,
+    /// then the address. The browser's own caption buttons stay to its right.
+    unsafe fn draw_nav(&self, w: f32, h: f32, title: &str, history: (bool, bool)) -> Result<()> {
+        self.context.Clear(Some(&color(PAPER)));
+        self.fill(rect(0.0, h - 1.0, w, 1.0), 0xebeae6)?;
+        let mid = h / 2.0;
+        let mut x = 8.0;
+        let enabled = [history.0, history.1, true];
+        for (glyph, enabled) in NAV_GLYPHS.into_iter().zip(enabled) {
+            let ink = if enabled { SOFT_INK } else { DISABLED_INK };
+            self.icon(glyph, rect(x, mid - 14.0, 28.0, 28.0), 14.0, ink)?;
+            x += NAV_STEP;
+        }
+        let area = rect(x + 8.0, mid - 14.0, w - x - 16.0, 28.0);
+        self.icon(
+            '\u{E72E}',
+            rect(area.left + 4.0, area.top, 20.0, 28.0),
+            12.0,
+            MUTED,
+        )?;
+        self.text(
+            NAV_TITLE,
+            rect(
+                area.left + 28.0,
+                area.top,
+                area.right - area.left - 32.0,
+                28.0,
+            ),
+            title,
+            SOFT_INK,
+            false,
+        )?;
+        Ok(())
+    }
+
+    /// Experiment: the frame colour around a rounded page panel. A rounded stroke of twice the
+    /// gap, centred one gap outside the panel, covers the gaps and leaves exactly the panel's
+    /// rounded shape clear. It is clipped away from the appbar and the native caption buttons.
+    unsafe fn draw_panel(&self, w: f32, h: f32, caption: f32) -> Result<()> {
+        self.context.Clear(Some(&rgba(FRAME, 0.0)));
+        let left = crate::APPBAR_WIDTH as f32;
+        let panel = rect(left, 0.0, w - PANEL_GAP - left, h - PANEL_GAP);
+        let outer = D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F {
+                left: panel.left - PANEL_GAP,
+                top: panel.top - PANEL_GAP,
+                right: panel.right + PANEL_GAP,
+                bottom: panel.bottom + PANEL_GAP,
+            },
+            radiusX: PANEL_RADIUS + PANEL_GAP,
+            radiusY: PANEL_RADIUS + PANEL_GAP,
+        };
+        let ring = D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F {
+                left: panel.left + 0.5,
+                top: panel.top + 0.5,
+                right: panel.right - 0.5,
+                bottom: panel.bottom - 0.5,
+            },
+            radiusX: PANEL_RADIUS,
+            radiusY: PANEL_RADIUS,
+        };
+        let frame = self.brush(FRAME)?;
+        let hairline = self.paint_brush(rgba(INK, 0.08))?;
+        // The top row runs to the window edge under the caption buttons, so the frame starts
+        // below it on the right.
+        let band = (crate::CAPTION_HEIGHT + crate::chrome_layout::PANEL_TOP) as f32;
+        for clip in [
+            rect(left, band, w - left, h - band),
+            rect(left, 0.0, w - caption - left, band),
+        ] {
+            self.context
+                .PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
+            self.context
+                .DrawRoundedRectangle(&outer, &frame, PANEL_GAP * 2.0, None);
+            self.context
+                .DrawRoundedRectangle(&ring, &hairline, 1.0, None);
+            self.context.PopAxisAlignedClip();
+        }
+        Ok(())
+    }
+
+    unsafe fn tab_row(
+        &self,
+        left: f32,
+        inner: f32,
+        top: f32,
+        item: &Row,
+        hovered: bool,
+        pressed: bool,
+    ) -> Result<()> {
+        self.tab_row_text(left, inner, top, item, item.title, hovered, pressed, false)
+    }
+
+    unsafe fn tab_row_text(
+        &self,
+        left: f32,
+        inner: f32,
+        top: f32,
+        item: &Row,
+        title: &str,
+        hovered: bool,
+        pressed: bool,
+        close_hovered: bool,
+    ) -> Result<()> {
         let area = rect(left, top, inner, 34.0);
+        let mut original = Matrix3x2::default();
+        self.context.GetTransform(&mut original);
+        if pressed {
+            let center = Vector2 {
+                X: left + inner / 2.0,
+                Y: top + 17.0,
+            };
+            self.context
+                .SetTransform(&(Matrix3x2::scale_around(0.98, 0.98, center) * original));
+        }
+        if hovered || pressed {
+            self.fill_rounded(area, 9.0, rgba(WHITE, if pressed { 0.65 } else { 0.4 }))?;
+        }
         if item.active {
             // The selected tab is a white pill with a hairline ring and a soft shadow.
             self.fill_rounded(rect(left, top + 1.0, inner, 34.0), 9.0, rgba(INK, 0.06))?;
@@ -668,7 +1032,7 @@ impl Canvas<'_> {
         self.text(
             style,
             rect(label_x, top, left + inner - label_x - 30.0, 34.0),
-            item.title,
+            title,
             ink,
             false,
         )?;
@@ -681,14 +1045,22 @@ impl Canvas<'_> {
                 true,
             )?;
         }
-        if item.active {
+        if item.active || hovered || pressed {
+            if close_hovered {
+                self.fill_rounded(
+                    rect(left + inner - 26.0, top + 6.0, 22.0, 22.0),
+                    6.0,
+                    rgba(INK, 0.08),
+                )?;
+            }
             self.icon(
                 '\u{E711}',
                 rect(left + inner - 26.0, top + 6.0, 22.0, 22.0),
                 10.0,
-                MUTED,
+                if close_hovered { INK } else { MUTED },
             )?;
         }
+        self.context.SetTransform(&original);
         Ok(())
     }
 }

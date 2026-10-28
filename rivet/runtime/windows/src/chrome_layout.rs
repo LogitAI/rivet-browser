@@ -39,6 +39,22 @@ pub fn reserve_leading(bounds: Rect, reserved: i32) -> Rect {
     }
 }
 
+/// Experiment: whether the page is laid out as the shell study's panel, below a taller top row
+/// and inside a gap on the right and the bottom.
+pub static PANEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How much taller the top row is than the browser's title bar, and the gap, in DIPs.
+pub const PANEL_TOP: i32 = 12;
+pub const PANEL_GAP: i32 = 8;
+
+fn inset_panel(bounds: Rect) -> Rect {
+    Rect {
+        x: bounds.x,
+        y: bounds.y,
+        width: (bounds.width - PANEL_GAP).max(1),
+        height: (bounds.height - PANEL_GAP).max(1),
+    }
+}
+
 type ClientViewBounds = unsafe extern "system" fn(*const c_void, *mut Rect) -> *mut Rect;
 type HwndForView = unsafe extern "system" fn(*const c_void) -> HWND;
 
@@ -54,6 +70,88 @@ struct Hook {
 
 static HOOK: OnceLock<Result<Hook, String>> = OnceLock::new();
 
+/// Experiment, Chrome 156.0.8078.48 only. The frame view paints its title bar with colours from
+/// a colour provider that other windows of the profile share. Rivet wraps the frame view's
+/// `OnPaint` and swaps the frame colours in that provider only while a Rivet window paints.
+///
+/// `views::View::GetColorProvider` returns the provider. It keeps generated colours in a tree
+/// whose nodes hold the colour id at `+0x20` and the colour at `+0x24`.
+const ON_PAINT_SLOT: usize = 89;
+const ON_PAINT: usize = 0x011B_5610;
+const GET_COLOR_PROVIDER: usize = 0x04AA_27D0;
+/// The active and inactive frame colour ids.
+const FRAME_IDS: [i32; 2] = [0x13C, 0x140];
+type OnPaint = unsafe extern "system" fn(*const c_void, *const c_void);
+type GetProvider = unsafe extern "system" fn(*const c_void) -> *const u8;
+static PAINT: OnceLock<(OnPaint, GetProvider, Paint)> = OnceLock::new();
+
+unsafe fn colour_slot(provider: *const u8, id: i32) -> Option<*mut u32> {
+    let mut node = *(provider.add(0x18) as *const *mut u8);
+    while !node.is_null() {
+        let key = *(node.add(0x20) as *const i32);
+        if key == id {
+            return Some(node.add(0x24) as *mut u32);
+        }
+        node = if id < key {
+            *(node as *const *mut u8)
+        } else {
+            *(node.add(8) as *const *mut u8)
+        };
+    }
+    None
+}
+
+unsafe extern "system" fn on_paint(view: *const c_void, canvas: *const c_void) {
+    let (original, provider_of, paint) = PAINT.get().expect("patched after it is stored");
+    let colour = match HOOK.get() {
+        Some(Ok(hook)) => paint((hook.hwnd_for_view)(view)),
+        _ => None,
+    };
+    let provider = provider_of(view);
+    let Some(colour) = colour.filter(|_| !provider.is_null()) else {
+        return original(view, canvas);
+    };
+    let saved: Vec<(*mut u32, u32)> = FRAME_IDS
+        .iter()
+        .filter_map(|id| colour_slot(provider, *id))
+        .map(|slot| (slot, slot.read()))
+        .collect();
+    for (slot, _) in &saved {
+        slot.write(colour);
+    }
+    original(view, canvas);
+    for (slot, value) in saved {
+        slot.write(value);
+    }
+}
+
+/// Experiment: lets Rivet choose the title bar colour of its own windows only.
+pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
+    if PAINT.get().is_some() {
+        return Ok(());
+    }
+    let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
+    let slot = (base + 0x0FE7_3E28 + ON_PAINT_SLOT * 8) as *mut usize;
+    if slot.read() != base + ON_PAINT {
+        return Err("this browser build has no recorded frame paint".into());
+    }
+    let _ = PAINT.set((
+        std::mem::transmute::<usize, OnPaint>(slot.read()),
+        std::mem::transmute::<usize, GetProvider>(base + GET_COLOR_PROVIDER),
+        paint,
+    ));
+    let mut previous: PAGE_PROTECTION_FLAGS = 0;
+    if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
+        return Err("could not unprotect the frame view vtable".into());
+    }
+    slot.write(on_paint as *const () as usize);
+    VirtualProtect(slot.cast(), 8, previous, &mut previous);
+    Ok(())
+}
+
+/// Decides the title bar colour of a window as `0xAARRGGBB`, or `None` to keep the browser's.
+pub type Paint = fn(HWND) -> Option<u32>;
+
 unsafe extern "system" fn client_view_bounds(view: *const c_void, out: *mut Rect) -> *mut Rect {
     let Some(Ok(hook)) = HOOK.get() else {
         unreachable!("the vtable is only patched after the hook is stored");
@@ -61,6 +159,9 @@ unsafe extern "system" fn client_view_bounds(view: *const c_void, out: *mut Rect
     let result = (hook.original)(view, out);
     if let Some(reserved) = (hook.reserved)((hook.hwnd_for_view)(view), *out) {
         *out = reserve_leading(*out, reserved);
+        if PANEL.load(std::sync::atomic::Ordering::Relaxed) {
+            *out = inset_panel(*out);
+        }
     }
     result
 }
@@ -165,4 +266,146 @@ mod tests {
         };
         assert_eq!(reserve_leading(bounds, 292).width, 1);
     }
+}
+
+/// Experiment, Chrome 156.0.8078.48 only: `WindowsCaptionButton::CalculatePreferredSize` in the
+/// caption button's vtable. Rivet windows get caption buttons as tall as the shell study's top
+/// row, so the native buttons sit centred in it.
+const CAPTION_VTABLE: usize = 0x0FF0_25C8;
+const CAPTION_SIZE_SLOT: usize = 74;
+const CAPTION_SIZE: usize = 0x0313_2D90;
+type PreferredSize =
+    unsafe extern "system" fn(*const c_void, *mut [i32; 2], *const c_void) -> *mut [i32; 2];
+/// Decides the caption button height of a window in DIPs, or `None` to keep the browser's.
+pub type CaptionHeight = fn(HWND) -> Option<i32>;
+static CAPTION: OnceLock<(PreferredSize, CaptionHeight)> = OnceLock::new();
+
+unsafe extern "system" fn caption_size(
+    button: *const c_void,
+    out: *mut [i32; 2],
+    bounds: *const c_void,
+) -> *mut [i32; 2] {
+    let (original, height) = CAPTION.get().expect("patched after it is stored");
+    let result = original(button, out, bounds);
+    if let Some(Ok(hook)) = HOOK.get() {
+        if let Some(height) = height((hook.hwnd_for_view)(button)) {
+            (*out)[1] = height;
+        }
+    }
+    result
+}
+
+pub unsafe fn install_caption_height(height: CaptionHeight) -> Result<(), String> {
+    if CAPTION.get().is_some() {
+        return Ok(());
+    }
+    let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
+    let slot = (base + CAPTION_VTABLE + CAPTION_SIZE_SLOT * 8) as *mut usize;
+    if slot.read() != base + CAPTION_SIZE {
+        return Err("this browser build has no recorded caption button size".into());
+    }
+    let _ = CAPTION.set((
+        std::mem::transmute::<usize, PreferredSize>(slot.read()),
+        height,
+    ));
+    let mut previous: PAGE_PROTECTION_FLAGS = 0;
+    if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
+        return Err("could not unprotect the caption button vtable".into());
+    }
+    slot.write(caption_size as *const () as usize);
+    VirtualProtect(slot.cast(), 8, previous, &mut previous);
+    Ok(())
+}
+
+/// Experiment, Chrome 156.0.8078.48 only: `BrowserFrameViewWin::GetTopInset` in the frame view's
+/// vtable. It is the height of the browser's own title bar, which also sizes the caption buttons.
+const TOP_INSET_SLOT: usize = 127;
+const TOP_INSET: usize = 0x0A40_33E0;
+type TopInset = unsafe extern "system" fn(*const c_void, bool) -> i32;
+/// Extra title bar height in DIPs for a window, or `None` to keep the browser's.
+pub type ExtraTop = fn(HWND) -> Option<i32>;
+static TOP: OnceLock<(TopInset, ExtraTop)> = OnceLock::new();
+
+unsafe extern "system" fn top_inset(view: *const c_void, restored: bool) -> i32 {
+    let (original, extra) = TOP.get().expect("patched after it is stored");
+    let inset = original(view, restored);
+    match HOOK.get() {
+        Some(Ok(hook)) => inset + extra((hook.hwnd_for_view)(view)).unwrap_or(0),
+        _ => inset,
+    }
+}
+
+pub unsafe fn install_top_inset(extra: ExtraTop) -> Result<(), String> {
+    if TOP.get().is_some() {
+        return Ok(());
+    }
+    let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
+    let slot = (base + 0x0FE7_3E28 + TOP_INSET_SLOT * 8) as *mut usize;
+    if slot.read() != base + TOP_INSET {
+        return Err("this browser build has no recorded top inset".into());
+    }
+    let _ = TOP.set((std::mem::transmute::<usize, TopInset>(slot.read()), extra));
+    let mut previous: PAGE_PROTECTION_FLAGS = 0;
+    if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
+        return Err("could not unprotect the frame view vtable".into());
+    }
+    slot.write(top_inset as *const () as usize);
+    VirtualProtect(slot.cast(), 8, previous, &mut previous);
+    Ok(())
+}
+
+/// Experiment, Chrome 156.0.8078.48 only: `BrowserFrameViewWin::Layout` in the frame view's
+/// vtable. It sizes the caption button container from the tab strip, not from the title bar
+/// height, so the container is resized once the browser's own layout is done.
+const LAYOUT_SLOT: usize = 23;
+const LAYOUT: usize = 0x017A_E5E0;
+/// `views::View::SetBoundsRect`, and where a frame view keeps its caption button container and a
+/// view keeps its bounds.
+const SET_BOUNDS_RECT: usize = 0x04F4_2540;
+const CAPTION_CONTAINER_OFFSET: usize = 0x3C8;
+const VIEW_BOUNDS_OFFSET: usize = 0x1C8;
+type Layout = unsafe extern "system" fn(*mut c_void);
+type SetBoundsRect = unsafe extern "system" fn(*mut c_void, *const [i32; 4]);
+static LAYOUT_HOOK: OnceLock<(Layout, SetBoundsRect, CaptionHeight)> = OnceLock::new();
+
+unsafe extern "system" fn frame_layout(view: *mut c_void) {
+    let (original, set_bounds, height) = LAYOUT_HOOK.get().expect("patched after it is stored");
+    original(view);
+    let Some(Ok(hook)) = HOOK.get() else { return };
+    let Some(bottom) = height((hook.hwnd_for_view)(view)) else {
+        return;
+    };
+    let container = *(view.cast::<u8>().add(CAPTION_CONTAINER_OFFSET) as *const *mut c_void);
+    if container.is_null() {
+        return;
+    }
+    let bounds = *(container.cast::<u8>().add(VIEW_BOUNDS_OFFSET) as *const [i32; 4]);
+    let wanted = [bounds[0], bounds[1], bounds[2], (bottom - bounds[1]).max(0)];
+    if wanted != bounds {
+        set_bounds(container, &wanted);
+    }
+}
+
+/// Makes the caption button container of a window reach `height` DIPs from the top of the frame.
+pub unsafe fn install_caption_layout(height: CaptionHeight) -> Result<(), String> {
+    if LAYOUT_HOOK.get().is_some() {
+        return Ok(());
+    }
+    let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
+    let slot = (base + 0x0FE7_3E28 + LAYOUT_SLOT * 8) as *mut usize;
+    if slot.read() != base + LAYOUT {
+        return Err("this browser build has no recorded frame layout".into());
+    }
+    let _ = LAYOUT_HOOK.set((
+        std::mem::transmute::<usize, Layout>(slot.read()),
+        std::mem::transmute::<usize, SetBoundsRect>(base + SET_BOUNDS_RECT),
+        height,
+    ));
+    let mut previous: PAGE_PROTECTION_FLAGS = 0;
+    if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
+        return Err("could not unprotect the frame view vtable".into());
+    }
+    slot.write(frame_layout as *const () as usize);
+    VirtualProtect(slot.cast(), 8, previous, &mut previous);
+    Ok(())
 }

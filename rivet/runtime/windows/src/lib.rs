@@ -83,13 +83,25 @@ pub extern "system" fn rivet_runtime_start_for_window(window: isize) -> u32 {
 }
 
 #[cfg(windows)]
+mod address_edit;
+#[cfg(windows)]
 mod appbar;
 #[cfg(windows)]
 mod chrome_layout;
 #[cfg(windows)]
+mod chrome_navigation;
+#[cfg(windows)]
+mod chrome_tabs;
+#[cfg(windows)]
+mod chrome_toolbar;
+#[cfg(windows)]
 mod frame;
 #[cfg(windows)]
+mod page_address;
+#[cfg(windows)]
 mod taskbar;
+#[cfg(windows)]
+mod vertical_tabs;
 
 #[cfg(test)]
 mod tests {

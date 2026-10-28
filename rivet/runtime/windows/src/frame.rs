@@ -11,18 +11,22 @@ use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
 use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, GetClassNameW, GetClientRect, GetPropW, GetWindowLongPtrW,
     GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW,
     RegisterWindowMessageW, RemovePropW, SetPropW, SetWindowLongPtrW, SetWindowPos, GWLP_WNDPROC,
     GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT, ICON_BIG, ICON_SMALL, SM_CXICON,
     SM_CXPADDEDBORDER, SM_CXSMICON, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, WM_DPICHANGED, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK,
-    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_SETICON,
-    WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
+    SWP_NOSIZE, SWP_NOZORDER, WM_APPCOMMAND, WM_DPICHANGED, WM_NCDESTROY, WM_NCHITTEST,
+    WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+    WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_SETICON, WM_SETTEXT, WM_WINDOWPOSCHANGED, WNDPROC,
+    WS_THICKFRAME,
 };
 
-use super::appbar::Appbar;
+use super::appbar::{Appbar, TabItem};
 use super::chrome_layout;
 use super::taskbar;
 use super::{layout_scale_dpi, scale, strip_hit, title_bar_top, StripHit, APPBAR_WIDTH};
@@ -34,9 +38,134 @@ const ATTACH_MESSAGE: &str = "Rivet.AttachAppbar";
 /// browser never receives the non-client mouse messages that carry it.
 const APPBAR_HIT: u32 = HTBORDER;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AppbarHit {
+    Pinned(usize),
+    Folder(usize),
+    NewTab,
+    Tab(usize),
+    CloseTab(usize),
+    Space(usize),
+}
+
 thread_local! {
     /// Appbars of the browser windows owned by this UI thread.
     static APPBARS: RefCell<HashMap<isize, Appbar>> = RefCell::new(HashMap::new());
+    static APPBAR_STATE: RefCell<HashMap<isize, (Option<AppbarHit>, Option<AppbarHit>, u32)>> = RefCell::new(HashMap::new());
+}
+
+fn appbar_hit(x: f32, y: f32, width: f32, height: f32, tab_count: usize) -> Option<AppbarHit> {
+    let left = 10.0;
+    let inner = width - 18.0;
+    if !(x >= left && x < left + inner) {
+        return None;
+    }
+    if (52.0..94.0).contains(&y) {
+        let tile = (inner - 18.0) / 4.0;
+        let index = ((x - left) / (tile + 6.0)).floor() as usize;
+        return (index < 4 && x < left + index as f32 * (tile + 6.0) + tile)
+            .then_some(AppbarHit::Pinned(index));
+    }
+    if (138.0..240.0).contains(&y) {
+        return Some(AppbarHit::Folder(((y - 138.0) / 34.0).floor() as usize));
+    }
+    let today = 257.0;
+    if (today..today + 34.0).contains(&y) {
+        return Some(AppbarHit::NewTab);
+    }
+    if y >= today + 34.0 && y < today + 34.0 + tab_count as f32 * 34.0 {
+        let index = ((y - today - 34.0) / 34.0).floor() as usize;
+        let row_left = left;
+        let row_right = left + inner;
+        if x >= row_right - 34.0 {
+            return Some(AppbarHit::CloseTab(index));
+        }
+        if x >= row_left && index < tab_count {
+            return Some(AppbarHit::Tab(index));
+        }
+    }
+    let foot = height - 38.0;
+    let dots = 3.0 * 32.0 - 4.0;
+    let start = left + 28.0 + (inner - 56.0 - dots) / 2.0;
+    if (foot..foot + 28.0).contains(&y) {
+        let index = ((x - start) / 32.0).floor() as usize;
+        if index < 3 && x >= start + index as f32 * 32.0 && x < start + index as f32 * 32.0 + 28.0 {
+            return Some(AppbarHit::Space(index));
+        }
+    }
+    None
+}
+
+fn appbar_model(window: HWND) -> (Vec<TabItem>, usize) {
+    unsafe {
+        crate::chrome_tabs::tabs(window)
+            .map(|(titles, active)| {
+                (
+                    titles
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, title)| TabItem {
+                            title,
+                            active: index == active,
+                        })
+                        .collect(),
+                    active,
+                )
+            })
+            .unwrap_or_default()
+    }
+}
+
+fn current_tab_count(window: HWND) -> usize {
+    appbar_model(window).0.len()
+}
+
+unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
+    let point = client_point(window, lparam);
+    let dpi = layout_dpi(window) as f32 / 96.0;
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    appbar_hit(
+        point.x as f32 / dpi,
+        (point.y - top_border(window)) as f32 / dpi,
+        APPBAR_WIDTH as f32,
+        (client.bottom - top_border(window)) as f32 / dpi,
+        current_tab_count(window),
+    )
+}
+
+unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
+    match hit {
+        AppbarHit::Tab(index) => {
+            crate::chrome_tabs::activate_tab(window, index);
+        }
+        AppbarHit::CloseTab(index) => {
+            crate::chrome_tabs::close_tab(window, index);
+        }
+        AppbarHit::NewTab => {
+            crate::chrome_tabs::new_tab(window);
+        }
+        AppbarHit::Pinned(index) => {
+            const URLS: [&str; 4] = [
+                "https://mail.google.com/",
+                "https://calendar.google.com/",
+                "https://docs.google.com/",
+                "https://keep.google.com/",
+            ];
+            if crate::chrome_tabs::new_tab(window) {
+                crate::chrome_navigation::open(window, URLS[index]);
+            }
+        }
+        AppbarHit::Space(index) => {
+            let tint = [0xd08a52, 0x5b8bab, 0xc0577f][index];
+            APPBAR_STATE.with(|states| {
+                let mut all = states.borrow_mut();
+                let entry = all.entry(window as isize).or_insert((None, None, 0xd08a52));
+                entry.2 = tint;
+            });
+        }
+        AppbarHit::Folder(_) => {}
+    }
 }
 
 fn wide(value: &str) -> Vec<u16> {
@@ -53,7 +182,111 @@ unsafe fn attach_message() -> u32 {
     RegisterWindowMessageW(wide(ATTACH_MESSAGE).as_ptr())
 }
 
-unsafe fn attached(window: HWND) -> bool {
+/// Experiment: whether Rivet paints the page's top row. A `rivet-nav.log` file next to the
+/// runtime turns it on.
+static NAV: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The browser's three caption buttons, which stay native, in DIPs.
+const NAV_CAPTION_WIDTH: i32 = 138;
+
+/// The page colour of the shell study, so the native caption buttons sit on the top row.
+fn nav_frame_color(window: HWND) -> Option<u32> {
+    attached(window).then_some(0xFFFB_FAF7)
+}
+
+fn nav_on() -> bool {
+    NAV.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Where the top row sits in client pixels: left, top, width and height.
+unsafe fn nav_bounds(window: HWND) -> (i32, i32, i32, i32) {
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    let dpi = layout_dpi(window);
+    let left = scale(APPBAR_WIDTH, dpi);
+    let top = top_border(window);
+    let width = client.right - left - scale(NAV_CAPTION_WIDTH, dpi);
+    let height = scale(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP, dpi) - top;
+    (left, top, width, height)
+}
+
+/// The top row button under a client point: 0 back, 1 forward, 2 reload. `None` elsewhere in
+/// the row, which drags the window. The outer `None` means the point is not in the row.
+unsafe fn nav_hit(window: HWND, x: i32, y: i32) -> Option<Option<usize>> {
+    let (left, top, width, height) = nav_bounds(window);
+    if x < left || x >= left + width || y < top || y >= top + height {
+        return None;
+    }
+    let dpi = layout_dpi(window) as f32 / 96.0;
+    let local = (x - left) as f32 / dpi - 8.0;
+    let index = (local / crate::appbar::NAV_STEP).floor();
+    // The address field starts one gap after the three buttons.
+    if local >= 3.0 * crate::appbar::NAV_STEP + 8.0 {
+        return Some(Some(NAV_ADDRESS));
+    }
+    let inside = local >= 0.0 && local - index * crate::appbar::NAV_STEP < 28.0;
+    Some((inside && (0.0..3.0).contains(&index)).then_some(index as usize))
+}
+
+/// The timer that refreshes the top row. Chromium's own timers use other identifiers.
+const NAV_TIMER: usize = 0x5249_5645;
+
+/// The `nav_hit` index of the address field.
+const NAV_ADDRESS: usize = 3;
+
+/// Opens the address editor over the address field of the top row.
+unsafe fn edit_address(window: HWND) {
+    let (left, top, width, height) = nav_bounds(window);
+    let dpi = layout_dpi(window);
+    let text_left = 8.0 + 3.0 * crate::appbar::NAV_STEP + 8.0 + 28.0;
+    let mut origin = POINT {
+        x: left + (text_left * dpi as f32 / 96.0) as i32,
+        y: top + height / 2 - scale(11, dpi),
+    };
+    windows_sys::Win32::Graphics::Gdi::ClientToScreen(window, &mut origin);
+    let text = crate::chrome_navigation::visible_url(window)
+        .or_else(|| crate::page_address::address(window as isize))
+        .unwrap_or_default();
+    crate::address_edit::begin(
+        window,
+        origin.x,
+        origin.y,
+        width - (text_left * dpi as f32 / 96.0) as i32 - scale(16, dpi),
+        scale(22, dpi),
+        dpi,
+        &text,
+    );
+}
+
+unsafe fn window_title(window: HWND) -> String {
+    let mut text = [0u16; 512];
+    let length = windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW(
+        window,
+        text.as_mut_ptr(),
+        text.len() as i32,
+    );
+    String::from_utf16_lossy(&text[..length.max(0) as usize])
+}
+
+unsafe fn edit_address_message() -> u32 {
+    RegisterWindowMessageW(wide("RivetEditAddress").as_ptr())
+}
+
+unsafe fn vertical_tabs_message() -> u32 {
+    RegisterWindowMessageW(wide("RivetVerticalTabs").as_ptr())
+}
+
+fn report_vertical_tabs(controller: usize) {
+    let windows: Vec<isize> = APPBARS.with(|appbars| appbars.borrow().keys().copied().collect());
+    for window in windows {
+        unsafe { PostMessageW(window as HWND, vertical_tabs_message(), controller, 0) };
+    }
+}
+
+fn attached(window: HWND) -> bool {
+    unsafe { attached_window(window) }
+}
+
+unsafe fn attached_window(window: HWND) -> bool {
     APPBARS.with(|appbars| appbars.borrow().contains_key(&(window as isize)))
 }
 
@@ -162,6 +395,47 @@ unsafe fn create_appbar(window: HWND) {
         log(&format!("rivet: not attaching to this browser: {error}"));
         return;
     }
+    // Experiment, off unless asked for: Chromium's vertical-tab frame for Rivet windows.
+    if runtime_directory().is_some_and(|dir| dir.join("rivet-nav.log").exists()) {
+        NAV.store(true, std::sync::atomic::Ordering::Relaxed);
+        chrome_layout::PANEL.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(dir) = runtime_directory() {
+            crate::vertical_tabs::set_trace(dir.join("rivet-nav.log"));
+        }
+        let installed = chrome_layout::install_frame_paint(nav_frame_color);
+        crate::vertical_tabs::trace(&format!("frame colour: {installed:?}"));
+        let caption = chrome_layout::install_caption_height(|window| {
+            attached(window).then_some(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP)
+        });
+        crate::vertical_tabs::trace(&format!("caption height: {caption:?}"));
+        let top = chrome_layout::install_top_inset(|window| {
+            attached(window).then_some(chrome_layout::PANEL_TOP)
+        });
+        crate::vertical_tabs::trace(&format!("top inset: {top:?}"));
+        let layout = chrome_layout::install_caption_layout(|window| {
+            attached(window).then_some(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP)
+        });
+        crate::vertical_tabs::trace(&format!("caption layout: {layout:?}"));
+    }
+    let hide = runtime_directory().map(|dir| dir.join("rivet-hide-tab-strip.log"));
+    if let Some(path) = hide.filter(|path| path.exists()) {
+        crate::vertical_tabs::set_trace(path);
+        if let Err(error) = crate::vertical_tabs::hide_tab_strip_everywhere() {
+            crate::vertical_tabs::trace(&format!("hide failed: {error}"));
+        }
+    }
+    let experiment = runtime_directory().map(|dir| dir.join("rivet-vertical-tabs.log"));
+    let vertical_tabs = match experiment.filter(|path| path.exists()) {
+        Some(path) => {
+            crate::vertical_tabs::set_trace(path);
+            let toolbar = crate::chrome_toolbar::install(runtime_directory());
+            crate::vertical_tabs::trace(&format!("toolbar: {toolbar:?}"));
+            crate::vertical_tabs::install(report_vertical_tabs)
+                .map_err(|error| crate::vertical_tabs::trace(&format!("unavailable: {error}")))
+                .is_ok()
+        }
+        None => false,
+    };
     let appbar = match Appbar::new(window as isize) {
         Ok(appbar) => appbar,
         Err(error) => {
@@ -171,6 +445,22 @@ unsafe fn create_appbar(window: HWND) {
         }
     };
     APPBARS.with(|appbars| appbars.borrow_mut().insert(window as isize, appbar));
+    APPBAR_STATE.with(|states| {
+        states
+            .borrow_mut()
+            .entry(window as isize)
+            .or_insert((None, None, 0xd08a52));
+    });
+    if vertical_tabs {
+        crate::chrome_toolbar::adopt(window);
+    }
+    // Tab titles and selection can change without a window title change.
+    windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(window, NAV_TIMER, 500, None);
+    if vertical_tabs {
+        for controller in crate::vertical_tabs::reported() {
+            PostMessageW(window, vertical_tabs_message(), controller, 0);
+        }
+    }
     if let Err(error) = taskbar::apply(window as isize, runtime_directory().as_deref()) {
         log(&format!(
             "rivet: could not set the taskbar identity: {error}"
@@ -204,9 +494,46 @@ unsafe fn update_appbar(window: HWND) {
     let top = top_border(window);
     APPBARS.with(|appbars| {
         if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            let (tabs, _, tint, hover, pressed) = APPBAR_STATE.with(|states| {
+                let state = states
+                    .borrow()
+                    .get(&(window as isize))
+                    .cloned()
+                    .unwrap_or((None, None, 0xd08a52));
+                (appbar_model(window).0, 0usize, state.2, state.0, state.1)
+            });
+            appbar.set_state(tabs, tint, hover, pressed);
             let height = client.bottom - top;
             if let Err(error) = appbar.update(visible, 0, top, width, height, dpi) {
                 log(&format!("rivet: could not draw the appbar: {error}"));
+            }
+            if nav_on() {
+                if let Err(error) = appbar.update_panel(
+                    visible,
+                    top,
+                    client.right,
+                    client.bottom - top,
+                    dpi,
+                    NAV_CAPTION_WIDTH as f32,
+                ) {
+                    log(&format!("rivet: could not draw the panel: {error}"));
+                }
+                let (left, top, width, height) = nav_bounds(window);
+                let title = match crate::chrome_navigation::visible_url(window)
+                    .or_else(|| crate::page_address::address(window as isize))
+                {
+                    Some(address) => crate::page_address::display(&address).to_owned(),
+                    None => {
+                        crate::page_address::request(window as isize);
+                        window_title(window)
+                    }
+                };
+                let history = crate::chrome_navigation::history(window).unwrap_or((true, true));
+                if let Err(error) =
+                    appbar.update_nav(visible, left, top, width, height, dpi, &title, history)
+                {
+                    log(&format!("rivet: could not draw the top row: {error}"));
+                }
             }
         }
     });
@@ -248,6 +575,9 @@ fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
         if !attached(window) || !framed(window) {
             return None;
         }
+        if let Some(strip) = crate::vertical_tabs::strip_width(window) {
+            return Some((crate::APPBAR_WIDTH - strip).max(0));
+        }
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(window, &mut client);
         let layout_width = bounds.x + bounds.width;
@@ -266,6 +596,15 @@ fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
 fn log(message: &str) {
     let text = wide(message);
     unsafe { OutputDebugStringW(text.as_ptr()) };
+}
+
+unsafe fn client_point(window: HWND, lparam: LPARAM) -> POINT {
+    let mut point = POINT {
+        x: (lparam & 0xffff) as i16 as i32,
+        y: ((lparam >> 16) & 0xffff) as i16 as i32,
+    };
+    ScreenToClient(window, &mut point);
+    point
 }
 
 unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
@@ -292,7 +631,110 @@ unsafe extern "system" fn browser_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // The browser lays out and paints parts of a window while handling its messages, so they run
+    // in that window's look.
+    if attached(window) {
+        return crate::chrome_toolbar::for_window(window, || {
+            handle(window, message, wparam, lparam)
+        });
+    }
+    handle(window, message, wparam, lparam)
+}
+
+unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match message {
+        WM_NCHITTEST
+            if attached(window) && nav_on() && framed(window) && {
+                let point = client_point(window, lparam);
+                nav_hit(window, point.x, point.y).is_some()
+            } =>
+        {
+            let point = client_point(window, lparam);
+            match nav_hit(window, point.x, point.y) {
+                Some(Some(_)) => APPBAR_HIT as LRESULT,
+                _ => HTCAPTION as LRESULT,
+            }
+        }
+        WM_NCLBUTTONUP
+            if wparam as u32 == APPBAR_HIT && attached(window) && nav_on() && {
+                let point = client_point(window, lparam);
+                nav_hit(window, point.x, point.y).is_some()
+            } =>
+        {
+            let point = client_point(window, lparam);
+            if let Some(Some(NAV_ADDRESS)) = nav_hit(window, point.x, point.y) {
+                // The browser takes the focus back while it finishes the click, so the editor
+                // opens once the click is over.
+                PostMessageW(window, edit_address_message(), 0, 0);
+            } else if let Some(Some(index)) = nav_hit(window, point.x, point.y) {
+                // The browser handles Windows' standard browser commands.
+                const COMMANDS: [u32; 3] = [1, 2, 3];
+                let command = (COMMANDS[index] as isize) << 16;
+                PostMessageW(window, WM_APPCOMMAND, window as WPARAM, command);
+            }
+            0
+        }
+        WM_NCMOUSEMOVE if wparam as u32 == APPBAR_HIT && attached(window) => {
+            let mut tracking = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE | TME_NONCLIENT,
+                hwndTrack: window,
+                dwHoverTime: 0,
+            };
+            TrackMouseEvent(&mut tracking);
+            let hit = appbar_point(window, lparam);
+            APPBAR_STATE.with(|states| {
+                let mut all = states.borrow_mut();
+                let entry = all.entry(window as isize).or_insert((None, None, 0xd08a52));
+                entry.0 = hit;
+            });
+            update_appbar(window);
+            0
+        }
+        WM_NCMOUSELEAVE if attached(window) => {
+            APPBAR_STATE.with(|states| {
+                if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+                    entry.0 = None;
+                }
+            });
+            update_appbar(window);
+            0
+        }
+        WM_NCLBUTTONDOWN if wparam as u32 == APPBAR_HIT && attached(window) => {
+            let hit = appbar_point(window, lparam);
+            APPBAR_STATE.with(|states| {
+                let mut all = states.borrow_mut();
+                let entry = all.entry(window as isize).or_insert((None, None, 0xd08a52));
+                entry.1 = hit;
+                entry.0 = hit;
+            });
+            update_appbar(window);
+            0
+        }
+        WM_NCLBUTTONUP if wparam as u32 == APPBAR_HIT && attached(window) => {
+            let hit = appbar_point(window, lparam);
+            let action = APPBAR_STATE.with(|states| {
+                let mut states = states.borrow_mut();
+                let entry = states
+                    .entry(window as isize)
+                    .or_insert((None, None, 0xd08a52));
+                let action = (entry.1 == hit).then_some(hit).flatten();
+                entry.1 = None;
+                action
+            });
+            if let Some(hit) = action {
+                appbar_action(window, hit);
+            }
+            update_appbar(window);
+            0
+        }
+        WM_SETTEXT if attached(window) && nav_on() => {
+            let result = call_browser(window, message, wparam, lparam);
+            // A new title usually means a new page, so the address is read again.
+            crate::page_address::request(window as isize);
+            update_appbar(window);
+            result
+        }
         WM_NCHITTEST if attached(window) => match hit_test(window, lparam) {
             StripHit::Browser => call_browser(window, message, wparam, lparam),
             // The caption band keeps native dragging, Snap Layouts, double-click maximize and
@@ -304,8 +746,7 @@ unsafe extern "system" fn browser_proc(
         },
         // Clicks on the appbar's content never reach the browser, which would otherwise see
         // non-client input it did not lay out.
-        WM_NCLBUTTONDOWN | WM_NCLBUTTONUP | WM_NCLBUTTONDBLCLK | WM_NCRBUTTONDOWN
-        | WM_NCRBUTTONUP
+        WM_NCLBUTTONDBLCLK | WM_NCRBUTTONDOWN | WM_NCRBUTTONUP
             if wparam as u32 == APPBAR_HIT && attached(window) =>
         {
             0
@@ -330,6 +771,10 @@ unsafe extern "system" fn browser_proc(
                 taskbar::clear(window as isize);
             }
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
+            APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
+            crate::vertical_tabs::forget(window);
+            crate::chrome_toolbar::forget(window);
+            crate::page_address::forget(window as isize);
             LAYOUT_DPI.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             let key = wide(ORIGINAL_PROC);
             let original = GetPropW(window, key.as_ptr());
@@ -338,10 +783,70 @@ unsafe extern "system" fn browser_proc(
             let original: WNDPROC = std::mem::transmute(original);
             CallWindowProcW(original, window, message, wparam, lparam)
         }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
+            if wparam == NAV_TIMER && attached(window) =>
+        {
+            update_appbar(window);
+            0
+        }
+        _ if message == edit_address_message() => {
+            edit_address(window);
+            0
+        }
+        _ if message == crate::page_address::message() => {
+            update_appbar(window);
+            0
+        }
+        _ if message == vertical_tabs_message() => {
+            crate::vertical_tabs::offer(window, wparam);
+            0
+        }
         _ if message == attach_message() => {
             create_appbar(window);
             0
         }
         _ => call_browser(window, message, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{appbar_hit, AppbarHit};
+
+    #[test]
+    fn fr3_pinned_tiles_have_four_non_overlapping_targets() {
+        let tile = (220.0 - 18.0 - 18.0) / 4.0;
+        for index in 0..4 {
+            let x = 10.0 + index as f32 * (tile + 6.0) + tile / 2.0;
+            assert_eq!(
+                appbar_hit(x, 70.0, 220.0, 700.0, 2),
+                Some(AppbarHit::Pinned(index))
+            );
+        }
+    }
+
+    #[test]
+    fn fr3_tab_rows_split_activation_and_close_hit_areas() {
+        assert_eq!(
+            appbar_hit(40.0, 325.0, 220.0, 700.0, 2),
+            Some(AppbarHit::Tab(1))
+        );
+        assert_eq!(
+            appbar_hit(205.0, 325.0, 220.0, 700.0, 2),
+            Some(AppbarHit::CloseTab(1))
+        );
+        assert_eq!(appbar_hit(40.0, 393.0, 220.0, 700.0, 2), None);
+    }
+
+    #[test]
+    fn fr3_new_tab_and_space_targets_are_distinct() {
+        assert_eq!(
+            appbar_hit(40.0, 270.0, 220.0, 700.0, 2),
+            Some(AppbarHit::NewTab)
+        );
+        assert_eq!(
+            appbar_hit(90.0, 670.0, 220.0, 700.0, 2),
+            Some(AppbarHit::Space(0))
+        );
     }
 }
