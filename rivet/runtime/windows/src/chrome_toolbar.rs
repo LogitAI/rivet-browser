@@ -52,6 +52,11 @@ const FROM_VECTOR_ICON: usize = 0x009F_C510;
 const FROM_VECTOR_ICON_PROLOGUE: [u8; 14] = [
     0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
 ];
+/// `LocationIconView::UpdateIcon` runs after navigation, outside widget painting.
+const UPDATE_LOCATION_ICON: usize = 0x00EE_4220;
+const UPDATE_LOCATION_ICON_PROLOGUE: [u8; 16] = [
+    0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0, 0, 0, 0x48, 0x89, 0xCE,
+];
 /// `BubbleDialogDelegate::GetAnchorRect`, `View::IsDrawn` and `View::GetBoundsInScreen`.
 const ANCHOR_RECT: usize = 0x0ACA_C450;
 const ANCHOR_RECT_PROLOGUE: [u8; 18] = [
@@ -150,6 +155,7 @@ static ORIGINAL_THEME_CHANGED: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_PAINT_LAYER: AtomicUsize = AtomicUsize::new(0);
 static LAYER_LOGGED: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_SET_VISIBLE: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_UPDATE_LOCATION_ICON: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
 static COLOUR_LOGGED: AtomicBool = AtomicBool::new(false);
 /// The widgets of Rivet windows.
@@ -307,6 +313,21 @@ unsafe extern "system" fn widget_paint(widget: *mut c_void, context: *const c_vo
 unsafe extern "system" fn widget_layout(widget: *mut c_void) {
     let hooks = hooks().expect("patched after it is stored");
     scoped(widget as usize, || (hooks.layout)(widget));
+}
+
+/// The icon is chosen while its view is being updated, which can happen outside any paint or
+/// layout of the window, so the Rivet scope is found from the view's ancestors.
+unsafe extern "system" fn update_location_icon(view: *mut c_void) {
+    let mut top = view as usize;
+    for _ in 0..32 {
+        let parent = *((top + PARENT_OFFSET) as *const usize);
+        if parent == 0 || is_rivet(top) {
+            break;
+        }
+        top = parent;
+    }
+    let run: WidgetCall = original(&ORIGINAL_UPDATE_LOCATION_ICON);
+    scoped(top, || run(view));
 }
 
 /// Whether `view` is one of the hidden buttons of a Rivet window.
@@ -550,12 +571,22 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(PAINT_LAYER, &PAINT_LAYER_PROLOGUE)
         || !prologue(SET_VISIBLE, &SET_VISIBLE_PROLOGUE)
         || !prologue(FROM_VECTOR_ICON, &FROM_VECTOR_ICON_PROLOGUE)
+        || !prologue(UPDATE_LOCATION_ICON, &UPDATE_LOCATION_ICON_PROLOGUE)
         || !prologue(ANCHOR_RECT, &ANCHOR_RECT_PROLOGUE)
         || !prologue(ANCHOR_RECT + 0x2a, &ANCHOR_VIEW_ACCESS)
         || !prologue(IS_DRAWN, &IS_DRAWN_BYTES)
         || !prologue(BOUNDS_IN_SCREEN, &BOUNDS_BYTES)
     {
         return Err("this browser build has other toolbar functions".into());
+    }
+    let icon = &*((base + PAGE_INFO_ICON) as *const VectorIcon);
+    if icon.count != 1 || icon.reps as usize != base + 0x10F5_D438
+        || icon.name as usize != base + 0x10F5_D448
+        || (*icon.reps).path as usize != base + 0x10F6_6E40
+        || (*icon.reps).size != 282
+        || !prologue(0x10F6_6E40, &PAGE_INFO_BYTES)
+    {
+        return Err("this browser build has another page info icon".into());
     }
     Ok(Hooks {
         base,
@@ -624,6 +655,14 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
     if skip.contains("icon") {
         return slots(base, skip);
     }
+    detour(
+        base,
+        UPDATE_LOCATION_ICON,
+        &UPDATE_LOCATION_ICON_PROLOGUE,
+        false,
+        update_location_icon as *const () as usize,
+        &ORIGINAL_UPDATE_LOCATION_ICON,
+    )?;
     let mut icon_trampoline = FROM_VECTOR_ICON_PROLOGUE.to_vec();
     jump(
         &mut icon_trampoline,
@@ -725,7 +764,19 @@ const fn at(value: f32) -> PathElement {
 const STROKE: u32 = 5;
 const MOVE_TO: u32 = 7;
 const LINE_TO: u32 = 11;
+const CIRCLE: u32 = 24;
 const CANVAS_DIMENSIONS: u32 = 28;
+
+/// A 13 DIP information mark on Chrome's 16 DIP icon canvas.
+static INFO_PATH: [PathElement; 20] = [
+    op(CANVAS_DIMENSIONS), at(16.0),
+    op(STROKE), at(1.5),
+    op(CIRCLE), at(8.0), at(8.0), at(6.5),
+    op(MOVE_TO), at(8.0), at(7.4),
+    op(LINE_TO), at(8.0), at(11.0),
+    op(MOVE_TO), at(8.0), at(5.0),
+    op(LINE_TO), at(8.0), at(5.2),
+];
 
 /// The Rivet back arrow: a thin stroked arrow on a 16 DIP canvas.
 static BACK_PATH: [PathElement; 19] = [
@@ -841,6 +892,11 @@ unsafe impl Send for VectorIcon {}
 const BACK_ICON: usize = 0x10E0_2EA8;
 const FORWARD_ICON: usize = 0x10E0_55C0;
 const RELOAD_ICON: usize = 0x10E0_7DD0;
+const PAGE_INFO_ICON: usize = 0x10F5_D470;
+const PAGE_INFO_BYTES: [u8; 32] = [
+    0x1C, 0, 0, 0, 0, 0, 0x80, 0x41, 1, 0, 0, 0, 7, 0, 0, 0,
+    0x5C, 0x8F, 0x3A, 0x41, 0xEC, 0x51, 0x5C, 0x41, 0x12, 0, 0, 0, 0xD7, 0xA3, 0x30, 0xBF,
+];
 
 static ICONS: OnceLock<Vec<(usize, Box<VectorIcon>)>> = OnceLock::new();
 
@@ -851,6 +907,7 @@ unsafe fn build_icons(base: usize) {
             (BACK_ICON, &BACK_PATH[..]),
             (FORWARD_ICON, &FORWARD_PATH[..]),
             (RELOAD_ICON, reload),
+            (PAGE_INFO_ICON, &INFO_PATH[..]),
         ]
         .into_iter()
         .map(|(rva, path)| {
@@ -873,6 +930,16 @@ unsafe fn build_icons(base: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_page_info_uses_a_thin_circle_without_replacing_warnings() {
+        assert_eq!(PAGE_INFO_ICON, 0x10F5_D470);
+        assert_ne!(PAGE_INFO_ICON, 0x10F5_CE60);
+        let commands: Vec<u32> = [0, 2, 4, 8, 11, 14]
+            .iter().map(|&index| unsafe { INFO_PATH[index].command }).collect();
+        assert_eq!(commands, [CANVAS_DIMENSIONS, STROKE, CIRCLE, MOVE_TO, LINE_TO, MOVE_TO]);
+        assert_eq!(unsafe { INFO_PATH[3].value }, 1.5);
+    }
 
     #[test]
     fn fr12_hidden_bubble_anchor_uses_nearest_drawn_ancestor() {
