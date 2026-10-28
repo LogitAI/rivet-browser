@@ -695,10 +695,63 @@ fn panel_caption_bounds(bounds: [i32; 4], height: i32) -> [i32; 4] {
     [bounds[0] - PANEL_GAP, PANEL_GAP, bounds[2], height.max(0)]
 }
 
+/// The frame view each window last laid out, so Rivet can ask for a layout when the space it
+/// reserves changes. Chromium only lays out again on its own when the window's size changes, and
+/// a maximized window cannot be resized to make it.
+static FRAME_VIEWS: std::sync::Mutex<Vec<(isize, usize)>> = std::sync::Mutex::new(Vec::new());
+
+fn remember_view(window: HWND, view: *mut c_void) {
+    let mut views = FRAME_VIEWS.lock().unwrap_or_else(|error| error.into_inner());
+    match views.iter_mut().find(|entry| entry.0 == window as isize) {
+        Some(entry) => entry.1 = view as usize,
+        None => views.push((window as isize, view as usize)),
+    }
+}
+
+/// Forgets a window that is going away, so its view is never used again.
+pub fn forget_view(window: HWND) {
+    FRAME_VIEWS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|entry| entry.0 != window as isize);
+}
+
+/// Lays the window's frame out again. Returns false when the window has not been laid out yet.
+pub unsafe fn relayout(window: HWND) -> bool {
+    let view = FRAME_VIEWS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|entry| entry.0 == window as isize)
+        .map(|entry| entry.1);
+    match view {
+        Some(view) => {
+            let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
+            // `views::View::DeprecatedLayoutImmediately` does the bookkeeping around a layout
+            // and then runs the view's own `Layout`, which is this hook. The wanted bytes are
+            // its first instructions in this build.
+            const IMMEDIATELY: usize = 0x04BE_C780;
+            const PROLOGUE: [u8; 12] =
+                [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53];
+            if base == 0
+                || std::slice::from_raw_parts((base + IMMEDIATELY) as *const u8, 12) != PROLOGUE
+            {
+                return false;
+            }
+            let layout_immediately: unsafe extern "system" fn(*mut c_void) =
+                std::mem::transmute(base + IMMEDIATELY);
+            layout_immediately(view as *mut c_void);
+            true
+        }
+        None => false,
+    }
+}
+
 unsafe extern "system" fn frame_layout(view: *mut c_void) {
     let (original, set_bounds, height) = LAYOUT_HOOK.get().expect("patched after it is stored");
     original(view);
     let Some(Ok(hook)) = HOOK.get() else { return };
+    remember_view((hook.hwnd_for_view)(view), view);
     let Some(bottom) = height((hook.hwnd_for_view)(view)) else {
         return;
     };

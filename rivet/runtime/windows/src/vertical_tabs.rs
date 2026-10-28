@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::atomic::Ordering;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use windows_sys::Win32::Foundation::HWND;
@@ -152,22 +153,39 @@ pub unsafe fn offer(window: HWND, controller: usize) {
     (hook.update_collapse_action)(pointer);
 }
 
-/// The vertical tab strip width Chromium lays out under the appbar of `window`, in DIPs, or
-/// `None` while the window shows horizontal tabs.
-pub fn strip_width(window: HWND) -> Option<i32> {
+/// The width Rivet gives the vertical tab strip of each window, in DIPs. Chromium keeps the strip
+/// in its layout even though a Rivet window hides it, so the strip is made exactly as wide as the
+/// appbar that covers it, or nothing while the appbar is hidden. Nothing is written to the
+/// browser's own state or preferences.
+static STRIP_WIDTHS: Mutex<Vec<(isize, i32)>> = Mutex::new(Vec::new());
+
+pub fn set_strip_override(window: HWND, width: i32) {
+    let mut widths = locked(&STRIP_WIDTHS);
+    match widths.iter_mut().find(|entry| entry.0 == window as isize) {
+        Some(entry) => entry.1 = width,
+        None => widths.push((window as isize, width)),
+    }
+}
+
+fn strip_override(window: HWND) -> Option<i32> {
+    locked(&STRIP_WIDTHS)
+        .iter()
+        .find(|entry| entry.0 == window as isize)
+        .map(|entry| entry.1)
+}
+
+/// The width the strip takes in the layout of `window`, or `None` while it shows horizontal tabs.
+pub fn layout_width(window: HWND) -> Option<i32> {
     let controller = *locked(&SWITCHED).as_ref()?.get(&(window as isize))?;
-    Some(unsafe {
-        let width = *((controller + WIDTH_OFFSET) as *const i32);
-        if width == 0 {
-            125
-        } else {
-            width
-        }
-    })
+    Some(strip_override(window).unwrap_or_else(|| unsafe {
+        *((controller + WIDTH_OFFSET) as *const i32)
+    }))
 }
 
 /// Forgets a window that is going away, so its controller is never read again.
 pub fn forget(window: HWND) {
+    locked(&STRIP_WIDTHS).retain(|entry| entry.0 != window as isize);
+    locked(&REGIONS).retain(|entry| entry.0 != window as isize);
     let removed = locked(&SWITCHED)
         .as_mut()
         .and_then(|map| map.remove(&(window as isize)));
@@ -212,8 +230,90 @@ unsafe fn patch(report: Report) -> Result<Hook, String> {
     }
     slot.write(should_display as *const () as usize);
     VirtualProtect(slot.cast(), 8, previous, &mut previous);
+    match patch_region_size(base) {
+        Ok(()) => trace("region size hook installed"),
+        Err(error) => trace(&format!("region size hook unavailable: {error}")),
+    }
     trace("installed");
     Ok(hook)
+}
+
+/// `VerticalTabStripRegionView::CalculatePreferredSize`, and the vtable slot that holds it.
+const REGION_PREFERRED_SIZE: usize = 0x0BC7_FA80;
+const REGION_PREFERRED_SIZE_SLOT: usize = 0x0FF1_7CF8;
+static REGION_ORIGINAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+static REGIONS: Mutex<Vec<(isize, usize)>> = Mutex::new(Vec::new());
+
+fn remember_region(window: HWND, view: *mut c_void) {
+    let mut regions = locked(&REGIONS);
+    match regions.iter_mut().find(|entry| entry.0 == window as isize) {
+        Some(entry) => entry.1 = view as usize,
+        None => regions.push((window as isize, view as usize)),
+    }
+}
+
+/// `views::View::InvalidateLayout`, with the first bytes that identify it in this build.
+const INVALIDATE_LAYOUT: usize = 0x0411_6480;
+const INVALIDATE_LAYOUT_PROLOGUE: [u8; 12] =
+    [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53];
+
+/// Makes the strip's view ask for its width again. Chromium caches the size it asked for, so a
+/// width Rivet changed is only seen after this.
+pub unsafe fn invalidate_strip(window: HWND) {
+    let Some(view) = locked(&REGIONS)
+        .iter()
+        .find(|entry| entry.0 == window as isize)
+        .map(|entry| entry.1)
+    else {
+        return;
+    };
+    let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
+    if base == 0
+        || std::slice::from_raw_parts((base + INVALIDATE_LAYOUT) as *const u8, 12)
+            != INVALIDATE_LAYOUT_PROLOGUE
+    {
+        return;
+    }
+    let invalidate: unsafe extern "system" fn(*mut c_void, i32) =
+        std::mem::transmute(base + INVALIDATE_LAYOUT);
+    invalidate(view as *mut c_void, 0);
+}
+
+/// A Rivet window's strip asks for the width Rivet gives it instead of Chromium's own.
+unsafe extern "system" fn region_preferred_size(
+    view: *mut c_void,
+    out: *mut [i32; 2],
+    bounds: usize,
+) -> *mut c_void {
+    type Original = unsafe extern "system" fn(*mut c_void, *mut [i32; 2], usize) -> *mut c_void;
+    let original: Original = std::mem::transmute(REGION_ORIGINAL.load(Ordering::Acquire));
+    let result = original(view, out, bounds);
+    if !locked(&STRIP_WIDTHS).is_empty() {
+        if let Some(Ok(hook)) = HOOK.get() {
+            let window = (hook.hwnd_for_view)(view);
+            if let Some(width) = strip_override(window) {
+                (*out)[0] = width;
+                remember_region(window, view);
+            }
+        }
+    }
+    result
+}
+
+unsafe fn patch_region_size(base: usize) -> Result<(), String> {
+    let slot = (base + REGION_PREFERRED_SIZE_SLOT) as *mut usize;
+    if slot.read() != base + REGION_PREFERRED_SIZE {
+        return Err("the region view's size slot is not the recorded function".into());
+    }
+    REGION_ORIGINAL.store(slot.read(), Ordering::Release);
+    let mut previous: PAGE_PROTECTION_FLAGS = 0;
+    if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
+        return Err("could not unprotect the region view's vtable".into());
+    }
+    slot.write(region_preferred_size as *const () as usize);
+    VirtualProtect(slot.cast(), 8, previous, &mut previous);
+    Ok(())
 }
 
 /// Controllers reported so far, for a Rivet window that attaches after its own was reported.

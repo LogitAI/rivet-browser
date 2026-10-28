@@ -110,6 +110,13 @@ impl AppbarLayout {
     }
 }
 
+/// What to reserve left of the client view so the page begins at `leading`, when the browser lays
+/// its own strip out at the view's leading edge with `strip` DIPs. The reservation is never
+/// negative, because the browser does not lay out a view that starts left of its window.
+fn reserved_for_strip(leading: i32, strip: i32) -> i32 {
+    (leading - strip).max(0)
+}
+
 /// The toggle button's rectangle as (x, y, width, height) in device-independent pixels of the
 /// window's client area, for a page panel that begins at `leading`.
 fn toggle_rect(leading: i32) -> (i32, i32, i32, i32) {
@@ -322,6 +329,18 @@ mod tests {
         assert_eq!(strip_hit(266, 10, 96, 0, 268), StripHit::Resizer);
         assert_eq!(strip_hit(266, 100, 96, 0, 0), StripHit::Browser);
         assert_eq!(strip_hit(416, 100, 96, 0, 420), StripHit::Resizer);
+    }
+
+    #[test]
+    fn fr3_page_edge_follows_the_appbar_for_every_width_and_when_hidden() {
+        // The strip is made as wide as the appbar, so the page begins at the appbar's edge.
+        for side in [200, 240, 268, 420] {
+            assert_eq!(reserved_for_strip(side, side) + side, side);
+        }
+        // Hidden: no strip, and the page begins after the gap.
+        assert_eq!(reserved_for_strip(FLOAT_INSET, 0), FLOAT_INSET);
+        // A strip wider than the wanted edge never pushes the view off the window.
+        assert_eq!(reserved_for_strip(200, 240), 0);
     }
 
     #[test]

@@ -18,12 +18,12 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CallWindowProcW, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos,
-    GetPropW, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
+    GetPropW, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow,
     IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, PostMessageW, RegisterWindowMessageW,
     RemovePropW, SetCursor, SetPropW, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW,
     WindowFromPoint, GA_ROOT, GWLP_WNDPROC, GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT,
     ICON_BIG, ICON_SMALL, IDC_SIZEWE, MSG, PM_REMOVE, SM_CXICON, SM_CXPADDEDBORDER, SM_CXSMICON,
-    SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREDRAW, SWP_NOSIZE,
+    SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, WH_GETMESSAGE, WM_CAPTURECHANGED, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN,
     WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL,
@@ -117,7 +117,7 @@ fn slide_of(window: HWND) -> f32 {
 /// to take it out of the layout, so the page cannot begin before it ends.
 fn page_x(window: HWND) -> i32 {
     let leading = layout_of(window).leading();
-    crate::vertical_tabs::strip_width(window).map_or(leading, |strip| leading.max(strip))
+    crate::vertical_tabs::layout_width(window).map_or(leading, |strip| leading.max(strip))
 }
 
 /// Converts client pixels to device-independent pixels of the appbar's own coordinates: below the
@@ -421,17 +421,20 @@ unsafe fn toggle_message() -> u32 {
     RegisterWindowMessageW(wide(TOGGLE_MESSAGE).as_ptr())
 }
 
+/// Makes Chromium's tab strip, which the appbar covers, as wide as the appbar: nothing while the
+/// appbar is hidden.
+unsafe fn sync_strip(window: HWND) {
+    let layout = layout_of(window);
+    crate::vertical_tabs::set_strip_override(window, layout.strip());
+}
+
 /// Lays the browser out again, now that the appbar's width or mode changed, and redraws.
 unsafe fn relayout(window: HWND) {
-    // A frame change alone does not make the browser lay out again once the window has been laid
-    // out. A restored window is made one pixel wider and back, which lays it out without ever
-    // showing the wider size.
-    let mut bounds: RECT = std::mem::zeroed();
-    if IsZoomed(window) == 0 && GetWindowRect(window, &mut bounds) != 0 {
-        let (width, height) = (bounds.right - bounds.left, bounds.bottom - bounds.top);
-        let keep = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW;
-        SetWindowPos(window, std::ptr::null_mut(), 0, 0, width + 1, height, keep);
-        SetWindowPos(window, std::ptr::null_mut(), 0, 0, width, height, keep);
+    // The frame view lays out again on request, which also works for a maximized window.
+    crate::vertical_tabs::invalidate_strip(window);
+    if chrome_layout::relayout(window) {
+        update_appbar(window);
+        return;
     }
     SetWindowPos(
         window,
@@ -449,6 +452,7 @@ unsafe fn relayout(window: HWND) {
 unsafe fn toggle_appbar(window: HWND) {
     close_menu(window);
     edit_layout(window, |layout| layout.toggle());
+    sync_strip(window);
     SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
     KillTimer(window, PEEK_TIMER);
     relayout(window);
@@ -572,6 +576,7 @@ unsafe fn drag_to(window: HWND, x: i32) {
     let factor = layout_dpi(window) as f32 / 96.0;
     let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
     if edit_layout(window, |layout| layout.set_width(wanted)) {
+        sync_strip(window);
         relayout(window);
     }
 }
@@ -787,6 +792,7 @@ unsafe fn create_appbar(window: HWND) {
     };
     APPBARS.with(|appbars| appbars.borrow_mut().insert(window as isize, appbar));
     install_keyboard_hook();
+    sync_strip(window);
     APPBAR_STATE.with(|states| {
         states
             .borrow_mut()
@@ -937,8 +943,8 @@ fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
         }
         // The scale is recorded above for both tab layouts. The strip is only subtracted here.
         let leading = layout_of(window).leading();
-        if let Some(strip) = crate::vertical_tabs::strip_width(window) {
-            return Some((leading - strip).max(0));
+        if let Some(strip) = crate::vertical_tabs::layout_width(window) {
+            return Some(crate::reserved_for_strip(leading, strip));
         }
         Some(leading)
     }
@@ -1210,6 +1216,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             {
                 end_drag(window);
                 if edit_layout(window, |layout| layout.set_width(APPBAR_WIDTH)) {
+                    sync_strip(window);
                     relayout(window);
                 }
             }
@@ -1245,6 +1252,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::vertical_tabs::forget(window);
+            chrome_layout::forget_view(window);
             crate::chrome_toolbar::forget(window);
             LAYOUT_DPI.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             let key = wide(ORIGINAL_PROC);
