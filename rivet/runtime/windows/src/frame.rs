@@ -179,6 +179,8 @@ thread_local! {
     static DRAGGING: RefCell<HashSet<isize>> = RefCell::new(HashSet::new());
 }
 
+/// `VK_OEM_5`, the backslash key on a US layout.
+const VK_OEM_5: usize = 0xDC;
 /// `WM_MOUSELEAVE`, which `windows-sys` does not export.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const PEEK_TIMER: usize = 0x5249_5650;
@@ -521,6 +523,24 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
             let window = GetAncestor(message.hwnd, GA_ROOT);
             if attached(window) {
                 PostMessageW(window, toggle_message(), 0, 0);
+                message.message = WM_NULL;
+            }
+        }
+        // Ctrl+Shift+\ splits the page or ends the split.
+        if message.message == WM_KEYDOWN
+            && message.wParam == VK_OEM_5
+            && GetKeyState(0x11) < 0
+            && GetKeyState(0x10) < 0
+            && GetKeyState(0x12) >= 0
+        {
+            let window = GetAncestor(message.hwnd, GA_ROOT);
+            if attached(window) {
+                PostMessageW(
+                    window,
+                    RegisterWindowMessageW(wide("Rivet.ToggleSplit").as_ptr()),
+                    0,
+                    0,
+                );
                 message.message = WM_NULL;
             }
         }
@@ -1524,6 +1544,11 @@ unsafe extern "system" fn browser_proc(
 unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if message == RegisterWindowMessageW(wide("Rivet.NewStartPage").as_ptr()) && attached(window) {
         start_page(window);
+        return 0;
+    }
+    if message == RegisterWindowMessageW(wide("Rivet.ToggleSplit").as_ptr()) && attached(window) {
+        crate::chrome_split::toggle_split(window);
+        update_appbar(window);
         return 0;
     }
     if message == toggle_message() && attached(window) {
