@@ -243,3 +243,19 @@
 - 줄 높이가 Chrome 제목 줄(32 DIP)이다. 목업은 44 DIP다.
 - 둥근 패널, 패널 둘레 여백, 그림자가 없다.
 - 주소 대신 페이지 제목만 보인다. URL 읽기, 주소 입력, 자동완성, 뒤로/앞으로 가능 여부 표시는 아직 없다.
+
+## 2026-10-28: 캡션 버튼 영역 색 맞추기 시도
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Google Chrome `156.0.8078.48`, 192 DPI 모니터, `--app` 창.
+
+### 결과
+
+- `BrowserFrameView::GetFrameColor`(`0x3121500`)는 프레임 뷰 vtable 133번과 281번 칸에 있다. 두 칸을 바꾸고,
+  이 함수를 직접 부르는 `BrowserFrameViewWin::GetTitlebarColor`(`0xA403B30`, 7바이트와 패딩)의 시작도 Rivet으로
+  가는 점프로 바꿨다. 설치는 성공했지만 창을 다시 그려도 세 경로 모두 한 번도 불리지 않았다.
+- 창은 Mica(`DWMWA_SYSTEMBACKDROP_TYPE` 2)를 쓰지만, Mica를 끄거나 `DWMWA_CAPTION_COLOR`를 바꿔도 화면 캡처의 캡션
+  영역 색은 그대로였다. 이 색은 Windows가 아니라 Chrome이 칠한다.
+- Chrome 156의 앱 창 제목 줄은 프레임 색 함수가 아니라 색 공급자(`ui::ColorProvider`)의 프레임 색을 바로 쓰는 것으로
+  보인다. 다음 후보는 이 창의 색 공급자 또는 색 믹서다.
