@@ -256,7 +256,7 @@ mod tests {
     fn fr12_caption_fills_the_panel_top_row() {
         assert_eq!(
             panel_caption_bounds([900, 0, 138, 32], 44),
-            [900, 8, 138, 44]
+            [892, 8, 138, 44]
         );
     }
 
@@ -482,6 +482,10 @@ static LAYOUT_HOOK: OnceLock<(Layout, SetBoundsRect, CaptionHeight)> = OnceLock:
 type SetPaintToLayer = unsafe extern "system" fn(*mut c_void, i32);
 type SetRadius = unsafe extern "system" fn(*mut c_void, *const [f32; 4]);
 type SetMasks = unsafe extern "system" fn(*mut c_void, bool);
+type StackAtTop = unsafe extern "system" fn(*mut c_void, *mut c_void);
+type SetOpaque = unsafe extern "system" fn(*mut c_void, bool);
+static SET_OPAQUE: OnceLock<SetOpaque> = OnceLock::new();
+static STACK_AT_TOP: OnceLock<StackAtTop> = OnceLock::new();
 static PANEL_LAYER: OnceLock<(SetPaintToLayer, SetRadius, SetMasks)> = OnceLock::new();
 
 fn panel_radii() -> [f32; 4] {
@@ -517,8 +521,34 @@ unsafe fn clip_panel(frame: *mut c_void) {
     }
 }
 
+/// Keeps the caption buttons above the rounded panel. Both are layers under the widget's root
+/// layer and views order layers by tree position, which puts the client view on top, so the
+/// caption container gets its own layer that is stacked on top again after every layout.
+unsafe fn raise_caption(container: *mut c_void) {
+    let Some((set_layer, set_radius, set_masks)) = PANEL_LAYER.get() else { return };
+    let Some(stack_at_top) = STACK_AT_TOP.get() else { return };
+    let layer_of = || *(container.cast::<u8>().add(0x20) as *const *mut c_void);
+    if layer_of().is_null() {
+        set_layer(container, 1);
+    }
+    let layer = layer_of();
+    if layer.is_null() {
+        return;
+    }
+    if let Some(set_opaque) = SET_OPAQUE.get() {
+        set_opaque(layer, false);
+    }
+    set_masks(layer, true);
+    set_radius(layer, &[0.0, 12.0, 0.0, 0.0]);
+    let parent = *(layer.cast::<u8>().add(0x20) as *const *mut c_void);
+    if !parent.is_null() {
+        stack_at_top(parent, layer);
+    }
+}
+
 fn panel_caption_bounds(bounds: [i32; 4], height: i32) -> [i32; 4] {
-    [bounds[0], PANEL_GAP, bounds[2], height.max(0)]
+    // The container ends at the window edge, but the panel ends one gap before it.
+    [bounds[0] - PANEL_GAP, PANEL_GAP, bounds[2], height.max(0)]
 }
 
 unsafe extern "system" fn frame_layout(view: *mut c_void) {
@@ -538,6 +568,7 @@ unsafe extern "system" fn frame_layout(view: *mut c_void) {
     if wanted != bounds {
         set_bounds(container, &wanted);
     }
+    raise_caption(container);
 }
 
 /// Makes the caption button container of a window reach `height` DIPs from the top of the frame.
@@ -564,6 +595,15 @@ pub unsafe fn install_caption_layout(height: CaptionHeight) -> Result<(), String
         || std::slice::from_raw_parts((base + SET_RADIUS) as *const u8, 7) != [0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x30]
         || std::slice::from_raw_parts((base + SET_MASKS) as *const u8, 7) != [0x48, 0x8b, 0x89, 0x70, 0x01, 0x00, 0x00]
     { return Err("this browser build has no recorded panel layer helpers".into()); }
+    const STACK_AT_TOP_RVA: usize = 0x0ACC_8FD0;
+    if std::slice::from_raw_parts((base + STACK_AT_TOP_RVA) as *const u8, 6)
+        != [0x41, 0x57, 0x41, 0x56, 0x56, 0x57]
+    { return Err("this browser build has no recorded panel layer helpers".into()); }
+    const SET_OPAQUE_RVA: usize = 0x020A_FEF0;
+    if std::slice::from_raw_parts((base + SET_OPAQUE_RVA) as *const u8, 5) != [0x56, 0x48, 0x83, 0xec, 0x20]
+    { return Err("this browser build has no recorded panel layer helpers".into()); }
+    let _ = SET_OPAQUE.set(std::mem::transmute::<usize, SetOpaque>(base + SET_OPAQUE_RVA));
+    let _ = STACK_AT_TOP.set(std::mem::transmute::<usize, StackAtTop>(base + STACK_AT_TOP_RVA));
     let _ = PANEL_LAYER.set((std::mem::transmute::<usize, SetPaintToLayer>(base + SET_LAYER),
         std::mem::transmute::<usize, SetRadius>(base + SET_RADIUS),
         std::mem::transmute::<usize, SetMasks>(base + SET_MASKS)));
