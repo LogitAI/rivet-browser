@@ -62,6 +62,13 @@ const UPDATE_LOCATION_ICON: usize = 0x00EE_4220;
 const UPDATE_LOCATION_ICON_PROLOGUE: [u8; 16] = [
     0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0, 0, 0, 0x48, 0x89, 0xCE,
 ];
+/// `LocationBarView::RefreshBackground` bakes the field's fill colour into a background. Hover
+/// and focus refresh it outside any paint, so it needs its own scope.
+const LOCATION_BAR_VIEW_BASE: usize = 0x100;
+const REFRESH_BACKGROUND: usize = 0x00EE_0120;
+const REFRESH_BACKGROUND_PROLOGUE: [u8; 14] = [
+    0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x60,
+];
 /// `location_bar::GetSecurityChipText(out, delegate, url, flag)` returns the label Chrome puts
 /// before the address: "File" for local pages and the connection state of the others.
 /// `GURL::~GURL` frees the page address that the delegate hands out by value.
@@ -201,6 +208,7 @@ static LAYER_LOGGED: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_SET_VISIBLE: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_UPDATE_LOCATION: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_UPDATE_LOCATION_ICON: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_REFRESH_BACKGROUND: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_CHIP_TEXT: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_TEXTFIELD_THEME: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
@@ -375,6 +383,13 @@ unsafe extern "system" fn update_location_icon(view: *mut c_void) {
     scoped(top, || run(view));
 }
 
+unsafe extern "system" fn refresh_background(view: *mut c_void) {
+    // The function takes the `LocationBarView`, whose `views::View` base starts 0x100 bytes in.
+    let top = widget_holding((view as usize + LOCATION_BAR_VIEW_BASE) as *mut c_void);
+    let run: WidgetCall = original(&ORIGINAL_REFRESH_BACKGROUND);
+    scoped(top, || run(view));
+}
+
 /// The label is built here, which can also happen outside any paint or layout of the window.
 unsafe extern "system" fn update_location(view: *mut c_void, first: usize, second: usize, third: usize) {
     let top = window_top(view);
@@ -425,6 +440,13 @@ unsafe fn window_top(view: *mut c_void) -> usize {
         top = parent;
     }
     top
+}
+
+/// The widget that holds `view`, which must point at a `views::View`.
+unsafe fn widget_holding(view: *mut c_void) -> usize {
+    let table = *(view as *const usize);
+    let get_widget: Pointer = std::mem::transmute(*(table as *const usize).add(GET_WIDGET_SLOT));
+    get_widget(view) as usize
 }
 
 /// Rivet windows show the address without a label before it. The label is built while the icon
@@ -730,6 +752,7 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(DERIVE_SIZE, &DERIVE_SIZE_BYTES)
         || !prologue(UPDATE_LOCATION_ICON, &UPDATE_LOCATION_ICON_PROLOGUE)
         || !prologue(CHIP_TEXT, &CHIP_TEXT_PROLOGUE)
+        || !prologue(REFRESH_BACKGROUND, &REFRESH_BACKGROUND_PROLOGUE)
         || !prologue(GURL_DESTRUCTOR, &GURL_DESTRUCTOR_BYTES)
         || !prologue(ANCHOR_RECT, &ANCHOR_RECT_PROLOGUE)
         || !prologue(ANCHOR_RECT + 0x2a, &ANCHOR_VIEW_ACCESS)
@@ -837,6 +860,14 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         false,
         update_location as *const () as usize,
         &ORIGINAL_UPDATE_LOCATION,
+    )?;
+    detour(
+        base,
+        REFRESH_BACKGROUND,
+        &REFRESH_BACKGROUND_PROLOGUE,
+        false,
+        refresh_background as *const () as usize,
+        &ORIGINAL_REFRESH_BACKGROUND,
     )?;
     detour(
         base,
@@ -1177,6 +1208,13 @@ mod tests {
         assert!(!is_file_scheme(b"https://example.com/", 0, 5));
         assert!(!is_file_scheme(b"filesystem:http://a/", 0, 10));
         assert!(!is_file_scheme(b"file", -1, -1));
+    }
+
+    #[test]
+    fn fr12_background_refresh_hook_copies_whole_instructions() {
+        // Seven pushes, then `sub rsp, 0x60`, and no relative operand within the copy.
+        assert_eq!(REFRESH_BACKGROUND_PROLOGUE.len(), 14);
+        assert_eq!(&REFRESH_BACKGROUND_PROLOGUE[10..], &[0x48, 0x83, 0xEC, 0x60]);
     }
 
     #[test]
