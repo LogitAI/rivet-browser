@@ -68,6 +68,30 @@ const CHIP_TEXT: usize = 0x00E4_D780;
 const CHIP_TEXT_PROLOGUE: [u8; 15] = [
     0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB8, 0, 0, 0,
 ];
+/// `views::Textfield::OnThemeChanged`, `Textfield::SetFontList`, `gfx::FontList::GetFontSize` and
+/// `gfx::FontList::DeriveWithSizeDelta`. The address field is the browser window's only text
+/// field, and Chrome chooses its font once, when the field is built.
+const TEXTFIELD_THEME: usize = 0x01FD_2870;
+const TEXTFIELD_THEME_PROLOGUE: [u8; 12] = [
+    0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x68,
+];
+const TEXTFIELD_SET_FONT: usize = 0x0316_0CB0;
+const TEXTFIELD_SET_FONT_BYTES: [u8; 16] = [
+    0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x81, 0x78, 0x03, 0, 0, 0x48,
+];
+const FONT_SIZE: usize = 0x036B_B960;
+const FONT_SIZE_BYTES: [u8; 16] = [
+    0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x31, 0x8B, 0x46, 0x44, 0x83, 0xF8, 0xFF, 0x74, 0x06,
+];
+const DERIVE_SIZE: usize = 0x0318_74F0;
+const DERIVE_SIZE_BYTES: [u8; 16] = [
+    0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x44, 0x89, 0xC7, 0x48, 0x89, 0xD6,
+];
+/// The Textfield's render text and its font list, as offsets.
+const TEXTFIELD_RENDER_TEXT: usize = 0x378;
+const RENDER_TEXT_FONT_LIST: usize = 0x48;
+/// The size of the address text, in DIPs.
+const ADDRESS_FONT_SIZE: i32 = 12;
 /// `BubbleDialogDelegate::GetAnchorRect`, `View::IsDrawn` and `View::GetBoundsInScreen`.
 const ANCHOR_RECT: usize = 0x0ACA_C450;
 const ANCHOR_RECT_PROLOGUE: [u8; 18] = [
@@ -172,6 +196,7 @@ static ORIGINAL_SET_VISIBLE: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_UPDATE_LOCATION: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_UPDATE_LOCATION_ICON: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_CHIP_TEXT: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_TEXTFIELD_THEME: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
 /// The provider caches a colour when it is first asked for, so a colour can be swapped only after
 /// that. This remembers which ones have been seen, for the trace.
@@ -349,6 +374,38 @@ unsafe extern "system" fn update_location(view: *mut c_void, first: usize, secon
     let top = window_top(view);
     let run: unsafe extern "system" fn(*mut c_void, usize, usize, usize) = original(&ORIGINAL_UPDATE_LOCATION);
     scoped(top, || run(view, first, second, third));
+}
+
+unsafe extern "system" fn textfield_theme(view: *mut c_void) {
+    let run: WidgetCall = original(&ORIGINAL_TEXTFIELD_THEME);
+    run(view);
+    if !active() {
+        return;
+    }
+    let Some(hooks) = hooks() else { return };
+    let holder = *((view as usize + TEXTFIELD_RENDER_TEXT) as *const usize);
+    if holder == 0 {
+        return;
+    }
+    let render_text = *((holder + 0x10) as *const usize);
+    if render_text == 0 {
+        return;
+    }
+    let font_list = (render_text + RENDER_TEXT_FONT_LIST) as *mut c_void;
+    if (*(font_list as *const usize)) == 0 {
+        return;
+    }
+    let size: unsafe extern "system" fn(*mut c_void) -> i32 = std::mem::transmute(hooks.base + FONT_SIZE);
+    let current = size(font_list);
+    if current == ADDRESS_FONT_SIZE {
+        return;
+    }
+    let derive: unsafe extern "system" fn(*mut c_void, *mut usize, i32) -> *mut usize =
+        std::mem::transmute(hooks.base + DERIVE_SIZE);
+    let mut smaller: usize = 0;
+    derive(font_list, &mut smaller, ADDRESS_FONT_SIZE - current);
+    let set: unsafe extern "system" fn(*mut c_void, *const usize) = std::mem::transmute(hooks.base + TEXTFIELD_SET_FONT);
+    set(view, &smaller);
 }
 
 /// The topmost ancestor of `view` that is a Rivet widget, or the topmost ancestor.
@@ -624,6 +681,10 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(SET_VISIBLE, &SET_VISIBLE_PROLOGUE)
         || !prologue(FROM_VECTOR_ICON, &FROM_VECTOR_ICON_PROLOGUE)
         || !prologue(UPDATE_LOCATION, &UPDATE_LOCATION_PROLOGUE)
+        || !prologue(TEXTFIELD_THEME, &TEXTFIELD_THEME_PROLOGUE)
+        || !prologue(TEXTFIELD_SET_FONT, &TEXTFIELD_SET_FONT_BYTES)
+        || !prologue(FONT_SIZE, &FONT_SIZE_BYTES)
+        || !prologue(DERIVE_SIZE, &DERIVE_SIZE_BYTES)
         || !prologue(UPDATE_LOCATION_ICON, &UPDATE_LOCATION_ICON_PROLOGUE)
         || !prologue(CHIP_TEXT, &CHIP_TEXT_PROLOGUE)
         || !prologue(ANCHOR_RECT, &ANCHOR_RECT_PROLOGUE)
@@ -716,6 +777,14 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         false,
         update_location_icon as *const () as usize,
         &ORIGINAL_UPDATE_LOCATION_ICON,
+    )?;
+    detour(
+        base,
+        TEXTFIELD_THEME,
+        &TEXTFIELD_THEME_PROLOGUE,
+        false,
+        textfield_theme as *const () as usize,
+        &ORIGINAL_TEXTFIELD_THEME,
     )?;
     detour(
         base,
@@ -1055,6 +1124,12 @@ mod tests {
         assert_eq!(UPDATE_LOCATION_PROLOGUE.len(), 15);
         assert_eq!(&CHIP_TEXT_PROLOGUE[8..11], &[0x48, 0x81, 0xEC]);
         assert_eq!(&UPDATE_LOCATION_PROLOGUE[8..11], &[0x48, 0x81, 0xEC]);
+    }
+
+    #[test]
+    fn fr12_address_text_is_twelve_dips() {
+        assert_eq!(ADDRESS_FONT_SIZE, 12);
+        assert_eq!(TEXTFIELD_THEME_PROLOGUE.len(), 12);
     }
 
     #[test]
