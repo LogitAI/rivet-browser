@@ -256,6 +256,12 @@ pub unsafe fn open_tabs(window: HWND) -> Option<Vec<OpenTab>> {
                 url,
                 title: tab.title,
                 active: tab.active,
+                group: tab.group.map(|group| crate::spaces::SavedGroup {
+                    key: group.id.iter().map(|byte| format!("{byte:02x}")).collect(),
+                    title: group.title,
+                    color: group.color,
+                    collapsed: group.collapsed,
+                }),
             },
         });
     }
@@ -463,6 +469,102 @@ pub unsafe fn probe_group(window: HWND) {
     activate_tab(window, 0);
 }
 
+/// `operator new` of the browser and `TabStripModel::AddToNewGroup`, which the group probe uses.
+const ALLOCATE: usize = 0x05d3_d6a0;
+const ADD_TO_NEW_GROUP: usize = 0x0a20_60b0;
+type Allocate = unsafe extern "system" fn(usize) -> *mut i32;
+type AddToNewGroup = unsafe extern "system" fn(
+    *mut c_void,
+    *mut [u8; 16],
+    *const [usize; 3],
+    bool,
+) -> *mut [u8; 16];
+
+/// Whether the two functions that make a group are the ones this build expects.
+fn group_calls_known() -> bool {
+    static KNOWN: OnceLock<bool> = OnceLock::new();
+    *KNOWN.get_or_init(|| unsafe {
+        let Some(image) = image::recorded() else { return false };
+        image.has(ALLOCATE, &[0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9])
+            && image.has(
+                ADD_TO_NEW_GROUP,
+                &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81],
+            )
+    })
+}
+
+/// Puts the tabs whose pages are `ids` into one new group with this title and colour, and returns
+/// the group's id. `collapsed` is left to the caller, because a collapsed group must not hold the
+/// active tab.
+pub unsafe fn group_tabs(window: HWND, ids: &[usize], title: &str, color: i32) -> Option<[u8; 16]> {
+    let base = base()?;
+    if ids.is_empty() || !group_calls_known() {
+        return None;
+    }
+    let model = tab_model(base, window)?;
+    let open = open_tabs(window)?;
+    let mut positions: Vec<i32> = ids
+        .iter()
+        .filter_map(|id| open.iter().position(|tab| tab.id == *id))
+        .map(|position| position as i32)
+        .collect();
+    positions.sort_unstable();
+    if positions.is_empty() {
+        return None;
+    }
+    // Chrome takes over this vector of a pointer, an element count and a capacity.
+    let indices = function::<Allocate>(base, ALLOCATE)(positions.len() * 4);
+    if indices.is_null() {
+        return None;
+    }
+    for (slot, position) in positions.iter().enumerate() {
+        indices.add(slot).write(*position);
+    }
+    let span = [indices as usize, positions.len(), positions.len()];
+    let mut id = [0u8; 16];
+    function::<AddToNewGroup>(base, ADD_TO_NEW_GROUP)(model, &mut id, &span, false);
+    set_group_visuals(base, model, &id, title, color, false)?;
+    Some(id)
+}
+
+/// Names, colours and folds a group. The visual data goes to the browser by value, so the browser
+/// destroys it after the call. A title of up to ten UTF-16 units fits the string's own storage,
+/// and a longer one needs a buffer from the browser's own allocator for that to be sound.
+unsafe fn set_group_visuals(
+    base: usize,
+    model: *mut c_void,
+    id: &[u8; 16],
+    title: &str,
+    color: i32,
+    collapsed: bool,
+) -> Option<()> {
+    let units: Vec<u16> = title.encode_utf16().collect();
+    let mut visual = [0u8; 32];
+    if units.len() <= 10 {
+        for (slot, unit) in units.iter().enumerate() {
+            visual[slot * 2..slot * 2 + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+        visual[23] = units.len() as u8;
+    } else {
+        if !group_calls_known() {
+            return None;
+        }
+        let buffer = function::<Allocate>(base, ALLOCATE)((units.len() + 1) * 2).cast::<u16>();
+        if buffer.is_null() {
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(units.as_ptr(), buffer, units.len());
+        buffer.add(units.len()).write(0);
+        visual[..8].copy_from_slice(&(buffer as usize).to_le_bytes());
+        visual[8..16].copy_from_slice(&units.len().to_le_bytes());
+        visual[16..24].copy_from_slice(&((units.len() as u64) | 1 << 63).to_le_bytes());
+    }
+    visual[24..28].copy_from_slice(&color.to_le_bytes());
+    visual[28] = collapsed as u8;
+    function::<ChangeGroup>(base, CHANGE_GROUP)(model, id.as_ptr(), visual.as_ptr(), false);
+    Some(())
+}
+
 pub unsafe fn toggle_group(window: HWND, id: &[u8; 16]) -> bool {
     let Some(base) = base() else { return false };
     let Some(model) = tab_model(base, window) else {
@@ -480,10 +582,8 @@ pub unsafe fn toggle_group(window: HWND, id: &[u8; 16]) -> bool {
     if visual.is_null() {
         return false;
     }
-    // ChangeTabGroupVisuals copies the borrowed string before replacing the old visual data.
-    let mut copy = [0u8; 32];
-    std::ptr::copy_nonoverlapping(visual, copy.as_mut_ptr(), 32);
-    copy[28] ^= 1;
-    function::<ChangeGroup>(base, CHANGE_GROUP)(model, id.as_ptr(), copy.as_ptr(), false);
-    true
+    let title = chromium_string(visual).unwrap_or_default();
+    let color = *(visual.add(24) as *const i32);
+    let collapsed = *visual.add(28) != 0;
+    set_group_visuals(base, model, id, &title, color, !collapsed).is_some()
 }

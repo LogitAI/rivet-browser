@@ -15,6 +15,19 @@ pub struct SavedTab {
     #[allow(dead_code)]
     pub title: String,
     pub active: bool,
+    /// The tab group the tab was in. Tabs with the same `key` were one group.
+    pub group: Option<SavedGroup>,
+}
+
+/// A tab group as a space remembers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedGroup {
+    /// Names the group among the tabs of one space, as hex of the browser's id.
+    pub key: String,
+    pub title: String,
+    /// The browser's colour number for the group.
+    pub color: i32,
+    pub collapsed: bool,
 }
 
 /// What a space is called, how it is coloured and which browser profile it opens in.
@@ -103,6 +116,7 @@ impl Spaces {
                 url: start_url.into(),
                 title: String::new(),
                 active: true,
+                group: None,
             });
         }
         if !tabs.iter().any(|tab| tab.active) {
@@ -169,7 +183,18 @@ impl Spaces {
                 quote(&mut out, &tab.url);
                 out.push_str(", \"title\": ");
                 quote(&mut out, &tab.title);
-                out.push_str(&format!(", \"active\": {}}}", tab.active));
+                out.push_str(&format!(", \"active\": {}", tab.active));
+                if let Some(group) = &tab.group {
+                    out.push_str(", \"group\": {\"id\": ");
+                    quote(&mut out, &group.key);
+                    out.push_str(", \"title\": ");
+                    quote(&mut out, &group.title);
+                    out.push_str(&format!(
+                        ", \"color\": {}, \"collapsed\": {}}}",
+                        group.color, group.collapsed
+                    ));
+                }
+                out.push('}');
             }
             out.push_str(if tabs.is_empty() { "]}" } else { "\n    ]}" });
         }
@@ -208,10 +233,27 @@ impl Spaces {
                 if url.len() > MAX_TEXT || title.len() > MAX_TEXT {
                     return None;
                 }
+                // Files written before groups were kept have no `group`, which is no group.
+                let group = match tab.get("group") {
+                    None | Some(json::Json::Null) => None,
+                    Some(group) => {
+                        let (key, name) = (group.get("id")?.as_str()?, group.get("title")?.as_str()?);
+                        if key.len() > MAX_TEXT || name.len() > MAX_TEXT {
+                            return None;
+                        }
+                        Some(SavedGroup {
+                            key: key.into(),
+                            title: name.into(),
+                            color: group.get("color")?.as_u64()?.min(i32::MAX as u64) as i32,
+                            collapsed: group.get("collapsed")?.as_bool()?,
+                        })
+                    }
+                };
                 tabs.push(SavedTab {
                     url: url.into(),
                     title: title.into(),
                     active: tab.get("active")?.as_bool()?,
+                    group,
                 });
             }
             list.push(SpaceInfo { name: name.into(), tint: tint as u32, profile: profile.into() });
@@ -496,6 +538,7 @@ mod tests {
             url: url.into(),
             title: format!("Title of {url}"),
             active,
+            group: None,
         }
     }
 
@@ -519,6 +562,7 @@ mod tests {
                 url: "file:///start.html?space=Personal".into(),
                 title: String::new(),
                 active: true,
+                group: None,
             }])
         );
     }
@@ -637,6 +681,28 @@ mod tests {
             assert!(Spaces::from_json(bad).is_none(), "{bad:?}");
         }
         assert!(Spaces::from_json(&"[".repeat(5000)).is_none());
+    }
+
+    #[test]
+    fn fr3_tab_groups_survive_the_file_and_older_files_have_none() {
+        let group = |key: &str, collapsed| {
+            Some(SavedGroup { key: key.into(), title: "Read \"later\"".into(), color: 3, collapsed })
+        };
+        let mut a = tab("https://a.test/", true);
+        a.group = group("0a1b", false);
+        let mut b = tab("https://b.test/", false);
+        b.group = group("0a1b", false);
+        let mut c = tab("https://c.test/", false);
+        c.group = group("ff", true);
+        let open = vec![a, b, c, tab("https://d.test/", false)];
+        let text = Spaces::new().to_json(&open, 268, false, "d");
+        let mut loaded = Spaces::from_json(&text).unwrap().spaces;
+        assert_eq!(loaded.take_current_tabs(), open);
+        // A tab line without a group, as the first file version wrote it, still loads.
+        let old = text.replace(", \"group\"", ", \"x\"");
+        assert!(Spaces::from_json(&old).is_some());
+        let broken = text.replace("\"collapsed\": true", "\"collapsed\": 1");
+        assert!(Spaces::from_json(&broken).is_none());
     }
 
     #[test]

@@ -321,6 +321,26 @@ unsafe fn show_tabs(window: HWND, old: Vec<usize>, restore: &[SavedTab]) {
             .map(|tab| (tab.saved.url.clone(), tab.saved.active))
             .collect::<Vec<_>>()
     ));
+    // Tabs that shared a group share a new one, after the old tabs left the strip.
+    let mut groups: Vec<(String, [u8; 16])> = Vec::new();
+    for tab in restore {
+        let Some(group) = &tab.group else { continue };
+        if groups.iter().any(|(key, _)| *key == group.key) {
+            continue;
+        }
+        let members: Vec<usize> = restore
+            .iter()
+            .enumerate()
+            .filter(|(_, other)| other.group.as_ref().is_some_and(|g| g.key == group.key))
+            .filter_map(|(slot, _)| shown.get(slot).copied())
+            .collect();
+        crate::vertical_tabs::trace(&format!("space: grouping {members:x?} as {:?}", group.title));
+        let made = crate::chrome_tabs::group_tabs(window, &members, &group.title, group.color);
+        crate::vertical_tabs::trace(&format!("space: grouped {made:02x?}"));
+        if let Some(id) = made {
+            groups.push((group.key.clone(), id));
+        }
+    }
     let wanted = restore.iter().position(|tab| tab.active).unwrap_or(0);
     if let Some(id) = shown.get(wanted) {
         let position = crate::chrome_tabs::open_tabs(window)
@@ -328,6 +348,18 @@ unsafe fn show_tabs(window: HWND, old: Vec<usize>, restore: &[SavedTab]) {
         if let Some(position) = position {
             crate::chrome_tabs::activate_tab(window, position);
         }
+    }
+    // A collapsed group is folded last, and never over the tab that is shown.
+    let active_group = restore.get(wanted).and_then(|tab| tab.group.as_ref()).map(|g| g.key.clone());
+    for (key, id) in &groups {
+        let collapsed = restore
+            .iter()
+            .filter_map(|tab| tab.group.as_ref())
+            .any(|group| group.key == *key && group.collapsed);
+        if !collapsed || active_group.as_deref() == Some(key.as_str()) {
+            continue;
+        }
+        crate::chrome_tabs::toggle_group(window, id);
     }
 }
 
