@@ -87,6 +87,117 @@ type OnPaint = unsafe extern "system" fn(*const c_void, *const c_void);
 type GetProvider = unsafe extern "system" fn(*const c_void) -> *const u8;
 type DrawColor = unsafe extern "system" fn(*const c_void, u32);
 static PAINT: OnceLock<(OnPaint, GetProvider, DrawColor, Paint)> = OnceLock::new();
+/// `gfx::Canvas::FillRect(const Rect&, SkColor)`, which composites source-over.
+const FILL_RECT: usize = 0x0142_7B70;
+type FillRect = unsafe extern "system" fn(*const c_void, *const Rect, u32);
+static FILL_RECT_FN: OnceLock<FillRect> = OnceLock::new();
+
+/// Edge of one tinted block, in DIPs. A block steps less than one colour level, so no seams show.
+const TINT_BLOCK: i32 = 6;
+
+/// Source-over of `top` (r, g, b) at `alpha` (0..1) onto `under`.
+fn over(under: [f32; 3], top: [f32; 3], alpha: f32) -> [f32; 3] {
+    [0, 1, 2].map(|i| under[i] + (top[i] - under[i]) * alpha)
+}
+
+/// Opacity of a radial gradient that fades from `peak` at its centre to nothing at 70% of an
+/// ellipse with radii `rx` and `ry`.
+fn radial_alpha(dx: f32, dy: f32, rx: f32, ry: f32, peak: f32) -> f32 {
+    let distance = ((dx / rx).powi(2) + (dy / ry).powi(2)).sqrt();
+    (peak * (1.0 - distance / 0.7)).max(0.0)
+}
+
+/// The frame colour at a point of a `width` by `height` frame: the base, a warm tint rising from
+/// the lower left and a faint white glow from the top right.
+fn frame_tint(base: u32, x: f32, y: f32, width: f32, height: f32) -> u32 {
+    let base = [16, 8, 0].map(|shift| ((base >> shift) & 0xff) as f32);
+    let glow = radial_alpha(x - width, y, 0.6 * width, 0.5 * height, 0.55);
+    let tint = radial_alpha(x, y - height, 0.8 * width, 0.6 * height, 0.34);
+    let colour = over(over(base, [255.0; 3], glow), [208.0, 138.0, 82.0], tint);
+    let [r, g, b] = colour.map(|c| c.round().clamp(0.0, 255.0) as u32);
+    0xff00_0000 | (r << 16) | (g << 8) | b
+}
+
+/// Paints the frame tint over a frame of `width` by `height` DIPs, merging equal neighbours.
+unsafe fn paint_frame_tint(canvas: *const c_void, fill: FillRect, base: u32, width: i32, height: i32) {
+    let (w, h) = (width as f32, height as f32);
+    let mut y = 0;
+    while y < height {
+        let block_height = TINT_BLOCK.min(height - y);
+        let centre_y = y as f32 + block_height as f32 / 2.0;
+        let mut x = 0;
+        while x < width {
+            let at = |from: i32, to: i32| frame_tint(base, (from + to) as f32 / 2.0, centre_y, w, h);
+            let mut end = (x + TINT_BLOCK).min(width);
+            let colour = at(x, end);
+            while end < width {
+                let next = (end + TINT_BLOCK).min(width);
+                if at(end, next) != colour {
+                    break;
+                }
+                end = next;
+            }
+            if colour != base {
+                fill(canvas, &Rect { x, y, width: end - x, height: block_height }, colour);
+            }
+            x = end;
+        }
+        y += block_height;
+    }
+}
+
+/// Opacity of a box shadow's blur at `distance` DIPs outside the box edge, for a blur radius of
+/// `blur` (a Gaussian of half that deviation) and a darkest opacity of `peak`.
+fn shadow_opacity(distance: f32, blur: f32, peak: f32) -> f32 {
+    let sigma = blur / 2.0;
+    let z = distance / (sigma * std::f32::consts::SQRT_2);
+    // Abramowitz and Stegun 7.1.26 for erfc on z >= 0, mirrored for z < 0.
+    let t = 1.0 / (1.0 + 0.327_591_1 * z.abs());
+    let poly = t * (0.254_829_6 + t * (-0.284_496_74 + t * (1.421_413_7 + t * (-1.453_152_1 + t * 1.061_405_4))));
+    let erfc_abs = poly * (-z * z).exp();
+    let erfc = if z >= 0.0 { erfc_abs } else { 2.0 - erfc_abs };
+    peak * 0.5 * erfc
+}
+
+/// Nested rectangles `(grow, alpha)` that stack to a blurred shadow: each is grown by `grow`
+/// DIPs from the shadow box and carries the alpha that lifts the stacked opacity to the blur's.
+fn shadow_layers(blur: f32, peak: f32) -> Vec<(i32, u8)> {
+    let mut stacked = 0.0_f32;
+    let mut layers = Vec::new();
+    for grow in (0..=blur.ceil() as i32).rev() {
+        let wanted = shadow_opacity(grow as f32, blur, peak);
+        let alpha = ((wanted - stacked) / (1.0 - stacked)).max(0.0);
+        let level = (alpha * 255.0).round() as u8;
+        if level > 0 {
+            layers.push((grow, level));
+            stacked += (1.0 - stacked) * (level as f32 / 255.0);
+        }
+    }
+    layers
+}
+
+/// The panel's two soft shadows as `(offset_y, blur, colour, peak)`.
+const PANEL_SHADOWS: [(i32, f32, u32, f32); 2] = [
+    (1, 3.0, 0x0000_0000, 0.05),
+    (12, 32.0, 0x0028_1c1e, 0.08),
+];
+
+/// Paints the panel's shadows into the frame around `panel`. The panel's own layer covers the
+/// middle, so only the part that reaches into the gap shows.
+unsafe fn paint_panel_shadow(canvas: *const c_void, fill: FillRect, panel: Rect) {
+    for (offset, blur, colour, peak) in PANEL_SHADOWS {
+        for (grow, alpha) in shadow_layers(blur, peak) {
+            let rect = Rect {
+                x: panel.x - grow,
+                y: panel.y + offset - grow,
+                width: panel.width + 2 * grow,
+                height: panel.height + 2 * grow,
+            };
+            fill(canvas, &rect, ((alpha as u32) << 24) | colour);
+        }
+    }
+}
+
 
 unsafe fn colour_slot(provider: *const u8, id: i32) -> Option<*mut u32> {
     let mut node = *(provider.add(0x18) as *const *mut u8);
@@ -128,6 +239,17 @@ unsafe extern "system" fn on_paint(view: *const c_void, canvas: *const c_void) {
     for (slot, value) in saved {
         slot.write(value);
     }
+    if let (Some(fill), Some(Ok(hook))) = (FILL_RECT_FN.get(), HOOK.get()) {
+        let bounds = *(view.cast::<u8>().add(VIEW_BOUNDS_OFFSET) as *const [i32; 4]);
+        let (width, height) = (bounds[2], bounds[3]);
+        if width > 0 && height > 0 {
+            paint_frame_tint(canvas, *fill, colour, width, height);
+            let whole = Rect { x: 0, y: 0, width, height };
+            let reserved = (hook.reserved)((hook.hwnd_for_view)(view), whole).unwrap_or(0);
+            let panel = inset_panel(Rect { x: reserved, ..whole });
+            paint_panel_shadow(canvas, *fill, Rect { width: panel.width - reserved, ..panel });
+        }
+    }
 }
 
 /// Experiment: lets Rivet choose the title bar colour of its own windows only.
@@ -149,6 +271,10 @@ pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
     {
         return Err("this browser build has no recorded frame paint helpers".into());
     }
+    if std::slice::from_raw_parts((base + FILL_RECT) as *const u8, 5) != [0x56, 0x48, 0x83, 0xc4, 0x80] {
+        return Err("this browser build has no recorded frame fill".into());
+    }
+    let _ = FILL_RECT_FN.set(std::mem::transmute::<usize, FillRect>(base + FILL_RECT));
     let _ = PAINT.set((
         std::mem::transmute::<usize, OnPaint>(slot.read()),
         std::mem::transmute::<usize, GetProvider>(base + GET_COLOR_PROVIDER),
@@ -263,6 +389,24 @@ mod tests {
     #[test]
     fn fr12_caption_ink_is_independent_of_window_activation() {
         assert_eq!(caption_ink(), 0xff1a_1a1a);
+    }
+
+    #[test]
+    fn fr12_frame_tint_is_warm_at_the_lower_left_and_bright_at_the_top_right() {
+        let base = 0xffec_e8e2;
+        let low_left = frame_tint(base, 0.0, 800.0, 1000.0, 800.0);
+        let top_right = frame_tint(base, 1000.0, 0.0, 1000.0, 800.0);
+        assert!((low_left >> 16 & 0xff) < 0xec && (low_left & 0xff) < 0xe2);
+        assert!((top_right & 0xff) > 0xe2);
+        assert_eq!(frame_tint(base, 500.0, 400.0, 1000.0, 800.0), base);
+    }
+
+    #[test]
+    fn fr12_panel_shadow_fades_with_distance() {
+        let layers = shadow_layers(32.0, 0.08);
+        assert!(layers.len() > 4);
+        assert!(layers.windows(2).all(|pair| pair[0].0 > pair[1].0));
+        assert!(shadow_opacity(32.0, 32.0, 0.08) < shadow_opacity(0.0, 32.0, 0.08));
     }
 
     #[test]
