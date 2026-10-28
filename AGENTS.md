@@ -45,6 +45,9 @@ feature exists.
   as a compatibility target and add a regression check before claiming support.
 - Do not copy, export, synchronize or transmit browser passwords, passkeys, cookies, encryption
   keys or profile databases. Browser-owned authentication stays browser-owned.
+- Every Rivet UI component is part of the browser window's surface, like the appbar: a
+  DirectComposition visual of that window, with input taken from the subclassed browser window.
+  Never add a separate top-level window, owned popup or child window for Rivet UI.
 - `hidden` means no visible Rivet surface or frame stream. It does not promise that the browser's
   renderer, layout engine or JavaScript engine is absent.
 - The CLI is a first-class public surface. It must use the same session and policy model as the
