@@ -188,3 +188,35 @@
 - 컨트롤러에서 HWND로 가는 올바른 경로.
 - 세로 탭 띠 폭이 사용자 설정이나 창 크기에 따라 바뀔 때 Appbar와 맞추는 방법.
 - Rivet이 `--app` 대신 일반 창을 여는 결정. INTENT D2와 SPEC FR-2를 바꿔야 한다.
+
+## 2026-10-28: 세로 탭 창 식별과 가로 탭바 숨기기 비교
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Google Chrome `156.0.8078.48`, 192 DPI 모니터, 별도 프로필 `.scratch/vt-rivet`.
+
+### 세로 탭: 컨트롤러에서 창 찾기
+
+- `this+0x1B8`은 `Browser`이고(`Browser` vtable `0xFE58AB0`), `GetBrowserViewForBrowser`는 `BrowserView`를
+  돌려준다(vtable `0xFDF8A08`). 이 포인터는 `views::View` 기반이 아니라서 `HWNDForView`에 그대로 넘기면 Chrome이
+  종료된다.
+- `BrowserView`의 `views::View` vtable은 `0xFE7BF68`이다(`+0x58` 칸이 `View::GetWidget`). 객체 안에서 이 vtable을
+  찾으면 `+0x1F0`에 있고, 그 주소를 넘기면 창 핸들이 맞게 나온다.
+- 판정 함수 안에서는 컨트롤러만 기록하고, 각 Rivet 창이 메시지를 받은 뒤 컨트롤러의 창이 자기인지 확인하고 전환했다.
+  Rivet 창은 세로 탭이 되고, 같은 프로세스의 일반 창은 "다른 창"으로 판정되어 가로 탭 그대로였다.
+- 같은 프로필로 `rivet session start`를 두 번 하면 두 번째는 기존 창의 새 탭으로 열리고 CLI가 창을 찾지 못한다.
+  여러 Rivet 창은 아직 확인하지 못했다.
+
+### 가로 탭바 숨기기
+
+- 탭바 표시를 정하는 `BrowserView::ShouldDrawTabStrip`(`0x5286C00`)과 `GetTabStripVisible`(`0x57F5EC0`)은 가상
+  함수가 아니다. vtable 칸 교체로는 바꿀 수 없고, 함수 코드를 직접 덮어써야 한다.
+- 실험으로 `ShouldDrawTabStrip`을 프로세스 전체에서 `false`로 덮어쓰자 탭바는 사라졌지만, 캡션 버튼만 있는 빈 제목
+  줄이 남고 도구 모음은 두 번째 줄에 놓였다. 팝업 창과 같은 두 줄 배치다.
+- 도구 모음을 캡션 버튼 줄로 올리려면 레이아웃을 더 바꿔야 한다. 후보는 프레임 뷰의 가상 함수
+  `GetBrowserLayoutParams`(`0x369E0E0`)이지만 구조를 아직 모른다.
+
+### 비교
+
+- 세로 탭 방식은 Chrome이 한 줄 배치를 직접 만들고, Rivet은 vtable 칸 하나와 Chrome 내부 함수 호출 두 개만 쓴다.
+- 탭바 숨기기 방식은 함수 코드 덮어쓰기와 추가 레이아웃 변경이 필요하고, 지금 상태로는 두 줄 배치가 된다.
