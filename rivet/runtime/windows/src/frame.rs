@@ -776,6 +776,10 @@ unsafe fn create_appbar(window: HWND) {
             crate::vertical_tabs::set_trace(path);
             let toolbar = crate::chrome_toolbar::install(runtime_directory());
             crate::vertical_tabs::trace(&format!("toolbar: {toolbar:?}"));
+            if let Err(error) = toolbar {
+                log(&format!("rivet: could not install the toolbar: {error}"));
+                return;
+            }
             crate::vertical_tabs::install(report_vertical_tabs)
                 .map_err(|error| crate::vertical_tabs::trace(&format!("unavailable: {error}")))
                 .is_ok()
