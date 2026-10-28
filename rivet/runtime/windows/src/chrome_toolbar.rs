@@ -75,6 +75,12 @@ const TOOLBAR_BUTTON_INSET: i32 = 6;
 /// and the space Rivet windows leave before the back button, in DIPs.
 const TOOLBAR_INSET: i32 = 11;
 const LEADING_SPACE: i32 = 32;
+const TOOLBAR_TOP: i32 = 5;
+const TOOLBAR_BOTTOM: i32 = 4;
+/// `LayoutInset` that `LocationIconView::UpdateBorder` reads for the space around the page info
+/// icon, and how far Rivet moves the icon and the text after it from the field's left edge.
+const LOCATION_ICON_INSET: i32 = 3;
+const LOCATION_ICON_SHIFT: i32 = 2;
 /// The padding, in DIPs: a 26 DIP button around an 18 DIP icon, which Chrome pads to 28.
 const TOOLBAR_BUTTON_PADDING: i32 = 4;
 /// `ToolbarButton::UpdateIcon` rebuilds a button's images. The reload button does it when a page
@@ -159,6 +165,18 @@ const WEB_CONTENTS_TITLE_SLOT: usize = 53;
 /// `LocationBarView::RefreshBackground` bakes the field's fill colour into a background. Hover
 /// and focus refresh it outside any paint, so it needs its own scope.
 const LOCATION_BAR_VIEW_BASE: usize = 0x100;
+/// The field's hover animation value, a `double` in the `LocationBarView`, and the background the
+/// refresh sets: a `views::Background` at `+0x328` whose painter, at `+0x10`, keeps its four
+/// corner radii as floats from `+0x10`.
+const HOVER_VALUE: usize = 0x5F8;
+const FIELD_BACKGROUND: usize = 0x328;
+const BACKGROUND_VTABLE: usize = 0x0FC3_C730;
+const PAINTER_VTABLE: usize = 0x0FDC_F4F0;
+const PAINTER_RADII: usize = 0x10;
+const PAINTER_INSETS: usize = 0x20;
+const FIELD_FILL_MARGIN: i32 = 3;
+/// The radius of the field's rectangle, in DIPs.
+const FIELD_RADIUS: f32 = 8.0;
 const REFRESH_BACKGROUND: usize = 0x00EE_0120;
 const REFRESH_BACKGROUND_PROLOGUE: [u8; 14] = [
     0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x60,
@@ -259,7 +277,7 @@ const COLOURS: [(i32, u32); 19] = [
     (0x13C, PAPER),      // kColorFrameActive
     (796, PAPER),        // kColorLocationBarBackground
     (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
-    (1003, PAPER),       // Page info chip background in a normal state
+    (1003, 0),           // Page info chip background: clear, so the field is one surface
     (1013, PAPER),       // Location bar background in the alternate state
     (1055, 0xFF4A_4850), // kColorOmniboxText
     (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
@@ -291,6 +309,12 @@ struct Hooks {
     provider: Provider,
     hidden: Vec<(usize, WidgetCall)>,
 }
+
+/// A state the address field is kept in for captures, since the pointer may not move: read once
+/// from `rivet-toolbar-force.txt` next to the runtime.
+static FORCED: AtomicUsize = AtomicUsize::new(0);
+const FORCE_HOVER: usize = 1;
+const FORCE_PRESSED: usize = 2;
 
 static HOOKS: OnceLock<Result<Hooks, String>> = OnceLock::new();
 /// Trampolines to the original functions. Each is stored before its function is patched, so a
@@ -325,6 +349,8 @@ static DISPLAYS: Mutex<Vec<(usize, address_display::Display)>> = Mutex::new(Vec:
 thread_local! {
     /// The Rivet widget the UI thread works for, or zero.
     static CURRENT: Cell<usize> = const { Cell::new(0) };
+    /// Whether the page the location icon was last updated for is a local file.
+    static LOCAL_PAGE: Cell<bool> = const { Cell::new(false) };
     /// Provider colours replaced for the current Rivet widget, with their own values.
     static SWAPPED: RefCell<Vec<(*mut u32, u32)>> = const { RefCell::new(Vec::new()) };
 }
@@ -459,8 +485,14 @@ unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut 
     )(out, inset);
     if active() && inset == TOOLBAR_INSET {
         // The insets are top, left, bottom and right. The left one is where the back button
-        // starts, and the appbar toggle sits in the space added before it.
+        // starts, and the appbar toggle sits in the space added before it. The row is 43 DIPs
+        // tall around the 34 DIP field, with the buttons centred 28 DIPs in it.
+        (*out)[0] = TOOLBAR_TOP;
+        (*out)[2] = TOOLBAR_BOTTOM;
         (*out)[1] = (*out)[1].saturating_add(LEADING_SPACE);
+    }
+    if active() && inset == LOCATION_ICON_INSET {
+        (*out)[1] = (*out)[1].saturating_add(LOCATION_ICON_SHIFT);
     }
     result
 }
@@ -721,7 +753,34 @@ unsafe extern "system" fn refresh_background(view: *mut c_void) {
     // The function takes the `LocationBarView`, whose `views::View` base starts 0x100 bytes in.
     let top = widget_holding((view as usize + LOCATION_BAR_VIEW_BASE) as *mut c_void);
     let run: WidgetCall = original(&ORIGINAL_REFRESH_BACKGROUND);
-    scoped(top, || run(view));
+    scoped(top, || {
+        if active() && FORCED.load(Ordering::Relaxed) >= FORCE_HOVER {
+            ((view as usize + HOVER_VALUE) as *mut f64).write(1.0);
+        }
+        run(view);
+        if active() {
+            round_field(view);
+        }
+    });
+}
+
+/// Chrome rounds the field's fill into a pill. Rivet's field is a rectangle with 8 DIP corners,
+/// like every other control of the top row.
+unsafe fn round_field(view: *mut c_void) {
+    let Some(hooks) = hooks() else { return };
+    let background = *((view as usize + FIELD_BACKGROUND) as *const usize);
+    if background == 0 || *(background as *const usize) != hooks.base + BACKGROUND_VTABLE {
+        return;
+    }
+    let painter = *((background + 0x10) as *const usize);
+    if painter == 0 || *(painter as *const usize) != hooks.base + PAINTER_VTABLE {
+        return;
+    }
+    for corner in 0..4 {
+        ((painter + PAINTER_RADII + corner * 4) as *mut f32).write(FIELD_RADIUS);
+    }
+    // Chrome's field is 34 DIPs tall. The fill is 28, centred, like a button of the row.
+    ((painter + PAINTER_INSETS) as *mut [i32; 4]).write([FIELD_FILL_MARGIN, 0, FIELD_FILL_MARGIN, 0]);
 }
 
 /// The label is built here, which can also happen outside any paint or layout of the window.
@@ -792,9 +851,14 @@ unsafe extern "system" fn chip_text(
     url: *mut c_void,
     flag: u8,
 ) -> *mut [u64; 3] {
-    if active() && page_is_local_file(delegate) {
-        out.write([0; 3]);
-        return out;
+    if active() {
+        // The icon is chosen right after the label, from the same page.
+        let local = page_is_local_file(delegate);
+        LOCAL_PAGE.with(|page| page.set(local));
+        if local {
+            out.write([0; 3]);
+            return out;
+        }
     }
     original::<unsafe extern "system" fn(*mut [u64; 3], *mut c_void, *mut c_void, u8) -> *mut [u64; 3]>(
         &ORIGINAL_CHIP_TEXT,
@@ -932,6 +996,9 @@ unsafe extern "system" fn choose_icon(icon: usize) -> usize {
         Some(icons) => icons
             .iter()
             .find(|(rva, _)| hooks.base + rva == icon)
+            // Chrome's warning for plain HTTP is the icon of local files too. Only local files
+            // get the Rivet mark, so a page that is not secure keeps its warning.
+            .filter(|(rva, _)| *rva != HTTP_ICON || LOCAL_PAGE.with(Cell::get))
             .map_or(icon, |(_, ours)| {
                 ours.as_ref() as *const VectorIcon as usize
             }),
@@ -1167,6 +1234,13 @@ unsafe fn patch() -> Result<Hooks, String> {
     {
         return Err("this browser build has another page info icon".into());
     }
+    let http = &*((base + HTTP_ICON) as *const VectorIcon);
+    if http.count != 1
+        || (*http.reps).size != 263
+        || std::slice::from_raw_parts(http.name, HTTP_ICON_NAME.len()) != HTTP_ICON_NAME
+    {
+        return Err("this browser build has another icon for plain HTTP".into());
+    }
     Ok(Hooks {
         base,
         paint: std::mem::transmute::<usize, WidgetPaint>(base + PAINT),
@@ -1371,9 +1445,21 @@ unsafe fn slots(base: usize, skip: &str) -> Result<(), String> {
 
 /// Installs the changes once per process. They stay inert until a window is adopted.
 pub unsafe fn install(directory: Option<std::path::PathBuf>) -> Result<(), String> {
-    let skip = directory
-        .and_then(|dir| std::fs::read_to_string(dir.join("rivet-toolbar-skip.txt")).ok())
-        .unwrap_or_default();
+    let read = |name: &str| {
+        directory
+            .as_ref()
+            .and_then(|dir| std::fs::read_to_string(dir.join(name)).ok())
+            .unwrap_or_default()
+    };
+    let skip = read("rivet-toolbar-skip.txt");
+    FORCED.store(
+        match read("rivet-toolbar-force.txt").trim() {
+            "hover" => FORCE_HOVER,
+            "pressed" => FORCE_PRESSED,
+            _ => 0,
+        },
+        Ordering::Relaxed,
+    );
     static WIRED: OnceLock<Result<(), String>> = OnceLock::new();
     WIRED
         .get_or_init(|| {
@@ -1445,15 +1531,19 @@ const LINE_TO: u32 = 11;
 const CIRCLE: u32 = 24;
 const CANVAS_DIMENSIONS: u32 = 28;
 
-/// A 13 DIP information mark on Chrome's 16 DIP icon canvas.
+/// The stroke of the Rivet icons, in DIPs.
+const ICON_STROKE: f32 = 1.3;
+
+/// A 13 DIP information mark on Chrome's 16 DIP icon canvas, centred 8.75 DIPs from its left edge
+/// and 7.1 from its top, which is where the page info mark sits in the Rivet design.
 static INFO_PATH: [PathElement; 20] = [
     op(CANVAS_DIMENSIONS), at(16.0),
-    op(STROKE), at(1.5),
-    op(CIRCLE), at(8.0), at(8.0), at(6.5),
-    op(MOVE_TO), at(8.0), at(7.4),
-    op(LINE_TO), at(8.0), at(11.0),
-    op(MOVE_TO), at(8.0), at(5.0),
-    op(LINE_TO), at(8.0), at(5.2),
+    op(STROKE), at(ICON_STROKE),
+    op(CIRCLE), at(8.75), at(7.1), at(6.0),
+    op(MOVE_TO), at(8.75), at(6.55),
+    op(LINE_TO), at(8.75), at(9.85),
+    op(MOVE_TO), at(8.75), at(4.35),
+    op(LINE_TO), at(8.75), at(4.55),
 ];
 
 /// The navigation icons are drawn on an 18 DIP canvas with 1.5 DIP strokes, and
@@ -1464,35 +1554,35 @@ const NAV_CANVAS: f32 = 18.0;
 fn arrow(line_from: f32, line_to: f32, tip_x: f32, head_x: f32) -> Vec<PathElement> {
     vec![
         op(CANVAS_DIMENSIONS), at(NAV_CANVAS),
-        op(STROKE), at(1.5),
-        op(MOVE_TO), at(line_from), at(9.0),
-        op(LINE_TO), at(line_to), at(9.0),
+        op(STROKE), at(ICON_STROKE),
+        op(MOVE_TO), at(line_from), at(8.5),
+        op(LINE_TO), at(line_to), at(8.5),
         op(MOVE_TO), at(head_x), at(2.5),
-        op(LINE_TO), at(tip_x), at(9.0),
-        op(LINE_TO), at(head_x), at(15.5),
+        op(LINE_TO), at(tip_x), at(8.5),
+        op(LINE_TO), at(head_x), at(14.5),
     ]
 }
 
-/// The Rivet back arrow.
+/// The Rivet back arrow: a 14.5 DIP line and a head 6 DIPs deep.
 fn back_path() -> Vec<PathElement> {
-    arrow(16.5, 1.5, 1.5, 8.5)
+    arrow(16.25, 1.75, 1.75, 7.75)
 }
 
 /// The Rivet forward arrow, the back arrow mirrored.
 fn forward_path() -> Vec<PathElement> {
-    arrow(1.5, 16.5, 16.5, 9.5)
+    arrow(1.75, 16.25, 16.25, 10.25)
 }
 
 /// The Rivet reload mark: an open circle with its gap on the right and a head at the top right
 /// that points into the gap. It uses the same move and line commands as the arrows, because a
 /// generated arc produced a malformed vector path in Chrome 156.
 fn reload_path() -> Vec<PathElement> {
-    let (centre, radius, arm) = (9.0f32, 7.25f32, 4.0f32);
+    let (centre, radius, arm) = (9.0f32, 6.5f32, 3.5f32);
     let point = |degrees: f32| {
         let angle = degrees.to_radians();
         (centre + radius * angle.cos(), centre + radius * angle.sin())
     };
-    let mut path = vec![op(CANVAS_DIMENSIONS), at(NAV_CANVAS), op(STROKE), at(1.5)];
+    let mut path = vec![op(CANVAS_DIMENSIONS), at(NAV_CANVAS), op(STROKE), at(ICON_STROKE)];
     // From the head counter-clockwise on screen to just below the right side.
     let (start, sweep, steps) = (-25.0f32, -310.0f32, 31);
     for step in 0..=steps {
@@ -1535,6 +1625,9 @@ const BACK_ICON: usize = 0x10E0_2EA8;
 const FORWARD_ICON: usize = 0x10E0_55C0;
 const RELOAD_ICON: usize = 0x10E0_7DD0;
 const PAGE_INFO_ICON: usize = 0x10F5_D470;
+/// `kHttpChromeRefreshOldIcon`, which Chrome shows for local files as well as for plain HTTP.
+const HTTP_ICON: usize = 0x10F5_CE60;
+const HTTP_ICON_NAME: &[u8] = b"kHttpChromeRefreshOldIcon";
 const PAGE_INFO_BYTES: [u8; 32] = [
     0x1C, 0, 0, 0, 0, 0, 0x80, 0x41, 1, 0, 0, 0, 7, 0, 0, 0,
     0x5C, 0x8F, 0x3A, 0x41, 0xEC, 0x51, 0x5C, 0x41, 0x12, 0, 0, 0, 0xD7, 0xA3, 0x30, 0xBF,
@@ -1550,6 +1643,7 @@ unsafe fn build_icons(base: usize) {
             (FORWARD_ICON, leak(forward_path())),
             (RELOAD_ICON, leak(reload_path())),
             (PAGE_INFO_ICON, &INFO_PATH[..]),
+            (HTTP_ICON, &INFO_PATH[..]),
         ]
         .into_iter()
         .map(|(rva, path)| {
@@ -1635,7 +1729,7 @@ mod tests {
         let commands: Vec<u32> = [0, 2, 4, 8, 11, 14]
             .iter().map(|&index| unsafe { INFO_PATH[index].command }).collect();
         assert_eq!(commands, [CANVAS_DIMENSIONS, STROKE, CIRCLE, MOVE_TO, LINE_TO, MOVE_TO]);
-        assert_eq!(unsafe { INFO_PATH[3].value }, 1.5);
+        assert_eq!(unsafe { INFO_PATH[3].value }, ICON_STROKE);
     }
 
     #[test]
@@ -1749,6 +1843,24 @@ mod tests {
     fn fr12_address_text_is_twelve_dips() {
         assert_eq!(ADDRESS_FONT_SIZE, 12);
         assert_eq!(TEXTFIELD_THEME_PROLOGUE.len(), 12);
+    }
+
+    #[test]
+    fn fr12_address_field_is_one_eight_dip_rectangle_in_a_43_dip_row() {
+        assert_eq!(FIELD_RADIUS, 8.0);
+        // Chrome's 34 DIP field, the 28 DIP fill inside it and the row around it.
+        assert_eq!(28 + 2 * FIELD_FILL_MARGIN, 34);
+        assert_eq!(TOOLBAR_TOP + 34 + TOOLBAR_BOTTOM, 43);
+        // The page info chip paints nothing of its own, so no circle shows inside the field.
+        assert!(COLOURS.contains(&(1003, 0)));
+        assert_eq!(LOCATION_ICON_SHIFT, 2);
+    }
+
+    #[test]
+    fn fr12_only_local_pages_replace_the_plain_http_icon() {
+        assert_ne!(HTTP_ICON, PAGE_INFO_ICON);
+        assert_eq!(HTTP_ICON_NAME.len(), 25);
+        assert!(ICON_STROKE < 1.5);
     }
 
     #[test]
