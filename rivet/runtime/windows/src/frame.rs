@@ -374,6 +374,9 @@ unsafe fn create_appbar(window: HWND) {
         return;
     }
     chrome_layout::PANEL.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Err(error) = chrome_layout::install_caption_paint() {
+        log(&format!("rivet: could not paint caption buttons: {error}"));
+    }
     if let Err(error) = chrome_layout::install_caption_layout(|window| {
         attached(window).then_some(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP)
     }) {

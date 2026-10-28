@@ -253,7 +253,15 @@ mod tests {
 
     #[test]
     fn fr12_caption_fills_the_panel_top_row() {
-        assert_eq!(panel_caption_bounds([900, 0, 138, 32], 44), [900, 8, 138, 44]);
+        assert_eq!(
+            panel_caption_bounds([900, 0, 138, 32], 44),
+            [900, 8, 138, 44]
+        );
+    }
+
+    #[test]
+    fn fr12_caption_ink_is_independent_of_window_activation() {
+        assert_eq!(caption_ink(), 0xff1a_1a1a);
     }
 
     #[test]
@@ -316,6 +324,67 @@ type PreferredSize =
 /// Decides the caption button height of a window in DIPs, or `None` to keep the browser's.
 pub type CaptionHeight = fn(HWND) -> Option<i32>;
 static CAPTION: OnceLock<(PreferredSize, CaptionHeight)> = OnceLock::new();
+
+const CAPTION_PAINT_SLOT: usize = 114;
+const CAPTION_PAINT: usize = 0x0313_32A0;
+static CAPTION_PAINT_HOOK: OnceLock<(OnPaint, GetProvider)> = OnceLock::new();
+
+fn caption_ink() -> u32 {
+    0xff1a_1a1a
+}
+
+unsafe extern "system" fn caption_paint(button: *const c_void, canvas: *const c_void) {
+    let (original, provider_of) = CAPTION_PAINT_HOOK
+        .get()
+        .expect("patched after it is stored");
+    let rivet = matches!((HOOK.get(), PAINT.get()), (Some(Ok(hook)), Some((_, _, _, paint))) if paint((hook.hwnd_for_view)(button)).is_some());
+    if !rivet {
+        return original(button, canvas);
+    }
+    let provider = provider_of(button);
+    if provider.is_null() {
+        return original(button, canvas);
+    }
+    let saved: Vec<_> = [0x66c, 0x66d, 0x66e]
+        .into_iter()
+        .filter_map(|id| colour_slot(provider, id))
+        .map(|slot| (slot, slot.read()))
+        .collect();
+    for (slot, _) in &saved {
+        slot.write(caption_ink());
+    }
+    original(button, canvas);
+    for (slot, colour) in saved {
+        slot.write(colour);
+    }
+}
+
+pub unsafe fn install_caption_paint() -> Result<(), String> {
+    if CAPTION_PAINT_HOOK.get().is_some() {
+        return Ok(());
+    }
+    let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
+    let slot = (base + CAPTION_VTABLE + CAPTION_PAINT_SLOT * 8) as *mut usize;
+    if slot.read() != base + CAPTION_PAINT
+        || std::slice::from_raw_parts((base + CAPTION_PAINT) as *const u8, 8)
+            != [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]
+        || std::slice::from_raw_parts((base + GET_COLOR_PROVIDER) as *const u8, 6)
+            != [0x56, 0x57, 0x48, 0x83, 0xec, 0x78]
+    {
+        return Err("this browser build has no recorded caption paint".into());
+    }
+    let _ = CAPTION_PAINT_HOOK.set((
+        std::mem::transmute::<usize, OnPaint>(slot.read()),
+        std::mem::transmute::<usize, GetProvider>(base + GET_COLOR_PROVIDER),
+    ));
+    let mut previous: PAGE_PROTECTION_FLAGS = 0;
+    if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
+        return Err("could not unprotect the caption paint slot".into());
+    }
+    slot.write(caption_paint as *const () as usize);
+    VirtualProtect(slot.cast(), 8, previous, &mut previous);
+    Ok(())
+}
 
 unsafe extern "system" fn caption_size(
     button: *const c_void,
