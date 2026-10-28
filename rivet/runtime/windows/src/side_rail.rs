@@ -8,18 +8,25 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
-use windows::core::{Result, HSTRING, PCWSTR};
-use windows::Win32::Foundation::POINT;
+use windows::core::{Interface, Result, HSTRING, PCWSTR};
+use windows::Win32::Foundation::{GENERIC_READ, POINT};
+use windows::Win32::Graphics::Imaging::{
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICBitmapSource, IWICImagingFactory,
+    WICBitmapDitherTypeNone, WICBitmapPaletteTypeMedianCut, WICDecodeMetadataCacheOnDemand,
+};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows::Win32::Graphics::Direct2D::{
-    ID2D1DeviceContext, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ROUNDED_RECT,
+    ID2D1DeviceContext, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+    D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectComposition::{
     IDCompositionDesktopDevice, IDCompositionVisual, IDCompositionVisual2,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    IDWriteFactory5, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
+    IDWriteFactory5, IDWriteTextLayout, DWRITE_FONT_STRETCH_NORMAL, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -39,6 +46,7 @@ use crate::appbar::Appbar;
 use crate::chrome_side_panel::{self as panel, PageGeometry, RAIL_WIDTH};
 
 const PAPER: u32 = 0xfbfaf7;
+/// The tint of a window before it has a space, and the accent that does not follow the space.
 const TINT: u32 = 0xd08a52;
 const ACCENT: u32 = 0x9a5424;
 const INK: u32 = 0x1f2024;
@@ -56,6 +64,39 @@ fn glyph_for(id: u32) -> char {
         _ => '\u{EA86}',
     }
 }
+/// What a rail button shows for an entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Look {
+    /// One of Chrome's own entries, drawn with its icon glyph.
+    Glyph(char),
+    /// An extension's own icon, from the file its manifest names.
+    Picture(PathBuf),
+    /// An extension whose icon is not on disk: its initial.
+    Letter(char),
+}
+
+/// A rail entry as the person sees it: the label that shows on hover, and the icon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EntryLook {
+    name: String,
+    look: Look,
+}
+
+/// How an entry of Chrome's side panel looks in the rail.
+fn entry_look(key: &panel::EntryKey, extensions: &mut HashMap<String, Option<panel::ExtensionLook>>) -> EntryLook {
+    let Some(id) = panel::extension_id(key) else {
+        let id = panel::entry_id(key);
+        return EntryLook { name: panel::builtin_name(id).to_owned(), look: Look::Glyph(glyph_for(id)) };
+    };
+    let found = extensions.entry(id.clone()).or_insert_with(|| panel::extension_look(&id)).clone();
+    let name = found.as_ref().map_or_else(|| id.clone(), |found| found.name.clone());
+    let look = match found.and_then(|found| found.icon) {
+        Some(path) => Look::Picture(path),
+        None => Look::Letter(name.chars().next().map_or('?', |c| c.to_uppercase().next().unwrap_or(c))),
+    };
+    EntryLook { name, look }
+}
+
 const ADD_GLYPH: char = '\u{E710}';
 const FOLD_GLYPH: char = '\u{E76C}';
 const OPEN_GLYPH: char = '\u{E76B}';
@@ -72,6 +113,10 @@ const OPEN_BOTTOM: f32 = 6.0;
 /// The timer that follows the pointer, in milliseconds.
 const POLL_MS: u32 = 70;
 const POLL_TIMER: usize = 0x5249_5253;
+/// The label over a hovered button: 26 DIPs tall, padded by 10, 6 away from the rail.
+const TIP_HEIGHT: f32 = 26.0;
+const TIP_PAD_X: f32 = 10.0;
+const TIP_GAP: f32 = 6.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RailHit {
@@ -178,7 +223,8 @@ struct ColumnKey {
     dpi: u32,
     hover: Option<RailHit>,
     pressed: Option<RailHit>,
-    ids: Vec<u32>,
+    looks: Vec<EntryLook>,
+    tint: u32,
     showing: u32,
 }
 
@@ -189,13 +235,27 @@ struct OpenKey {
     over: bool,
 }
 
+/// What the label over a hovered button was painted for.
+#[derive(Debug, Clone, PartialEq)]
+struct TipKey {
+    text: String,
+    dpi: u32,
+}
+
 struct Rail {
     device: IDCompositionDesktopDevice,
     dwrite: IDWriteFactory5,
     column: IDCompositionVisual2,
     open: IDCompositionVisual2,
+    tip: IDCompositionVisual2,
     column_key: Option<ColumnKey>,
     open_key: Option<OpenKey>,
+    tip_key: Option<TipKey>,
+    /// The icons already decoded, by file.
+    pictures: HashMap<PathBuf, Option<IWICBitmapSource>>,
+    /// What was found out about each extension, by id, so the disk is read once.
+    extensions: HashMap<String, Option<panel::ExtensionLook>>,
+    looks: Vec<EntryLook>,
     /// The entries Chrome's side panel registry listed at the last update.
     entries: Vec<panel::EntryKey>,
     hover: Option<RailHit>,
@@ -222,13 +282,20 @@ impl Rail {
         root.AddVisual(&column, true, None::<&IDCompositionVisual>)?;
         let open = device.CreateVisual()?;
         root.AddVisual(&open, true, None::<&IDCompositionVisual>)?;
+        let tip = device.CreateVisual()?;
+        root.AddVisual(&tip, true, None::<&IDCompositionVisual>)?;
         Ok(Self {
             device,
             dwrite,
             column,
             open,
+            tip,
             column_key: None,
             open_key: None,
+            tip_key: None,
+            pictures: HashMap::new(),
+            extensions: HashMap::new(),
+            looks: Vec::new(),
             entries: Vec::new(),
             hover: None,
             pressed: None,
@@ -271,6 +338,75 @@ impl Rail {
         Ok(())
     }
 
+    /// Draws an extension's icon, 16 DIPs square in the middle of a button.
+    unsafe fn picture(&self, context: &ID2D1DeviceContext, path: &PathBuf, area: D2D_RECT_F, ink: u32) -> Result<()> {
+        let Some(Some(source)) = self.pictures.get(path) else {
+            return self.letter(context, '?', area, ink);
+        };
+        let bitmap = context.CreateBitmapFromWicBitmap(source, None)?;
+        let (x, y) = ((area.left + area.right) / 2.0 - 8.0, (area.top + area.bottom) / 2.0 - 8.0);
+        let target = rect(x, y, 16.0, 16.0);
+        context.DrawBitmap(&bitmap, Some(&target), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
+        Ok(())
+    }
+
+    /// The initial of an extension that has no icon on disk, in a small rounded square.
+    unsafe fn letter(&self, context: &ID2D1DeviceContext, letter: char, area: D2D_RECT_F, ink: u32) -> Result<()> {
+        let (x, y) = ((area.left + area.right) / 2.0 - 8.0, (area.top + area.bottom) / 2.0 - 8.0);
+        self.rounded(context, rect(x, y, 16.0, 16.0), 5.0, rgb(INK, 0.08))?;
+        let locale = HSTRING::from("en-us");
+        let format = self.dwrite.CreateTextFormat(
+            &HSTRING::from("Segoe UI Variable Text"),
+            None,
+            DWRITE_FONT_WEIGHT(700),
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            10.0,
+            PCWSTR(locale.as_ptr()),
+        )?;
+        format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+        let text: Vec<u16> = letter.to_string().encode_utf16().collect();
+        let layout = self.dwrite.CreateTextLayout(&text, &format, 16.0, 16.0)?;
+        let brush = context.CreateSolidColorBrush(&rgb(ink, 1.0), None)?;
+        context.DrawTextLayout(Vector2 { X: x, Y: y }, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        Ok(())
+    }
+
+    /// The width and height in DIPs of a label's bubble.
+    unsafe fn tip_size(&self, text: &str) -> Result<(f32, f32)> {
+        let layout = self.tip_layout(text, 400.0)?;
+        let mut metrics = Default::default();
+        layout.GetMetrics(&mut metrics)?;
+        Ok((metrics.width.ceil() + 2.0 * TIP_PAD_X, TIP_HEIGHT))
+    }
+
+    unsafe fn tip_layout(&self, text: &str, width: f32) -> Result<IDWriteTextLayout> {
+        let locale = HSTRING::from("en-us");
+        let format = self.dwrite.CreateTextFormat(
+            &HSTRING::from("Segoe UI Variable Text"),
+            None,
+            DWRITE_FONT_WEIGHT(500),
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            12.0,
+            PCWSTR(locale.as_ptr()),
+        )?;
+        format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        let text: Vec<u16> = text.encode_utf16().collect();
+        self.dwrite.CreateTextLayout(&text, &format, width, TIP_HEIGHT)
+    }
+
+    /// The label that names a button, drawn like the mock-up's tooltip: ink with light text.
+    unsafe fn draw_tip(&self, context: &ID2D1DeviceContext, text: &str, width: f32) -> Result<()> {
+        self.rounded(context, rect(0.0, 0.0, width, TIP_HEIGHT), 8.0, rgb(INK, 0.94))?;
+        let layout = self.tip_layout(text, width - 2.0 * TIP_PAD_X)?;
+        let brush = context.CreateSolidColorBrush(&rgb(0xffffff, 1.0), None)?;
+        context.DrawTextLayout(Vector2 { X: TIP_PAD_X, Y: 0.0 }, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        Ok(())
+    }
+
     unsafe fn rounded(&self, context: &ID2D1DeviceContext, area: D2D_RECT_F, radius: f32, colour: D2D1_COLOR_F) -> Result<()> {
         let brush = context.CreateSolidColorBrush(&colour, None)?;
         context.FillRoundedRectangle(
@@ -308,7 +444,7 @@ impl Rail {
     }
 
     unsafe fn draw_column(&self, context: &ID2D1DeviceContext, width: f32, height: f32, key: &ColumnKey) -> Result<()> {
-        let ground = mix(PAPER, TINT, 0.04);
+        let ground = mix(PAPER, key.tint, 0.04);
         // The page panel rounds its lower right corner. The rail is cut from the same shape: its
         // top edge lies below the top row, so only the lower corner shows.
         let square = context.CreateSolidColorBrush(&rgb(ground, 1.0), None)?;
@@ -321,29 +457,33 @@ impl Rail {
         )?;
         context.FillRectangle(&rect(0.0, 0.0, 1.0, height), &context.CreateSolidColorBrush(&rgb(INK, 0.08), None)?);
         let left = (width - BUTTON) / 2.0;
-        let button = |top: f32, hit: RailHit, glyph: char, on: bool| -> Result<()> {
+        let button = |top: f32, hit: RailHit, look: &Look, on: bool| -> Result<()> {
             let area = rect(left, top, BUTTON, BUTTON);
             let pressed = key.pressed == Some(hit) && key.hover == Some(hit);
             if on {
-                self.rounded(context, area, 8.0, rgb(mix(0xffffff, TINT, 0.14), 1.0))?;
+                self.rounded(context, area, 8.0, rgb(mix(0xffffff, key.tint, 0.14), 1.0))?;
             } else if pressed || key.hover == Some(hit) {
                 self.rounded(context, area, 8.0, rgb(INK, if pressed { 0.1 } else { 0.06 }))?;
             }
             let ink = if on { ACCENT } else if key.hover == Some(hit) { INK } else { SOFT_INK };
-            self.icon(context, glyph, area, 14.0, rgb(ink, 1.0))
+            match look {
+                Look::Glyph(glyph) => self.icon(context, *glyph, area, 14.0, rgb(ink, 1.0)),
+                Look::Picture(path) => self.picture(context, path, area, ink),
+                Look::Letter(letter) => self.letter(context, *letter, area, ink),
+            }
         };
-        for (index, id) in key.ids.iter().enumerate() {
+        for (index, entry) in key.looks.iter().enumerate() {
             let top = RAIL_PAD + index as f32 * (BUTTON + BUTTON_GAP);
             let on = key.showing & (1 << index.min(31)) != 0;
-            button(top, RailHit::Entry(index), glyph_for(*id), on)?;
+            button(top, RailHit::Entry(index), &entry.look, on)?;
         }
-        let rule = RAIL_PAD + key.ids.len() as f32 * (BUTTON + BUTTON_GAP) + 4.0;
+        let rule = RAIL_PAD + key.looks.len() as f32 * (BUTTON + BUTTON_GAP) + 4.0;
         context.FillRectangle(
             &rect((width - 18.0) / 2.0, rule, 18.0, 1.0),
             &context.CreateSolidColorBrush(&rgb(INK, 0.08), None)?,
         );
-        button(add_top(key.ids.len()), RailHit::Add, ADD_GLYPH, false)?;
-        button(height - RAIL_PAD - BUTTON, RailHit::Fold, FOLD_GLYPH, false)
+        button(add_top(key.looks.len()), RailHit::Add, &Look::Glyph(ADD_GLYPH), false)?;
+        button(height - RAIL_PAD - BUTTON, RailHit::Fold, &Look::Glyph(FOLD_GLYPH), false)
     }
 
     unsafe fn draw_open(&self, context: &ID2D1DeviceContext, opacity: f32, over: bool) -> Result<()> {
@@ -381,6 +521,9 @@ pub unsafe fn update(window: HWND, appbar: &Appbar, visible: bool, dpi: u32) {
             if let Err(error) = panel::install_layout() {
                 crate::vertical_tabs::trace(&format!("side rail: {error}"));
             }
+            if let Err(error) = panel::install_page_colours() {
+                crate::vertical_tabs::trace(&format!("side rail: {error}"));
+            }
             SetTimer(window, POLL_TIMER, POLL_MS, Some(poll));
             install_hook();
         }
@@ -399,9 +542,21 @@ unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>,
     let (Some(geometry), true) = (geometry, unfolded) else {
         rail.column.SetContent(None)?;
         rail.column_key = None;
+        rail.tip.SetContent(None)?;
+        rail.tip_key = None;
         return refresh_open(rail, geometry.filter(|_| !unfolded), dpi);
     };
     rail.entries = panel::listed_entries(window);
+    let looks: Vec<EntryLook> = rail.entries.iter().map(|key| entry_look(key, &mut rail.extensions)).collect();
+    rail.looks = looks;
+    rail.looks.extend(FAKE.with(|fake| fake.borrow().clone()));
+    for look in rail.looks.clone() {
+        if let Look::Picture(path) = &look.look {
+            if !rail.pictures.contains_key(path) {
+                rail.pictures.insert(path.clone(), load_picture(path));
+            }
+        }
+    }
     let (left, top, height) = rail_rect(geometry);
     let (width_px, height_px) = ((RAIL_WIDTH as f32 * scale).round() as i32, (height * scale).round() as i32);
     rail.column.SetOffsetX2((left * scale).round())?;
@@ -412,7 +567,8 @@ unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>,
         dpi,
         hover: rail.hover,
         pressed: rail.pressed,
-        ids: rail.entries.iter().map(panel::entry_id).collect(),
+        looks: rail.looks.clone(),
+        tint: FORCED_TINT.with(|forced| forced.get()).unwrap_or_else(|| crate::frame::space_tint(window)),
         showing: showing_mask(window, &rail.entries),
     };
     if rail.column_key.as_ref() != Some(&key) && width_px > 0 && height_px > 0 {
@@ -423,7 +579,68 @@ unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>,
         rail.column_key = Some(key);
     }
     refresh_open(rail, None, dpi)?;
+    refresh_tip(rail, geometry, height, dpi)?;
     rail.device.Commit()
+}
+
+/// What a rail button is called.
+fn hit_name(rail: &Rail, hit: RailHit) -> String {
+    match hit {
+        RailHit::Entry(index) => rail.looks.get(index).map(|look| look.name.clone()).unwrap_or_default(),
+        RailHit::Add => "Get extensions".to_owned(),
+        RailHit::Fold => "Hide the Sidebar".to_owned(),
+    }
+}
+
+/// Where a hit's button is in the rail, from its top.
+fn hit_top(hit: RailHit, height: f32, entries: usize) -> f32 {
+    match hit {
+        RailHit::Entry(index) => RAIL_PAD + index as f32 * (BUTTON + BUTTON_GAP),
+        RailHit::Add => add_top(entries),
+        RailHit::Fold => height - RAIL_PAD - BUTTON,
+    }
+}
+
+/// Shows the name of the hovered button to its left, or nothing when no button is hovered.
+unsafe fn refresh_tip(rail: &mut Rail, geometry: PageGeometry, height: f32, dpi: u32) -> Result<()> {
+    let Some(hit) = rail.hover.filter(|hit| match hit {
+        RailHit::Entry(index) => *index < rail.looks.len(),
+        _ => true,
+    }) else {
+        rail.tip.SetContent(None)?;
+        rail.tip_key = None;
+        return Ok(());
+    };
+    let text = hit_name(rail, hit);
+    let scale = dpi as f32 / 96.0;
+    let (width, tall) = rail.tip_size(&text)?;
+    let (left, top, _) = rail_rect(geometry);
+    let button = top + hit_top(hit, height, rail.looks.len());
+    rail.tip.SetOffsetX2(((left - TIP_GAP - width) * scale).round())?;
+    rail.tip.SetOffsetY2(((button + (BUTTON - tall) / 2.0) * scale).round())?;
+    let key = TipKey { text: text.clone(), dpi };
+    if rail.tip_key.as_ref() != Some(&key) {
+        rail.paint(&rail.tip, (width * scale).ceil() as i32, (tall * scale).ceil() as i32, dpi, |context| {
+            rail.draw_tip(context, &text, width)
+        })?;
+        rail.tip_key = Some(key);
+    }
+    Ok(())
+}
+
+/// Decodes an icon file into pixels Direct2D can draw.
+unsafe fn load_picture(path: &PathBuf) -> Option<IWICBitmapSource> {
+    let factory: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
+    let name = HSTRING::from(path.to_string_lossy().as_ref());
+    let decoder = factory
+        .CreateDecoderFromFilename(&name, None, GENERIC_READ, WICDecodeMetadataCacheOnDemand)
+        .ok()?;
+    let frame = decoder.GetFrame(0).ok()?;
+    let converter = factory.CreateFormatConverter().ok()?;
+    converter
+        .Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut)
+        .ok()?;
+    converter.cast().ok()
 }
 
 unsafe fn refresh_open(rail: &mut Rail, geometry: Option<PageGeometry>, dpi: u32) -> Result<()> {
@@ -498,10 +715,10 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
                 || rail.geometry.is_some_and(|g| on_open_button(g, x, y)),
                 |(_, over)| over,
             );
-        rail.hover = match target_at(rail, unfolded, x, y) {
+        rail.hover = FORCED_HOVER.with(|forced| forced.get()).filter(|_| unfolded).or(match target_at(rail, unfolded, x, y) {
             Some(Target::Rail(hit)) => Some(hit),
             _ => None,
-        };
+        });
         rail.opacity = fade(rail.opacity, open_opacity(rail.near, rail.over), 0.2);
         before != (rail.hover, rail.near, rail.over, rail.opacity)
     });
@@ -597,6 +814,12 @@ unsafe fn perform(window: HWND, target: Target) {
 }
 
 thread_local! {
+    /// A test can show the rail in the tint of a space the window is not in.
+    static FORCED_TINT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    /// Entries a test adds to the rail, to see how an extension's entry looks without one.
+    static FAKE: RefCell<Vec<EntryLook>> = const { RefCell::new(Vec::new()) };
+    /// A test can hold the pointer over a rail button.
+    static FORCED_HOVER: std::cell::Cell<Option<RailHit>> = const { std::cell::Cell::new(None) };
     /// A test can hold the pointer near the corner without a real pointer: (near, over).
     static FORCED_POINTER: std::cell::Cell<Option<(bool, bool)>> = const { std::cell::Cell::new(None) };
 }
@@ -619,7 +842,36 @@ pub unsafe fn simulate(window: HWND, command: &str) {
             FORCED_POINTER.with(|forced| forced.set(Some((true, true))));
             None
         }
+        (Some("hover"), Some(n)) => {
+            FORCED_HOVER.with(|forced| forced.set(Some(RailHit::Entry(n))));
+            None
+        }
+        (Some("hover"), None) => {
+            let hit = match words.next() {
+                Some("add") => Some(RailHit::Add),
+                Some("fold") => Some(RailHit::Fold),
+                _ => None,
+            };
+            FORCED_HOVER.with(|forced| forced.set(hit));
+            None
+        }
+        (Some("tint"), _) => {
+            let tint = command.split_whitespace().nth(1).and_then(|hex| u32::from_str_radix(hex, 16).ok());
+            FORCED_TINT.with(|forced| forced.set(tint));
+            None
+        }
+        (Some("fake"), _) => {
+            let mut words = command.split_whitespace().skip(1);
+            let name = words.next().unwrap_or("Fake").to_owned();
+            let look = match words.next() {
+                Some(path) => Look::Picture(PathBuf::from(path)),
+                None => Look::Letter(name.chars().next().unwrap_or('?')),
+            };
+            FAKE.with(|fake| fake.borrow_mut().push(EntryLook { name, look }));
+            None
+        }
         (Some("away"), _) => {
+            FORCED_HOVER.with(|forced| forced.set(None));
             FORCED_POINTER.with(|forced| forced.set(None));
             None
         }
@@ -672,6 +924,23 @@ mod tests {
         assert_eq!(open_opacity(false, false), 0.0);
         assert_eq!(open_opacity(true, false), 0.6);
         assert_eq!(open_opacity(true, true), 1.0);
+    }
+
+    #[test]
+    fn fr10_rail_labels_chromes_entries_and_draws_their_glyphs() {
+        let mut known = HashMap::new();
+        let mut key: panel::EntryKey = [0; 0x28];
+        key[..4].copy_from_slice(&1u32.to_le_bytes());
+        let look = entry_look(&key, &mut known);
+        assert_eq!(look, EntryLook { name: "Bookmarks".into(), look: Look::Glyph('\u{E736}') });
+        assert!(known.is_empty(), "Chrome's own entries need no disk");
+    }
+
+    #[test]
+    fn fr10_label_of_a_hovered_button_sits_beside_the_button_it_names() {
+        assert_eq!(hit_top(RailHit::Entry(1), 600.0, 3), 6.0 + 32.0);
+        assert_eq!(hit_top(RailHit::Fold, 600.0, 3), 600.0 - 6.0 - 30.0);
+        assert!(hit_top(RailHit::Add, 600.0, 3) > hit_top(RailHit::Entry(2), 600.0, 3));
     }
 
     #[test]

@@ -262,6 +262,11 @@ unsafe fn appbar_height(window: HWND) -> f32 {
     }
 }
 
+/// The tint of the space a window shows now.
+pub(crate) fn space_tint(window: HWND) -> u32 {
+    with_spaces(window, |spaces| spaces.list()[spaces.current()].tint)
+}
+
 fn with_spaces<R>(window: HWND, edit: impl FnOnce(&mut Spaces) -> R) -> R {
     SPACES.with(|all| edit(all.borrow_mut().entry(window as isize).or_insert_with(Spaces::new)))
 }

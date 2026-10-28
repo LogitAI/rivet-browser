@@ -11,13 +11,14 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{
-    VirtualProtect, VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_PROTECTION_FLAGS,
-    PAGE_READWRITE,
+    VirtualAlloc, VirtualProtect, VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_RESERVE,
+    PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
 };
 
 use crate::chrome_layout;
@@ -38,6 +39,8 @@ const SHOW_PROLOGUE: [u8; 9] = [0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 
 /// `SidePanelEntryIdToString(std::string*, SidePanelEntryId)`.
 const ENTRY_ID_TO_STRING: usize = 0x01E7_18C0;
 const ENTRY_ID_TO_STRING_PROLOGUE: [u8; 8] = [0x56, 0x48, 0x83, 0xec, 0x30, 0x48, 0x89, 0xce];
+/// The id of the entries that extensions register.
+const EXTENSION_ENTRY: u32 = 0x17;
 /// How many entry ids Chrome 156 defines.
 const ENTRY_COUNT: u32 = 0x18;
 
@@ -150,11 +153,154 @@ pub fn entry_id(key: &EntryKey) -> u32 {
     u32::from_le_bytes([key[0], key[1], key[2], key[3]])
 }
 
+/// The extension id of an extension's entry key, or `None` for Chrome's own entries. The key
+/// holds an optional `std::string` at +8: libc++'s alternate layout keeps a long string as a
+/// pointer, a size and a capacity whose top bit marks it long, and the optional's flag follows.
+pub fn extension_id(key: &EntryKey) -> Option<String> {
+    if key[0x20] == 0 || entry_id(key) != EXTENSION_ENTRY {
+        return None;
+    }
+    let word = |at: usize| u64::from_le_bytes(key[at..at + 8].try_into().expect("eight bytes")) as usize;
+    let long = key[8 + 23] & 0x80 != 0;
+    let text = if long {
+        let (data, size) = (word(8), word(16));
+        if size == 0 || size > 64 || !readable(data, size) {
+            return None;
+        }
+        unsafe { std::slice::from_raw_parts(data as *const u8, size) }.to_vec()
+    } else {
+        key[8..8 + (key[8 + 23] as usize).min(22)].to_vec()
+    };
+    let text = String::from_utf8(text).ok()?;
+    (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_lowercase())).then_some(text)
+}
+
+/// What the rail shows of an installed extension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionLook {
+    pub name: String,
+    pub icon: Option<std::path::PathBuf>,
+}
+
+/// The value of the first `"key": "value"` string pair in JSON text, with its escapes resolved.
+fn json_string(text: &str, key: &str) -> Option<String> {
+    let at = text.find(&format!("\"{key}\""))?;
+    let rest = text[at + key.len() + 2..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'u' => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                }
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                other => out.push(other),
+            },
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+/// The icon file a manifest names, preferring the smallest of at least 32 pixels: the rail draws it at 16
+/// DIPs, so the picture stays sharp at 200 percent.
+fn manifest_icon(manifest: &str) -> Option<String> {
+    let at = manifest.find("\"icons\"")?;
+    let body = &manifest[at..];
+    let body = &body[body.find('{')? + 1..];
+    let body = &body[..body.find('}')?];
+    let mut best: Option<(u32, String)> = None;
+    for part in body.split(',') {
+        let (size, path) = part.split_once(':')?;
+        let size: u32 = size.trim().trim_matches('"').parse().ok()?;
+        let path = path.trim().trim_matches('"').replace("\\/", "/");
+        if !path.to_ascii_lowercase().ends_with(".png") {
+            continue;
+        }
+        // A picture at least 32 pixels wide stays sharp, so a smaller one only wins when none is.
+        let distance = |size: u32| (size < 32, size.abs_diff(32));
+        if best.as_ref().map_or(true, |(other, _)| distance(size) < distance(*other)) {
+            best = Some((size, path));
+        }
+    }
+    best.map(|(_, path)| path)
+}
+
+/// The name a manifest gives, resolving a `__MSG_name__` reference in its default locale.
+fn manifest_name(directory: &std::path::Path, manifest: &str) -> Option<String> {
+    let name = json_string(manifest, "name")?;
+    let Some(message) = name.strip_prefix("__MSG_").and_then(|rest| rest.strip_suffix("__")) else {
+        return Some(name);
+    };
+    let locale = json_string(manifest, "default_locale").unwrap_or_else(|| "en".into());
+    let messages = std::fs::read_to_string(directory.join("_locales").join(locale).join("messages.json")).ok()?;
+    let at = messages.to_ascii_lowercase().find(&format!("\"{}\"", message.to_ascii_lowercase()))?;
+    json_string(&messages[at..], "message")
+}
+
+/// The folders that hold installed extensions, one for each profile of the browser's user data.
+fn extension_roots() -> Vec<std::path::PathBuf> {
+    let given = std::env::args_os()
+        .filter_map(|argument| argument.into_string().ok())
+        .find_map(|argument| argument.strip_prefix("--user-data-dir=").map(str::to_owned));
+    let data = given.map(std::path::PathBuf::from).or_else(|| {
+        std::env::var_os("LOCALAPPDATA").map(|local| std::path::Path::new(&local).join("Google/Chrome/User Data"))
+    });
+    let Some(data) = data else { return Vec::new() };
+    let Ok(profiles) = std::fs::read_dir(&data) else { return Vec::new() };
+    let mut roots: Vec<_> = profiles
+        .flatten()
+        .map(|profile| profile.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "Default" || name.starts_with("Profile "))
+        })
+        .map(|path| path.join("Extensions"))
+        .collect();
+    roots.sort();
+    roots
+}
+
+/// The name and icon of an installed extension, from the files the browser unpacked for it. Only
+/// the extension's own manifest, locale messages and icon are read.
+pub fn extension_look(id: &str) -> Option<ExtensionLook> {
+    for root in extension_roots() {
+        let Ok(versions) = std::fs::read_dir(root.join(id)) else { continue };
+        let mut versions: Vec<_> = versions.flatten().map(|version| version.path()).collect();
+        versions.sort();
+        let Some(directory) = versions.pop() else { continue };
+        let Ok(manifest) = std::fs::read_to_string(directory.join("manifest.json")) else { continue };
+        let manifest = manifest.trim_start_matches('\u{feff}');
+        return Some(ExtensionLook {
+            name: manifest_name(&directory, manifest).unwrap_or_else(|| id.to_owned()),
+            icon: manifest_icon(manifest).map(|path| directory.join(path)).filter(|path| path.is_file()),
+        });
+    }
+    None
+}
+
+/// What Chrome calls an entry in the Sidebar's rail, for entries that are not extensions'.
+pub fn builtin_name(id: u32) -> &'static str {
+    match id {
+        0 => "Reading list",
+        1 => "Bookmarks",
+        2 | 3 => "History",
+        4 => "Reading mode",
+        _ => "Side panel",
+    }
+}
+
 /// The entries the rail lists: the ones a person uses from a side panel, which are the reading
 /// list, bookmarks, history, the reading mode and the extensions' own panels. Chrome's other
 /// entries belong to features that open them themselves.
 fn listed(id: u32) -> bool {
-    matches!(id, 0..=4 | 0x17)
+    matches!(id, 0..=4 | EXTENSION_ENTRY)
 }
 
 /// The entries Chrome registered for the window's side panel, in its own order.
@@ -233,6 +379,172 @@ unsafe fn entry_names() -> Vec<String> {
             format!("{id}={}", String::from_utf8_lossy(&text[..length]))
         })
         .collect()
+}
+
+// The side panel's pages (bookmarks, reading list, history) are web pages. Their colours reach
+// them as a style sheet that Chrome writes from the window's colour provider, outside any view's
+// paint. The sheet is written for a Rivet window with the Rivet side panel colours in place, so
+// those pages take the paper, hairline and accent of the window. Two functions are involved.
+/// `WebContentsImpl::GetColorProvider`, which hands back the provider of the window's widget.
+const GET_COLOR_PROVIDER: usize = 0x0366_DB00;
+const GET_COLOR_PROVIDER_PROLOGUE: [u8; 14] =
+    [0x48, 0x8b, 0x89, 0x98, 0x00, 0x00, 0x00, 0x48, 0x8b, 0x01, 0x48, 0x8b, 0x40, 0x08];
+/// Where the colour provider source lies in the widget.
+const SOURCE_IN_WIDGET: usize = 0x48;
+/// Where `WebContentsImpl` keeps the colour provider source it asks.
+const COLOR_SOURCE: usize = 0x98;
+/// `ThemeSource::GenerateColorsCss(out, provider, url, flag, flag)`, which writes the style sheet.
+const GENERATE_COLORS_CSS: usize = 0x058C_6090;
+const GENERATE_COLORS_CSS_PROLOGUE: [u8; 12] =
+    [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53];
+
+type GenerateCss = unsafe extern "system" fn(*mut c_void, *const c_void, *const c_void, u32, u32) -> usize;
+static ORIGINAL_CSS: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// The provider the last web contents asked for and whether its window is a Rivet window.
+    static ASKED: std::cell::Cell<(usize, bool)> = const { std::cell::Cell::new((0, false)) };
+}
+
+/// Colours a checked build adds to the side panel's own, to learn which ids paint which part.
+static EXPERIMENT: Mutex<Vec<(i32, u32)>> = Mutex::new(Vec::new());
+
+/// The hue of Rivet's tint, in degrees. Chrome's blues become this hue.
+const TINT_HUE: f32 = 27.0;
+/// The lightness from which a blue tinted surface is the Rivet paper.
+const PAPER_FROM: f32 = 0.94;
+const PAPER: u32 = 0xfbfaf7;
+/// How much of its saturation a blue keeps when it takes the tint's hue.
+const TINT_SATURATION: f32 = 0.55;
+
+/// Rivet's version of a colour of Chrome's side panel pages, as `0xAARRGGBB`. Chrome's blues, which
+/// are its accent and the surfaces tinted with it, take the tint's hue at the same lightness, and the
+/// palest surfaces are the paper.
+/// Neutral and semantic colours stay as they are.
+fn warm(colour: u32) -> Option<u32> {
+    let channel = |shift: u32| ((colour >> shift) & 0xff) as f32 / 255.0;
+    let (r, g, b) = (channel(16), channel(8), channel(0));
+    let (high, low) = (r.max(g).max(b), r.min(g).min(b));
+    let lightness = (high + low) / 2.0;
+    let spread = high - low;
+    if spread <= 0.0 {
+        return None;
+    }
+    let saturation = spread / (1.0 - (2.0 * lightness - 1.0).abs());
+    let hue = if high == r {
+        60.0 * (((g - b) / spread) % 6.0)
+    } else if high == g {
+        60.0 * ((b - r) / spread + 2.0)
+    } else {
+        60.0 * ((r - g) / spread + 4.0)
+    };
+    let hue = if hue < 0.0 { hue + 360.0 } else { hue };
+    if !(190.0..=260.0).contains(&hue) || saturation < 0.2 {
+        return None;
+    }
+    if lightness >= PAPER_FROM {
+        return Some((colour & 0xff00_0000) | PAPER);
+    }
+    let saturation = saturation * TINT_SATURATION;
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let sector = TINT_HUE / 60.0;
+    let second = chroma * (1.0 - (sector % 2.0 - 1.0).abs());
+    let (r, g, b) = match sector as u32 {
+        0 => (chroma, second, 0.0),
+        _ => (second, chroma, 0.0),
+    };
+    let offset = lightness - chroma / 2.0;
+    let byte = |value: f32| ((value + offset) * 255.0).round().clamp(0.0, 255.0) as u32;
+    Some((colour & 0xff00_0000) | byte(r) << 16 | byte(g) << 8 | byte(b))
+}
+
+unsafe fn write_code(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
+    let mut previous = 0;
+    if VirtualProtect(target.cast(), bytes.len(), PAGE_EXECUTE_READWRITE, &mut previous) == 0 {
+        return Err("could not unprotect browser code".into());
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
+    VirtualProtect(target.cast(), bytes.len(), previous, &mut previous);
+    windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache(
+        windows_sys::Win32::System::Threading::GetCurrentProcess(),
+        target.cast(),
+        bytes.len(),
+    );
+    Ok(())
+}
+
+/// `mov rax, to; jmp rax`, padded with `int3` to `length` bytes.
+fn jump_to(to: usize, length: usize) -> Vec<u8> {
+    let mut patch = vec![0x48, 0xB8];
+    patch.extend_from_slice(&(to as u64).to_le_bytes());
+    patch.extend_from_slice(&[0xFF, 0xE0]);
+    patch.resize(length, 0xCC);
+    patch
+}
+
+/// The widget of a Rivet window whose colour provider source this is.
+fn rivet_source(source: usize) -> Option<usize> {
+    crate::chrome_toolbar::rivet_widgets()
+        .into_iter()
+        .find(|widget| source == *widget + SOURCE_IN_WIDGET)
+}
+
+/// Same as the browser's own: the provider of the web contents' window. It also notes whose it was.
+unsafe extern "system" fn get_color_provider(contents: *mut c_void) -> *const c_void {
+    let source = *(contents.cast::<u8>().add(COLOR_SOURCE) as *const *mut c_void);
+    let table = *(source as *const *const usize);
+    let provider: unsafe extern "system" fn(*mut c_void) -> *const c_void = std::mem::transmute(*table.add(1));
+    let provider = provider(source);
+    let rivet = rivet_source(source as usize);
+    ASKED.with(|asked| asked.set((provider as usize, rivet.is_some())));
+    provider
+}
+
+unsafe extern "system" fn generate_colors_css(
+    out: *mut c_void,
+    provider: *const c_void,
+    url: *const c_void,
+    flag: u32,
+    last: u32,
+) -> usize {
+    let original: GenerateCss = std::mem::transmute(ORIGINAL_CSS.load(Ordering::Acquire));
+    let (asked, rivet) = ASKED.with(|asked| asked.get());
+    if !rivet || asked != provider as usize {
+        return original(out, provider, url, flag, last);
+    }
+    let experiment = EXPERIMENT.lock().unwrap_or_else(|error| error.into_inner()).clone();
+    let map = |id: i32, value: u32| {
+        experiment.iter().find(|(wanted, _)| *wanted == id).map(|(_, colour)| *colour).or_else(|| warm(value))
+    };
+    crate::chrome_toolbar::with_colour_map(provider.cast(), map, || original(out, provider, url, flag, last))
+}
+
+/// Makes the style sheets of the side panel's pages in Rivet windows use the Rivet colours. It
+/// does nothing unless both functions still start with the recorded bytes.
+pub unsafe fn install_page_colours() -> Result<(), String> {
+    if ORIGINAL_CSS.load(Ordering::Acquire) != 0 {
+        return Ok(());
+    }
+    let base = chrome_base();
+    let provider = (base + GET_COLOR_PROVIDER) as *mut u8;
+    let css = (base + GENERATE_COLORS_CSS) as *mut u8;
+    if std::slice::from_raw_parts(provider, 14) != GET_COLOR_PROVIDER_PROLOGUE
+        || std::slice::from_raw_parts(css, 12) != GENERATE_COLORS_CSS_PROLOGUE
+    {
+        return Err("this browser build has no recorded colour provider functions".into());
+    }
+    // The style sheet function continues after its first twelve bytes in a copy of them.
+    let mut trampoline = GENERATE_COLORS_CSS_PROLOGUE.to_vec();
+    trampoline.extend_from_slice(&[0xFF, 0x25, 0, 0, 0, 0]);
+    trampoline.extend_from_slice(&((base + GENERATE_COLORS_CSS + 12) as u64).to_le_bytes());
+    let memory = VirtualAlloc(std::ptr::null(), trampoline.len(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) as *mut u8;
+    if memory.is_null() {
+        return Err("could not allocate executable memory".into());
+    }
+    std::ptr::copy_nonoverlapping(trampoline.as_ptr(), memory, trampoline.len());
+    ORIGINAL_CSS.store(memory as usize, Ordering::Release);
+    write_code(css, &jump_to(generate_colors_css as *const () as usize, 12))?;
+    write_code(provider, &jump_to(get_color_provider as *const () as usize, 14))
 }
 
 /// How wide the rail is, in device-independent pixels. The mock-up's rail is 40 DIPs.
@@ -462,7 +774,23 @@ pub unsafe fn set_unfolded(window: HWND, unfolded: bool) {
     relayout_page_area(window);
 }
 
+unsafe fn dump_entry_memory(window: HWND) {
+    let Some(found) = objects(window).filter(|found| found.coordinator != 0) else { return };
+    let base = chrome_base();
+    let browser = *((found.coordinator + 8) as *const usize);
+    let from: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + REGISTRY_FROM);
+    let registry = from(browser);
+    let data = *((registry + 0x38) as *const usize);
+    let count = *((registry + 0x40) as *const usize);
+    for index in 0..count.min(32) {
+        let entry = *((data + index * 8) as *const usize);
+        let words: Vec<String> = (0..0x24).map(|word| format!("{:x}", *((entry + word * 8) as *const usize))).collect();
+        trace(&format!("entry {index} at {entry:x}: {}", words.join(" ")));
+    }
+}
+
 unsafe fn dump_entries(window: HWND) {
+    dump_entry_memory(window);
     let ids: Vec<u32> = listed_entries(window).iter().map(entry_id).collect();
     trace(&format!("listed entries {ids:?}"));
 }
@@ -476,6 +804,8 @@ enum Command {
     DumpLayout,
     Click(String),
     Entries,
+    Colours,
+    Paint(Vec<(i32, u32)>),
 }
 
 impl Command {
@@ -489,6 +819,14 @@ impl Command {
             "rail off" => return Some(Self::Rail(false)),
             "layout" => return Some(Self::DumpLayout),
             "entries" => return Some(Self::Entries),
+            "colours" => return Some(Self::Colours),
+            _ if text.starts_with("paint") => {
+                let pairs = text["paint".len()..].split_whitespace().filter_map(|pair| {
+                    let (id, value) = pair.split_once('=')?;
+                    Some((id.parse().ok()?, u32::from_str_radix(value, 16).ok()?))
+                });
+                return Some(Self::Paint(pairs.collect()));
+            }
             _ if text.starts_with("sim ") => return Some(Self::Click(text["sim ".len()..].to_owned())),
             _ => {}
         }
@@ -515,6 +853,13 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
         }
         Some(Command::Rail(on)) => set_unfolded(window, on),
         Some(Command::Entries) => dump_entries(window),
+        Some(Command::Paint(list)) => *EXPERIMENT.lock().unwrap_or_else(|error| error.into_inner()) = list,
+        Some(Command::Colours) => {
+            let (provider, _) = ASKED.with(|asked| asked.get());
+            if provider != 0 {
+                crate::chrome_toolbar::dump_colours(provider as *const u8);
+            }
+        }
         Some(Command::Click(command)) => crate::side_rail::simulate(window, &command),
         Some(Command::DumpLayout) => {
             let _ = install_layout();
@@ -546,6 +891,59 @@ mod tests {
         let mut contents = [0, 0, 20, 100];
         make_room(&mut contents, None, None, None, RAIL_WIDTH);
         assert_eq!(contents[2], 1);
+    }
+
+    #[test]
+    fn fr10_side_panel_pages_turn_chromes_blues_to_the_tint_and_keep_neutrals() {
+        let accent = warm(0xff0b57d0).expect("Chrome's accent blue is a blue");
+        assert_eq!(accent >> 24, 0xff);
+        let (r, g, b) = ((accent >> 16) & 0xff, (accent >> 8) & 0xff, accent & 0xff);
+        assert!(r > g && g > b, "the accent turns warm: {accent:#x}");
+        let surface = warm(0xffedf2fa).expect("the blue tinted surface is a blue");
+        assert_eq!(surface, 0xfffbfaf7, "a pale tinted surface is the paper");
+        assert_eq!(warm(0xff1f1f1f), None);
+        assert_eq!(warm(0xffffffff), None);
+        assert_eq!(warm(0xffd93025), None, "red stays red");
+        assert_eq!(warm(0x1f0b57d0).map(|c| c >> 24), Some(0x1f), "alpha is kept");
+    }
+
+    #[test]
+    fn fr10_rail_reads_an_extension_name_and_icon_from_its_manifest() {
+        let manifest = r#"{"name": "Notes \u00e9 Panel", "icons": {"16": "a16.png", "48": "icons\/a48.png", "128": "a128.png"}}"#;
+        assert_eq!(json_string(manifest, "name").as_deref(), Some("Notes é Panel"));
+        assert_eq!(manifest_icon(manifest).as_deref(), Some("icons/a48.png"), "the smallest icon of at least 32 pixels");
+        assert_eq!(manifest_icon(r#"{"icons": {"16": "a.svg"}}"#), None, "only PNG icons are drawn");
+        assert_eq!(manifest_icon(r#"{"name": "x"}"#), None);
+    }
+
+    #[test]
+    fn fr10_rail_resolves_a_localised_extension_name() {
+        let directory = std::env::temp_dir().join(format!("rivet-ext-{}", std::process::id()));
+        let locale = directory.join("_locales").join("ko");
+        std::fs::create_dir_all(&locale).unwrap();
+        std::fs::write(locale.join("messages.json"), r#"{"appDesc": {"message": "x"}, "appName": {"message": "메모 패널"}}"#).unwrap();
+        let manifest = r#"{"name": "__MSG_appName__", "default_locale": "ko"}"#;
+        assert_eq!(manifest_name(&directory, manifest).as_deref(), Some("메모 패널"));
+        assert_eq!(manifest_name(&directory, r#"{"name": "Plain"}"#).as_deref(), Some("Plain"));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn fr10_rail_takes_an_extension_id_from_a_long_string_in_the_key() {
+        let id = b"abcdefghijklmnopabcdefghijklmnop".to_vec();
+        let backing: Vec<u64> = id.chunks(8).map(|part| u64::from_le_bytes(part.try_into().unwrap())).collect();
+        let mut key: EntryKey = [0; 0x28];
+        key[..4].copy_from_slice(&EXTENSION_ENTRY.to_le_bytes());
+        key[8..16].copy_from_slice(&(backing.as_ptr() as u64).to_le_bytes());
+        key[16..24].copy_from_slice(&(id.len() as u64).to_le_bytes());
+        key[24..32].copy_from_slice(&(0x8000_0000_0000_0000u64 | 33).to_le_bytes());
+        key[0x20] = 1;
+        assert_eq!(extension_id(&key).as_deref(), Some("abcdefghijklmnopabcdefghijklmnop"));
+        key[0x20] = 0;
+        assert_eq!(extension_id(&key), None, "the optional holds no value");
+        let mut own: EntryKey = [0; 0x28];
+        own[..4].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(extension_id(&own), None, "Chrome's own entries are not extensions");
     }
 
     #[test]
