@@ -204,6 +204,8 @@ mod chrome_layout;
 #[cfg(windows)]
 mod chrome_navigation;
 #[cfg(windows)]
+mod chrome_split;
+#[cfg(windows)]
 mod chrome_tabs;
 #[cfg(windows)]
 mod chrome_toolbar;

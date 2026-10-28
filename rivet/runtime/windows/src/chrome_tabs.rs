@@ -34,7 +34,7 @@ type LookupGroup = unsafe extern "system" fn(*mut c_void, *const u8) -> *mut u8;
 type ChangeGroup = unsafe extern "system" fn(*mut c_void, *const u8, *const u8, bool);
 
 static BASE: OnceLock<Option<usize>> = OnceLock::new();
-fn base() -> Option<usize> {
+pub(crate) fn base() -> Option<usize> {
     *BASE.get_or_init(|| unsafe {
         let image = image::recorded()?;
         let signatures: &[(usize, &[u8])] = &[
@@ -87,7 +87,7 @@ fn base() -> Option<usize> {
         Some(image.base)
     })
 }
-unsafe fn function<T: Copy>(base: usize, rva: usize) -> T {
+pub(crate) unsafe fn function<T: Copy>(base: usize, rva: usize) -> T {
     std::mem::transmute_copy(&(base + rva))
 }
 unsafe fn web_contents(base: usize, window: HWND) -> Option<*mut c_void> {
@@ -118,7 +118,7 @@ unsafe fn browser(base: usize, window: HWND) -> Option<*mut c_void> {
     Some(holder.cast())
 }
 
-unsafe fn tab_model(base: usize, window: HWND) -> Option<*mut c_void> {
+pub(crate) unsafe fn tab_model(base: usize, window: HWND) -> Option<*mut c_void> {
     let browser = browser(base, window)?;
     let model = function::<Pointer>(base, GET_TAB_MODEL)(browser);
     (!model.is_null()).then_some(model)

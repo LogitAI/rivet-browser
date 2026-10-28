@@ -1067,7 +1067,9 @@ unsafe fn create_appbar(window: HWND) {
     if vertical_tabs {
         crate::chrome_toolbar::adopt(window);
     }
-    if runtime_directory().is_some_and(|dir| dir.join("rivet-group-probe.flag").exists()) {
+    if runtime_directory().is_some_and(|dir| {
+        dir.join("rivet-group-probe.flag").exists() || dir.join("rivet-split.flag").exists()
+    }) {
         PostMessageW(window, group_probe_message(), 0, 0);
     }
     // Tab titles and selection can change without a window title change.
@@ -1561,7 +1563,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ if message == group_probe_message() && attached(window) => {
-            crate::chrome_tabs::probe_group(window);
+            if runtime_directory().is_some_and(|dir| dir.join("rivet-split.flag").exists()) {
+                crate::chrome_split::probe(window);
+            } else {
+                crate::chrome_tabs::probe_group(window);
+            }
             update_appbar(window);
             0
         }
