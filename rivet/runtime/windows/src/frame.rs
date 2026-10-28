@@ -1,7 +1,7 @@
 //! Subclasses the browser window to show the appbar and route the appbar strip's input.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{
@@ -17,27 +17,32 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     TME_NONCLIENT, TRACKMOUSEEVENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CallWindowProcW, GetAncestor, GetClassNameW, GetClientRect, GetPropW,
-    GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
-    PostMessageW, RegisterWindowMessageW, RemovePropW, SetPropW, SetWindowLongPtrW, SetWindowPos,
-    SetWindowsHookExW, GA_ROOT, GWLP_WNDPROC, GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT,
-    ICON_BIG, ICON_SMALL, MSG, PM_REMOVE, SM_CXICON, SM_CXPADDEDBORDER, SM_CXSMICON,
-    SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    WH_GETMESSAGE, WM_CAPTURECHANGED, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
-    WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_SETICON,
-    WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
+    CallNextHookEx, CallWindowProcW, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos,
+    GetPropW, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
+    IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, PostMessageW, RegisterWindowMessageW,
+    RemovePropW, SetCursor, SetPropW, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW,
+    WindowFromPoint, GA_ROOT, GWLP_WNDPROC, GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT,
+    ICON_BIG, ICON_SMALL, IDC_SIZEWE, MSG, PM_REMOVE, SM_CXICON, SM_CXPADDEDBORDER, SM_CXSMICON,
+    SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREDRAW, SWP_NOSIZE,
+    SWP_NOZORDER, WH_GETMESSAGE, WM_CAPTURECHANGED, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN,
+    WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL,
+    WM_SETCURSOR, WM_SETICON, WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
 };
 
 use super::appbar::Appbar;
 use super::chrome_layout;
 use super::taskbar;
-use super::{layout_scale_dpi, scale, strip_hit, title_bar_top, StripHit, APPBAR_WIDTH};
+use super::{
+    layout_scale_dpi, scale, strip_hit, title_bar_top, toggle_rect, AppbarLayout, StripHit,
+    APPBAR_WIDTH, FLOAT_INSET, RESIZER_WIDTH,
+};
 use crate::tab_rows::{self, Row};
 
 const BROWSER_CLASS: &str = "Chrome_WidgetWin_1";
 const ORIGINAL_PROC: &str = "Rivet.OriginalWindowProc";
 const ATTACH_MESSAGE: &str = "Rivet.AttachAppbar";
+const TOGGLE_MESSAGE: &str = "Rivet.ToggleAppbar";
 /// Hit-test code for the appbar's own content. Windows gives it no default behaviour, and the
 /// browser never receives the non-client mouse messages that carry it.
 const APPBAR_HIT: u32 = HTBORDER;
@@ -53,6 +58,10 @@ pub(crate) enum AppbarHit {
     WorkspaceMenu,
     ProfileSettings,
     ManageProfiles,
+    /// The button in the toolbar row that hides and shows the appbar.
+    Toggle,
+    /// The seam on the appbar's right edge that drags its width.
+    Resizer,
 }
 
 thread_local! {
@@ -61,6 +70,82 @@ thread_local! {
     static MENUS: RefCell<HashMap<isize, isize>> = RefCell::new(HashMap::new());
     static APPBAR_STATE: RefCell<HashMap<isize, (Option<AppbarHit>, Option<AppbarHit>, u32)>> = RefCell::new(HashMap::new());
     static KEYBOARD_HOOK: RefCell<isize> = const { RefCell::new(0) };
+    /// The width and the hidden or peeking state of each window's appbar. It lives as long as the
+    /// window does.
+    static LAYOUTS: RefCell<HashMap<isize, AppbarLayout>> = RefCell::new(HashMap::new());
+    /// How far the floating appbar has slid in, from 0 to 1, while it moves.
+    static SLIDE: RefCell<HashMap<isize, f32>> = RefCell::new(HashMap::new());
+    /// Windows whose appbar width is being dragged.
+    static DRAGGING: RefCell<HashSet<isize>> = RefCell::new(HashSet::new());
+}
+
+/// `WM_MOUSELEAVE`, which `windows-sys` does not export.
+const WM_MOUSELEAVE: u32 = 0x02A3;
+const PEEK_TIMER: usize = 0x5249_5650;
+/// One frame of the slide, of about 220 ms from out to in.
+const SLIDE_STEP: f32 = 16.0 / 220.0;
+
+fn layout_of(window: HWND) -> AppbarLayout {
+    LAYOUTS
+        .with(|layouts| layouts.borrow().get(&(window as isize)).copied())
+        .unwrap_or(AppbarLayout::new())
+}
+
+fn edit_layout<R>(window: HWND, edit: impl FnOnce(&mut AppbarLayout) -> R) -> R {
+    LAYOUTS.with(|layouts| {
+        edit(
+            layouts
+                .borrow_mut()
+                .entry(window as isize)
+                .or_insert(AppbarLayout::new()),
+        )
+    })
+}
+
+fn dragging(window: HWND) -> bool {
+    DRAGGING.with(|set| set.borrow().contains(&(window as isize)))
+}
+
+fn slide_of(window: HWND) -> f32 {
+    SLIDE
+        .with(|slides| slides.borrow().get(&(window as isize)).copied())
+        .unwrap_or(0.0)
+}
+
+/// Where the page panel begins, in device-independent pixels. Chromium's own vertical tab strip
+/// keeps its width at the left even while the appbar is hidden, because the browser offers no way
+/// to take it out of the layout, so the page cannot begin before it ends.
+fn page_x(window: HWND) -> i32 {
+    let leading = layout_of(window).leading();
+    crate::vertical_tabs::strip_width(window).map_or(leading, |strip| leading.max(strip))
+}
+
+/// Converts client pixels to device-independent pixels of the appbar's own coordinates: below the
+/// window's top border, and inside the floating rectangle while the hidden appbar peeks.
+unsafe fn local_dip(window: HWND, x: i32, y: i32) -> (f32, f32) {
+    let factor = layout_dpi(window) as f32 / 96.0;
+    let inset = if layout_of(window).collapsed {
+        FLOAT_INSET as f32
+    } else {
+        0.0
+    };
+    (
+        x as f32 / factor - inset,
+        (y - top_border(window)) as f32 / factor - inset,
+    )
+}
+
+/// The height of the appbar below the top border, in device-independent pixels.
+unsafe fn appbar_height(window: HWND) -> f32 {
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    let factor = layout_dpi(window) as f32 / 96.0;
+    let height = (client.bottom - top_border(window)) as f32 / factor;
+    if layout_of(window).collapsed {
+        height - 2.0 * FLOAT_INSET as f32
+    } else {
+        height
+    }
 }
 
 unsafe fn start_page(window: HWND) {
@@ -83,6 +168,18 @@ unsafe fn start_page(window: HWND) {
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 && wparam == PM_REMOVE as usize {
         let message = &mut *(lparam as *mut MSG);
+        if message.message == WM_KEYDOWN
+            && message.wParam == b'S' as usize
+            && GetKeyState(0x11) < 0
+            && GetKeyState(0x10) < 0
+            && GetKeyState(0x12) >= 0
+        {
+            let window = GetAncestor(message.hwnd, GA_ROOT);
+            if attached(window) {
+                PostMessageW(window, toggle_message(), 0, 0);
+                message.message = WM_NULL;
+            }
+        }
         if message.message == WM_KEYDOWN
             && message.wParam == b'T' as usize
             && GetKeyState(0x11) < 0
@@ -200,23 +297,60 @@ fn appbar_model(window: HWND) -> Vec<Row> {
 
 unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
     let point = client_point(window, lparam);
-    let dpi = layout_dpi(window) as f32 / 96.0;
+    let layout = layout_of(window);
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
+    let (x, y) = local_dip(window, point.x, point.y);
     if menu_open(window) {
-        return workspace_menu_hit(
-            point.x as f32 / dpi,
-            (point.y - top_border(window)) as f32 / dpi,
-            APPBAR_WIDTH as f32,
-        );
+        return workspace_menu_hit(x, y, layout.side as f32);
+    }
+    if layout.collapsed {
+        if layout.peek && in_floating(layout, x, y, appbar_height(window)) {
+            return appbar_hit(
+                x,
+                y,
+                layout.side as f32,
+                appbar_height(window),
+                &appbar_model(window),
+            );
+        }
+        return toggle_at(window, point);
+    }
+    if let Some(hit) = toggle_at(window, point) {
+        return Some(hit);
+    }
+    if x >= (layout.side - RESIZER_WIDTH) as f32 && x < layout.side as f32 {
+        return Some(AppbarHit::Resizer);
     }
     appbar_hit(
-        point.x as f32 / dpi,
-        (point.y - top_border(window)) as f32 / dpi,
-        APPBAR_WIDTH as f32,
-        (client.bottom - top_border(window)) as f32 / dpi,
+        x,
+        y,
+        layout.side as f32,
+        appbar_height(window),
         &appbar_model(window),
     )
+}
+
+/// Whether a point in the floating appbar's own coordinates is inside it.
+fn in_floating(layout: AppbarLayout, x: f32, y: f32, height: f32) -> bool {
+    (0.0..layout.side as f32).contains(&x) && (0.0..height).contains(&y)
+}
+
+/// Whether a client point, in pixels, is on the toggle button.
+unsafe fn toggle_at(window: HWND, point: POINT) -> Option<AppbarHit> {
+    let factor = layout_dpi(window) as f32 / 96.0;
+    let (left, top, width, height) = toggle_rect(page_x(window));
+    let (x, y) = (point.x as f32 / factor, point.y as f32 / factor);
+    ((left as f32..(left + width) as f32).contains(&x)
+        && (top as f32..(top + height) as f32).contains(&y))
+    .then_some(AppbarHit::Toggle)
+}
+
+/// Whether a client point, in pixels, is inside the floating appbar of a peeking window.
+unsafe fn floating_at(window: HWND, point: POINT) -> bool {
+    let layout = layout_of(window);
+    let (x, y) = local_dip(window, point.x, point.y);
+    layout.collapsed && layout.peek && in_floating(layout, x, y, appbar_height(window))
 }
 
 unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
@@ -278,6 +412,167 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
         AppbarHit::Folder(id) => {
             crate::chrome_tabs::toggle_group(window, &id);
         }
+        AppbarHit::Toggle => toggle_appbar(window),
+        AppbarHit::Resizer => {}
+    }
+}
+
+unsafe fn toggle_message() -> u32 {
+    RegisterWindowMessageW(wide(TOGGLE_MESSAGE).as_ptr())
+}
+
+/// Lays the browser out again, now that the appbar's width or mode changed, and redraws.
+unsafe fn relayout(window: HWND) {
+    // A frame change alone does not make the browser lay out again once the window has been laid
+    // out. A restored window is made one pixel wider and back, which lays it out without ever
+    // showing the wider size.
+    let mut bounds: RECT = std::mem::zeroed();
+    if IsZoomed(window) == 0 && GetWindowRect(window, &mut bounds) != 0 {
+        let (width, height) = (bounds.right - bounds.left, bounds.bottom - bounds.top);
+        let keep = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW;
+        SetWindowPos(window, std::ptr::null_mut(), 0, 0, width + 1, height, keep);
+        SetWindowPos(window, std::ptr::null_mut(), 0, 0, width, height, keep);
+    }
+    SetWindowPos(
+        window,
+        std::ptr::null_mut(),
+        0,
+        0,
+        0,
+        0,
+        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+    );
+    update_appbar(window);
+}
+
+/// Hides the docked appbar so the page takes its width, or docks it again.
+unsafe fn toggle_appbar(window: HWND) {
+    close_menu(window);
+    edit_layout(window, |layout| layout.toggle());
+    SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
+    KillTimer(window, PEEK_TIMER);
+    relayout(window);
+}
+
+/// Shows or puts away the floating appbar of a hidden one, sliding it.
+unsafe fn set_peek(window: HWND, on: bool) {
+    let changed = edit_layout(window, |layout| {
+        let changed = layout.collapsed && layout.peek != on;
+        if changed {
+            layout.peek = on;
+        }
+        changed
+    });
+    if changed {
+        SetTimer(window, PEEK_TIMER, 16, None);
+    }
+}
+
+/// Follows the pointer, in client pixels, to the left edge or away from the floating appbar.
+unsafe fn track_pointer(window: HWND, x: i32, y: i32) {
+    let layout = layout_of(window);
+    if !layout.collapsed || menu_open(window) {
+        return;
+    }
+    let factor = layout_dpi(window) as f32 / 96.0;
+    let height = appbar_height(window) + 2.0 * FLOAT_INSET as f32;
+    let (dx, dy) = (
+        (x as f32 / factor).floor() as i32,
+        ((y - top_border(window)) as f32 / factor).floor() as i32,
+    );
+    if !layout.peek && layout.reaches_edge(dx) {
+        // Windows reports a leave at once when the pointer is not over the window, which only
+        // happens for input that was posted rather than moved.
+        let mut cursor = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut cursor);
+        if GetAncestor(WindowFromPoint(cursor), GA_ROOT) == window {
+            let mut tracking = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: window,
+                dwHoverTime: 0,
+            };
+            TrackMouseEvent(&mut tracking);
+        }
+        set_peek(window, true);
+    } else if layout.peek && !layout.keeps_peek(dx, dy, height as i32) {
+        set_peek(window, false);
+    }
+}
+
+/// Puts the floating appbar away when the real pointer is no longer over it. `strict` also counts
+/// the pointer being over another window as leaving.
+unsafe fn check_peek(window: HWND, strict: bool) {
+    let layout = layout_of(window);
+    if !layout.collapsed || !layout.peek || menu_open(window) || dragging(window) {
+        return;
+    }
+    let mut cursor = POINT { x: 0, y: 0 };
+    GetCursorPos(&mut cursor);
+    if GetAncestor(WindowFromPoint(cursor), GA_ROOT) != window {
+        // Tests drive the window with posted input while the real pointer is elsewhere. The
+        // flag file next to the runtime keeps such a peek from leaving with the real pointer.
+        let held = runtime_directory().is_some_and(|dir| dir.join("rivet-hold-peek.flag").exists());
+        if strict && !held {
+            set_peek(window, false);
+        }
+        return;
+    }
+    ScreenToClient(window, &mut cursor);
+    let factor = layout_dpi(window) as f32 / 96.0;
+    let height = appbar_height(window) + 2.0 * FLOAT_INSET as f32;
+    let (x, y) = (
+        (cursor.x as f32 / factor).floor() as i32,
+        ((cursor.y - top_border(window)) as f32 / factor).floor() as i32,
+    );
+    if !layout.keeps_peek(x, y, height as i32) {
+        set_peek(window, false);
+    }
+}
+
+/// Advances the slide of the floating appbar by one frame, and polls the pointer while it rests.
+unsafe fn peek_tick(window: HWND) {
+    let layout = layout_of(window);
+    let before = slide_of(window);
+    let target = if layout.collapsed && layout.peek {
+        1.0
+    } else {
+        0.0
+    };
+    let after = if target > before {
+        (before + SLIDE_STEP).min(1.0)
+    } else {
+        (before - SLIDE_STEP).max(0.0)
+    };
+    SLIDE.with(|slides| slides.borrow_mut().insert(window as isize, after));
+    if after != before {
+        update_appbar(window);
+    } else if target == 1.0 {
+        check_peek(window, false);
+    } else {
+        KillTimer(window, PEEK_TIMER);
+    }
+}
+
+unsafe fn end_drag(window: HWND) {
+    if DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize))) {
+        ReleaseCapture();
+        APPBAR_STATE.with(|states| {
+            if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+                entry.0 = None;
+                entry.1 = None;
+            }
+        });
+        update_appbar(window);
+    }
+}
+
+/// Follows a drag of the resizer: the appbar's right edge goes to the pointer.
+unsafe fn drag_to(window: HWND, x: i32) {
+    let factor = layout_dpi(window) as f32 / 96.0;
+    let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
+    if edit_layout(window, |layout| layout.set_width(wanted)) {
+        relayout(window);
     }
 }
 
@@ -536,7 +831,16 @@ unsafe fn update_appbar(window: HWND) {
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
     let dpi = layout_dpi(window);
-    let width = scale(APPBAR_WIDTH, dpi);
+    let layout = layout_of(window);
+    // A hidden appbar leaves its column to the page, apart from the gap of the shell study.
+    let width = scale(
+        if layout.collapsed {
+            page_x(window)
+        } else {
+            layout.side
+        },
+        dpi,
+    );
     let visible = framed(window);
     // A window's composition target is positioned at its client origin, which is also where the
     // browser's layout leaves the strip free. The window's own top border runs across the whole
@@ -553,9 +857,32 @@ unsafe fn update_appbar(window: HWND) {
                 (appbar_model(window), 0usize, state.2, state.0, state.1)
             });
             appbar.set_state(tabs, tint, hover, pressed, menu_open(window));
+            appbar.set_layout(!layout.collapsed, dragging(window));
             let height = client.bottom - top;
             if let Err(error) = appbar.update(visible, 0, top, width, height, dpi) {
                 log(&format!("rivet: could not draw the appbar: {error}"));
+            }
+            let (x, y, size) = {
+                let (x, y, w, _) = toggle_rect(page_x(window));
+                (scale(x, dpi), scale(y, dpi), scale(w, dpi))
+            };
+            if let Err(error) = appbar.update_toggle(visible, x, y, size, dpi) {
+                log(&format!("rivet: could not draw the toggle: {error}"));
+            }
+            let slide = slide_of(window);
+            let eased = 1.0 - (1.0 - slide).powi(3);
+            let floating = (height as f32 * 96.0 / dpi as f32) as i32 - 2 * FLOAT_INSET;
+            if let Err(error) = appbar.update_peek(
+                visible && layout.collapsed,
+                top,
+                layout.side,
+                floating,
+                dpi,
+                eased,
+            ) {
+                log(&format!(
+                    "rivet: could not draw the floating appbar: {error}"
+                ));
             }
         }
     });
@@ -609,10 +936,11 @@ fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
             }
         }
         // The scale is recorded above for both tab layouts. The strip is only subtracted here.
+        let leading = layout_of(window).leading();
         if let Some(strip) = crate::vertical_tabs::strip_width(window) {
-            return Some((crate::APPBAR_WIDTH - strip).max(0));
+            return Some((leading - strip).max(0));
         }
-        Some(APPBAR_WIDTH)
+        Some(leading)
     }
 }
 
@@ -639,21 +967,27 @@ unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
         y: ((lparam >> 16) & 0xffff) as i16 as i32,
     };
     ScreenToClient(window, &mut point);
+    // The floating appbar and the toggle button belong to Rivet wherever the browser's own frame
+    // would put them.
+    if floating_at(window, point) || toggle_at(window, point).is_some() {
+        return StripHit::Appbar;
+    }
+    let layout = layout_of(window);
     let dpi = layout_dpi(window);
     let border = if IsZoomed(window) != 0 {
         0
     } else {
         GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
     };
-    let strip = strip_hit(point.x, point.y, dpi, border);
+    let strip = strip_hit(point.x, point.y, dpi, border, layout.strip());
     let factor = dpi as f32 / 96.0;
     let x = point.x as f32 / factor;
     let y = (point.y - top_border(window)) as f32 / factor;
-    if strip == StripHit::Caption
-        && x >= APPBAR_WIDTH as f32 - 36.0
-        && x < APPBAR_WIDTH as f32 - 8.0
-        && (12.0..40.0).contains(&y)
+    let side = layout.side as f32;
+    if strip == StripHit::Caption && x >= side - 36.0 && x < side - 8.0 && (12.0..40.0).contains(&y)
     {
+        StripHit::Appbar
+    } else if strip == StripHit::Resizer {
         StripHit::Appbar
     } else {
         strip
@@ -681,7 +1015,45 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         start_page(window);
         return 0;
     }
+    if message == toggle_message() && attached(window) {
+        toggle_appbar(window);
+        return 0;
+    }
     match message {
+        WM_MOUSEMOVE if attached(window) && dragging(window) => {
+            drag_to(window, (lparam & 0xffff) as i16 as i32);
+            0
+        }
+        WM_LBUTTONUP | WM_CAPTURECHANGED if attached(window) && dragging(window) => {
+            end_drag(window);
+            0
+        }
+        WM_SETCURSOR
+            if attached(window)
+                && (dragging(window)
+                    || (lparam & 0xffff) as u32 == APPBAR_HIT
+                        && APPBAR_STATE.with(|states| {
+                            states
+                                .borrow()
+                                .get(&(window as isize))
+                                .is_some_and(|state| state.0 == Some(AppbarHit::Resizer))
+                        })) =>
+        {
+            SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_SIZEWE));
+            1
+        }
+        WM_MOUSEMOVE if attached(window) && layout_of(window).collapsed && !menu_open(window) => {
+            track_pointer(
+                window,
+                (lparam & 0xffff) as i16 as i32,
+                ((lparam >> 16) & 0xffff) as i16 as i32,
+            );
+            call_browser(window, message, wparam, lparam)
+        }
+        WM_MOUSELEAVE if attached(window) && layout_of(window).collapsed => {
+            check_peek(window, true);
+            call_browser(window, message, wparam, lparam)
+        }
         WM_KEYDOWN if attached(window) && menu_open(window) && wparam == 0x1b => {
             close_menu(window);
             update_appbar(window);
@@ -695,14 +1067,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         WM_LBUTTONDOWN if attached(window) && menu_open(window) => {
             let x = (lparam & 0xffff) as i16 as i32;
             let y = ((lparam >> 16) & 0xffff) as i16 as i32;
-            let dpi = layout_dpi(window) as f32 / 96.0;
-            let hit = workspace_menu_hit(
-                x as f32 / dpi,
-                (y - top_border(window)) as f32 / dpi,
-                APPBAR_WIDTH as f32,
-            );
-            let inside = (10.0..APPBAR_WIDTH as f32 - 8.0).contains(&(x as f32 / dpi))
-                && (138.0..384.0).contains(&((y - top_border(window)) as f32 / dpi));
+            let (lx, ly) = local_dip(window, x, y);
+            let hit = workspace_menu_hit(lx, ly, layout_of(window).side as f32);
+            let inside = (10.0..layout_of(window).side as f32 - 8.0).contains(&lx)
+                && (138.0..384.0).contains(&ly);
             if !inside {
                 close_menu(window);
             } else {
@@ -718,12 +1086,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         WM_LBUTTONUP if attached(window) && menu_open(window) => {
             let x = (lparam & 0xffff) as i16 as i32;
             let y = ((lparam >> 16) & 0xffff) as i16 as i32;
-            let dpi = layout_dpi(window) as f32 / 96.0;
-            let hit = workspace_menu_hit(
-                x as f32 / dpi,
-                (y - top_border(window)) as f32 / dpi,
-                APPBAR_WIDTH as f32,
-            );
+            let (lx, ly) = local_dip(window, x, y);
+            let hit = workspace_menu_hit(lx, ly, layout_of(window).side as f32);
             let action = APPBAR_STATE.with(|states| {
                 let mut states = states.borrow_mut();
                 let entry = states.get_mut(&(window as isize)).unwrap();
@@ -740,12 +1104,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         WM_MOUSEMOVE if attached(window) && menu_open(window) => {
             let x = (lparam & 0xffff) as i16 as i32;
             let y = ((lparam >> 16) & 0xffff) as i16 as i32;
-            let dpi = layout_dpi(window) as f32 / 96.0;
-            let hit = workspace_menu_hit(
-                x as f32 / dpi,
-                (y - top_border(window)) as f32 / dpi,
-                APPBAR_WIDTH as f32,
-            );
+            let (lx, ly) = local_dip(window, x, y);
+            let hit = workspace_menu_hit(lx, ly, layout_of(window).side as f32);
             APPBAR_STATE.with(|states| {
                 if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
                     entry.0 = hit;
@@ -772,13 +1132,32 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         WM_NCMOUSELEAVE if attached(window) => {
-            APPBAR_STATE.with(|states| {
-                if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
-                    entry.0 = None;
-                }
-            });
+            if !dragging(window) {
+                APPBAR_STATE.with(|states| {
+                    if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+                        entry.0 = None;
+                    }
+                });
+            }
             update_appbar(window);
+            check_peek(window, true);
             0
+        }
+        // Other parts of the window clear a hover left on the appbar and show a hidden appbar
+        // when the pointer reaches the window's left edge.
+        WM_NCMOUSEMOVE if attached(window) && !dragging(window) => {
+            let stale = APPBAR_STATE.with(|states| {
+                states
+                    .borrow_mut()
+                    .get_mut(&(window as isize))
+                    .is_some_and(|entry| entry.0.take().is_some())
+            });
+            let point = client_point(window, lparam);
+            track_pointer(window, point.x, point.y);
+            if stale {
+                update_appbar(window);
+            }
+            call_browser(window, message, wparam, lparam)
         }
         WM_NCLBUTTONDOWN if wparam as u32 == APPBAR_HIT && attached(window) => {
             let hit = appbar_point(window, lparam);
@@ -788,6 +1167,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 entry.1 = hit;
                 entry.0 = hit;
             });
+            if hit == Some(AppbarHit::Resizer) {
+                DRAGGING.with(|set| set.borrow_mut().insert(window as isize));
+                SetCapture(window);
+            }
             update_appbar(window);
             0
         }
@@ -815,13 +1198,21 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             StripHit::Caption => HTCAPTION as LRESULT,
             StripHit::Top => HTTOP as LRESULT,
             StripHit::TopLeft => HTTOPLEFT as LRESULT,
-            StripHit::Appbar => APPBAR_HIT as LRESULT,
+            StripHit::Appbar | StripHit::Resizer => APPBAR_HIT as LRESULT,
         },
         // Clicks on the appbar's content never reach the browser, which would otherwise see
         // non-client input it did not lay out.
         WM_NCLBUTTONDBLCLK | WM_NCRBUTTONDOWN | WM_NCRBUTTONUP
             if wparam as u32 == APPBAR_HIT && attached(window) =>
         {
+            if message == WM_NCLBUTTONDBLCLK
+                && appbar_point(window, lparam) == Some(AppbarHit::Resizer)
+            {
+                end_drag(window);
+                if edit_layout(window, |layout| layout.set_width(APPBAR_WIDTH)) {
+                    relayout(window);
+                }
+            }
             0
         }
         WM_WINDOWPOSCHANGED if attached(window) => {
@@ -847,6 +1238,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 taskbar::clear(window as isize);
             }
             close_menu(window);
+            KillTimer(window, PEEK_TIMER);
+            LAYOUTS.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
+            SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
+            DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize)));
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::vertical_tabs::forget(window);
@@ -858,6 +1253,12 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             RemovePropW(window, key.as_ptr());
             let original: WNDPROC = std::mem::transmute(original);
             CallWindowProcW(original, window, message, wparam, lparam)
+        }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
+            if wparam == PEEK_TIMER && attached(window) =>
+        {
+            peek_tick(window);
+            0
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
             if wparam == TAB_REFRESH_TIMER && attached(window) =>

@@ -9,7 +9,6 @@
 
 use windows::core::{Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
-use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D1_GRADIENT_STOP, D2D_RECT_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1RenderTarget,
@@ -27,8 +26,8 @@ use windows::Win32::Graphics::DirectComposition::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory5, IDWriteFontCollection1, IDWriteTextFormat3,
-    IDWriteTextLayout1, DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE, DWRITE_FONT_AXIS_VALUE,
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    IDWriteTextLayout1, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE,
+    DWRITE_FONT_AXIS_VALUE, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_RANGE,
     DWRITE_WORD_WRAPPING_NO_WRAP,
@@ -37,6 +36,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows_numerics::{Matrix3x2, Vector2};
 
 /// Fonts of the shell study, licensed under the SIL Open Font License 1.1.
@@ -170,6 +170,37 @@ pub struct Appbar {
     hover: Option<crate::frame::AppbarHit>,
     pressed: Option<crate::frame::AppbarHit>,
     menu_open: bool,
+    /// False while the appbar is hidden: the column then only carries the ground of the frame.
+    docked: bool,
+    /// Whether the resizer is being dragged, which keeps its grip showing.
+    dragging: bool,
+    toggle: IDCompositionVisual2,
+    toggle_painted: Option<(i32, u32, bool, bool)>,
+    peek: IDCompositionVisual2,
+    peek_painted: Option<Painted>,
+}
+
+/// What a painted surface shows of the appbar.
+#[derive(Clone, Copy)]
+enum Surface {
+    /// The whole appbar over the frame ground.
+    Docked,
+    /// The frame ground only, in the gap a hidden appbar leaves beside the page.
+    Gap,
+    /// The appbar's content, on the fill of the floating appbar.
+    Floating,
+}
+
+/// Room around the floating appbar for its shadow, in device-independent pixels.
+const PEEK_PAD: f32 = 40.0;
+
+/// The floating appbar's fill: the frame colour 88% over white, as in the shell study.
+fn floating_fill() -> u32 {
+    let mix = |shift: u32| {
+        let channel = ((FRAME >> shift) & 0xff) as f32;
+        ((channel * 0.88 + 255.0 * 0.12).round() as u32) << shift
+    };
+    mix(16) | mix(8) | mix(0)
 }
 
 impl Appbar {
@@ -201,6 +232,11 @@ impl Appbar {
         root.AddVisual(&visual, false, None::<&IDCompositionVisual>)?;
         let panel = device.CreateVisual()?;
         root.AddVisual(&panel, true, &visual)?;
+        let toggle = device.CreateVisual()?;
+        root.AddVisual(&toggle, true, &panel)?;
+        // The floating appbar covers the toggle, as it covers the rest of the top row.
+        let peek = device.CreateVisual()?;
+        root.AddVisual(&peek, true, &toggle)?;
         target.SetRoot(&root)?;
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
@@ -219,7 +255,23 @@ impl Appbar {
             hover: None,
             pressed: None,
             menu_open: false,
+            docked: true,
+            dragging: false,
+            toggle,
+            toggle_painted: None,
+            peek,
+            peek_painted: None,
         })
+    }
+
+    /// Whether the column shows the whole appbar, and whether its resizer is being dragged.
+    pub fn set_layout(&mut self, docked: bool, dragging: bool) {
+        if self.docked != docked || self.dragging != dragging {
+            self.docked = docked;
+            self.dragging = dragging;
+            self.painted = None;
+            self.peek_painted = None;
+        }
     }
 
     pub fn set_state(
@@ -242,7 +294,143 @@ impl Appbar {
             self.hover = hover;
             self.pressed = pressed;
             self.painted = None;
+            self.peek_painted = None;
+            self.toggle_painted = None;
         }
+    }
+
+    /// Draws the toggle button in the leading space of the toolbar row. `x` and `y` are physical
+    /// pixels in the window's client area.
+    pub unsafe fn update_toggle(
+        &mut self,
+        visible: bool,
+        x: i32,
+        y: i32,
+        size: i32,
+        dpi: u32,
+    ) -> Result<()> {
+        if !visible || size <= 0 {
+            self.toggle.SetContent(None)?;
+            self.toggle_painted = None;
+            return self.device.Commit();
+        }
+        self.toggle.SetOffsetX2(x as f32)?;
+        self.toggle.SetOffsetY2(y as f32)?;
+        let hot = self.hover == Some(crate::frame::AppbarHit::Toggle);
+        let down = self.pressed == Some(crate::frame::AppbarHit::Toggle);
+        if self.toggle_painted != Some((size, dpi, hot, down)) {
+            let surface = self.device.CreateSurface(
+                size as u32,
+                size as u32,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                DXGI_ALPHA_MODE_PREMULTIPLIED,
+            )?;
+            let mut offset = POINT::default();
+            let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+            let scale = dpi as f32 / 96.0;
+            context.SetDpi(dpi as f32, dpi as f32);
+            context.SetTransform(&Matrix3x2::translation(
+                offset.x as f32 / scale,
+                offset.y as f32 / scale,
+            ));
+            context.Clear(Some(&rgba(WHITE, 0.0)));
+            let canvas = Canvas {
+                context: &context,
+                dwrite: &self.dwrite,
+                fonts: &self.fonts,
+            };
+            let area = rect(0.0, 0.0, size as f32 / scale, size as f32 / scale);
+            let result = (|| {
+                if hot || down {
+                    canvas.fill_rounded(area, 8.0, rgba(INK, if down { 0.1 } else { 0.06 }))?;
+                }
+                canvas.icon('\u{E90C}', area, 18.0, SOFT_INK)
+            })();
+            surface.EndDraw()?;
+            result?;
+            self.toggle.SetContent(&surface)?;
+            self.toggle_painted = Some((size, dpi, hot, down));
+        }
+        self.device.Commit()
+    }
+
+    /// Draws the hidden appbar floating over the page. The floating rectangle starts `inset` DIPs
+    /// from the window's left edge and from `top`. `slide` is 0 while it is out of the window and 1
+    /// when it has arrived.
+    pub unsafe fn update_peek(
+        &mut self,
+        visible: bool,
+        top: i32,
+        side: i32,
+        height: i32,
+        dpi: u32,
+        slide: f32,
+    ) -> Result<()> {
+        let scale = dpi as f32 / 96.0;
+        let inset = crate::FLOAT_INSET as f32;
+        if !visible || side <= 0 || height <= 0 || slide <= 0.0 {
+            self.peek.SetContent(None)?;
+            self.peek_painted = None;
+            return self.device.Commit();
+        }
+        let (w, h) = (side as f32 + PEEK_PAD * 2.0, height as f32 + PEEK_PAD * 2.0);
+        let (pw, ph) = ((w * scale).round() as i32, (h * scale).round() as i32);
+        // The visual leaves to the left by its whole width plus the gap, as the study's
+        // translateX(-100% - 16px).
+        let travel = (1.0 - slide) * (side as f32 + inset * 2.0) * scale;
+        self.peek
+            .SetOffsetX2(((inset - PEEK_PAD) * scale - travel).round())?;
+        self.peek
+            .SetOffsetY2(top as f32 + ((inset - PEEK_PAD) * scale).round())?;
+        let stale = self
+            .peek_painted
+            .as_ref()
+            .is_none_or(|p| (p.width, p.height, p.dpi) != (pw, ph, dpi));
+        if stale {
+            let surface = self.device.CreateSurface(
+                pw as u32,
+                ph as u32,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                DXGI_ALPHA_MODE_PREMULTIPLIED,
+            )?;
+            let mut offset = POINT::default();
+            let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+            context.SetDpi(dpi as f32, dpi as f32);
+            let origin = Matrix3x2::translation(offset.x as f32 / scale, offset.y as f32 / scale);
+            context.SetTransform(&origin);
+            context.Clear(Some(&rgba(WHITE, 0.0)));
+            let canvas = Canvas {
+                context: &context,
+                dwrite: &self.dwrite,
+                fonts: &self.fonts,
+            };
+            let result = (|| {
+                canvas.floating(rect(PEEK_PAD, PEEK_PAD, side as f32, height as f32))?;
+                context.SetTransform(&(Matrix3x2::translation(PEEK_PAD, PEEK_PAD) * origin));
+                let span = side as f32;
+                canvas.draw(
+                    side as f32,
+                    height as f32,
+                    span,
+                    self.tint,
+                    &self.tabs,
+                    self.hover,
+                    self.pressed,
+                    self.menu_open,
+                    Surface::Floating,
+                )
+            })();
+            surface.EndDraw()?;
+            result?;
+            self.peek.SetContent(&surface)?;
+            self.peek_painted = Some(Painted {
+                width: pw,
+                height: ph,
+                dpi,
+                span: pw,
+            });
+        }
+        self.device.Commit()
     }
 
     /// Positions the visual in window coordinates and repaints it when its size or DPI changed.
@@ -375,6 +563,11 @@ impl Appbar {
             self.hover,
             self.pressed,
             self.menu_open,
+            if self.docked {
+                Surface::Docked
+            } else {
+                Surface::Gap
+            },
         );
         surface.EndDraw()?;
         result
@@ -681,8 +874,14 @@ impl Canvas<'_> {
         hover: Option<crate::frame::AppbarHit>,
         pressed: Option<crate::frame::AppbarHit>,
         menu_open: bool,
+        surface: Surface,
     ) -> Result<()> {
-        self.ground(span, h, tint)?;
+        // A floating appbar is drawn over its own fill, and a hidden one leaves only the ground.
+        match surface {
+            Surface::Docked => self.ground(span, h, tint)?,
+            Surface::Gap => return self.ground(span, h, tint),
+            Surface::Floating => {}
+        }
         let left = 10.0;
         let inner = w - 18.0;
 
@@ -930,7 +1129,34 @@ impl Canvas<'_> {
                 )?;
             }
         }
+        // The grip of the resizer shows while the pointer is on the seam or drags it.
+        if matches!(surface, Surface::Docked) && hover == Some(crate::frame::AppbarHit::Resizer) {
+            self.fill_rounded(
+                rect(w - 4.0, h / 2.0 - 18.0, 2.0, 36.0),
+                1.0,
+                rgba(INK, 0.18),
+            )?;
+        }
         Ok(())
+    }
+
+    /// The floating appbar's shape: a soft shadow, the fill and a hairline ring, like the study's
+    /// `0 0 0 1px rgba(0,0,0,.07), 0 24px 60px rgba(40,28,30,.28)`.
+    unsafe fn floating(&self, area: D2D_RECT_F) -> Result<()> {
+        const LAYERS: i32 = 10;
+        for layer in (1..=LAYERS).rev() {
+            let grow = (layer as f32 / LAYERS as f32) * (PEEK_PAD - 4.0);
+            let fade = 1.0 - (layer - 1) as f32 / LAYERS as f32;
+            let reach = D2D_RECT_F {
+                left: area.left - grow,
+                top: area.top - grow + 12.0,
+                right: area.right + grow,
+                bottom: area.bottom + grow + 12.0,
+            };
+            self.fill_rounded(reach, 14.0 + grow, rgba(0x28_1c_1e, 0.028 * fade * fade))?;
+        }
+        self.fill_rounded(area, 14.0, color(floating_fill()))?;
+        self.ring(area, 14.0, rgba(0x000000, 0.07))
     }
 
     /// Experiment: the frame colour around a rounded page panel. A rounded stroke of twice the
