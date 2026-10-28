@@ -111,10 +111,11 @@ const OVERRIDES: [(i32, i32); 7] = [
 const PAPER: u32 = 0xFFFB_FAF7;
 const HAIRLINE: u32 = 0xFFE9_E9E6;
 /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
-const COLOURS: [(i32, u32); 12] = [
+const COLOURS: [(i32, u32); 13] = [
     (0x13C, PAPER),      // kColorFrameActive
     (796, PAPER),        // kColorLocationBarBackground
     (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
+    (1013, PAPER),       // Location bar background in the alternate state
     (1055, 0xFF1F_2024), // kColorOmniboxText
     (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
     (1590, PAPER),       // kColorToolbar
@@ -726,50 +727,50 @@ const MOVE_TO: u32 = 7;
 const LINE_TO: u32 = 11;
 const CANVAS_DIMENSIONS: u32 = 28;
 
-/// The Rivet back arrow: a thin stroked arrow on a 20 DIP canvas.
+/// The Rivet back arrow: a thin stroked arrow on a 16 DIP canvas.
 static BACK_PATH: [PathElement; 19] = [
     op(CANVAS_DIMENSIONS),
-    at(20.0),
+    at(16.0),
     op(STROKE),
     at(1.5),
     op(MOVE_TO),
-    at(16.0),
-    at(10.0),
+    at(12.8),
+    at(8.0),
     op(LINE_TO),
-    at(4.5),
-    at(10.0),
+    at(3.6),
+    at(8.0),
     op(MOVE_TO),
-    at(9.5),
-    at(5.0),
+    at(7.6),
+    at(4.0),
     op(LINE_TO),
-    at(4.5),
-    at(10.0),
+    at(3.6),
+    at(8.0),
     op(LINE_TO),
-    at(9.5),
-    at(15.0),
+    at(7.6),
+    at(12.0),
 ];
 
 /// The Rivet forward arrow, the back arrow mirrored.
 static FORWARD_PATH: [PathElement; 19] = [
     op(CANVAS_DIMENSIONS),
-    at(20.0),
+    at(16.0),
     op(STROKE),
     at(1.5),
     op(MOVE_TO),
-    at(4.0),
-    at(10.0),
+    at(3.2),
+    at(8.0),
     op(LINE_TO),
-    at(15.5),
-    at(10.0),
+    at(12.4),
+    at(8.0),
     op(MOVE_TO),
-    at(10.5),
-    at(5.0),
+    at(8.4),
+    at(4.0),
     op(LINE_TO),
-    at(15.5),
-    at(10.0),
+    at(12.4),
+    at(8.0),
     op(LINE_TO),
-    at(10.5),
-    at(15.0),
+    at(8.4),
+    at(12.0),
 ];
 
 /// The Rivet reload arrow: three quarters of a circle drawn as short strokes, with a head.
@@ -778,60 +779,43 @@ fn reload_path() -> Vec<PathElement> {
     // The previous generated arc produced a malformed vector path in Chrome 156.
     [
         op(CANVAS_DIMENSIONS),
-        at(20.0),
+        at(16.0),
         op(STROKE),
         at(1.5),
         op(MOVE_TO),
-        at(15.0),
-        at(8.0),
+        at(12.8),
+        at(3.0),
         op(LINE_TO),
-        at(15.0),
-        at(4.5),
+        at(12.8),
+        at(6.4),
+        op(LINE_TO),
+        at(9.4),
+        at(6.4),
+        op(MOVE_TO),
+        at(12.8),
+        at(6.4),
         op(LINE_TO),
         at(11.5),
-        at(4.5),
-        op(MOVE_TO),
-        at(15.0),
-        at(4.5),
+        at(4.2),
         op(LINE_TO),
-        at(15.0),
-        at(8.0),
-        op(LINE_TO),
-        at(12.5),
-        at(6.0),
-        op(MOVE_TO),
-        at(15.0),
-        at(8.0),
-        op(LINE_TO),
-        at(13.5),
-        at(12.0),
-        op(LINE_TO),
-        at(10.0),
-        at(14.5),
-        op(LINE_TO),
-        at(7.0),
-        at(15.0),
-        op(LINE_TO),
-        at(4.5),
-        at(13.5),
-        op(LINE_TO),
-        at(3.0),
-        at(10.5),
-        op(LINE_TO),
-        at(3.0),
-        at(7.0),
-        op(LINE_TO),
-        at(4.5),
-        at(4.5),
-        op(LINE_TO),
-        at(7.0),
+        at(9.5),
         at(3.0),
         op(LINE_TO),
-        at(10.0),
-        at(2.5),
+        at(7.2),
+        at(2.8),
         op(LINE_TO),
-        at(12.5),
-        at(3.5),
+        at(4.9),
+        at(3.6),
+        op(LINE_TO),
+        at(3.3),
+        at(5.5),
+        op(LINE_TO), at(2.8), at(7.8),
+        op(LINE_TO), at(3.3), at(10.1),
+        op(LINE_TO), at(4.9), at(12.0),
+        op(LINE_TO), at(7.2), at(12.9),
+        op(LINE_TO), at(9.5), at(12.7),
+        op(LINE_TO), at(11.5), at(11.5),
+        op(LINE_TO), at(12.6), at(9.5),
     ]
     .to_vec()
 }
@@ -905,6 +889,7 @@ mod tests {
         assert_eq!(colour(1590), Some(PAPER));
         assert_eq!(colour(1595), Some(0xFF4A_4850));
         assert_eq!(colour(796), Some(PAPER));
+        assert_eq!(colour(1013), Some(PAPER));
         assert_eq!(colour(1603), Some(HAIRLINE));
         for (index, (id, _)) in COLOURS.iter().enumerate() {
             assert!(!COLOURS[..index].iter().any(|(other, _)| other == id));
@@ -919,7 +904,7 @@ mod tests {
             .map(|element| unsafe { element.value })
             .filter(|value| value.is_finite() && *value < 100.0)
             .collect();
-        assert!(values.iter().all(|value| (0.0..=20.0).contains(value)));
+        assert!(values.iter().all(|value| (0.0..=16.0).contains(value)));
     }
 
     #[test]
