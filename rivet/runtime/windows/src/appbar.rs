@@ -126,18 +126,6 @@ const fn row(lead: Lead, title: &'static str, meta: &'static str) -> Row {
     }
 }
 
-// The tab list shows the shell study's sample until the workspace model supplies real tabs.
-const FOLDER: [Row; 3] = [
-    row(Lead::Glyph('\u{E8B7}'), "Launch Atlas", "3"),
-    Row {
-        child: true,
-        ..row(Lead::Favicon(0xc0577f, "L"), "Launch plan", "")
-    },
-    Row {
-        child: true,
-        ..row(Lead::Favicon(0x7a5bd1, "F"), "Design review", "")
-    },
-];
 const PINNED: [(u32, &str); 4] = [
     (0xd4513b, "M"),
     (0x3b6fd4, "31"),
@@ -145,12 +133,6 @@ const PINNED: [(u32, &str); 4] = [
     (0x1f2024, "N"),
 ];
 const SPACE_DOTS: [u32; 3] = [TINT, 0x5b8bab, 0xc0577f];
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TabItem {
-    pub title: String,
-    pub active: bool,
-}
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> D2D_RECT_F {
     D2D_RECT_F {
@@ -179,7 +161,7 @@ pub struct Appbar {
     painted: Option<Painted>,
     panel: IDCompositionVisual2,
     panel_painted: Option<Painted>,
-    tabs: Vec<TabItem>,
+    tabs: Vec<crate::tab_rows::Row>,
     tint: u32,
     hover: Option<crate::frame::AppbarHit>,
     pressed: Option<crate::frame::AppbarHit>,
@@ -235,7 +217,7 @@ impl Appbar {
 
     pub fn set_state(
         &mut self,
-        tabs: Vec<TabItem>,
+        tabs: Vec<crate::tab_rows::Row>,
         tint: u32,
         hover: Option<crate::frame::AppbarHit>,
         pressed: Option<crate::frame::AppbarHit>,
@@ -660,7 +642,7 @@ impl Canvas<'_> {
         w: f32,
         h: f32,
         tint: u32,
-        tabs: &[TabItem],
+        tabs: &[crate::tab_rows::Row],
         hover: Option<crate::frame::AppbarHit>,
         pressed: Option<crate::frame::AppbarHit>,
     ) -> Result<()> {
@@ -727,49 +709,81 @@ impl Canvas<'_> {
             false,
         )?;
 
-        // Tabs: a folder, then the browser's current tabs below New tab.
         let mut top = 138.0;
-        for (index, item) in FOLDER.iter().enumerate() {
-            self.tab_row(
-                left,
-                inner,
-                top,
-                item,
-                hover == Some(crate::frame::AppbarHit::Folder(index)),
-                pressed == Some(crate::frame::AppbarHit::Folder(index)),
-            )?;
-            top += 34.0;
-        }
-        self.fill(rect(left + 10.0, top + 8.0, inner - 20.0, 1.0), 0xd9d3cb)?;
-        top += 17.0;
-        let new_tab = row(Lead::Glyph('\u{E710}'), "New tab", "Ctrl T");
-        self.tab_row(
-            left,
-            inner,
-            top,
-            &new_tab,
-            hover == Some(crate::frame::AppbarHit::NewTab),
-            pressed == Some(crate::frame::AppbarHit::NewTab),
-        )?;
-        top += 34.0;
-        for (index, item) in tabs.iter().enumerate() {
-            let row = Row {
-                lead: Lead::Favicon(0x7c2d4f, "R"),
-                title: "",
-                meta: "",
-                child: false,
-                active: item.active,
-            };
-            self.tab_row_text(
-                left,
-                inner,
-                top,
-                &row,
-                &item.title,
-                matches!(hover, Some(crate::frame::AppbarHit::Tab(i) | crate::frame::AppbarHit::CloseTab(i)) if i == index),
-                matches!(pressed, Some(crate::frame::AppbarHit::Tab(i) | crate::frame::AppbarHit::CloseTab(i)) if i == index),
-                hover == Some(crate::frame::AppbarHit::CloseTab(index)),
-            )?;
+        for item in tabs {
+            use crate::frame::AppbarHit;
+            use crate::tab_rows::Row as TabRow;
+            if matches!(item, TabRow::NewTab) && top > 138.0 {
+                self.fill(rect(left + 10.0, top + 8.0, inner - 20.0, 1.0), 0xd9d3cb)?;
+                top += 17.0;
+            }
+            match item {
+                TabRow::Group(group) => {
+                    let hit = AppbarHit::Folder(group.id);
+                    if hover == Some(hit) || pressed == Some(hit) {
+                        self.fill_rounded(rect(left, top, inner, 34.0), 9.0, rgba(WHITE, 0.4))?;
+                    }
+                    let colours = [
+                        0x9aa0a6, 0x8ab4f8, 0xf28b82, 0xfdd663, 0x81c995, 0xf6aea9, 0xc58af9,
+                        0x78d9ec, 0xffb26b,
+                    ];
+                    let color = colours
+                        .get(group.color as usize)
+                        .copied()
+                        .unwrap_or(colours[0]);
+                    self.dot(left + 10.0, top + 13.0, 8.0, color)?;
+                    self.text(
+                        TAB,
+                        rect(left + 34.0, top, inner - 62.0, 34.0),
+                        if group.title.is_empty() {
+                            "Untitled group"
+                        } else {
+                            &group.title
+                        },
+                        SOFT_INK,
+                        false,
+                    )?;
+                    self.icon(
+                        if group.collapsed {
+                            '\u{E76C}'
+                        } else {
+                            '\u{E70D}'
+                        },
+                        rect(left + inner - 26.0, top + 4.0, 24.0, 24.0),
+                        12.0,
+                        MUTED,
+                    )?;
+                }
+                TabRow::NewTab => {
+                    let row = row(Lead::Glyph('\u{E710}'), "New tab", "Ctrl T");
+                    self.tab_row(
+                        left,
+                        inner,
+                        top,
+                        &row,
+                        hover == Some(AppbarHit::NewTab),
+                        pressed == Some(AppbarHit::NewTab),
+                    )?;
+                }
+                TabRow::Tab {
+                    index,
+                    title,
+                    active,
+                    child,
+                } => {
+                    let row = Row {
+                        lead: Lead::Favicon(0x7c2d4f, "R"),
+                        title: "",
+                        meta: "",
+                        child: *child,
+                        active: *active,
+                    };
+                    self.tab_row_text(left,inner,top,&row,title,
+                        matches!(hover,Some(AppbarHit::Tab(i)|AppbarHit::CloseTab(i)) if i==*index),
+                        matches!(pressed,Some(AppbarHit::Tab(i)|AppbarHit::CloseTab(i)) if i==*index),
+                        hover==Some(AppbarHit::CloseTab(*index)))?;
+                }
+            }
             top += 34.0;
         }
 

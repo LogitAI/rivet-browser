@@ -151,3 +151,6 @@ mod tests {
         assert_eq!(rivet_runtime_start_for_window(1), 0);
     }
 }
+
+#[cfg(windows)]
+mod tab_rows;

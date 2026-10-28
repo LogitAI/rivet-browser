@@ -25,10 +25,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_NCRBUTTONUP, WM_SETICON, WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
 };
 
-use super::appbar::{Appbar, TabItem};
+use super::appbar::Appbar;
 use super::chrome_layout;
 use super::taskbar;
 use super::{layout_scale_dpi, scale, strip_hit, title_bar_top, StripHit, APPBAR_WIDTH};
+use crate::tab_rows::{self, Row};
 
 const BROWSER_CLASS: &str = "Chrome_WidgetWin_1";
 const ORIGINAL_PROC: &str = "Rivet.OriginalWindowProc";
@@ -40,7 +41,7 @@ const APPBAR_HIT: u32 = HTBORDER;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AppbarHit {
     Pinned(usize),
-    Folder(usize),
+    Folder([u8; 16]),
     NewTab,
     Tab(usize),
     CloseTab(usize),
@@ -53,7 +54,7 @@ thread_local! {
     static APPBAR_STATE: RefCell<HashMap<isize, (Option<AppbarHit>, Option<AppbarHit>, u32)>> = RefCell::new(HashMap::new());
 }
 
-fn appbar_hit(x: f32, y: f32, width: f32, height: f32, tab_count: usize) -> Option<AppbarHit> {
+fn appbar_hit(x: f32, y: f32, width: f32, height: f32, rows: &[Row]) -> Option<AppbarHit> {
     let left = 10.0;
     let inner = width - 18.0;
     if !(x >= left && x < left + inner) {
@@ -65,23 +66,20 @@ fn appbar_hit(x: f32, y: f32, width: f32, height: f32, tab_count: usize) -> Opti
         return (index < 4 && x < left + index as f32 * (tile + 6.0) + tile)
             .then_some(AppbarHit::Pinned(index));
     }
-    if (138.0..240.0).contains(&y) {
-        return Some(AppbarHit::Folder(((y - 138.0) / 34.0).floor() as usize));
-    }
-    let today = 257.0;
-    if (today..today + 34.0).contains(&y) {
-        return Some(AppbarHit::NewTab);
-    }
-    if y >= today + 34.0 && y < today + 34.0 + tab_count as f32 * 34.0 {
-        let index = ((y - today - 34.0) / 34.0).floor() as usize;
-        let row_left = left;
-        let row_right = left + inner;
-        if x >= row_right - 34.0 {
-            return Some(AppbarHit::CloseTab(index));
+    let mut top = 138.0;
+    for row in rows {
+        if matches!(row, Row::NewTab) && top > 138.0 {
+            top += 17.0;
         }
-        if x >= row_left && index < tab_count {
-            return Some(AppbarHit::Tab(index));
+        if (top..top + 34.0).contains(&y) {
+            return Some(match row {
+                Row::Group(group) => AppbarHit::Folder(group.id),
+                Row::NewTab => AppbarHit::NewTab,
+                Row::Tab { index, .. } if x >= left + inner - 34.0 => AppbarHit::CloseTab(*index),
+                Row::Tab { index, .. } => AppbarHit::Tab(*index),
+            });
         }
+        top += 34.0;
     }
     let foot = height - 38.0;
     let dots = 3.0 * 32.0 - 4.0;
@@ -95,28 +93,9 @@ fn appbar_hit(x: f32, y: f32, width: f32, height: f32, tab_count: usize) -> Opti
     None
 }
 
-fn appbar_model(window: HWND) -> (Vec<TabItem>, usize) {
-    unsafe {
-        crate::chrome_tabs::tabs(window)
-            .map(|(titles, active)| {
-                (
-                    titles
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, title)| TabItem {
-                            title,
-                            active: index == active,
-                        })
-                        .collect(),
-                    active,
-                )
-            })
-            .unwrap_or_default()
-    }
-}
-
-fn current_tab_count(window: HWND) -> usize {
-    appbar_model(window).0.len()
+fn appbar_model(window: HWND) -> Vec<Row> {
+    let tabs = unsafe { crate::chrome_tabs::tabs(window) }.unwrap_or_default();
+    tab_rows::build_rows(&tabs)
 }
 
 unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
@@ -129,7 +108,7 @@ unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
         (point.y - top_border(window)) as f32 / dpi,
         APPBAR_WIDTH as f32,
         (client.bottom - top_border(window)) as f32 / dpi,
-        current_tab_count(window),
+        &appbar_model(window),
     )
 }
 
@@ -163,7 +142,9 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
                 entry.2 = tint;
             });
         }
-        AppbarHit::Folder(_) => {}
+        AppbarHit::Folder(id) => {
+            crate::chrome_tabs::toggle_group(window, &id);
+        }
     }
 }
 
@@ -190,6 +171,10 @@ fn nav_frame_color(window: HWND) -> Option<u32> {
 
 const NAV_CAPTION_WIDTH: i32 = 138;
 const TAB_REFRESH_TIMER: usize = 0x5249_5645;
+
+unsafe fn group_probe_message() -> u32 {
+    RegisterWindowMessageW(wide("RivetGroupProbe").as_ptr())
+}
 
 unsafe fn vertical_tabs_message() -> u32 {
     RegisterWindowMessageW(wide("RivetVerticalTabs").as_ptr())
@@ -374,6 +359,9 @@ unsafe fn create_appbar(window: HWND) {
     if vertical_tabs {
         crate::chrome_toolbar::adopt(window);
     }
+    if runtime_directory().is_some_and(|dir| dir.join("rivet-group-probe.flag").exists()) {
+        PostMessageW(window, group_probe_message(), 0, 0);
+    }
     // Tab titles and selection can change without a window title change.
     windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(window, TAB_REFRESH_TIMER, 500, None);
     if vertical_tabs {
@@ -420,7 +408,7 @@ unsafe fn update_appbar(window: HWND) {
                     .get(&(window as isize))
                     .cloned()
                     .unwrap_or((None, None, 0xd08a52));
-                (appbar_model(window).0, 0usize, state.2, state.0, state.1)
+                (appbar_model(window), 0usize, state.2, state.0, state.1)
             });
             appbar.set_state(tabs, tint, hover, pressed);
             let height = client.bottom - top;
@@ -654,6 +642,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             update_appbar(window);
             0
         }
+        _ if message == group_probe_message() && attached(window) => {
+            crate::chrome_tabs::probe_group(window);
+            update_appbar(window);
+            0
+        }
         _ if message == vertical_tabs_message() => {
             crate::vertical_tabs::offer(window, wparam);
             0
@@ -670,13 +663,62 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 mod tests {
     use super::{appbar_hit, AppbarHit};
 
+    fn test_rows() -> Vec<crate::tab_rows::Row> {
+        vec![
+            crate::tab_rows::Row::NewTab,
+            crate::tab_rows::Row::Tab {
+                index: 0,
+                title: String::new(),
+                active: false,
+                child: false,
+            },
+            crate::tab_rows::Row::Tab {
+                index: 1,
+                title: String::new(),
+                active: false,
+                child: false,
+            },
+        ]
+    }
+    #[test]
+    fn fr3_group_and_child_targets_follow_the_visible_rows() {
+        let group = crate::tab_rows::Group {
+            id: [7; 16],
+            title: "Work".into(),
+            color: 3,
+            collapsed: false,
+        };
+        let tabs = vec![crate::tab_rows::Tab {
+            index: 4,
+            title: "Child".into(),
+            active: false,
+            group: Some(group.clone()),
+        }];
+        let rows = crate::tab_rows::build_rows(&tabs);
+        assert_eq!(
+            appbar_hit(40.0, 150.0, 220.0, 700.0, &rows),
+            Some(AppbarHit::Folder(group.id))
+        );
+        assert_eq!(
+            appbar_hit(40.0, 180.0, 220.0, 700.0, &rows),
+            Some(AppbarHit::Tab(4))
+        );
+        assert_eq!(
+            appbar_hit(205.0, 180.0, 220.0, 700.0, &rows),
+            Some(AppbarHit::CloseTab(4))
+        );
+        assert_eq!(
+            appbar_hit(40.0, 230.0, 220.0, 700.0, &rows),
+            Some(AppbarHit::NewTab)
+        );
+    }
     #[test]
     fn fr3_pinned_tiles_have_four_non_overlapping_targets() {
         let tile = (220.0 - 18.0 - 18.0) / 4.0;
         for index in 0..4 {
             let x = 10.0 + index as f32 * (tile + 6.0) + tile / 2.0;
             assert_eq!(
-                appbar_hit(x, 70.0, 220.0, 700.0, 2),
+                appbar_hit(x, 70.0, 220.0, 700.0, &[]),
                 Some(AppbarHit::Pinned(index))
             );
         }
@@ -685,24 +727,24 @@ mod tests {
     #[test]
     fn fr3_tab_rows_split_activation_and_close_hit_areas() {
         assert_eq!(
-            appbar_hit(40.0, 325.0, 220.0, 700.0, 2),
+            appbar_hit(40.0, 207.0, 220.0, 700.0, &test_rows()),
             Some(AppbarHit::Tab(1))
         );
         assert_eq!(
-            appbar_hit(205.0, 325.0, 220.0, 700.0, 2),
+            appbar_hit(205.0, 207.0, 220.0, 700.0, &test_rows()),
             Some(AppbarHit::CloseTab(1))
         );
-        assert_eq!(appbar_hit(40.0, 393.0, 220.0, 700.0, 2), None);
+        assert_eq!(appbar_hit(40.0, 300.0, 220.0, 700.0, &test_rows()), None);
     }
 
     #[test]
     fn fr3_new_tab_and_space_targets_are_distinct() {
         assert_eq!(
-            appbar_hit(40.0, 270.0, 220.0, 700.0, 2),
+            appbar_hit(40.0, 145.0, 220.0, 700.0, &test_rows()),
             Some(AppbarHit::NewTab)
         );
         assert_eq!(
-            appbar_hit(90.0, 670.0, 220.0, 700.0, 2),
+            appbar_hit(90.0, 670.0, 220.0, 700.0, &test_rows()),
             Some(AppbarHit::Space(0))
         );
     }
