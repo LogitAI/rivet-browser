@@ -368,6 +368,10 @@ pub unsafe fn update(window: HWND, appbar: &Appbar, visible: bool, dpi: u32) {
         if !rails.contains_key(&(window as isize)) {
             let Ok(rail) = Rail::new(appbar) else { return };
             rails.insert(window as isize, rail);
+            // The page area is known once the browser has laid out with the patched layout.
+            if let Err(error) = panel::install_layout() {
+                crate::vertical_tabs::trace(&format!("side rail: {error}"));
+            }
             SetTimer(window, POLL_TIMER, POLL_MS, Some(poll));
             install_hook();
         }
@@ -459,14 +463,30 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
         return;
     }
     ScreenToClient(window, &mut pointer);
+    let known = RAILS.with(|rails| rails.borrow().get(&(window as isize)).is_some_and(|rail| rail.geometry.is_some()));
+    if !known {
+        // Not laid out since the layout hook went in. Lay out outside any layout of the browser's.
+        panel::relayout_page_area(window);
+        crate::frame::update_appbar(window);
+        return;
+    }
     let changed = RAILS.with(|rails| {
         let mut rails = rails.borrow_mut();
         let Some(rail) = rails.get_mut(&(window as isize)) else { return false };
         let unfolded = panel::is_unfolded(window);
         let (x, y) = to_dips(pointer, rail.scale);
         let before = (rail.hover, rail.near, rail.over, rail.opacity);
-        rail.near = !unfolded && rail.geometry.is_some_and(|g| in_hot_area(g, x, y));
-        rail.over = !unfolded && rail.geometry.is_some_and(|g| on_open_button(g, x, y));
+        let forced = FORCED_POINTER.with(|forced| forced.get());
+        rail.near = !unfolded
+            && forced.map_or_else(
+                || rail.geometry.is_some_and(|g| in_hot_area(g, x, y)),
+                |(near, _)| near,
+            );
+        rail.over = !unfolded
+            && forced.map_or_else(
+                || rail.geometry.is_some_and(|g| on_open_button(g, x, y)),
+                |(_, over)| over,
+            );
         rail.hover = match target_at(rail, unfolded, x, y) {
             Some(Target::Rail(hit)) => Some(hit),
             _ => None,
@@ -528,17 +548,26 @@ unsafe fn click(message: &MSG) -> bool {
         }
     });
     let Some(action) = action else { return false };
-    match action {
-        Some(Target::Open) => panel::set_unfolded(window, true),
-        Some(Target::Rail(RailHit::Entry(index))) => {
+    if let Some(target) = action {
+        perform(window, target);
+    }
+    crate::frame::update_appbar(window);
+    true
+}
+
+/// What a click on a target does.
+unsafe fn perform(window: HWND, target: Target) {
+    match target {
+        Target::Open => panel::set_unfolded(window, true),
+        Target::Rail(RailHit::Entry(index)) => {
             panel::toggle_entry(window, ENTRIES[index].0);
         }
-        Some(Target::Rail(RailHit::Add)) => {
+        Target::Rail(RailHit::Add) => {
             if crate::chrome_tabs::new_tab(window) {
                 crate::chrome_navigation::open(window, "chrome://extensions");
             }
         }
-        Some(Target::Rail(RailHit::Fold)) => {
+        Target::Rail(RailHit::Fold) => {
             for (id, _, _) in ENTRIES {
                 if panel::entry_showing(window, id) {
                     panel::toggle_entry(window, id);
@@ -546,10 +575,42 @@ unsafe fn click(message: &MSG) -> bool {
             }
             panel::set_unfolded(window, false);
         }
-        None => {}
+    }
+}
+
+thread_local! {
+    /// A test can hold the pointer near the corner without a real pointer: (near, over).
+    static FORCED_POINTER: std::cell::Cell<Option<(bool, bool)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Drives the rail like a click or a pointer would. Used by the test flag file, so a checked
+/// build needs neither the real pointer nor focus. Commands: `open`, `fold`, `entry <n>`, `add`,
+/// `near`, `over` and `away`.
+pub unsafe fn simulate(window: HWND, command: &str) {
+    let mut words = command.split_whitespace();
+    let target = match (words.next(), words.next().and_then(|n| n.parse::<usize>().ok())) {
+        (Some("open"), _) => Some(Target::Open),
+        (Some("fold"), _) => Some(Target::Rail(RailHit::Fold)),
+        (Some("add"), _) => Some(Target::Rail(RailHit::Add)),
+        (Some("entry"), Some(n)) if n < ENTRIES.len() => Some(Target::Rail(RailHit::Entry(n))),
+        (Some("near"), _) => {
+            FORCED_POINTER.with(|forced| forced.set(Some((true, false))));
+            None
+        }
+        (Some("over"), _) => {
+            FORCED_POINTER.with(|forced| forced.set(Some((true, true))));
+            None
+        }
+        (Some("away"), _) => {
+            FORCED_POINTER.with(|forced| forced.set(None));
+            None
+        }
+        _ => None,
+    };
+    if let Some(target) = target {
+        perform(window, target);
     }
     crate::frame::update_appbar(window);
-    true
 }
 
 /// Forgets a window that is going away.

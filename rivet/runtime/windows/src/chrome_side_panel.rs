@@ -432,6 +432,7 @@ enum Command {
     Open(u32),
     Rail(bool),
     DumpLayout,
+    Click(String),
 }
 
 impl Command {
@@ -444,6 +445,7 @@ impl Command {
             "rail on" => return Some(Self::Rail(true)),
             "rail off" => return Some(Self::Rail(false)),
             "layout" => return Some(Self::DumpLayout),
+            _ if text.starts_with("sim ") => return Some(Self::Click(text["sim ".len()..].to_owned())),
             _ => {}
         }
         text.strip_prefix("open ")?.trim().parse().ok().map(Self::Open)
@@ -468,6 +470,7 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
             }
         }
         Some(Command::Rail(on)) => set_unfolded(window, on),
+        Some(Command::Click(command)) => crate::side_rail::simulate(window, &command),
         Some(Command::DumpLayout) => {
             let _ = install_layout();
             DUMP_LAYOUT.store(true, std::sync::atomic::Ordering::Relaxed);
