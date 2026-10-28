@@ -161,3 +161,30 @@
 - 이 컨트롤러가 어느 창의 것인지 알아내는 방법. 컨트롤러에서 Browser, 창, HWND로 가는 경로를 찾아야 한다.
 - 세로 탭 띠 자리를 Appbar로 덮을 때 입력을 Rivet과 Chrome 중 어디로 보낼지.
 - 세로 탭 띠의 폭을 Appbar 폭(268 DIP)에 맞추는 방법. `GetUncollapsedWidth`나 설정 값으로 가능해 보인다.
+
+## 2026-10-28: Rivet 창에만 Chrome 세로 탭을 켜는 실험
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Google Chrome `156.0.8078.48`, 192 DPI 모니터. 별도 프로필 `.scratch/vt-rivet`에서만 했다.
+
+### 결과
+
+- `--app` 창에는 탭 띠와 도구 모음이 없어서 세로 탭을 켤 수 없다. 실험은 Rivet이 일반 창을 열도록 바꾼 빌드로 했다.
+  일반 창에서도 Appbar와 레이아웃 훅은 그대로 동작했다.
+- `ShouldDisplayVerticalTabs`는 창이 붙은 뒤에도 레이아웃마다 불린다. 하지만 실제 모드 값(`this+0x1E8`)이 가로인데
+  `true`로 답하면 Chrome이 바로 종료된다. 판정만 바꾸는 방법은 쓸 수 없다.
+- 모드 값을 1로 쓰고 `NotifyModeChanged`와 `UpdateCollapseActionItem`을 부르면, 설정을 바꿀 때와 같이 그 창만 세로 탭
+  배치로 다시 만들어진다. 레이아웃 도중이 아니라 창 메시지로 미뤄서 불렀다.
+- 그 결과 맨 위 한 줄에 Chrome의 뒤로, 앞으로, 새로고침, 주소창, 확장, 메뉴와 Windows 캡션 버튼이 모이고 그 아래에 웹
+  페이지가 놓였다. 세로 탭 띠(240 DIP)는 Appbar 밑에 두고 레이아웃 훅으로 나머지 28 DIP만 밀었다.
+- 같은 프로필에서 새로 연 일반 창은 가로 탭 그대로였다. 프로필 설정에 `vertical_tabs.enabled`가 기록되지 않았다.
+- `this+0x1CC`의 폭 값을 직접 바꾸면 효과가 없었다. 탭 띠 폭은 `vertical_tabs.uncollapsed_width` 설정에서 온다.
+- 컨트롤러에서 창을 찾는 경로는 아직 틀렸다. `this+0x1B8`을 Browser로 보고 `GetBrowserViewForBrowser`와
+  `HWNDForView`를 부르면 Chrome이 종료된다. 이번 실험은 Rivet 창이 하나라는 가정으로 첫 컨트롤러만 바꿨다.
+
+### 남은 조사
+
+- 컨트롤러에서 HWND로 가는 올바른 경로.
+- 세로 탭 띠 폭이 사용자 설정이나 창 크기에 따라 바뀔 때 Appbar와 맞추는 방법.
+- Rivet이 `--app` 대신 일반 창을 여는 결정. INTENT D2와 SPEC FR-2를 바꿔야 한다.
