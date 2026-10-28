@@ -21,7 +21,7 @@ use std::sync::{Mutex, OnceLock};
 use crate::address_display;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use crate::chrome_layout::image;
 use windows_sys::Win32::System::Memory::{
     VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
     PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
@@ -939,7 +939,18 @@ unsafe extern "system" fn choose_icon(icon: usize) -> usize {
     }
 }
 
-unsafe fn write_code(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
+/// What an installation overwrote, oldest first: the address and the bytes that were there. A
+/// failed installation puts all of it back, so the browser is never left half patched.
+static JOURNAL: Mutex<Vec<(usize, Vec<u8>)>> = Mutex::new(Vec::new());
+/// Set once every change of the installation has been made.
+static INSTALLED: AtomicBool = AtomicBool::new(false);
+
+fn journal() -> std::sync::MutexGuard<'static, Vec<(usize, Vec<u8>)>> {
+    JOURNAL.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// Overwrites `bytes.len()` bytes at `target`, whatever their protection, without recording.
+unsafe fn write_raw(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
     let mut previous: PAGE_PROTECTION_FLAGS = 0;
     if VirtualProtect(
         target.cast(),
@@ -948,12 +959,44 @@ unsafe fn write_code(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
         &mut previous,
     ) == 0
     {
-        return Err("could not unprotect browser code".into());
+        return Err("could not unprotect browser memory".into());
     }
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
     VirtualProtect(target.cast(), bytes.len(), previous, &mut previous);
     FlushInstructionCache(GetCurrentProcess(), target.cast(), bytes.len());
     Ok(())
+}
+
+/// Overwrites browser memory and remembers what was there.
+unsafe fn write_recorded(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
+    let original = std::slice::from_raw_parts(target, bytes.len()).to_vec();
+    write_raw(target, bytes)?;
+    journal().push((target as usize, original));
+    Ok(())
+}
+
+unsafe fn write_code(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
+    write_recorded(target, bytes)
+}
+
+/// Puts back everything the journal holds, newest first. The trampolines already allocated stay
+/// where they are: a thread may still be inside one, and they are only a few bytes.
+unsafe fn rollback() {
+    let entries = std::mem::take(&mut *journal());
+    for (address, original) in entries.into_iter().rev() {
+        let _ = write_raw(address as *mut u8, &original);
+    }
+}
+
+/// Runs `install` and undoes every change it made when it fails.
+unsafe fn transaction(install: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    journal().clear();
+    let result = install();
+    match &result {
+        Ok(()) => journal().clear(),
+        Err(_) => rollback(),
+    }
+    result
 }
 
 unsafe fn executable(code: &[u8]) -> Result<usize, String> {
@@ -1045,43 +1088,34 @@ unsafe fn second_argument_stub(choose: usize, original: usize) -> Result<usize, 
 }
 
 unsafe fn replace_slot(slot: *mut usize, value: usize) -> Result<(), String> {
-    let mut previous: PAGE_PROTECTION_FLAGS = 0;
-    if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
-        return Err("could not unprotect a vtable".into());
-    }
-    slot.write(value);
-    VirtualProtect(slot.cast(), 8, previous, &mut previous);
-    Ok(())
+    write_recorded(slot.cast(), &value.to_le_bytes())
 }
 
 unsafe fn patch() -> Result<Hooks, String> {
-    let base = GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize;
-    if base == 0 {
-        return Err("this browser process has no chrome.dll".into());
-    }
-    let widget = (base + BROWSER_WIDGET_VTABLE) as *mut usize;
-    if widget.add(PAINT_SLOT).read() != base + PAINT
-        || widget.add(LAYOUT_SLOT).read() != base + LAYOUT
+    let image = image::recorded().ok_or("this browser build has no recorded toolbar")?;
+    let base = image.base;
+    let slot = |vtable: usize, index: usize| vtable.checked_add(index.checked_mul(8)?);
+    let holds = |vtable: usize, index: usize, function: usize| {
+        slot(vtable, index).is_some_and(|rva| image.points_to(rva, function))
+    };
+    if !holds(BROWSER_WIDGET_VTABLE, PAINT_SLOT, PAINT)
+        || !holds(BROWSER_WIDGET_VTABLE, LAYOUT_SLOT, LAYOUT)
     {
         return Err("this browser build has no recorded browser widget".into());
     }
-    if ((base + BROWSER_DELEGATE_VTABLE) as *const usize).add(ACTIVE_WEB_CONTENTS_SLOT).read()
-        != base + ACTIVE_WEB_CONTENTS
-        || ((base + WEB_CONTENTS_VTABLE) as *const usize).add(WEB_CONTENTS_TITLE_SLOT).read()
-            != base + WEB_CONTENTS_TITLE
+    if !holds(BROWSER_DELEGATE_VTABLE, ACTIVE_WEB_CONTENTS_SLOT, ACTIVE_WEB_CONTENTS)
+        || !holds(WEB_CONTENTS_VTABLE, WEB_CONTENTS_TITLE_SLOT, WEB_CONTENTS_TITLE)
     {
         return Err("this browser build has no recorded web contents".into());
     }
     for (vtable, theme) in HIDDEN {
-        if ((base + vtable) as *const usize).add(THEME_SLOT).read() != base + theme {
+        if !holds(vtable, THEME_SLOT, theme) {
             return Err(format!(
                 "this browser build has no recorded view at {vtable:#x}"
             ));
         }
     }
-    let prologue = |rva: usize, bytes: &[u8]| {
-        std::slice::from_raw_parts((base + rva) as *const u8, bytes.len()) == bytes
-    };
+    let prologue = |rva: usize, bytes: &[u8]| image.has(rva, bytes);
     if !prologue(LAYOUT_CONSTANT, &LAYOUT_CONSTANT_PROLOGUE)
         || !prologue(THEME_CHANGED, &THEME_CHANGED_PROLOGUE)
         || !prologue(PAINT_LAYER, &PAINT_LAYER_PROLOGUE)
@@ -1115,6 +1149,14 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(BOUNDS_IN_SCREEN, &BOUNDS_BYTES)
     {
         return Err("this browser build has other toolbar functions".into());
+    }
+    // The icons are read through their addresses, so each must lie inside the image.
+    if [BACK_ICON, FORWARD_ICON, RELOAD_ICON, PAGE_INFO_ICON]
+        .iter()
+        .any(|rva| image.at(*rva, std::mem::size_of::<VectorIcon>()).is_none())
+        || image.at(0x10F5_D438, std::mem::size_of::<IconRep>()).is_none()
+    {
+        return Err("this browser build has another page info icon".into());
     }
     let icon = &*((base + PAGE_INFO_ICON) as *const VectorIcon);
     if icon.count != 1 || icon.reps as usize != base + 0x10F5_D438
@@ -1339,7 +1381,9 @@ pub unsafe fn install(directory: Option<std::path::PathBuf>) -> Result<(), Strin
                 .get_or_init(|| patch())
                 .as_ref()
                 .map_err(Clone::clone)?;
-            wire(hooks.base, &skip)
+            let result = transaction(|| wire(hooks.base, &skip));
+            INSTALLED.store(result.is_ok(), Ordering::Release);
+            result
         })
         .clone()
 }
@@ -1352,7 +1396,7 @@ const WIDGET_FOR_WINDOW: usize = 0x0315_C7C0;
 /// Makes `window` a Rivet window and rebuilds its views the way a theme change does, so it
 /// picks up the Rivet look.
 pub unsafe fn adopt(window: HWND) {
-    if hooks().is_none() {
+    if hooks().is_none() || !INSTALLED.load(Ordering::Acquire) {
         return;
     }
     let widget = widget_of(window);
@@ -1528,6 +1572,61 @@ unsafe fn build_icons(base: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A page of plain read-write memory to stand in for browser code and vtables.
+    unsafe fn scratch_page() -> *mut u8 {
+        use windows_sys::Win32::System::Memory::{VirtualAlloc, MEM_COMMIT, MEM_RESERVE};
+        let page = VirtualAlloc(
+            std::ptr::null(),
+            0x1000,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        ) as *mut u8;
+        assert!(!page.is_null());
+        for index in 0..0x1000 {
+            *page.add(index) = (index % 251) as u8;
+        }
+        page
+    }
+
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn nfr3_failed_installation_restores_every_patched_byte() {
+        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        unsafe {
+            let page = scratch_page();
+            let before = std::slice::from_raw_parts(page, 0x1000).to_vec();
+            static STORE: AtomicUsize = AtomicUsize::new(0);
+            let prologue = before[0x100..0x10c].to_vec();
+            let result = transaction(|| {
+                detour(page as usize, 0x100, &prologue, false, 0x1122_3344, &STORE)?;
+                replace_slot(page.add(0x200).cast(), 0xdead_beef)?;
+                write_code(page.add(0x300), &[0xcc; 7])?;
+                assert_ne!(std::slice::from_raw_parts(page, 0x1000), &before[..]);
+                Err("the next change cannot be made".to_owned())
+            });
+            assert!(result.is_err());
+            assert_eq!(std::slice::from_raw_parts(page, 0x1000), &before[..]);
+            assert!(journal().is_empty());
+        }
+    }
+
+    #[test]
+    fn nfr3_complete_installation_keeps_its_changes() {
+        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        unsafe {
+            let page = scratch_page();
+            let result = transaction(|| {
+                replace_slot(page.add(0x40).cast(), 0x0102_0304_0506_0708)?;
+                write_code(page.add(0x80), &[0x90, 0x90])
+            });
+            assert!(result.is_ok());
+            assert_eq!(*(page.add(0x40) as *const usize), 0x0102_0304_0506_0708);
+            assert_eq!(*page.add(0x80), 0x90);
+            assert!(journal().is_empty());
+        }
+    }
 
     #[test]
     fn fr12_page_info_uses_a_thin_circle_without_replacing_warnings() {
