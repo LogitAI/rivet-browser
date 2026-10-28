@@ -180,7 +180,7 @@ const OVERRIDES: [(i32, i32); 7] = [
 const PAPER: u32 = 0xFFFB_FAF7;
 const HAIRLINE: u32 = 0xFFE9_E9E6;
 /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
-const COLOURS: [(i32, u32); 17] = [
+const COLOURS: [(i32, u32); 19] = [
     (0x13C, PAPER),      // kColorFrameActive
     (796, PAPER),        // kColorLocationBarBackground
     (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
@@ -189,9 +189,11 @@ const COLOURS: [(i32, u32); 17] = [
     (1055, 0xFF4A_4850), // kColorOmniboxText
     (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
     (1590, PAPER),       // kColorToolbar
-    (1645, 0xFF1A_1A1A), // Caption button glyph, active window
-    (1646, 0xFF1A_1A1A), // Caption button glyph, inactive window
+    (1644, 0xFF1A_1A1A), // Caption button glyph, active window
+    (1645, 0xFF1A_1A1A), // Caption button glyph, inactive window
+    (1646, 0xFF1A_1A1A), // Caption button glyph without a theme colour
     (1647, 0xFFC4_2B1C), // Close button hover fill
+    (1650, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
     (1595, 0xFF4A_4850), // kColorToolbarButtonIcon
     (1598, 0xFF1F_2024), // kColorToolbarButtonIconHovered
     (1599, 0xFFC4_C1C8), // kColorToolbarButtonIconInactive
@@ -1193,6 +1195,10 @@ mod tests {
         assert_eq!(colour(1603), Some(HAIRLINE));
         assert_eq!(colour(1647), Some(0xFFC4_2B1C));
         assert_eq!(colour(1645), Some(0xFF1A_1A1A));
+        // Active, inactive and unthemed glyphs, and the alpha an inactive window applies.
+        assert_eq!(colour(1644), Some(0xFF1A_1A1A));
+        assert_eq!(colour(1646), Some(0xFF1A_1A1A));
+        assert_eq!(colour(1650), Some(0xFF1A_1A1A));
         for (index, (id, _)) in COLOURS.iter().enumerate() {
             assert!(!COLOURS[..index].iter().any(|(other, _)| other == id));
         }
