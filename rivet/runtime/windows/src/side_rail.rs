@@ -46,12 +46,16 @@ const SOFT_INK: u32 = 0x4a4850;
 const ICONS: &str = "Segoe Fluent Icons";
 const PANEL_RADIUS: f32 = 12.0;
 
-/// The built-in entries of Chrome's side panel the rail lists: entry id, glyph and name.
-pub const ENTRIES: [(u32, char, &str); 3] = [
-    (0, '\u{E7BC}', "Reading list"),
-    (1, '\u{E736}', "Bookmarks"),
-    (3, '\u{E81C}', "History"),
-];
+/// The glyph the rail shows for a side panel entry. Extension panels share one.
+fn glyph_for(id: u32) -> char {
+    match id {
+        0 => '\u{E7BC}',
+        1 => '\u{E736}',
+        2 | 3 => '\u{E81C}',
+        4 => '\u{E8E9}',
+        _ => '\u{EA86}',
+    }
+}
 const ADD_GLYPH: char = '\u{E710}';
 const FOLD_GLYPH: char = '\u{E76C}';
 const OPEN_GLYPH: char = '\u{E76B}';
@@ -77,26 +81,26 @@ pub enum RailHit {
 }
 
 /// What a point of the rail, in its own DIPs, is. `height` is the rail's height.
-pub fn rail_hit(x: f32, y: f32, height: f32) -> Option<RailHit> {
+pub fn rail_hit(x: f32, y: f32, height: f32, entries: usize) -> Option<RailHit> {
     let inside = |top: f32| {
         x >= (RAIL_WIDTH as f32 - BUTTON) / 2.0
             && x < (RAIL_WIDTH as f32 + BUTTON) / 2.0
             && y >= top && y < top + BUTTON
     };
-    for index in 0..ENTRIES.len() {
+    for index in 0..entries {
         if inside(RAIL_PAD + index as f32 * (BUTTON + BUTTON_GAP)) {
             return Some(RailHit::Entry(index));
         }
     }
-    if inside(add_top()) {
+    if inside(add_top(entries)) {
         return Some(RailHit::Add);
     }
     inside(height - RAIL_PAD - BUTTON).then_some(RailHit::Fold)
 }
 
 /// Where the add button begins: after the entries, a rule and its margins.
-fn add_top() -> f32 {
-    RAIL_PAD + ENTRIES.len() as f32 * (BUTTON + BUTTON_GAP) + 4.0 + 1.0 + 4.0 + BUTTON_GAP
+fn add_top(entries: usize) -> f32 {
+    RAIL_PAD + entries as f32 * (BUTTON + BUTTON_GAP) + 4.0 + 1.0 + 4.0 + BUTTON_GAP
 }
 
 /// The open button's rectangle as (left, top) in page-area DIPs measured from the page's right
@@ -174,6 +178,7 @@ struct ColumnKey {
     dpi: u32,
     hover: Option<RailHit>,
     pressed: Option<RailHit>,
+    ids: Vec<u32>,
     showing: u32,
 }
 
@@ -191,6 +196,8 @@ struct Rail {
     open: IDCompositionVisual2,
     column_key: Option<ColumnKey>,
     open_key: Option<OpenKey>,
+    /// The entries Chrome's side panel registry listed at the last update.
+    entries: Vec<panel::EntryKey>,
     hover: Option<RailHit>,
     pressed: Option<RailHit>,
     /// The pointer is near the corner, and on the open button.
@@ -222,6 +229,7 @@ impl Rail {
             open,
             column_key: None,
             open_key: None,
+            entries: Vec::new(),
             hover: None,
             pressed: None,
             near: false,
@@ -324,16 +332,17 @@ impl Rail {
             let ink = if on { ACCENT } else if key.hover == Some(hit) { INK } else { SOFT_INK };
             self.icon(context, glyph, area, 14.0, rgb(ink, 1.0))
         };
-        for (index, (_, glyph, _)) in ENTRIES.iter().enumerate() {
+        for (index, id) in key.ids.iter().enumerate() {
             let top = RAIL_PAD + index as f32 * (BUTTON + BUTTON_GAP);
-            button(top, RailHit::Entry(index), *glyph, key.showing & (1 << index) != 0)?;
+            let on = key.showing & (1 << index.min(31)) != 0;
+            button(top, RailHit::Entry(index), glyph_for(*id), on)?;
         }
-        let rule = RAIL_PAD + ENTRIES.len() as f32 * (BUTTON + BUTTON_GAP) + 4.0;
+        let rule = RAIL_PAD + key.ids.len() as f32 * (BUTTON + BUTTON_GAP) + 4.0;
         context.FillRectangle(
             &rect((width - 18.0) / 2.0, rule, 18.0, 1.0),
             &context.CreateSolidColorBrush(&rgb(INK, 0.08), None)?,
         );
-        button(add_top(), RailHit::Add, ADD_GLYPH, false)?;
+        button(add_top(key.ids.len()), RailHit::Add, ADD_GLYPH, false)?;
         button(height - RAIL_PAD - BUTTON, RailHit::Fold, FOLD_GLYPH, false)
     }
 
@@ -350,12 +359,12 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> D2D_RECT_F {
     D2D_RECT_F { left: x, top: y, right: x + width, bottom: y + height }
 }
 
-/// Which of the entries Chrome's side panel shows, as a bit mask over `ENTRIES`.
-unsafe fn showing_mask(window: HWND) -> u32 {
-    ENTRIES
+/// Which of the entries Chrome's side panel shows, as a bit mask over the listed ones.
+unsafe fn showing_mask(window: HWND, entries: &[panel::EntryKey]) -> u32 {
+    entries
         .iter()
         .enumerate()
-        .filter(|(_, (id, _, _))| panel::entry_showing(window, *id))
+        .filter(|(index, key)| *index < 32 && panel::entry_showing(window, key))
         .fold(0, |mask, (index, _)| mask | 1 << index)
 }
 
@@ -392,6 +401,7 @@ unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>,
         rail.column_key = None;
         return refresh_open(rail, geometry.filter(|_| !unfolded), dpi);
     };
+    rail.entries = panel::listed_entries(window);
     let (left, top, height) = rail_rect(geometry);
     let (width_px, height_px) = ((RAIL_WIDTH as f32 * scale).round() as i32, (height * scale).round() as i32);
     rail.column.SetOffsetX2((left * scale).round())?;
@@ -402,7 +412,8 @@ unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>,
         dpi,
         hover: rail.hover,
         pressed: rail.pressed,
-        showing: showing_mask(window),
+        ids: rail.entries.iter().map(panel::entry_id).collect(),
+        showing: showing_mask(window, &rail.entries),
     };
     if rail.column_key.as_ref() != Some(&key) && width_px > 0 && height_px > 0 {
         let shown = key.clone();
@@ -451,7 +462,7 @@ fn target_at(rail: &Rail, unfolded: bool, x: f32, y: f32) -> Option<Target> {
     let geometry = rail.geometry?;
     if unfolded {
         let (left, top, height) = rail_rect(geometry);
-        return rail_hit(x - left, y - top, height).map(Target::Rail);
+        return rail_hit(x - left, y - top, height, rail.entries.len()).map(Target::Rail);
     }
     (rail.opacity > 0.0 && on_open_button(geometry, x, y)).then_some(Target::Open)
 }
@@ -555,12 +566,19 @@ unsafe fn click(message: &MSG) -> bool {
     true
 }
 
+/// The entries the rail lists for a window.
+fn entries_of(window: HWND) -> Vec<panel::EntryKey> {
+    RAILS.with(|rails| rails.borrow().get(&(window as isize)).map(|rail| rail.entries.clone()).unwrap_or_default())
+}
+
 /// What a click on a target does.
 unsafe fn perform(window: HWND, target: Target) {
     match target {
         Target::Open => panel::set_unfolded(window, true),
         Target::Rail(RailHit::Entry(index)) => {
-            panel::toggle_entry(window, ENTRIES[index].0);
+            if let Some(key) = entries_of(window).get(index) {
+                panel::toggle_entry(window, key);
+            }
         }
         Target::Rail(RailHit::Add) => {
             if crate::chrome_tabs::new_tab(window) {
@@ -568,9 +586,9 @@ unsafe fn perform(window: HWND, target: Target) {
             }
         }
         Target::Rail(RailHit::Fold) => {
-            for (id, _, _) in ENTRIES {
-                if panel::entry_showing(window, id) {
-                    panel::toggle_entry(window, id);
+            for key in entries_of(window) {
+                if panel::entry_showing(window, &key) {
+                    panel::toggle_entry(window, &key);
                 }
             }
             panel::set_unfolded(window, false);
@@ -592,7 +610,7 @@ pub unsafe fn simulate(window: HWND, command: &str) {
         (Some("open"), _) => Some(Target::Open),
         (Some("fold"), _) => Some(Target::Rail(RailHit::Fold)),
         (Some("add"), _) => Some(Target::Rail(RailHit::Add)),
-        (Some("entry"), Some(n)) if n < ENTRIES.len() => Some(Target::Rail(RailHit::Entry(n))),
+        (Some("entry"), Some(n)) => Some(Target::Rail(RailHit::Entry(n))),
         (Some("near"), _) => {
             FORCED_POINTER.with(|forced| forced.set(Some((true, false))));
             None
@@ -624,18 +642,19 @@ mod tests {
 
     #[test]
     fn fr10_rail_buttons_are_thirty_dips_two_apart_after_six() {
-        assert_eq!(rail_hit(20.0, 20.0, 600.0), Some(RailHit::Entry(0)));
-        assert_eq!(rail_hit(20.0, 6.0 + 32.0 + 5.0, 600.0), Some(RailHit::Entry(1)));
-        assert_eq!(rail_hit(20.0, 6.0 + 31.0, 600.0), None, "the gap between buttons is not a button");
-        assert_eq!(rail_hit(2.0, 20.0, 600.0), None, "the rail's padding is not a button");
+        assert_eq!(rail_hit(20.0, 20.0, 600.0, 3), Some(RailHit::Entry(0)));
+        assert_eq!(rail_hit(20.0, 6.0 + 32.0 + 5.0, 600.0, 3), Some(RailHit::Entry(1)));
+        assert_eq!(rail_hit(20.0, 6.0 + 31.0, 600.0, 3), None, "the gap between buttons is not a button");
+        assert_eq!(rail_hit(2.0, 20.0, 600.0, 3), None, "the rail's padding is not a button");
     }
 
     #[test]
     fn fr10_rail_ends_with_a_fold_button_after_the_add_button() {
-        assert_eq!(rail_hit(20.0, 600.0 - 6.0 - 15.0, 600.0), Some(RailHit::Fold));
-        let add = add_top() + 10.0;
-        assert_eq!(rail_hit(20.0, add, 600.0), Some(RailHit::Add));
-        assert!(add_top() > 6.0 + 3.0 * 32.0);
+        assert_eq!(rail_hit(20.0, 600.0 - 6.0 - 15.0, 600.0, 3), Some(RailHit::Fold));
+        let add = add_top(3) + 10.0;
+        assert_eq!(rail_hit(20.0, add, 600.0, 3), Some(RailHit::Add));
+        assert!(add_top(3) > 6.0 + 3.0 * 32.0);
+        assert!(add_top(2) < add_top(3), "the add button follows however many entries there are");
     }
 
     #[test]

@@ -136,16 +136,53 @@ const TOGGLE: usize = 0x0997_F450;
 const TOGGLE_PROLOGUE: [u8; 11] = [0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x60];
 const ENTRY_SHOWING: usize = 0x0369_1A10;
 const ENTRY_SHOWING_PROLOGUE: [u8; 8] = [0x48, 0x8b, 0x49, 0x10, 0x80, 0x79, 0x30, 0x01];
+/// `SidePanelRegistry::From(BrowserWindowInterface*)` returns the window's global registry. It
+/// keeps its entries as a pointer at +0x38 and a count at +0x40, and each entry keeps its
+/// `SidePanelEntryKey` at +0x30.
+const REGISTRY_FROM: usize = 0x030B_E3C0;
+const REGISTRY_FROM_PROLOGUE: [u8; 7] = [0x48, 0x81, 0xc1, 0xa8, 0x00, 0x00, 0x00];
 
-/// A `SidePanelEntryKey` for a built-in entry: the id, and no extension id.
-fn entry_key(entry: u32) -> [u8; 0x28] {
-    let mut key = [0u8; 0x28];
-    key[..4].copy_from_slice(&entry.to_le_bytes());
-    key
+/// A `SidePanelEntryKey`: the entry id, and the extension id of an extension's panel.
+pub type EntryKey = [u8; 0x28];
+
+/// The id of a key.
+pub fn entry_id(key: &EntryKey) -> u32 {
+    u32::from_le_bytes([key[0], key[1], key[2], key[3]])
+}
+
+/// The entries the rail lists: the ones a person uses from a side panel, which are the reading
+/// list, bookmarks, history, the reading mode and the extensions' own panels. Chrome's other
+/// entries belong to features that open them themselves.
+fn listed(id: u32) -> bool {
+    matches!(id, 0..=4 | 0x17)
+}
+
+/// The entries Chrome registered for the window's side panel, in its own order.
+pub unsafe fn listed_entries(window: HWND) -> Vec<EntryKey> {
+    let base = chrome_base();
+    let Some(found) = objects(window).filter(|found| found.coordinator != 0) else { return Vec::new() };
+    if !prologue_is(base + REGISTRY_FROM, &REGISTRY_FROM_PROLOGUE) {
+        return Vec::new();
+    }
+    let browser = *((found.coordinator + 8) as *const usize);
+    let from: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + REGISTRY_FROM);
+    let registry = from(browser);
+    if !readable(registry.wrapping_add(0x38), 0x10) {
+        return Vec::new();
+    }
+    let data = *((registry + 0x38) as *const usize);
+    let count = *((registry + 0x40) as *const usize);
+    (0..count.min(32))
+        .filter_map(|index| {
+            let entry = *((data.wrapping_add(index * 8)) as *const usize);
+            readable(entry.wrapping_add(0x30), 0x28).then(|| *((entry + 0x30) as *const EntryKey))
+        })
+        .filter(|key| listed(entry_id(key)))
+        .collect()
 }
 
 /// Whether Chrome's side panel shows this entry in the window.
-pub unsafe fn entry_showing(window: HWND, entry: u32) -> bool {
+pub unsafe fn entry_showing(window: HWND, key: &EntryKey) -> bool {
     let base = chrome_base();
     let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else { return false };
     if !prologue_is(base + ENTRY_SHOWING, &ENTRY_SHOWING_PROLOGUE) {
@@ -153,11 +190,11 @@ pub unsafe fn entry_showing(window: HWND, entry: u32) -> bool {
     }
     let showing: unsafe extern "system" fn(*mut c_void, *const u8) -> bool =
         std::mem::transmute(base + ENTRY_SHOWING);
-    showing(objects.coordinator as *mut c_void, entry_key(entry).as_ptr())
+    showing(objects.coordinator as *mut c_void, key.as_ptr())
 }
 
 /// Opens an entry, or closes it when it is the one showing.
-pub unsafe fn toggle_entry(window: HWND, entry: u32) -> bool {
+pub unsafe fn toggle_entry(window: HWND, key: &EntryKey) -> bool {
     let base = chrome_base();
     let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else { return false };
     if !prologue_is(base + TOGGLE, &TOGGLE_PROLOGUE) {
@@ -165,7 +202,7 @@ pub unsafe fn toggle_entry(window: HWND, entry: u32) -> bool {
     }
     let toggle: unsafe extern "system" fn(*mut c_void, *const u8, u32) =
         std::mem::transmute(base + TOGGLE);
-    toggle(objects.coordinator as *mut c_void, entry_key(entry).as_ptr(), 0);
+    toggle(objects.coordinator as *mut c_void, key.as_ptr(), 0);
     true
 }
 
@@ -425,6 +462,11 @@ pub unsafe fn set_unfolded(window: HWND, unfolded: bool) {
     relayout_page_area(window);
 }
 
+unsafe fn dump_entries(window: HWND) {
+    let ids: Vec<u32> = listed_entries(window).iter().map(entry_id).collect();
+    trace(&format!("listed entries {ids:?}"));
+}
+
 /// What a test flag file asks for.
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -433,6 +475,7 @@ enum Command {
     Rail(bool),
     DumpLayout,
     Click(String),
+    Entries,
 }
 
 impl Command {
@@ -445,6 +488,7 @@ impl Command {
             "rail on" => return Some(Self::Rail(true)),
             "rail off" => return Some(Self::Rail(false)),
             "layout" => return Some(Self::DumpLayout),
+            "entries" => return Some(Self::Entries),
             _ if text.starts_with("sim ") => return Some(Self::Click(text["sim ".len()..].to_owned())),
             _ => {}
         }
@@ -470,6 +514,7 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
             }
         }
         Some(Command::Rail(on)) => set_unfolded(window, on),
+        Some(Command::Entries) => dump_entries(window),
         Some(Command::Click(command)) => crate::side_rail::simulate(window, &command),
         Some(Command::DumpLayout) => {
             let _ = install_layout();
