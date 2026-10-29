@@ -633,9 +633,11 @@ unsafe fn switch_space(window: HWND, index: usize) {
     show_tabs(window, old, &restore);
 }
 
-/// Switches to a space that lives in another browser. This window keeps the space it shows, so a
-/// failed start loses nothing. The other browser's profile gets the spaces with `index` current,
-/// and the launcher starts it with the Rivet runtime. The window closes once that browser is up.
+/// Shows a space that lives in another browser. A window cannot move between browser processes,
+/// so the space has its own window. This window stays open on its own space and keeps its tabs.
+/// If a window already runs the space's profile it is brought forward, and it keeps the space it
+/// shows. Otherwise the other browser's profile gets the spaces with `index` current and the
+/// launcher starts it with the Rivet runtime.
 unsafe fn hand_over_to(
     window: HWND,
     index: usize,
@@ -643,10 +645,15 @@ unsafe fn hand_over_to(
     hand_over: crate::spaces::HandOver,
     start: String,
 ) {
+    save_spaces(window, saved.clone());
+    let running = crate::browsers::raise_existing(&hand_over.user_data_dir);
+    if crate::spaces::show_for(running) == crate::spaces::Show::BringForward {
+        crate::vertical_tabs::trace(&format!("space: bringing forward the {} window", hand_over.browser.label()));
+        return;
+    }
     let Some(directory) = runtime_directory() else {
         return;
     };
-    save_spaces(window, saved.clone());
     let layout = layout_of(window);
     let dir = hand_over.user_data_dir.to_string_lossy().into_owned();
     let (mut next, root) = (
@@ -665,8 +672,8 @@ unsafe fn hand_over_to(
         log(&format!("rivet: could not save the spaces for the other browser: {error}"));
         return;
     }
-    crate::vertical_tabs::trace(&format!("space: handing over to {}", hand_over.browser.label()));
-    crate::browsers::start_and_close(window, hand_over, start, directory);
+    crate::vertical_tabs::trace(&format!("space: starting {}", hand_over.browser.label()));
+    crate::browsers::start(hand_over, start, directory);
 }
 
 /// Opens `restore` as the window's tabs and closes the tabs `old`, which are the ones shown now,

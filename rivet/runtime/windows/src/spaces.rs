@@ -149,8 +149,48 @@ pub fn start_arguments(
     arguments
 }
 
+/// What a switch to a space of another browser does. A window that already runs the profile is
+/// brought forward and nothing starts; otherwise a new session starts. The window switched from is
+/// never closed and keeps its own current space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Show {
+    BringForward,
+    Start,
+}
+
+pub fn show_for(running: bool) -> Show {
+    if running {
+        Show::BringForward
+    } else {
+        Show::Start
+    }
+}
+
+/// Whether a profile folder name read from a window is the folder asked for. Slash direction,
+/// trailing separators and letter case do not matter on Windows.
+pub fn same_directory(a: &str, b: &str) -> bool {
+    let normal = |text: &str| text.trim().trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase();
+    !normal(a).is_empty() && normal(a) == normal(b)
+}
+
+/// A top-level window of a browser process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Candidate {
+    pub window: isize,
+    /// Shown or minimised, so not a hidden helper window.
+    pub shown: bool,
+    /// Owned by another window, such as a popup.
+    pub owned: bool,
+}
+
+/// The window to bring forward among a process's windows given topmost first: the first browser
+/// window that is shown and not an owned popup.
+pub fn pick_window(windows: &[Candidate]) -> Option<isize> {
+    windows.iter().find(|candidate| candidate.shown && !candidate.owned).map(|candidate| candidate.window)
+}
+
 /// Whether the launcher got the other browser's window up. A browser the runtime cannot attach to
-/// yet still opens, without the Rivet frame, and that counts: the old window may close.
+/// yet still opens, without the Rivet frame, and that counts as started.
 pub fn handover_started(success: bool, stderr: &str) -> bool {
     success || stderr.contains("could not load the Rivet runtime")
 }
@@ -1058,7 +1098,29 @@ mod tests {
     }
 
     #[test]
-    fn fr3_the_old_window_closes_only_once_the_other_browser_is_up() {
+    fn fr3_a_running_window_of_the_profile_is_brought_forward_instead_of_starting_again() {
+        assert_eq!(show_for(true), Show::BringForward);
+        assert_eq!(show_for(false), Show::Start);
+    }
+
+    #[test]
+    fn fr3_a_running_profile_is_found_by_its_folder_whatever_the_spelling() {
+        assert!(same_directory(r"D:/Data/Rivet/profiles/edge/Lab/", r"d:\data\rivet\profiles\edge\lab"));
+        assert!(!same_directory(r"D:\Data\Rivet\edge\Lab", r"D:\Data\Rivet\edge\Other"));
+        assert!(!same_directory("", ""));
+    }
+
+    #[test]
+    fn fr3_the_window_brought_forward_is_a_shown_browser_window_not_a_popup() {
+        let one = |window, shown, owned| Candidate { window, shown, owned };
+        let windows = [one(1, true, true), one(2, false, false), one(3, true, false), one(4, true, false)];
+        assert_eq!(pick_window(&windows), Some(3));
+        assert_eq!(pick_window(&windows[..2]), None);
+        assert_eq!(pick_window(&[]), None);
+    }
+
+    #[test]
+    fn fr3_a_launch_counts_as_started_even_when_the_runtime_cannot_attach() {
         assert!(handover_started(true, ""));
         // The browser opened but the runtime could not attach yet: it still counts.
         assert!(handover_started(false, "could not load the Rivet runtime into browser task 7: x"));
