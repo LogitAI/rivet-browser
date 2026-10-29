@@ -291,6 +291,25 @@ pub struct EdgeVertical {
     pub set_bounds_rect: usize,
     pub set_bounds_rect_prologue: &'static [u8],
     pub toolbar_vtable: usize,
+    /// The vtables of the back and forward buttons and of the reload button, whose preferred size
+    /// Rivet windows make 28 by 28, and the toolbar's preferred height there. `CalculatePreferredSize`
+    /// sits in the slot of `size_slot`.
+    pub button_vtables: &'static [usize],
+    pub toolbar_height: i32,
+    pub toolbar_overlap: i32,
+    pub button_size: i32,
+    /// Where the toolbar's children sit inside it in a Rivet window, in DIPs: the first button's x
+    /// and y, the step to the next button, and the address field's vtable, x, y, height and the
+    /// room left after it.
+    pub button_x: i32,
+    pub button_y: i32,
+    pub button_pitch: i32,
+    pub field_vtable: usize,
+    pub field_x: i32,
+    pub field_y: i32,
+    pub field_height: i32,
+    pub field_margin: i32,
+    pub size_slot: usize,
     pub caption_gap: i32,
     /// The room Rivet's toggle button takes before the toolbar's first button, in DIPs, so the back
     /// button sits where Chrome's does.
@@ -1501,9 +1520,9 @@ pub static EDGE: Build = Build {
         update_location_icon_prologue: &[0x00], // function not found in Edge
         layout_insets: 0x00FF3C3D, // ?GetLayoutInsets@@YA?AVInsets@gfx@@W4LayoutInset@@@Z
         layout_insets_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00],
-        toolbar_button_inset: 6, // Chrome value, not checked on Edge
-        toolbar_inset: 11, // Chrome value, not checked on Edge
-        location_icon_inset: 3, // Chrome value, not checked on Edge
+        toolbar_button_inset: 12, // LayoutInset::TOOLBAR_BUTTON, read by ToolbarButton::GetTargetInsets
+        toolbar_inset: 23, // LayoutInset::TOOLBAR, read by ToolbarView::LayoutCommon
+        location_icon_inset: 55, // LayoutInset read by LocationIconView::UpdateBorder
         update_icon: 0x033C8D50, // ?UpdateIcon@ToolbarButton@@UEAAXXZ
         update_icon_prologue: &[0x80, 0xB9, 0x98, 0x07, 0x00, 0x00, 0x01, 0x75, 0x0C, 0x48, 0x8B, 0x91, 0x88, 0x07, 0x00, 0x00, 0xE9],
         formatted_url: 0x027A8DC8, // ?GetFormattedURL@LocationBarModelImpl@@AEBA?AV?$basic_string@_SU?$char_traits@_S@__Cr@std@
@@ -1610,9 +1629,20 @@ pub static EDGE: Build = Build {
         get_widget_slot: 10,
         size_slots: (86, 15),
         paint_children_slot: 100,
-        overrides: &[], // Edge numbers its layout constants differently; filled in once traced
+        overrides: &[
+        (100, 8),  // kLocationBarChildCornerRadius
+        (104, 28), // kLocationBarHeight
+        (127, 12), // kMainBackgroundRegionCornerRadius
+        (147, 28), // kToolbarButtonHeight
+        (148, 18), // kToolbarButtonIconSize
+        (153, 2),  // kToolbarElementPadding
+        (146, 0),  // kTabstripToolbarOverlap
+        (156, 8),  // kToolbarCornerRadius
+        (161, 0),  // kVerticalTabMinWidth
+    ], // Edge's ids sit 88 to 101 above Chrome's: matched by the constants the same functions ask for in both builds
         colours: &[
         (316, PAPER),      // kColorFrameActive
+        (1936, 0),         // kColorCaptionButtonBackground: clear, so the row shows through like Chrome's
         (2082, PAPER),        // kColorLocationBarBackground
         (2083, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
         (2298, 0),           // Page info chip background: clear, so the field is one surface
@@ -1930,9 +1960,22 @@ pub static EDGE: Build = Build {
         set_bounds_rect: 0x01021E78,
         set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
         toolbar_vtable: 0x1180FCB8,
-        caption_gap: 25,
-        toolbar_leading: 34,
-        top_inset_adjust: -8,
+        button_vtables: &[0x11892138, 0x11895898], // BackForwardButton, ReloadButton
+        toolbar_height: 43,
+        toolbar_overlap: 8,
+        button_size: 28,
+        button_x: 36,
+        button_y: 8,
+        button_pitch: 30,
+        field_vtable: 0x11874078, // LocationBarView
+        field_x: 133,
+        field_y: 5,
+        field_height: 34,
+        field_margin: 9,
+        size_slot: 86,
+        caption_gap: 34,
+        toolbar_leading: 2,
+        top_inset_adjust: -18,
         container_offset: 0x958,
         state_offset: 0x610,
     }),

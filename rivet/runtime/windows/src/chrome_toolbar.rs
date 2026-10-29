@@ -147,7 +147,7 @@ pub(crate) fn is_rivet(widget: usize) -> bool {
             .contains(&widget)
 }
 
-fn active() -> bool {
+pub(crate) fn active() -> bool {
     CURRENT.with(Cell::get) != 0
 }
 
@@ -354,7 +354,7 @@ unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
 
 /// Runs `work` in the scope of `widget`: Rivet's look when it belongs to a Rivet window, the
 /// browser's otherwise. Scopes nest, and leaving one restores the outer one.
-unsafe fn scoped<R>(widget: usize, work: impl FnOnce() -> R) -> R {
+pub(crate) unsafe fn scoped<R>(widget: usize, work: impl FnOnce() -> R) -> R {
     let Some(hooks) = hooks() else { return work() };
     let (outer, outer_source) = (CURRENT.with(Cell::get), SOURCE.with(Cell::get));
     let rivet = if is_rivet(widget) { widget } else { 0 };
@@ -522,12 +522,40 @@ unsafe fn original<T: Copy>(slot: &AtomicUsize) -> T {
 }
 
 unsafe extern "system" fn layout_constant(constant: i32) -> i32 {
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    if CALLS.fetch_add(1, Ordering::Relaxed) < 3 {
+        crate::vertical_tabs::trace(&format!("layout constant hook called with {constant}"));
+    }
     if active() {
         if let Some((_, value)) = bv().overrides.iter().find(|(key, _)| *key == constant) {
+            if crate::vertical_tabs::tracing() && crate::edge_vertical::skipped("lctrace") {
+                static USED: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+                let mut used = USED.lock().unwrap_or_else(|error| error.into_inner());
+                if !used.contains(&constant) {
+                    used.push(constant);
+                    crate::vertical_tabs::trace(&format!("layout constant {constant} overridden with {value}"));
+                }
+            }
             return *value;
         }
     }
-    original::<LayoutConstant>(&ORIGINAL_LAYOUT_CONSTANT)(constant)
+    let value = original::<LayoutConstant>(&ORIGINAL_LAYOUT_CONSTANT)(constant);
+    if crate::vertical_tabs::tracing() && crate::edge_vertical::skipped("lctrace") && (active() || !crate::edge_vertical::skipped("lcactive")) {
+        static SEEN: Mutex<Vec<(i32, bool)>> = Mutex::new(Vec::new());
+        let mut seen = SEEN.lock().unwrap_or_else(|error| error.into_inner());
+        if !seen.contains(&(constant, active())) {
+            seen.push((constant, active()));
+            crate::vertical_tabs::trace(&format!("layout constant {constant} = {value} active {}", active()));
+            if !active() && crate::edge_vertical::skipped("lcstack") {
+                let mut frames = [std::ptr::null_mut::<c_void>(); 48];
+                let count = windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace(1, 48, frames.as_mut_ptr(), std::ptr::null_mut());
+                let base = hooks().map_or(0, |hooks| hooks.base);
+                let text: Vec<String> = frames[..count as usize].iter().map(|frame| format!("{:#x}", (*frame as usize).wrapping_sub(base))).collect();
+                crate::vertical_tabs::trace(&format!("  from {}", text.join(" ")));
+            }
+        }
+    }
+    value
 }
 
 unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut [i32; 4] {
@@ -538,6 +566,21 @@ unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut 
     let result = original::<unsafe extern "system" fn(*mut [i32; 4], i32) -> *mut [i32; 4]>(
         &ORIGINAL_LAYOUT_INSETS,
     )(out, inset);
+    if crate::vertical_tabs::tracing() && crate::edge_vertical::skipped("lctrace") {
+        static SEEN: Mutex<Vec<(i32, bool)>> = Mutex::new(Vec::new());
+        let mut seen = SEEN.lock().unwrap_or_else(|error| error.into_inner());
+        if !seen.contains(&(inset, active())) {
+            seen.push((inset, active()));
+            crate::vertical_tabs::trace(&format!("layout inset {inset} = {:?} active {}", *out, active()));
+            if !active() && crate::edge_vertical::skipped("lcstack") {
+                let mut frames = [std::ptr::null_mut::<c_void>(); 48];
+                let count = windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace(1, 48, frames.as_mut_ptr(), std::ptr::null_mut());
+                let base = hooks().map_or(0, |hooks| hooks.base);
+                let text: Vec<String> = frames[..count as usize].iter().map(|frame| format!("{:#x}", (*frame as usize).wrapping_sub(base))).collect();
+                crate::vertical_tabs::trace(&format!("  from {}", text.join(" ")));
+            }
+        }
+    }
     if active() && inset == bv().toolbar_inset {
         // The insets are top, left, bottom and right. The left one is where the back button
         // starts, and the appbar toggle sits in the space added before it. The row is 43 DIPs
@@ -1295,7 +1338,7 @@ fn own_size(table: usize, slot: usize) -> Option<usize> {
 }
 
 /// Asks a view to ask for its size again, which also tells the layout above it.
-unsafe fn invalidate_layout_of(view: *mut c_void) {
+pub(crate) unsafe fn invalidate_layout_of(view: *mut c_void) {
     let vertical = &crate::builds::get().vertical;
     let Some(image) = image::recorded() else { return };
     if image.has(vertical.invalidate_layout, vertical.invalidate_layout_prologue) {
@@ -1950,15 +1993,15 @@ pub unsafe fn install(directory: Option<std::path::PathBuf>) -> Result<(), Strin
 }
 
 
-/// Makes `window` a Rivet window and rebuilds its views the way a theme change does, so it
-/// picks up the Rivet look.
-pub unsafe fn adopt(window: HWND) {
+/// Records `window` as a Rivet window, so the browser's work on it from now on runs in its scope.
+/// Returns its widget, or zero when the toolbar hooks are not in place.
+pub unsafe fn register(window: HWND) -> usize {
     if hooks().is_none() || !INSTALLED.load(Ordering::Acquire) {
-        return;
+        return 0;
     }
     let widget = widget_of(window);
     if widget == 0 {
-        return;
+        return 0;
     }
     {
         let mut widgets = WIDGETS.lock().unwrap_or_else(|error| error.into_inner());
@@ -1971,9 +2014,20 @@ pub unsafe fn adopt(window: HWND) {
         windows.retain(|(known, _)| *known != widget);
         windows.push((widget, window as usize));
     }
+    widget
+}
+
+/// Makes `window` a Rivet window and rebuilds its views the way a theme change does, so it
+/// picks up the Rivet look.
+pub unsafe fn adopt(window: HWND) {
+    let widget = register(window);
+    if widget == 0 {
+        return;
+    }
     start_press_timer();
     crate::vertical_tabs::trace("adopt");
     theme_changed(widget as *mut c_void);
+    crate::edge_vertical::relayout(window);
     crate::vertical_tabs::trace("adopted");
 }
 

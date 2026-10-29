@@ -95,6 +95,61 @@ unsafe fn detour(
     Ok(original)
 }
 
+/// The preferred size functions of the vtables Rivet reshapes: the vtable and its function.
+static SIZED: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+unsafe extern "system" fn sized_preferred(view: *mut c_void, out: *mut [i32; 2], bounds: usize) -> *mut c_void {
+    type Original = unsafe extern "system" fn(*mut c_void, *mut [i32; 2], usize) -> *mut c_void;
+    let table = *(view as *const usize);
+    let original = SIZED.lock().unwrap_or_else(|error| error.into_inner()).iter().find(|(vtable, _)| *vtable == table).map(|(_, function)| *function);
+    let Some(original) = original else { return out.cast() };
+    let original: Original = std::mem::transmute(original);
+    let result = original(view, out, bounds);
+    let (Some(edge), Some(image)) = (bv(), image::recorded()) else { return result };
+    if !skipped("edgesize") && is_rivet_view_tree(view as usize) {
+        if table == image.base + edge.toolbar_vtable {
+            (*out)[1] = edge.toolbar_height + edge.toolbar_overlap;
+        } else {
+            *out = [edge.button_size, edge.button_size];
+        }
+    }
+    result
+}
+
+static ORIGINAL_SET_VISIBLE: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether `view` is the second back or forward button of its toolbar, which is the forward button.
+unsafe fn is_forward_button(view: usize) -> bool {
+    let (Some(edge), Some(image)) = (bv(), image::recorded()) else { return false };
+    if *(view as *const usize) != image.base + edge.button_vtables[0] {
+        return false;
+    }
+    let parent = *((view + 0x198) as *const usize);
+    if parent < 0x10000 {
+        return false;
+    }
+    let kids = *((parent + 0x1A0) as *const usize) as *const usize;
+    let count = *((parent + 0x1A8) as *const usize);
+    if kids.is_null() || count > 64 {
+        return false;
+    }
+    let buttons: Vec<usize> = (0..count)
+        .map(|n| *kids.add(n))
+        .filter(|child| *child > 0x10000 && *(*child as *const usize) == image.base + edge.button_vtables[0])
+        .collect();
+    buttons.get(1) == Some(&view)
+}
+
+/// Edge hides the forward button until a page can go forward. The design shows it, greyed, so a
+/// Rivet window keeps it visible. Showing a view that is already shown changes nothing, so the
+/// toolbar does not lay itself out again.
+unsafe extern "system" fn set_visible(view: *mut c_void, visible: bool) {
+    type Original = unsafe extern "system" fn(*mut c_void, bool);
+    let original: Original = std::mem::transmute(ORIGINAL_SET_VISIBLE.load(Ordering::Acquire));
+    let keep = !visible && !skipped("edgeforward") && is_rivet_view_tree(view as usize) && is_forward_button(view as usize);
+    original(view, visible || keep);
+}
+
 static ORIGINAL_PREFERRED: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_MINIMUM: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_SET_BOUNDS: AtomicUsize = AtomicUsize::new(0);
@@ -155,17 +210,57 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
     if *(view as *const usize) == image.base + edge.toolbar_vtable && !skipped("edgebounds") {
         let parent = *((view as usize + 0x198) as *const usize);
         if parent > 0x10000 && is_rivet_view_tree(view as usize) {
-            let origin = window_x(parent);
-            let mut left = moved[0];
-            let mut right = moved[0] + moved[2];
-            left = left.max(edge.toolbar_leading);
-            if let Some(container) = caption_container(view as usize) {
-                let caption_x = *((container + 0x1C8) as *const i32);
-                right = right.min(caption_x - edge.caption_gap - origin);
-            }
+            // The toolbar keeps running to the container's right edge, under the caption buttons, as
+            // Edge's own does: the window's backdrop shows through whatever it leaves bare.
+            let left = edge.toolbar_leading;
+            let right = *((parent + 0x1C8 + 8) as *const i32);
             if left >= 0 && right > left {
-                moved = [left, moved[1], right - left, moved[3]];
+                // The browser lifts the toolbar by the overlap and makes its container as much shorter.
+                // The toolbar's own height is what the design gives the row, from the container's top.
+                moved = [left, 0, right - left, edge.toolbar_height];
             }
+        }
+    }
+    // The toolbar's own children keep the design's positions. Their order in the toolbar is back,
+    // forward, reload.
+    if !skipped("edgechildren") && is_rivet_view_tree(view as usize) {
+        let table = *(view as *const usize);
+        let parent = *((view as usize + 0x198) as *const usize);
+        if parent > 0x10000 && *(parent as *const usize) == image.base + edge.toolbar_vtable {
+            if edge.button_vtables.iter().any(|vtable| table == image.base + vtable) {
+                let kids = *((parent + 0x1A0) as *const usize) as *const usize;
+                let count = *((parent + 0x1A8) as *const usize);
+                let mut index = 0;
+                if !kids.is_null() && count <= 64 {
+                    for n in 0..count {
+                        let child = *kids.add(n);
+                        if child == view as usize {
+                            break;
+                        }
+                        if child > 0x10000 && edge.button_vtables.iter().any(|vtable| *(child as *const usize) == image.base + vtable) {
+                            index += 1;
+                        }
+                    }
+                }
+                moved = [edge.button_x + index * edge.button_pitch, edge.button_y, edge.button_size, edge.button_size];
+            } else if table == image.base + edge.field_vtable {
+                let toolbar_width = *((parent + 0x1C8 + 8) as *const i32);
+                let mut width = toolbar_width - edge.field_x - edge.field_margin;
+                if let Some(container) = caption_container(view as usize) {
+                    // The field stops short of the caption buttons by the design's gap.
+                    let caption_x = *((container + 0x1C8) as *const i32);
+                    width = caption_x - edge.caption_gap - window_x(parent) - edge.field_x;
+                }
+                moved = [edge.field_x, edge.field_y, width, edge.field_height];
+            }
+        }
+    }
+    // Bounds changes lay a view out at once, outside any widget layout or paint, so the layout of a
+    // Rivet window's views runs in the window's scope.
+    if !skipped("edgescope") && !crate::chrome_toolbar::active() && is_rivet_view_tree(view as usize) {
+        let widget = crate::chrome_toolbar::widget_holding(view);
+        if crate::chrome_toolbar::is_rivet(widget) {
+            return crate::chrome_toolbar::scoped(widget, || original(view, &moved));
         }
     }
     original(view, &moved)
@@ -253,6 +348,19 @@ pub unsafe fn install() -> Result<(), String> {
                 detour(image.base, edge.set_bounds_rect, edge.set_bounds_rect_prologue, None, set_bounds_rect as *const () as usize)?,
                 Ordering::Release,
             );
+            let toolbar = &crate::builds::get().toolbar;
+            if image.has(toolbar.set_visible, toolbar.set_visible_prologue) {
+                ORIGINAL_SET_VISIBLE.store(
+                    detour(image.base, toolbar.set_visible, toolbar.set_visible_prologue, None, set_visible as *const () as usize)?,
+                    Ordering::Release,
+                );
+            }
+            for vtable in edge.button_vtables.iter().copied().chain([edge.toolbar_vtable]) {
+                let slot = ((image.base + vtable) as *mut usize).add(edge.size_slot);
+                let held = *slot;
+                SIZED.lock().unwrap_or_else(|error| error.into_inner()).push((image.base + vtable, held));
+                crate::chrome_toolbar::replace_slot(slot, sized_preferred as *const () as usize)?;
+            }
             Ok(())
         })
         .clone()
@@ -320,7 +428,9 @@ pub unsafe fn adopt(window: HWND) -> Result<(), String> {
         entry.2 = container;
     }
     let set: SetState = std::mem::transmute(base + edge.set_state);
-    set(view, edge.vertical_state, false);
+    // The state change lays the window out at once, so it runs in the window's scope.
+    crate::chrome_toolbar::register(window);
+    crate::chrome_toolbar::for_window(window, || set(view, edge.vertical_state, false));
     // The strip has no width, so its children would spill over the page. The appbar replaces it.
     let toolbar = &crate::builds::get().toolbar;
     if image::recorded().is_some_and(|image| image.has(toolbar.set_visible, toolbar.set_visible_prologue)) {
@@ -347,6 +457,42 @@ pub unsafe fn adopt(window: HWND) -> Result<(), String> {
         });
     }
     Ok(())
+}
+
+/// Makes every view of a Rivet window's browser view ask for its size again, in the window's scope.
+/// The browser sized its toolbar before the window was a Rivet window, and keeps what it asked for.
+pub unsafe fn relayout(window: HWND) {
+    if bv().is_none() || skipped("edgerelayout") {
+        return;
+    }
+    let Some(view) = browser_view(window) else { return };
+    let Some(image) = image::recorded() else { return };
+    let words = view as *const usize;
+    let table = image.base + crate::builds::get().layout.browser_view_view_vtable;
+    let Some(index) = (0..0x100).find(|index| *words.add(*index) == table) else { return };
+    let root = words.add(index) as usize;
+    unsafe fn walk(view: usize, depth: usize) {
+        if depth > 6 {
+            return;
+        }
+        let kids = *((view + 0x1A0) as *const usize) as *const usize;
+        let count = *((view + 0x1A8) as *const usize);
+        if kids.is_null() || count > 64 {
+            return;
+        }
+        for n in 0..count {
+            let child = *kids.add(n);
+            if child > 0x10000 {
+                walk(child, depth + 1);
+            }
+        }
+        if !skipped("edgeforward") && ORIGINAL_SET_VISIBLE.load(Ordering::Acquire) != 0 && is_forward_button(view) {
+            let show: unsafe extern "system" fn(*mut c_void, bool) = std::mem::transmute(ORIGINAL_SET_VISIBLE.load(Ordering::Acquire));
+            show(view as *mut c_void, true);
+        }
+        crate::chrome_toolbar::invalidate_layout_of(view as *mut c_void);
+    }
+    crate::chrome_toolbar::for_window(window, || walk(root, 0));
 }
 
 /// Forgets a window that is going away.

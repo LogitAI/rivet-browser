@@ -381,6 +381,28 @@ unsafe fn colour_slot(provider: *const u8, id: i32) -> Option<*mut u32> {
     None
 }
 
+/// The provider's slots for the colours the frame paints with. A provider makes a colour the first
+/// time it is asked for it, so one that is missing is asked for before its slot is read.
+unsafe fn frame_slots(provider: *const u8) -> Vec<(*mut u32, u32)> {
+    let get_color = image::recorded().map(|image| {
+        std::mem::transmute::<usize, unsafe extern "system" fn(*const u8, i32) -> u32>(image.base + crate::builds::get().toolbar.get_color)
+    });
+    bv().frame_ids
+        .iter()
+        .filter_map(|id| {
+            let mut slot = colour_slot(provider, *id);
+            if slot.is_none() {
+                if let Some(get_color) = get_color {
+                    get_color(provider, *id);
+                    slot = colour_slot(provider, *id);
+                }
+            }
+            slot
+        })
+        .map(|slot| (slot, slot.read()))
+        .collect()
+}
+
 unsafe extern "system" fn on_paint(view: *const c_void, canvas: *const c_void) {
     let (original, provider_of, draw_color, paint) =
         PAINT.get().expect("patched after it is stored");
@@ -393,11 +415,7 @@ unsafe extern "system" fn on_paint(view: *const c_void, canvas: *const c_void) {
         return original(view, canvas);
     };
     draw_color(canvas, colour);
-    let saved: Vec<(*mut u32, u32)> = bv().frame_ids
-        .iter()
-        .filter_map(|id| colour_slot(provider, *id))
-        .map(|slot| (slot, slot.read()))
-        .collect();
+    let saved = frame_slots(provider);
     for (slot, _) in &saved {
         slot.write(colour);
     }
@@ -420,11 +438,7 @@ unsafe extern "system" fn corner_paint(view: *const c_void, canvas: *const c_voi
     let Some((colour, provider)) = colour.filter(|(_, provider)| !provider.is_null()) else {
         return original(view, canvas);
     };
-    let saved: Vec<(*mut u32, u32)> = bv().frame_ids
-        .iter()
-        .filter_map(|id| colour_slot(provider, *id))
-        .map(|slot| (slot, slot.read()))
-        .collect();
+    let saved = frame_slots(provider);
     for (slot, _) in &saved {
         slot.write(colour);
     }
