@@ -949,6 +949,30 @@ mod tests {
     }
 
     #[test]
+    fn nfr3_samsung_internet_is_its_own_browser_process() {
+        // The version folder holds the browser module and helper programs, but not a copy of the
+        // registered executable, so the registered path is the process that owns the windows.
+        let root = std::env::temp_dir().join(format!("rivet-samsung-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("143.0.4.29")).unwrap();
+        for name in ["samsunginternet.dll", "notification_helper.exe", "chrome_pwa_launcher.exe"] {
+            std::fs::write(root.join("143.0.4.29").join(name), b"x").unwrap();
+        }
+        std::fs::write(root.join("samsunginternet.exe"), b"x").unwrap();
+        std::fs::write(root.join("samsunginternet_proxy.exe"), b"x").unwrap();
+        assert_eq!(
+            resolve_browser_executable(&root.join("samsunginternet.exe")),
+            root.join("samsunginternet.exe")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        // The installed build resolves the same way.
+        let installed = Path::new(r"C:\Program Files\Samsung\Internet\Application\samsunginternet.exe");
+        if installed.is_file() {
+            assert_eq!(resolve_browser_executable(installed), installed);
+        }
+    }
+
+    #[test]
     fn nfr3_browser_without_a_stub_keeps_its_path() {
         let root = std::env::temp_dir().join(format!("rivet-keep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
