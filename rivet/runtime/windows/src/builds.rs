@@ -2283,6 +2283,7 @@ pub static BRAVE: Build = Build {
     },
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
+    edge_page: None,
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
@@ -2328,6 +2329,7 @@ pub static BRAVE: Build = Build {
         frame_browser_window_offset: 0x340,
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
+        provider_verified: true,
     },
 };
 
