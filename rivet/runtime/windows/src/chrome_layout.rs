@@ -359,8 +359,9 @@ const ON_PAINT: usize = 0x011B_5610;
 const GET_COLOR_PROVIDER: usize = 0x04AA_27D0;
 const DRAW_COLOR: usize = 0x036B_AD80;
 /// The active, inactive and unthemed-inactive frame colour ids. The last one fills the band
-/// behind the top row, which the panel's rounded corners now reveal.
-const FRAME_IDS: [i32; 3] = [0x13C, 0x140, 321];
+/// behind the top row, which the panel's rounded corners now reveal. An active window with an
+/// unthemed frame may read 0x13D and 0x144, which hold the same blue as the active colour.
+const FRAME_IDS: [i32; 5] = [0x13C, 0x13D, 0x140, 321, 0x144];
 type OnPaint = unsafe extern "system" fn(*const c_void, *const c_void);
 type GetProvider = unsafe extern "system" fn(*const c_void) -> *const u8;
 type DrawColor = unsafe extern "system" fn(*const c_void, u32);
