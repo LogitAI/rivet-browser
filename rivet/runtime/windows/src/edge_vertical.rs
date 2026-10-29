@@ -280,7 +280,7 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
 }
 
 /// Whether a view lies in the browser view of a Rivet window.
-unsafe fn is_rivet_view_tree(view: usize) -> bool {
+pub(crate) unsafe fn is_rivet_view_tree(view: usize) -> bool {
     let mut at = view;
     for _ in 0..16 {
         if at < 0x10000 {

@@ -282,6 +282,13 @@ pub struct EdgePage {
     /// returns `gfx::Insets` through a hidden pointer.
     pub container_margin: usize,
     pub container_margin_prologue: &'static [u8],
+    /// `ContentsWebView::EdgeUpdateRoundedCornerVisibility(this, visible)` shows or hides the overlay
+    /// that rounds the page's corners, which the page view keeps at `corner_offset`.
+    pub update_corners: usize,
+    pub update_corners_prologue: &'static [u8],
+    pub corner_offset: usize,
+    /// `EdgeRoundedCornerView::SetVisible(this, visible)`.
+    pub corner_set_visible: usize,
 }
 
 /// Values for `edge_vertical.rs`: Edge keeps its vertical tabs in its own container view, which
@@ -2029,6 +2036,10 @@ pub static EDGE: Build = Build {
         paint_border_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00],
         container_margin: 0x02A1AA04, // ?GetContentsContainerMargin@AppLayerStyle@edge_app_layer@@
         container_margin_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x38],
+        update_corners: 0x0273862E, // ?EdgeUpdateRoundedCornerVisibility@ContentsWebView@@
+        update_corners_prologue: &[0x48, 0x8B, 0x89, 0x88, 0x05, 0x00, 0x00, 0x48, 0x85, 0xC9, 0x0F, 0x85, 0x02, 0x00, 0x00, 0x00],
+        corner_offset: 0x588,
+        corner_set_visible: 0x02738640, // ?SetVisible@EdgeRoundedCornerView@@
     }),
     edge_vertical: Some(EdgeVertical {
         content_window_for_hwnd: 0x026A4DC6,
@@ -2485,6 +2496,7 @@ mod tests {
         // Both functions start with a prologue the detour can copy whole.
         assert!(page.paint_border_prologue.len() >= 12);
         assert!(page.container_margin_prologue.len() >= 12);
+        assert!(page.update_corners_prologue.len() >= 12);
         assert!(CHROME.edge_page.is_none());
         assert!(CHROME_150.edge_page.is_none());
     }
