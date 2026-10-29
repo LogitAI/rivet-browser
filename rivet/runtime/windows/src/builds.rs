@@ -342,6 +342,9 @@ pub struct VerticalTabs {
     /// `BrowserView::ShouldDrawTabStrip` and its first bytes, for the tab strip experiment.
     pub should_draw_tab_strip: usize,
     pub should_draw_tab_strip_prologue: &'static [u8],
+    /// Whether a Rivet window leaves that function out of its layout by a detour, with this build's
+    /// prologue copied to a trampoline. Only builds where this has been checked set it.
+    pub detour_strip: bool,
 }
 
 /// Values for `chrome_navigation.rs`.
@@ -770,6 +773,7 @@ const UNCHECKED_VERTICALTABS: VerticalTabs = VerticalTabs {
     region_minimum_prologue: &[0],
     should_draw_tab_strip: ABSENT,
     should_draw_tab_strip_prologue: &[0],
+    detour_strip: false,
 };
 
 const UNCHECKED_NAVIGATION: Navigation = Navigation {
@@ -1238,6 +1242,7 @@ pub static CHROME: Build = Build {
     ],
         should_draw_tab_strip: 0x0528_6C00, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
+        detour_strip: false,
     },
     navigation: Navigation {
         supported: true,
@@ -1714,6 +1719,7 @@ pub static EDGE: Build = Build {
     ], // Chrome value, not checked on Edge
         should_draw_tab_strip: 0x0100A550, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x89, 0x18, 0x06, 0x00, 0x00],
+        detour_strip: false,
     },
     navigation: Navigation {
         supported: false, // not checked on Edge yet
@@ -2006,7 +2012,16 @@ pub static WHALE: Build = Build {
         skip: "toolbar",
         ..UNCHECKED_TOOLBAR
     },
-    vertical: UNCHECKED_VERTICALTABS,
+    vertical: VerticalTabs {
+        // Whale's `BrowserView::ShouldDrawTabStrip`, the target of slot 1 of its layout delegate. The
+        // prologue ends on an instruction boundary and holds no relative operand.
+        should_draw_tab_strip: 0x0E6CBE60,
+        should_draw_tab_strip_prologue: &[
+            0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x89, 0xC0, 0x05, 0x00, 0x00,
+        ],
+        detour_strip: true,
+        ..UNCHECKED_VERTICALTABS
+    },
     navigation: UNCHECKED_NAVIGATION,
     tabs: Tabs {
         supported: true, // list, switch and close checked on Whale 5.39.412.57; groups are not
@@ -2173,6 +2188,8 @@ mod tests {
         assert_eq!(WHALE.version, [5, 39, 412, 57]);
         assert!(!WHALE.vertical.supported && WHALE.tabs.supported && !WHALE.tabs.groups && !WHALE.split.supported);
         assert!(!WHALE.navigation.supported && !WHALE.side_panel.supported);
+        assert!(WHALE.vertical.detour_strip && WHALE.vertical.should_draw_tab_strip_prologue.len() >= 14);
+        assert!(all().iter().filter(|build| build.vertical.detour_strip).count() == 1);
         assert_eq!(WHALE.toolbar.skip, "toolbar");
         // Hooks without a verified address are absent, so their checks fail.
         assert_eq!(WHALE.layout.corner_paint, ABSENT);

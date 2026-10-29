@@ -420,7 +420,7 @@ unsafe extern "system" fn region_minimum_size(view: *mut c_void, out: *mut [i32;
 }
 
 /// `jmp qword ptr [rip + 0]` followed by the absolute target.
-fn absolute_jump(target: usize) -> [u8; 14] {
+pub(crate) fn absolute_jump(target: usize) -> [u8; 14] {
     let mut code = [0u8; 14];
     code[..6].copy_from_slice(&[0xff, 0x25, 0, 0, 0, 0]);
     code[6..].copy_from_slice(&target.to_le_bytes());

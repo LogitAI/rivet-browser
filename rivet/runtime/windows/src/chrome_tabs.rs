@@ -52,7 +52,21 @@ unsafe fn web_contents(base: usize, window: HWND) -> Option<*mut c_void> {
     let result = function::<Pointer>(base, bv().active_web_contents)(view);
     (!result.is_null()).then_some(result)
 }
-unsafe fn browser(base: usize, window: HWND) -> Option<*mut c_void> {
+/// The browser view of a window, which also answers for the layout's own questions.
+pub(crate) unsafe fn browser_view(window: HWND) -> Option<*mut c_void> {
+    let base = crate::chrome_layout::image::recorded()?.base;
+    let tabs = &crate::builds::get().tabs;
+    if !tabs.supported {
+        return None;
+    }
+    let content = function::<Pointer>(base, tabs.content_window_for_hwnd)(window as *const c_void);
+    if content.is_null() {
+        return None;
+    }
+    let view = function::<Pointer>(base, tabs.browser_view_for_window)(content);
+    (!view.is_null()).then_some(view)
+}
+pub(crate) unsafe fn browser(base: usize, window: HWND) -> Option<*mut c_void> {
     let content = function::<Pointer>(base, bv().content_window_for_hwnd)(window);
     if content.is_null() {
         return None;

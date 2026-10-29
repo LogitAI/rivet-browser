@@ -217,6 +217,7 @@ mod chrome_split;
 mod side_rail;
 #[cfg(windows)]
 mod chrome_tabs;
+mod hide_strip;
 #[cfg(windows)]
 mod chrome_toolbar;
 #[cfg(windows)]
