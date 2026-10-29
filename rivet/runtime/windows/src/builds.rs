@@ -352,6 +352,9 @@ pub struct EdgeVertical {
     pub text_margin: i32,
     pub size_slot: usize,
     pub caption_gap: i32,
+    /// `EdgeExtensionsToolbarContainer`, the toolbar's extensions button, which Edge places against the
+    /// toolbar's right edge.
+    pub extensions_vtable: usize,
     /// The room Rivet's toggle button takes before the toolbar's first button, in DIPs, so the back
     /// button sits where Chrome's does.
     pub toolbar_leading: i32,
@@ -2088,6 +2091,7 @@ pub static EDGE: Build = Build {
         text_margin: 20,
         size_slot: 86,
         caption_gap: 34,
+        extensions_vtable: 0x118118B8, // EdgeExtensionsToolbarContainer
         toolbar_leading: 0,
         top_inset_adjust: -18,
         container_offset: 0x958,
@@ -2620,7 +2624,7 @@ mod tests {
         // The edge vertical functions and the vtables Rivet reshapes.
         let edge = EDGE.edge_vertical.as_ref().expect("Edge has its own vertical tabs");
         assert_eq!(file_bytes(&file, edge.set_bounds_rect, edge.set_bounds_rect_prologue.len()).as_deref(), Some(edge.set_bounds_rect_prologue));
-        for vtable in edge.button_vtables.iter().copied().chain([edge.toolbar_vtable, edge.field_vtable, edge.icon_vtable, edge.text_vtable]) {
+        for vtable in edge.button_vtables.iter().copied().chain([edge.toolbar_vtable, edge.field_vtable, edge.icon_vtable, edge.text_vtable, edge.extensions_vtable]) {
             assert!(pointer(vtable).is_some(), "vtable {vtable:#x} lies inside msedge.dll");
         }
     }

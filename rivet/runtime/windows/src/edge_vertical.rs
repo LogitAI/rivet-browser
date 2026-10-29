@@ -243,6 +243,17 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
                     }
                 }
                 moved = [edge.button_x + index * edge.button_pitch, edge.button_y, edge.button_size, edge.button_size];
+            } else if table == image.base + edge.extensions_vtable {
+                // Edge lays this container out from the toolbar's right edge, which runs under the
+                // caption buttons: it would sit beneath the close button and show through its glyph.
+                // It moves left by the width the caption buttons cover.
+                if let Some(container) = caption_container(view as usize) {
+                    let toolbar_width = *((parent + 0x1C8 + 8) as *const i32);
+                    let caption_x = *((container + 0x1C8) as *const i32) - window_x(parent);
+                    if caption_x > 0 && caption_x < toolbar_width {
+                        moved[0] -= toolbar_width - caption_x;
+                    }
+                }
             } else if table == image.base + edge.field_vtable {
                 let toolbar_width = *((parent + 0x1C8 + 8) as *const i32);
                 let mut width = toolbar_width - edge.field_x - edge.field_margin;
