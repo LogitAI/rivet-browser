@@ -1665,14 +1665,10 @@ pub static EDGE: Build = Build {
         overrides: &[
         (100, 8),  // kLocationBarChildCornerRadius
         (104, 28), // kLocationBarHeight
-        (127, 12), // kMainBackgroundRegionCornerRadius
         (147, 28), // kToolbarButtonHeight
-        (148, 18), // kToolbarButtonIconSize
         (153, 2),  // kToolbarElementPadding
         (146, 0),  // kTabstripToolbarOverlap
-        (156, 8),  // kToolbarCornerRadius
-        (161, 0),  // kVerticalTabMinWidth
-    ], // Edge's ids sit 88 to 101 above Chrome's: matched by the constants the same functions ask for in both builds
+    ], // Edge's ids sit 88 to 101 above Chrome's: matched by the constants the same functions ask for in both builds. Only ids that a Rivet window asks for are listed; kMainBackgroundRegionCornerRadius, kToolbarCornerRadius and kVerticalTabMinWidth were never asked for, so their Edge ids are not recorded
         colours: &[
         (316, PAPER),      // kColorFrameActive
         (1936, 0),         // kColorCaptionButtonBackground: clear, so the row shows through like Chrome's
@@ -1719,6 +1715,9 @@ pub static EDGE: Build = Build {
         (2948, 0xFF1A_1A1A), // Caption button glyph, inactive window
         (2949, 0xFF1A_1A1A), // Caption button glyph without a theme colour
         (2950, 0xFFC4_2B1C), // Close button hover fill
+        (2951, 0xFF1A_1A1A), // Caption button glyph that PaintSymbol reads
+        (3409, 0xFF1A_1A1A), // Caption button glyph, found by replacing ids until the glyph changed
+        (3410, 0xFF1A_1A1A), // the same for an inactive window
         (2953, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
         (2898, 0xFF4A_4850), // kColorToolbarButtonIcon
         (2901, 0xFF1F_2024), // kColorToolbarButtonIconHovered
@@ -2234,6 +2233,49 @@ mod tests {
                 Some(prologue),
                 "{name} prologue does not match chrome.dll"
             );
+        }
+    }
+
+    #[test]
+    fn nfr3_edge_156_toolbar_functions_and_tables_match_the_installed_build() {
+        let path = r"C:\Program Files (x86)\Microsoft\Edge\Application\156.0.4314.50\msedge.dll";
+        let Ok(file) = std::fs::read(path) else {
+            return;
+        };
+        let toolbar = &EDGE.toolbar;
+        for (name, rva, prologue) in [
+            ("layout constant", toolbar.layout_constant, toolbar.layout_constant_prologue),
+            ("layout insets", toolbar.layout_insets, toolbar.layout_insets_prologue),
+            ("icon update", toolbar.update_location_icon, toolbar.update_location_icon_prologue),
+            ("security chip text", toolbar.chip_text, toolbar.chip_text_prologue),
+            ("background refresh", toolbar.refresh_background, toolbar.refresh_background_prologue),
+            ("formatted url", toolbar.formatted_url, toolbar.formatted_url_prologue),
+            ("omnibox update", toolbar.omnibox_update, toolbar.omnibox_update_prologue),
+            ("set visible", toolbar.set_visible, toolbar.set_visible_prologue),
+        ] {
+            assert_eq!(
+                file_bytes(&file, rva, prologue.len()).as_deref(),
+                Some(prologue),
+                "{name} prologue does not match msedge.dll"
+            );
+        }
+        // A vtable slot holds the function's absolute address.
+        let image_base = 0x1_8000_0000usize;
+        let pointer = |rva: usize| {
+            file_bytes(&file, rva, 8).map(|bytes| u64::from_le_bytes(bytes.try_into().unwrap()) as usize - image_base)
+        };
+        assert_eq!(pointer(toolbar.browser_delegate_vtable + toolbar.active_web_contents_slot * 8), Some(toolbar.active_web_contents));
+        assert_eq!(pointer(toolbar.web_contents_vtable + toolbar.web_contents_title_slot * 8), Some(toolbar.web_contents_title));
+        // Each navigation icon carries the name recorded for it.
+        for (rva, name) in [toolbar.back_icon, toolbar.forward_icon, toolbar.reload_icon].into_iter().zip(toolbar.nav_icon_names) {
+            let name_pointer = pointer(rva + 16).expect("icon is mapped");
+            assert_eq!(file_bytes(&file, name_pointer, name.len()).as_deref(), Some(*name));
+        }
+        // The edge vertical functions and the vtables Rivet reshapes.
+        let edge = EDGE.edge_vertical.as_ref().expect("Edge has its own vertical tabs");
+        assert_eq!(file_bytes(&file, edge.set_bounds_rect, edge.set_bounds_rect_prologue.len()).as_deref(), Some(edge.set_bounds_rect_prologue));
+        for vtable in edge.button_vtables.iter().copied().chain([edge.toolbar_vtable, edge.field_vtable, edge.icon_vtable, edge.text_vtable]) {
+            assert!(pointer(vtable).is_some(), "vtable {vtable:#x} lies inside msedge.dll");
         }
     }
 
