@@ -208,7 +208,7 @@ fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
                 } else {
                     directory
                 };
-                rivet_core::start_page_url(directory, "Work")
+                rivet_core::start_page_url(directory, "Work", "Chrome", "Work")
             }
         },
         user_data_dir,
@@ -386,7 +386,7 @@ mod tests {
         ])
         .unwrap();
         assert!(options.url.starts_with("file:///"));
-        assert!(options.url.ends_with("/start.html?space=Work"));
+        assert!(options.url.ends_with("/start.html?space=Work&browser=Chrome&profile=Work"));
         assert!(build_launch_plan(&LaunchRequest {
             browser: options.browser,
             url: options.url,

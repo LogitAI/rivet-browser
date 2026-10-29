@@ -296,7 +296,22 @@ pub fn is_blank_tab(url: &str) -> bool {
         || url == "about:blank"
         || url.starts_with("chrome://newtab")
         || url.starts_with("chrome-search://")
-        || (url.starts_with("file:") && url.contains("/start.html?space="))
+        || is_start_page(url)
+}
+
+/// Whether `url` is a Rivet start page, whichever space and browser it was made for.
+pub fn is_start_page(url: &str) -> bool {
+    url.starts_with("file:") && url.contains("/start.html?space=")
+}
+
+/// The address to open for a saved tab: a start page saved by an older build names no browser
+/// or profile, so it opens as the current space's start page instead.
+pub fn restored_url<'a>(url: &'a str, start: &'a str) -> &'a str {
+    if is_start_page(url) && !url.contains("&browser=") {
+        start
+    } else {
+        url
+    }
 }
 
 /// The tabs of one space kept in the file, at most.
@@ -747,6 +762,14 @@ mod tests {
             active,
             group: None,
         }
+    }
+
+    #[test]
+    fn fr3_old_start_page_is_reopened_with_the_spaces_browser() {
+        let start = "file:///C:/Rivet/start.html?space=Research&browser=Edge&profile=Lab";
+        assert_eq!(restored_url("file:///C:/Rivet/start.html?space=Research", start), start);
+        assert_eq!(restored_url(start, "other"), start);
+        assert_eq!(restored_url("https://example.com/", start), "https://example.com/");
     }
 
     #[test]

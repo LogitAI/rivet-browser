@@ -573,18 +573,20 @@ fn with_spaces<R>(window: HWND, edit: impl FnOnce(&mut Spaces) -> R) -> R {
 }
 
 /// The address of the Rivet start page for the space called `space`.
-unsafe fn start_url(space: &str) -> Option<String> {
-    runtime_directory().map(|directory| rivet_core::start_page_url(&directory, space))
+unsafe fn start_url(space: &crate::spaces::SpaceInfo) -> Option<String> {
+    runtime_directory().map(|directory| {
+        rivet_core::start_page_url(&directory, &space.name, space.browser.label(), &space.profile)
+    })
 }
 
 /// The address of the Rivet start page for the space `window` shows.
 pub(crate) unsafe fn start_url_of(window: HWND) -> Option<String> {
-    let space = with_spaces(window, |spaces| spaces.list()[spaces.current()].name.clone());
+    let space = with_spaces(window, |spaces| spaces.list()[spaces.current()].clone());
     start_url(&space)
 }
 
 unsafe fn start_page(window: HWND) {
-    let space = with_spaces(window, |spaces| spaces.list()[spaces.current()].name.clone());
+    let space = with_spaces(window, |spaces| spaces.list()[spaces.current()].clone());
     if let Some(url) = start_url(&space) {
         if crate::chrome_tabs::new_tab(window) {
             crate::chrome_navigation::open(window, &url);
@@ -604,7 +606,7 @@ unsafe fn switch_space(window: HWND, index: usize) {
             .list()
             .get(index)
             .filter(|_| index != spaces.current())
-            .map(|space| space.name.clone())
+            .cloned()
     }) else {
         return;
     };
@@ -627,7 +629,8 @@ unsafe fn switch_space(window: HWND, index: usize) {
         return;
     };
     crate::vertical_tabs::trace(&format!(
-        "space: to {name}, restoring {:?}",
+        "space: to {}, restoring {:?}",
+        name.name,
         restore.iter().map(|tab| tab.url.as_str()).collect::<Vec<_>>()
     ));
     let tint = with_spaces(window, |spaces| spaces.list()[spaces.current()].tint);
@@ -685,9 +688,10 @@ unsafe fn hand_over_to(
 /// Opens `restore` as the window's tabs and closes the tabs `old`, which are the ones shown now,
 /// only afterwards so the window never has zero tabs.
 unsafe fn show_tabs(window: HWND, old: Vec<usize>, restore: &[SavedTab]) {
+    let start = start_url_of(window).unwrap_or_default();
     for tab in restore {
         if crate::chrome_tabs::new_tab(window) && !tab.url.is_empty() {
-            crate::chrome_navigation::open(window, &tab.url);
+            crate::chrome_navigation::open(window, crate::spaces::restored_url(&tab.url, &start));
         }
     }
     let shown: Vec<usize> = crate::chrome_tabs::open_tabs(window)

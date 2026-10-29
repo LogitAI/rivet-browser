@@ -9,7 +9,12 @@ use std::path::PathBuf;
 pub mod session;
 
 /// URL of the local start page shipped alongside Rivet binaries.
-pub fn start_page_url(directory: &std::path::Path, space: &str) -> String {
+pub fn start_page_url(
+    directory: &std::path::Path,
+    space: &str,
+    browser: &str,
+    profile: &str,
+) -> String {
     fn encode(value: &str, path: bool) -> String {
         let mut result = String::new();
         for b in value.bytes() {
@@ -34,9 +39,11 @@ pub fn start_page_url(directory: &std::path::Path, space: &str) -> String {
         "file:///"
     };
     format!(
-        "{prefix}{}?space={}",
+        "{prefix}{}?space={}&browser={}&profile={}",
         encode(&path, true),
-        encode(space, false)
+        encode(space, false),
+        encode(browser, false),
+        encode(profile, false)
     )
 }
 
@@ -196,8 +203,8 @@ mod tests {
     #[test]
     fn fr3_start_page_url_encodes_path_and_space() {
         assert_eq!(
-            start_page_url(std::path::Path::new("C:/Rivet files"), "Work & Play"),
-            "file:///C:/Rivet%20files/start.html?space=Work%20%26%20Play"
+            start_page_url(std::path::Path::new("C:/Rivet files"), "Work & Play", "Edge", "Research"),
+            "file:///C:/Rivet%20files/start.html?space=Work%20%26%20Play&browser=Edge&profile=Research"
         );
     }
 
