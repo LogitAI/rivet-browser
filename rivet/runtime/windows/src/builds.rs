@@ -2225,8 +2225,62 @@ pub static BRAVE: Build = Build {
         ..UNCHECKED_TOOLBAR
     },
     vertical: UNCHECKED_VERTICALTABS,
-    navigation: UNCHECKED_NAVIGATION,
-    tabs: UNCHECKED_TABS,
+    navigation: Navigation {
+        supported: true,
+        content_window_for_hwnd: 0x02EE93A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        browser_view_for_window: 0x0CF09280, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
+        active_web_contents: 0x0CF09730, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        gurl_from_text: 0x0609D7A0, // ??0GURL@@QEAA@V?$basic_string_view@DU?$char_traits@D@__Cr@std@@@__Cr@std@@@Z
+        gurl_empty: 0x06A5E800, // ??0GURL@@QEAA@XZ
+        gurl_drop: 0x0515D0D0, // ??1GURL@@QEAA@XZ
+        open_url_params: 0x0857FB20, // ??0OpenURLParams@content@@QEAA@AEBVGURL@@AEBUReferrer@1@W4WindowOpenDisposition@@W4PageTransition@ui@@_N@Z
+        open_url_params_drop: 0x01FC71B0, // ??1OpenURLParams@content@@QEAA@XZ
+        open_url: 0x0972ED60, // ?OpenURL@WebContentsImpl@content@@UEAAPEAVWebContents@2@AEBUOpenURLParams@2@V?$OnceCallback@...@Z
+        signatures: &[
+            (0x02EE93A0, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x0CF09280, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0609D7A0, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]),
+            (0x06A5E800, &[0x48, 0x89, 0xC8, 0x0F, 0x57, 0xC0]),
+            (0x0515D0D0, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28]),
+            (0x0857FB20, &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53]),
+            (0x01FC71B0, &[0x41, 0x56, 0x56, 0x57, 0x53]),
+            (0x0972ED60, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57]),
+            (0x0CF09730, &[0x48, 0x8B, 0x81, 0x60, 0x05, 0x00, 0x00]),
+        ],
+    },
+    tabs: Tabs {
+        supported: true, // list, switch, close and new tab; groups are not read
+        content_window_for_hwnd: 0x02EE93A0,
+        browser_view_for_window: 0x0CF09280,
+        active_web_contents: 0x0CF09730,
+        browser_in_view: 0x560, // the field `GetActiveWebContents` reads first
+        groups: false,
+        get_tab_model: 0x063A9C70, // ?GetTabStripModel@Browser@@UEAAPEAVTabStripModel@@XZ, `mov rax, [rcx + 0x30]; ret`
+        tab_count: 0x039AD7B0, // ?count@TabStripModel@@QEBAHXZ
+        tab_at: 0x00B0DDC0, // ?GetWebContentsAt@TabStripModel@@QEBAPEAVWebContents@content@@H@Z
+        activate_tab: 0x0B4DAF50, // ?ActivateTabAt@TabStripModel@@QEAAXHUTabStripUserGestureDetails@@@Z
+        close_tab: 0x0B4DDC20, // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
+        title: 0x01029360, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator@_S@23@@__Cr@std@@XZ
+        new_tab: 0x0B3DA400, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
+        last_committed_url: 0x06B1CB70, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
+        visible_url: 0x00B27C70, // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
+        get_group: 0x02E99DE0, // ?GetTabGroupForTab@TabStripModel@@QEBA?AV?$optional@VTabGroupId@tab_groups@@@__Cr@std@@H@Z
+        signatures: &[
+            (0x02EE93A0, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x0CF09280, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0CF09730, &[0x48, 0x8B, 0x81, 0x60, 0x05, 0x00, 0x00]),
+            (0x063A9C70, &[0x48, 0x8B, 0x41, 0x30, 0xC3]),
+            (0x039AD7B0, &[0x48, 0x8B, 0x41, 0x08, 0x8B, 0x40, 0x20]),
+            (0x00B0DDC0, &[0x48, 0x83, 0xEC, 0x28, 0x85, 0xD2]),
+            (0x0B4DAF50, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38]),
+            (0x0B4DDC20, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28]),
+            (0x01029360, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x48]),
+            (0x0B3DA400, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57]),
+            (0x06B1CB70, &[0x48, 0x63, 0x81, 0xD4, 0x02, 0x00, 0x00]),
+            (0x00B27C70, &[0x48, 0x8B, 0x81, 0xB0, 0x02, 0x00, 0x00]),
+        ],
+        ..UNCHECKED_TABS
+    },
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
     side_panel: UNCHECKED_SIDEPANEL,
@@ -2482,7 +2536,7 @@ mod tests {
     fn nfr3_brave_156_frame_hooks_match_the_installed_build() {
         assert_eq!(BRAVE.version, [156, 1, 98, 62]);
         assert_eq!(BRAVE.toolbar.skip, "toolbar");
-        assert!(!BRAVE.vertical.supported && !BRAVE.tabs.supported && !BRAVE.navigation.supported);
+        assert!(!BRAVE.vertical.supported && BRAVE.tabs.supported && !BRAVE.tabs.groups && BRAVE.navigation.supported);
         assert!(!BRAVE.split.supported && !BRAVE.side_panel.supported && !BRAVE.vertical.detour_strip);
         // Brave's frame is its own subclass, so the vtable is not Chrome's.
         assert_ne!(BRAVE.layout.frame_vtable, CHROME.layout.frame_vtable);
@@ -2511,6 +2565,9 @@ mod tests {
                 Some(prologue),
                 "{name} prologue does not match Brave's chrome.dll"
             );
+        }
+        for (rva, bytes) in BRAVE.tabs.signatures.iter().chain(BRAVE.navigation.signatures) {
+            assert_eq!(file_bytes(&file, *rva, bytes.len()).as_deref(), Some(*bytes), "signature at {rva:#x}");
         }
         // Each replaced slot holds the function the row names, at the vtable the objects carry.
         for (name, vtable, slot, function) in [
