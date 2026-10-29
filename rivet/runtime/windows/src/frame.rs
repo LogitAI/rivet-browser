@@ -1828,7 +1828,9 @@ unsafe extern "system" fn browser_proc(
 ) -> LRESULT {
     // The browser lays out and paints parts of a window while handling its messages, so they run
     // in that window's look.
-    if attached(window) {
+    // Accessibility queries can arrive while the window is still being built or torn down and
+    // never draw, so they skip the scope.
+    if attached(window) && message != windows_sys::Win32::UI::WindowsAndMessaging::WM_GETOBJECT {
         return crate::chrome_toolbar::for_window(window, || {
             handle(window, message, wparam, lparam)
         });

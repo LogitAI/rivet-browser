@@ -522,6 +522,24 @@ fn first_swap(id: i32) -> bool {
     true
 }
 
+/// Whether `view` looks like a live browser object: aligned, and its first word points into the
+/// browser module, where every views vtable lives.
+unsafe fn is_live_view(view: usize) -> bool {
+    use windows_sys::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT};
+    if view % 8 != 0 || view < 0x10000 || view > 0x7FFF_FFFF_FFFF {
+        return false;
+    }
+    let mut info: MEMORY_BASIC_INFORMATION = std::mem::zeroed();
+    if VirtualQuery(view as *const c_void, &mut info, std::mem::size_of_val(&info)) == 0
+        || info.State != MEM_COMMIT
+        || info.Protect & 0xEE == 0
+    {
+        return false;
+    }
+    let table = *(view as *const usize);
+    image::recorded().is_some_and(|image| table >= image.base && table < image.base + image.size)
+}
+
 unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
     if CURRENT.with(Cell::get) == widget && SOURCE.with(Cell::get) == source {
         return;
@@ -537,7 +555,9 @@ unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
         return;
     }
     let root = *((source + ROOT_VIEW_OFFSET) as *const *mut c_void);
-    if root.is_null() {
+    // A widget that is still being built or already torn down can hold a root view that is not a
+    // live view, and asking it for its colours would read freed memory.
+    if root.is_null() || !is_live_view(root as usize) {
         return;
     }
     let provider = (hooks.provider)(root);
