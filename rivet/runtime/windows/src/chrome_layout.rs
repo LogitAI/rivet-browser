@@ -365,9 +365,39 @@ type OnPaint = unsafe extern "system" fn(*const c_void, *const c_void);
 type GetProvider = unsafe extern "system" fn(*const c_void) -> *const u8;
 type DrawColor = unsafe extern "system" fn(*const c_void, u32);
 static PAINT: OnceLock<(OnPaint, GetProvider, DrawColor, Paint)> = OnceLock::new();
-unsafe fn colour_slot(provider: *const u8, id: i32) -> Option<*mut u32> {
+/// Whether `length` bytes at `address` are committed, readable and writable memory, and the address
+/// is pointer aligned.
+fn readable(address: usize, length: usize) -> bool {
+    use windows_sys::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT};
+    if address < 0x10000 || address % 8 != 0 || address > 0x7FFF_FFFF_0000 {
+        return false;
+    }
+    let Some(last) = address.checked_add(length) else { return false };
+    let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+    let got = unsafe { VirtualQuery(address as *const c_void, &mut info, std::mem::size_of_val(&info)) };
+    // Readable or writable, and neither a guard page nor no-access.
+    got != 0
+        && info.State == MEM_COMMIT
+        && info.Protect & 0xEE != 0
+        && info.Protect & 0x101 == 0
+        && last <= info.BaseAddress as usize + info.RegionSize
+}
+
+/// Finds the node for colour `id` in the provider's tree, reading nothing that `valid` rejects.
+/// A node whose pointer is bad ends the walk with `None`, and so does a tree deeper than any real
+/// one, which a cycle would be.
+unsafe fn find_slot(provider: *const u8, id: i32, valid: &dyn Fn(usize, usize) -> bool) -> Option<*mut u32> {
+    if !valid(provider as usize + 0x18, 8) {
+        return None;
+    }
     let mut node = *(provider.add(0x18) as *const *mut u8);
-    while !node.is_null() {
+    for _ in 0..512 {
+        if node.is_null() {
+            return None;
+        }
+        if !valid(node as usize, 0x28) {
+            return None;
+        }
         let key = *(node.add(0x20) as *const i32);
         if key == id {
             return Some(node.add(0x24) as *mut u32);
@@ -381,12 +411,26 @@ unsafe fn colour_slot(provider: *const u8, id: i32) -> Option<*mut u32> {
     None
 }
 
+unsafe fn colour_slot(provider: *const u8, id: i32) -> Option<*mut u32> {
+    if !bv().provider_verified {
+        return None;
+    }
+    find_slot(provider, id, &readable)
+}
+
 /// The provider's slots for the colours the frame paints with. A provider makes a colour the first
-/// time it is asked for it, so one that is missing is asked for before its slot is read.
+/// time it is asked for it, so one that is missing is asked for before its slot is read. A build
+/// whose provider layout is not verified yields no slots, so nothing is created or swapped.
 unsafe fn frame_slots(provider: *const u8) -> Vec<(*mut u32, u32)> {
-    let get_color = image::recorded().map(|image| {
-        std::mem::transmute::<usize, unsafe extern "system" fn(*const u8, i32) -> u32>(image.base + crate::builds::get().toolbar.get_color)
-    });
+    if !bv().provider_verified {
+        return Vec::new();
+    }
+    let get_color = (crate::builds::get().toolbar.get_color != crate::builds::ABSENT)
+        .then(|| image::recorded())
+        .flatten()
+        .map(|image| {
+            std::mem::transmute::<usize, unsafe extern "system" fn(*const u8, i32) -> u32>(image.base + crate::builds::get().toolbar.get_color)
+        });
     bv().frame_ids
         .iter()
         .filter_map(|id| {
@@ -461,6 +505,9 @@ unsafe fn install_corner_paint(image: &Image) -> Result<(), String> {
 pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
     if PAINT.get().is_some() {
         return Ok(());
+    }
+    if !bv().provider_verified {
+        return Err("this browser build has no verified colour provider layout".into());
     }
     let image = recorded_image()?;
     let slot_rva = bv().frame_vtable + bv().on_paint_slot * 8;
@@ -729,6 +776,9 @@ unsafe extern "system" fn caption_paint(button: *const c_void, canvas: *const c_
 pub unsafe fn install_caption_paint() -> Result<(), String> {
     if CAPTION_PAINT_HOOK.get().is_some() {
         return Ok(());
+    }
+    if !bv().provider_verified {
+        return Err("this browser build has no verified colour provider layout".into());
     }
     let image = recorded_image()?;
     let slot_rva = bv().caption_vtable + bv().caption_paint_slot * 8;
@@ -1027,3 +1077,66 @@ pub unsafe fn install_caption_layout(height: CaptionHeight) -> Result<(), String
     replace_vtable_slot(&image, slot_rva, bv().layout, frame_layout as *const () as usize, "frame view vtable")
 }
 
+
+#[cfg(test)]
+mod provider_guard_tests {
+    use super::*;
+
+    /// A node: left, right, 8 bytes of padding, then the id and the colour at +0x20 and +0x24.
+    #[repr(C)]
+    struct Node {
+        left: *mut Node,
+        right: *mut Node,
+        pad: [u64; 2],
+        id: i32,
+        colour: u32,
+        tail: u64,
+    }
+
+    fn node(id: i32, colour: u32) -> Node {
+        Node { left: std::ptr::null_mut(), right: std::ptr::null_mut(), pad: [0; 2], id, colour, tail: 0 }
+    }
+
+    #[test]
+    fn nfr3_tree_walk_finds_a_colour_and_refuses_bad_pointers() {
+        let mut leaf = node(5, 0xff00_ff00);
+        let mut root = node(3, 1);
+        root.right = &mut leaf;
+        let mut provider = [0u64; 4];
+        provider[3] = &mut root as *mut Node as u64;
+        let any = |_: usize, _: usize| true;
+        unsafe {
+            let found = find_slot(provider.as_ptr() as *const u8, 5, &any).expect("slot");
+            assert_eq!(found.read(), 0xff00_ff00);
+            assert!(find_slot(provider.as_ptr() as *const u8, 9, &any).is_none());
+            // A validator that rejects the node ends the walk without reading it.
+            let reject_nodes = |address: usize, _: usize| address != &root as *const Node as usize;
+            assert!(find_slot(provider.as_ptr() as *const u8, 5, &reject_nodes).is_none());
+            // A node pointing at itself is cut off.
+            root.right = &mut root;
+            assert!(find_slot(provider.as_ptr() as *const u8, 9, &any).is_none());
+        }
+    }
+
+    #[test]
+    fn nfr3_readable_rejects_bad_addresses() {
+        assert!(!readable(0, 8));
+        assert!(!readable(usize::MAX, 8));
+        assert!(!readable(0xffff_ffff_ffff_fff8, 8));
+        assert!(!readable(0x1234_5678, 8));
+        let value = Box::new(0u64);
+        assert!(readable(&*value as *const u64 as usize, 8));
+        assert!(!readable(&*value as *const u64 as usize + 1, 8));
+    }
+
+    #[test]
+    fn nfr3_only_builds_with_a_recorded_get_color_may_create_colours() {
+        for build in crate::builds::all() {
+            let creates = build.toolbar.get_color != crate::builds::ABSENT;
+            if build.layout.frame_ids.is_empty() {
+                assert!(!build.layout.provider_verified, "{}", build.browser);
+            }
+            assert!(!creates || build.layout.provider_verified, "{}", build.browser);
+        }
+    }
+}

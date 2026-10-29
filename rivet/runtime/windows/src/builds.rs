@@ -581,6 +581,10 @@ pub struct Layout {
     ///
     /// `views::View::GetColorProvider` returns the provider. It keeps generated colours in a tree
     /// whose nodes hold the colour id at `+0x20` and the colour at `+0x24`.
+    /// Whether the colour provider's tree layout (head at +0x18, id at +0x20, colour at +0x24) and
+    /// `toolbar.get_color` were checked on this build. Only then does Rivet read, create or swap
+    /// provider colours. A build that is not verified paints the browser's own frame.
+    pub provider_verified: bool,
     pub on_paint_slot: usize,
     pub on_paint: usize,
     pub get_color_provider: usize,
@@ -942,6 +946,7 @@ const UNCHECKED_SIDEPANEL: SidePanel = SidePanel {
 /// A layout section that records no address, so every frame hook stays off.
 const UNCHECKED_LAYOUT: Layout = Layout {
     on_paint_slot: 0,
+    provider_verified: false,
     on_paint: ABSENT,
     get_color_provider: ABSENT,
     draw_color: ABSENT,
@@ -1485,6 +1490,7 @@ pub static CHROME: Build = Build {
     },
     layout: Layout {
         on_paint_slot: 89,
+        provider_verified: true,
         on_paint: 0x011B_5610, // ?OnPaint@BrowserFrameViewWin@@MEAAXPEAVCanvas@gfx@@@Z
         get_color_provider: 0x04AA_27D0, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
         draw_color: 0x036B_AD80, // ?DrawColor@Canvas@gfx@@QEAAXI@Z
@@ -1937,6 +1943,7 @@ pub static EDGE: Build = Build {
     },
     layout: Layout {
         on_paint_slot: 101,
+        provider_verified: true,
         on_paint: 0x02B44110, // ?OnPaint@BrowserFrameViewWin@@MEAAXPEAVCanvas@gfx@@@Z
         get_color_provider: 0x01003060, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
         draw_color: 0x02A3F86A, // ?DrawColor@Canvas@gfx@@QEAAXI@Z
@@ -2045,6 +2052,7 @@ pub static CHROME_150: Build = Build {
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
+        provider_verified: true,
         on_paint: 0x13a4880,
         get_color_provider: 0x421ccb0,
         draw_color: 0x3192520,
@@ -2151,6 +2159,7 @@ pub static WHALE: Build = Build {
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
+        provider_verified: true, // the tree walk is checked on 5.39.412.57; `toolbar.get_color` is not mapped, so no colour is created
         on_paint: 0xe2f3b70,
         on_paint_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89],
         get_color_provider: 0x8f819d0,
@@ -2312,6 +2321,22 @@ mod tests {
         // Colour ids and View member offsets moved between milestones 150 and 156.
         assert_eq!(CHROME_150.layout.caption_ink_ids, &[1593, 1594, 1595]);
         assert_eq!(CHROME_150.layout.view_bounds_offset, 0x1C0);
+    }
+
+    #[test]
+    fn nfr3_provider_colours_are_only_touched_on_verified_builds() {
+        // Whale's provider is only read: creating a colour needs a recorded GetColor, which it lacks.
+        assert!(WHALE.layout.provider_verified);
+        assert!(CHROME.layout.provider_verified && EDGE.layout.provider_verified);
+        for build in all() {
+            if build.layout.provider_verified {
+                assert_ne!(build.layout.get_color_provider, ABSENT, "{}", build.browser);
+            }
+        }
+        // Creating a colour calls GetColor, so it needs a recorded address.
+        assert_eq!(WHALE.toolbar.get_color, ABSENT);
+        assert_ne!(CHROME.toolbar.get_color, ABSENT);
+        assert_ne!(EDGE.toolbar.get_color, ABSENT);
     }
 
     #[test]
