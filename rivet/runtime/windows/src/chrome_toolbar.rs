@@ -308,7 +308,7 @@ const SELECTION: u32 = 0xFFE3_D0C2;
 /// Keyboard focus keeps a visible ring, in ink instead of the browser's blue.
 const FOCUS_RING: u32 = 0x661F_2024;
 /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
-const COLOURS: [(i32, u32); 48] = [
+const COLOURS: [(i32, u32); 49] = [
     (0x13C, PAPER),      // kColorFrameActive
     (796, PAPER),        // kColorLocationBarBackground
     (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
@@ -339,6 +339,7 @@ const COLOURS: [(i32, u32); 48] = [
     (1043, INK),         // kColorOmniboxResultsTextSelected
     (1044, 0xFF4A_4850), // kColorOmniboxResultsUrl
     (1045, INK),         // kColorOmniboxResultsUrlSelected
+    (1052, SOFT_INK),    // kColorOmniboxSecurityChipText: the icon of the field while editing
     (1053, SELECTION),   // kColorOmniboxSelectionBackground: the accent at 25 percent over paper
     (1054, INK),         // kColorOmniboxSelectionForeground
     (1046, 0xFFB3_261E), // kColorOmniboxSecurityChipDangerous: the "Not secure" label and its warning
@@ -998,7 +999,6 @@ unsafe extern "system" fn update_text_style(
         .iter()
         .find(|(known, display)| *known == widget && display.text == shown)
         .map(|(_, display)| display.clone());
-    let Some(display) = display else { return };
     let holder = *((textfield + TEXTFIELD_RENDER_TEXT) as *const usize);
     if holder == 0 {
         return;
@@ -1011,6 +1011,12 @@ unsafe extern "system" fn update_text_style(
         std::mem::transmute(hooks.base + APPLY_COLOR);
     let apply_weight: unsafe extern "system" fn(usize, u32, *const [u32; 2]) =
         std::mem::transmute(hooks.base + APPLY_WEIGHT);
+    // The text of an address being edited is the plain address: one weight and Chrome's colours,
+    // not what the title of the resting text left behind.
+    let Some(display) = display else {
+        apply_weight(render_text, WEIGHT_NORMAL, &[0, shown.len() as u32]);
+        return;
+    };
     let all = [0, display.text.len() as u32];
     apply_colour(render_text, ADDRESS_COLOUR, &all);
     apply_weight(render_text, WEIGHT_NORMAL, &all);
@@ -1736,8 +1742,9 @@ unsafe fn patch() -> Result<Hooks, String> {
         return Err("this browser build has other toolbar functions".into());
     }
     // The icons are read through their addresses, so each must lie inside the image.
-    if [BACK_ICON, FORWARD_ICON, RELOAD_ICON, PAGE_INFO_ICON]
+    if [BACK_ICON, FORWARD_ICON, RELOAD_ICON, PAGE_INFO_ICON, GOOGLE_G_ICON, GOOGLE_G_MONOCHROME_ICON]
         .iter()
+        .chain(EDIT_ICONS.iter())
         .any(|rva| image.at(*rva, std::mem::size_of::<VectorIcon>()).is_none())
         || image.at(0x10F5_D438, std::mem::size_of::<IconRep>()).is_none()
     {
@@ -2069,9 +2076,9 @@ const QUADRATIC_TO: u32 = 20;
 
 /// Chrome builds the page info icon as an 18 DIP image of a 16 DIP canvas. The marks are drawn on
 /// an 18 DIP canvas instead, so that one unit is one DIP, centred 9.1 DIPs from the left edge and
-/// 6.8 from the top, which is where the Rivet design puts its 13 DIP glyphs.
+/// 7.8 from the top, which is where the Rivet design puts its 13 DIP glyphs.
 const MARK_X: f32 = 9.1;
-const MARK_Y: f32 = 6.8;
+const MARK_Y: f32 = 7.8;
 const MARK_CANVAS: f32 = 18.0;
 
 fn mark(path: &mut Vec<PathElement>, x1: f32, y1: f32, x2: f32, y2: f32) {
@@ -2088,6 +2095,14 @@ fn info_path() -> Vec<PathElement> {
     path.extend([op(CIRCLE), at(MARK_X), at(MARK_Y), at(5.75)]);
     mark(&mut path, 0.0, -2.7, 0.0, -2.65);
     mark(&mut path, 0.0, -0.6, 0.0, 2.7);
+    path
+}
+
+/// The magnifier of the field while editing: a 10 DIP lens and a short handle.
+fn search_path() -> Vec<PathElement> {
+    let mut path = mark_canvas();
+    path.extend([op(CIRCLE), at(MARK_X - 1.0), at(MARK_Y - 1.0), at(4.9)]);
+    mark(&mut path, 2.5, 2.5, 5.7, 5.7);
     path
 }
 
@@ -2225,6 +2240,12 @@ const BACK_ICON: usize = 0x10E0_2EA8;
 const FORWARD_ICON: usize = 0x10E0_55C0;
 const RELOAD_ICON: usize = 0x10E0_7DD0;
 const PAGE_INFO_ICON: usize = 0x10F5_D470;
+/// The Google G logos Chrome shows in the field while a person edits it, in colour and in one
+/// colour. The design shows a magnifier there.
+const GOOGLE_G_ICON: usize = 0x10E0_A3F0;
+const GOOGLE_G_MONOCHROME_ICON: usize = 0x10E0_A438;
+/// The globe Chrome shows for an address being edited, and its search icons.
+const EDIT_ICONS: [usize; 5] = [0x10E0_5680, 0x10E0_56B8, 0x10E0_8278, 0x10E0_82C0, 0x10E0_82F8];
 /// `kHttpChromeRefreshOldIcon`, which Chrome shows for local files as well as for plain HTTP.
 const HTTP_ICON: usize = 0x10F5_CE60;
 /// The key of the information mark in `ICONS`, which replaces the HTTP icon on local pages.
@@ -2247,8 +2268,11 @@ unsafe fn build_icons(base: usize) {
             (PAGE_INFO_ICON, leak(lock_path())),
             (HTTP_ICON, leak(warning_path())),
             (LOCAL_PAGE_ICON, leak(info_path())),
+            (GOOGLE_G_ICON, leak(search_path())),
+            (GOOGLE_G_MONOCHROME_ICON, leak(search_path())),
         ]
         .into_iter()
+        .chain(EDIT_ICONS.map(|rva| (rva, leak(search_path()))))
         .map(|(rva, path)| {
             let rep: &'static IconRep = Box::leak(Box::new(IconRep {
                 path: path.as_ptr(),
