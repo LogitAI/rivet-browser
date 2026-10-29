@@ -2685,7 +2685,7 @@ mod tests {
     }
 
     #[test]
-    fn nfr3_samsung_maps_only_the_frame_hooks_and_matches_the_installed_build() {
+    fn nfr3_samsung_frame_and_tab_hooks_match_the_installed_build() {
         assert_eq!(SAMSUNG.module, "samsunginternet.dll");
         assert_eq!(SAMSUNG.version, [30, 0, 4, 29]);
         assert_eq!(SAMSUNG.toolbar.skip, "toolbar");
