@@ -208,6 +208,9 @@ pub struct Toolbar {
     /// differs from what it asked for, so a button kept hidden behind its back loops forever. Its views
     /// stay visible and ask for no room instead, and nothing of them is drawn.
     pub size_slots: (usize, usize),
+    /// The vtable slot of `PaintChildren`, which a hidden view skips: a view's children are not clipped
+    /// to it, so the children of a view with no room would still be drawn. Zero when unused.
+    pub paint_children_slot: usize,
     /// `views::View::GetWidget` is the twelfth entry of every view's vtable.
     pub get_widget_slot: usize,
     /// `LayoutConstant` values of this build and the sizes of the Rivet top row, in DIPs.
@@ -286,10 +289,6 @@ pub struct EdgeVertical {
     pub toolbar_vtable: usize,
     pub caption_gap: i32,
     pub top_inset_adjust: i32,
-    /// The container's `views::View` vtable and the slot of `View::PaintChildren` in it.
-    pub container_vtable: usize,
-    pub paint_children_slot: usize,
-    pub paint_children: usize,
     /// Where the browser view keeps its container view, and where that keeps its state.
     pub container_offset: usize,
     pub state_offset: usize,
@@ -785,6 +784,7 @@ pub static CHROME: Build = Build {
     ],
         get_widget_slot: 11,
         size_slots: (0, 0),
+        paint_children_slot: 0,
         overrides: &[
         (12, 8),  // kLocationBarChildCornerRadius
         (16, 28), // kLocationBarHeight
@@ -1249,9 +1249,17 @@ pub static EDGE: Build = Build {
                 (0x1191FB58, 0x00FDE2C0), // EdgeCopilotToolbarSplitButtonContainer
                 (0x11811CB8, 0x02E8BD60), // ToolbarHubIconContainerView
                 (0x11894A78, 0x02B70B40), // HomeButton
+                (0x118CB818, 0x00FDE2C0), // page_actions::PageActionContainerView
+                (0x11918C58, 0x00FDE2C0), // EdgePageActionIconContainerView: translate, reader mode, favorite
+                (0x11936E78, 0x02B70B40), // HubToggleToolbarButton
+                (0x11873498, 0x02A1F9F0), // ContentSettingImageView: cookies, pop-ups and the like
+                (0x1191F5B8, 0x02E3FF50), // EdgeCopilotToolbarLabelButton, the chat button inside the address field
+                (0x119498F8, 0x02B70B40), // EdgeCopilotDropdownMenuButton
+                (0x11817938, 0x033CA380), // BookmarkBarView, which the design has no row for
             ],
         get_widget_slot: 10,
         size_slots: (86, 15),
+        paint_children_slot: 100,
         overrides: &[], // Edge numbers its layout constants differently; filled in once traced
         colours: &[
         (0x13C, PAPER),      // kColorFrameActive
@@ -1565,9 +1573,6 @@ pub static EDGE: Build = Build {
         toolbar_vtable: 0x1180FCB8,
         caption_gap: 25,
         top_inset_adjust: -8,
-        container_vtable: 0x1181E578,
-        paint_children_slot: 100,
-        paint_children: 0x0109C270,
         container_offset: 0x958,
         state_offset: 0x610,
     }),
@@ -1693,5 +1698,23 @@ mod tests {
         // again whenever a button's visibility differs from the one it asked for.
         assert_ne!(EDGE.toolbar.size_slots, (0, 0));
         assert_eq!(CHROME.toolbar.size_slots, (0, 0));
+    }
+
+    #[test]
+    fn fr12_edge_hides_every_toolbar_view_the_design_has_no_row_for() {
+        let hidden: Vec<usize> = EDGE.toolbar.hidden.iter().map(|(vtable, _)| *vtable).collect();
+        for (vtable, name) in [
+            (0x11892678, "settings menu"),
+            (0x1191FEF8, "profile"),
+            (0x1191FB58, "Copilot"),
+            (0x11811CB8, "favorites and collections hub"),
+            (0x1181E578, "vertical tab strip"),
+            (0x11918C58, "translate, reader and favorite icons"),
+            (0x1191F5B8, "chat button in the address field"),
+        ] {
+            assert!(hidden.contains(&vtable), "{name} is not hidden");
+        }
+        // A hidden class reads its own theme function, which is never the zero address.
+        assert!(EDGE.toolbar.hidden.iter().all(|(_, theme)| *theme != 0));
     }
 }

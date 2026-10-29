@@ -97,7 +97,6 @@ unsafe fn detour(
 
 static ORIGINAL_PREFERRED: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_MINIMUM: AtomicUsize = AtomicUsize::new(0);
-static ORIGINAL_PAINT_CHILDREN: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_SET_BOUNDS: AtomicUsize = AtomicUsize::new(0);
 
 /// The x of a view in window coordinates: its own and every ancestor's.
@@ -141,6 +140,14 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
     let original: Original = std::mem::transmute(ORIGINAL_SET_BOUNDS.load(Ordering::Acquire));
     let (Some(edge), Some(image)) = (bv(), image::recorded()) else { return original(view, rect) };
     let mut moved = *rect;
+    // A hidden view that the browser places itself, such as the chat button inside the address field,
+    // is put out of the window: its layout asks it for no room, but a view paints its children and
+    // layers wherever it is, so size alone does not hide it.
+    if !skipped("edgebounds") && crate::chrome_toolbar::is_hidden_view(view) {
+        // Moved out of the window, with its children and any layer they paint into.
+        moved[0] -= 20000;
+        return original(view, &moved);
+    }
     if is_rivet_container(view as usize) && !skipped("edgebounds") {
         moved[0] -= 20000;
         return original(view, &moved);
@@ -181,16 +188,6 @@ unsafe fn is_rivet_view_tree(view: usize) -> bool {
     false
 }
 
-/// The strip's children lie outside its zero width and a view does not clip them, so a Rivet
-/// window's strip paints none.
-unsafe extern "system" fn paint_children(container: *mut c_void, info: *const c_void) {
-    if is_rivet_container(container as usize) {
-        return;
-    }
-    let original: unsafe extern "system" fn(*mut c_void, *const c_void) =
-        std::mem::transmute(ORIGINAL_PAINT_CHILDREN.load(Ordering::Acquire));
-    original(container, info)
-}
 
 /// A Rivet window's strip asks for no width: the appbar takes its place, and the browser lays the
 /// toolbar and the page out from the appbar's edge.
@@ -258,13 +255,7 @@ pub unsafe fn install() -> Result<(), String> {
                 detour(image.base, edge.set_bounds_rect, edge.set_bounds_rect_prologue, None, set_bounds_rect as *const () as usize)?,
                 Ordering::Release,
             );
-            let slot = edge.container_vtable + edge.paint_children_slot * 8;
-            if !image.points_to(slot, edge.paint_children) {
-                return Err("the strip's paint slot is not the recorded function".into());
-            }
-            let slot = image.at(slot, 8).ok_or("slot outside the image")? as *mut usize;
-            ORIGINAL_PAINT_CHILDREN.store(slot.read(), Ordering::Release);
-            crate::chrome_toolbar::replace_slot(slot, paint_children as *const () as usize)
+            Ok(())
         })
         .clone()
 }
@@ -387,10 +378,11 @@ pub unsafe fn dump_children(view: usize, depth: usize) {
         let bounds = *((child + 0x1C8) as *const [i32; 4]);
         let visible = *((child + 0x1D8) as *const u8);
         crate::vertical_tabs::trace(&format!(
-            "{}child {child:#x} vtable {table:#x} bounds {bounds:?} visible {visible}",
-            "  ".repeat(depth)
+            "{}child {child:#x} vtable {table:#x} bounds {bounds:?} visible {visible} windowx {}",
+            "  ".repeat(depth),
+            window_x(child)
         ));
-        if depth < 2 {
+        if depth < 4 {
             dump_children(child, depth + 1);
         }
     }

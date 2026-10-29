@@ -252,6 +252,8 @@ unsafe fn is_live_view(view: usize) -> bool {
     image::recorded().is_some_and(|image| table >= image.base && table < image.base + image.size)
 }
 
+static COLOURS_DUMPED: AtomicBool = AtomicBool::new(false);
+
 unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
     if CURRENT.with(Cell::get) == widget && SOURCE.with(Cell::get) == source {
         return;
@@ -275,6 +277,9 @@ unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
     let provider = (hooks.provider)(root);
     if provider.is_null() {
         return;
+    }
+    if crate::vertical_tabs::tracing() && crate::edge_vertical::skipped("colours") && !COLOURS_DUMPED.swap(true, Ordering::Relaxed) {
+        dump_colours(provider);
     }
     SWAPPED.with(|swapped| {
         let mut swapped = swapped.borrow_mut();
@@ -1210,6 +1215,11 @@ unsafe fn hidden_here(hooks: &Hooks, view: *mut c_void) -> bool {
     is_rivet(get_widget(view) as usize)
 }
 
+/// Whether `view` is one of the views a Rivet window hides.
+pub(crate) unsafe fn is_hidden_view(view: *mut c_void) -> bool {
+    hooks().is_some_and(|hooks| hidden_here(hooks, view))
+}
+
 unsafe extern "system" fn set_visible(view: *mut c_void, visible: bool) {
     let run = original::<SetVisible>(&ORIGINAL_SET_VISIBLE);
     let hide = visible && hooks().is_some_and(|hooks| hidden_here(hooks, view));
@@ -1247,6 +1257,16 @@ unsafe fn hide_view(view: *mut c_void) {
         // The toolbar lays out again on the next pass.
         invalidate_layout_of(view);
     }
+}
+
+unsafe extern "system" fn hidden_paint_children(view: *mut c_void, info: *const c_void) {
+    let table = *(view as *const usize);
+    let Some(function) = own_size(table, bv().paint_children_slot) else { return };
+    if hooks().is_some_and(|hooks| hidden_here(hooks, view)) {
+        return;
+    }
+    let run: unsafe extern "system" fn(*mut c_void, *const c_void) = std::mem::transmute(function);
+    run(view, info)
 }
 
 type SizeOf = unsafe extern "system" fn(*mut c_void, *mut [i32; 2], usize) -> *mut c_void;
@@ -1819,6 +1839,7 @@ unsafe fn slots(base: usize, skip: &str) -> Result<(), String> {
             for (slot_index, hook) in [
                 (bv().size_slots.0, hidden_preferred_size as usize),
                 (bv().size_slots.1, hidden_minimum_size as usize),
+                (bv().paint_children_slot, hidden_paint_children as usize),
             ] {
                 let slot = ((base + vtable) as *mut usize).add(slot_index);
                 let held = *slot;
