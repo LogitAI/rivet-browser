@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use crate::chrome_layout::Rect;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::Memory::{
-    VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, PAGE_READWRITE,
+    VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
 };
 
 use crate::chrome_tabs::{base, function, tab_model};
@@ -513,12 +513,6 @@ unsafe extern "system" fn calculate_layout(
         request_relayout(view as usize);
     }
     splits.push((widget, SplitPanes { view: view as usize, gap, rects }));
-    if gap != 0 && *(gap as *const usize) == base().unwrap_or(0) + RESIZE_AREA_VTABLE {
-        paint_to_layer(gap);
-        if changed {
-            repaint(gap);
-        }
-    }
     result
 }
 
@@ -591,70 +585,6 @@ unsafe extern "system" fn container_layout(
         }
     }
     result
-}
-
-/// `MultiContentsResizeArea`'s primary vtable, where slot 89 is `views::View::OnPaint`. The area
-/// sits in the gap between two pages.
-const RESIZE_AREA_VTABLE: usize = 0x0FEC_C008;
-const ON_PAINT_SLOT: usize = 89;
-const VIEW_ON_PAINT: usize = 0x052F_6F0;
-type OnPaint = unsafe extern "system" fn(*mut c_void, *mut c_void);
-
-/// `views::View::SetPaintToLayer(this, ui::LayerType)`. The split's background is a solid layer
-/// over everything the split view itself paints, so the gap can only show something that has a
-/// layer of its own, above it.
-const SET_PAINT_TO_LAYER: usize = 0x00F0_5F10;
-const SET_PAINT_TO_LAYER_PROLOGUE: [u8; 13] =
-    [0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x89, 0xd7, 0x48, 0x89, 0xce, 0x80, 0xb9];
-const LAYER_TEXTURED: u32 = 1;
-
-unsafe fn paint_to_layer(view: usize) {
-    let Some(base) = base() else { return };
-    let code = std::slice::from_raw_parts((base + SET_PAINT_TO_LAYER) as *const u8, 13);
-    if view != 0 && code == SET_PAINT_TO_LAYER_PROLOGUE {
-        function::<unsafe extern "system" fn(*mut c_void, u32)>(base, SET_PAINT_TO_LAYER)(
-            view as *mut c_void,
-            LAYER_TEXTURED,
-        );
-    }
-}
-
-/// The gap between the pages is Rivet's paper with the pages' shadows on it.
-unsafe extern "system" fn resize_area_paint(view: *mut c_void, canvas: *mut c_void) {
-    let base = base().unwrap_or(0);
-    let original: OnPaint = std::mem::transmute(base + VIEW_ON_PAINT);
-    original(view, canvas);
-    let widget = crate::chrome_toolbar::widget_holding(view);
-    if !crate::chrome_toolbar::is_rivet(widget) {
-        return;
-    }
-    let splits = SPLITS.lock().unwrap_or_else(|error| error.into_inner());
-    if let Some((_, split)) = splits
-        .iter()
-        .find(|(key, split)| *key == widget && split.gap == view as usize)
-    {
-        let active = *((split.view + ACTIVE_MEMBER) as *const i32);
-        // The area's bounds are the gap, so the pages move to its own coordinates.
-        let Some(first) = split.rects.first() else { return };
-        let (x, y) = (first.x + first.width, first.y);
-        let panes: Vec<Rect> =
-            split.rects.iter().map(|pane| Rect { x: pane.x - x, y: pane.y - y, ..*pane }).collect();
-        crate::chrome_layout::paint_split(canvas, &panes, active.max(0) as usize);
-    }
-}
-
-unsafe fn install_shadows(base: usize) -> Result<(), String> {
-    let slot = (base + RESIZE_AREA_VTABLE + ON_PAINT_SLOT * 8) as *mut usize;
-    if *slot != base + VIEW_ON_PAINT {
-        return Err("the resize area's paint is not the recorded function".into());
-    }
-    let mut previous = 0;
-    if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
-        return Err("could not unprotect the resize area's vtable".into());
-    }
-    slot.write(resize_area_paint as *const () as usize);
-    VirtualProtect(slot.cast(), 8, previous, &mut previous);
-    Ok(())
 }
 
 /// Asks the window to lay the browser out again once the current layout is done, because the top
@@ -861,7 +791,6 @@ pub unsafe fn install_panels() -> Result<(), String> {
         web_contents_focused as *const () as usize,
         &ORIGINAL_FOCUSED,
     )?;
-    install_shadows(base)?;
     detour(
         base,
         UPDATE_BORDER,

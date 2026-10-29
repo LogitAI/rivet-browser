@@ -450,8 +450,8 @@ unsafe fn pane_rows(window: HWND) -> Vec<crate::appbar::PaneRow> {
                 y: (pane.y - ROW_HEIGHT) as f32 * factor,
                 width: pane.width as f32 * factor,
                 height: ROW_HEIGHT as f32 * factor,
-                reach_left: if pane.first { 0.0 } else { 4.0 * factor },
-                reach_right: if pane.last { 0.0 } else { 4.0 * factor },
+                reach_left: 0.0,
+                reach_right: 0.0,
                 caption: if pane.last { crate::chrome_split::CAPTION_ROOM * factor } else { 0.0 },
                 active: pane.active,
                 first: pane.first,
@@ -1534,6 +1534,7 @@ unsafe fn create_appbar(window: HWND) {
         return;
     }
     chrome_layout::PANEL.store(true, std::sync::atomic::Ordering::Relaxed);
+    chrome_layout::on_panel_change(panel_moved);
     if let Err(error) = chrome_layout::install_caption_paint() {
         log(&format!("rivet: could not paint caption buttons: {error}"));
     }
@@ -1709,9 +1710,75 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     "rivet: could not draw the floating appbar: {error}"
                 ));
             }
+            sync_ground(window, appbar, visible, dpi);
             crate::side_rail::update(window, appbar, visible, dpi);
         }
     });
+}
+
+/// The pages of a window as the holes of its ground: each page of a split with its top row, or
+/// the one panel the browser laid out.
+unsafe fn ground_holes(window: HWND) -> Vec<crate::ground::Hole> {
+    use crate::ground::{Hole, Raise};
+    let panes = crate::chrome_split::panes(window);
+    if !panes.is_empty() {
+        let pages: Vec<chrome_layout::Rect> = panes
+            .iter()
+            .map(|pane| chrome_layout::Rect { x: pane.x, y: pane.y, width: pane.width, height: pane.height })
+            .collect();
+        let active = panes.iter().position(|pane| pane.active).unwrap_or(0);
+        return crate::ground::split_holes(&pages, active, crate::chrome_split::ROW_HEIGHT);
+    }
+    let leading = LAID_LEADING.with(|all| all.borrow().get(&(window as isize)).copied()).unwrap_or(0);
+    chrome_layout::panel_bounds(window)
+        .map(|mut rect| {
+            let cut = (leading - rect.x).max(0).min(rect.width - 1);
+            rect.x += cut;
+            rect.width -= cut;
+            vec![Hole { rect, raise: Raise::Page }]
+        })
+        .unwrap_or_default()
+}
+
+/// The holes of the ground, with their left edges kept right of the appbar while its width is
+/// being dragged. The browser lays out only when the drag ends, so until then the page would
+/// show through the wider appbar.
+unsafe fn ground_holes_at(window: HWND) -> Vec<crate::ground::Hole> {
+    let mut holes = ground_holes(window);
+    let layout = layout_of(window);
+    if dragging(window) && !layout.collapsed {
+        for hole in &mut holes {
+            let cut = (layout.side - hole.rect.x).max(0).min(hole.rect.width - 1);
+            hole.rect.x += cut;
+            hole.rect.width -= cut;
+        }
+    }
+    holes
+}
+
+/// Draws the window's ground for the pages the browser has laid out.
+unsafe fn sync_ground(window: HWND, appbar: &mut Appbar, visible: bool, dpi: u32) {
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    let holes = ground_holes_at(window);
+    if let Err(error) = appbar.update_ground(visible, client.right, client.bottom, dpi, &holes) {
+        log(&format!("rivet: could not draw the ground: {error}"));
+    }
+}
+
+/// The browser laid a window's page panel out somewhere new, so the ground's hole follows it.
+fn panel_moved(window: HWND) {
+    unsafe {
+        let (visible, dpi) = (framed(window), layout_dpi(window));
+        APPBARS.with(|appbars| {
+            // A layout inside a redraw is followed by that redraw's own ground update.
+            if let Ok(mut appbars) = appbars.try_borrow_mut() {
+                if let Some(appbar) = appbars.get_mut(&(window as isize)) {
+                    sync_ground(window, appbar, visible, dpi);
+                }
+            }
+        });
+    }
 }
 
 /// The thickness of the visible window border along the top edge. A maximized window has none.
@@ -1731,6 +1798,9 @@ unsafe fn top_border(window: HWND) -> i32 {
 }
 
 thread_local! {
+    /// Where each window's page began when the browser last laid it out. The client view reaches
+    /// left under the browser's own tab strip, so this, not its edge, is where the page starts.
+    static LAID_LEADING: RefCell<HashMap<isize, i32>> = RefCell::new(HashMap::new());
     /// The scale each browser window last laid itself out at, as a DPI.
     static LAYOUT_DPI: RefCell<HashMap<isize, u32>> = RefCell::new(HashMap::new());
 }
@@ -1763,6 +1833,7 @@ fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
         }
         // The scale is recorded above for both tab layouts. The strip is only subtracted here.
         let leading = layout_of(window).leading();
+        LAID_LEADING.with(|all| all.borrow_mut().insert(window as isize, leading));
         if let Some(strip) = crate::vertical_tabs::layout_width(window) {
             return Some(crate::reserved_for_strip(leading, strip));
         }

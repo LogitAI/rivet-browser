@@ -7,15 +7,15 @@
 //! Direct2D and DirectWrite paint the visual with the shell study's fonts, which are embedded in
 //! the runtime and loaded into a private font collection.
 
+use crate::ground;
 use crate::spaces::{SpaceInfo, Spaces};
 use windows::core::{Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
-use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D1_GRADIENT_STOP, D2D_RECT_F};
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1RenderTarget,
+    D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1,
     ID2D1SolidColorBrush, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE,
-    D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
-    D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES, D2D1_ROUNDED_RECT, D2D1_CAP_STYLE_FLAT,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ROUNDED_RECT, D2D1_CAP_STYLE_FLAT,
     D2D1_DASH_STYLE_DASH, D2D1_LINE_JOIN_MITER, D2D1_STROKE_STYLE_PROPERTIES,
 };
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
@@ -167,6 +167,9 @@ pub struct Appbar {
     root: IDCompositionVisual2,
     visual: IDCompositionVisual2,
     painted: Option<Painted>,
+    /// The ground of the whole window, with a hole for each page, and what it was last painted for.
+    ground: IDCompositionVisual2,
+    ground_painted: Option<(i32, i32, u32, u32, Vec<ground::Hole>)>,
     panel: IDCompositionVisual2,
     panel_painted: Option<Painted>,
     tabs: Vec<crate::tab_rows::Row>,
@@ -279,8 +282,6 @@ impl Scene<'_> {
 enum Surface {
     /// The whole appbar over the frame ground.
     Docked,
-    /// The frame ground only, in the gap a hidden appbar leaves beside the page.
-    Gap,
     /// The appbar's content, on the fill of the floating appbar.
     Floating,
 }
@@ -324,6 +325,10 @@ impl Appbar {
         let root = device.CreateVisual()?;
         let visual = device.CreateVisual()?;
         root.AddVisual(&visual, false, None::<&IDCompositionVisual>)?;
+        // The ground lies just under the appbar, over the browser's content and the pages' top
+        // rows. Its holes leave the pages showing.
+        let ground = device.CreateVisual()?;
+        root.AddVisual(&ground, false, &visual)?;
         let panel = device.CreateVisual()?;
         root.AddVisual(&panel, true, &visual)?;
         let toggle = device.CreateVisual()?;
@@ -343,6 +348,8 @@ impl Appbar {
             root,
             visual,
             painted: None,
+            ground,
+            ground_painted: None,
             panel,
             panel_painted: None,
             tabs: Vec::new(),
@@ -539,11 +546,9 @@ impl Appbar {
             let result = (|| {
                 canvas.floating(rect(PEEK_PAD, PEEK_PAD, side as f32, height as f32))?;
                 context.SetTransform(&(Matrix3x2::translation(PEEK_PAD, PEEK_PAD) * origin));
-                let span = side as f32;
                 canvas.draw(
                     side as f32,
                     height as f32,
-                    span,
                     &self.scene(),
                     Surface::Floating,
                 )
@@ -571,21 +576,18 @@ impl Appbar {
         height: i32,
         dpi: u32,
     ) -> Result<()> {
-        if !visible || width <= 0 || height <= 0 {
+        // A hidden appbar leaves its column to the ground visual, which carries the same colours.
+        if !visible || !self.docked || width <= 0 || height <= 0 {
             self.visual.SetContent(None)?;
             self.painted = None;
             return self.device.Commit();
         }
         self.visual.SetOffsetX2(left as f32)?;
         self.visual.SetOffsetY2(top as f32)?;
-        // The ground rises across the whole window, so its width is part of what was painted.
-        let mut client = RECT::default();
-        let _ = GetClientRect(self.window, &mut client);
-        let span = client.right - client.left;
         let stale = self
             .painted
             .as_ref()
-            .is_none_or(|p| (p.width, p.height, p.dpi, p.span) != (width, height, dpi, span));
+            .is_none_or(|p| (p.width, p.height, p.dpi) != (width, height, dpi));
         if stale {
             let surface = self.device.CreateSurface(
                 width as u32,
@@ -593,15 +595,57 @@ impl Appbar {
                 DXGI_FORMAT_B8G8R8A8_UNORM,
                 DXGI_ALPHA_MODE_PREMULTIPLIED,
             )?;
-            self.paint(&surface, width, height, dpi, span)?;
+            self.paint(&surface, width, height, dpi)?;
             self.visual.SetContent(&surface)?;
             self.painted = Some(Painted {
                 width,
                 height,
                 dpi,
-                span,
+                span: width,
             });
         }
+        self.device.Commit()
+    }
+
+    /// Shows the ground of the window, `width` by `height` pixels, with a hole for each page. It
+    /// is repainted only when its size, scale, tint or holes change. No holes means the browser
+    /// has not laid the pages out yet, so the ground stays away rather than cover them.
+    pub(crate) unsafe fn update_ground(
+        &mut self,
+        visible: bool,
+        width: i32,
+        height: i32,
+        dpi: u32,
+        holes: &[ground::Hole],
+    ) -> Result<()> {
+        if !visible || holes.is_empty() || width <= 0 || height <= 0 {
+            if self.ground_painted.take().is_some() {
+                self.ground.SetContent(None)?;
+                self.device.Commit()?;
+            }
+            return Ok(());
+        }
+        let tint = self.scene().tint();
+        let key = (width, height, dpi, tint, holes.to_vec());
+        if self.ground_painted.as_ref() == Some(&key) {
+            return Ok(());
+        }
+        let surface = self.device.CreateSurface(
+            width as u32,
+            height as u32,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_ALPHA_MODE_PREMULTIPLIED,
+        )?;
+        let mut offset = POINT::default();
+        let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+        // The ground is drawn in pixels, so the hole edges land on whole pixels.
+        context.SetDpi(96.0, 96.0);
+        context.SetTransform(&Matrix3x2::translation(offset.x as f32, offset.y as f32));
+        let result = ground::paint(&context, width as f32, height as f32, dpi as f32 / 96.0, tint, holes);
+        surface.EndDraw()?;
+        result?;
+        self.ground.SetContent(&surface)?;
+        self.ground_painted = Some(key);
         self.device.Commit()
     }
 
@@ -666,7 +710,6 @@ impl Appbar {
         width: i32,
         height: i32,
         dpi: u32,
-        span: i32,
     ) -> Result<()> {
         let mut offset = POINT::default();
         let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
@@ -677,6 +720,7 @@ impl Appbar {
             offset.x as f32 / scale,
             offset.y as f32 / scale,
         ));
+        context.Clear(Some(&rgba(WHITE, 0.0)));
         let canvas = Canvas {
             context: &context,
             dwrite: &self.dwrite,
@@ -685,13 +729,8 @@ impl Appbar {
         let result = canvas.draw(
             width as f32 / scale,
             height as f32 / scale,
-            span as f32 / scale,
             &self.scene(),
-            if self.docked {
-                Surface::Docked
-            } else {
-                Surface::Gap
-            },
+            Surface::Docked,
         );
         surface.EndDraw()?;
         result
@@ -707,7 +746,9 @@ impl Appbar {
     pub(crate) unsafe fn update_rows(&mut self, rows: &[PaneRow], dpi: u32) -> Result<()> {
         while self.rows.len() < rows.len() {
             let visual = self.device.CreateVisual()?;
-            self.root.AddVisual(&visual, true, None::<&IDCompositionVisual>)?;
+            // The rows lie under the ground, whose holes are the pages, so the ground rounds
+            // their corners.
+            self.root.AddVisual(&visual, false, &self.ground)?;
             self.rows.push((visual, None));
         }
         let scale = dpi as f32 / 96.0;
@@ -1150,36 +1191,6 @@ impl Canvas<'_> {
         Ok(())
     }
 
-    /// The frame ground: the space colour rises from the lower left corner, as in the study.
-    unsafe fn ground(&self, w: f32, h: f32, tint: u32) -> Result<()> {
-        self.context.Clear(Some(&color(FRAME)));
-        let stops = [
-            D2D1_GRADIENT_STOP {
-                position: 0.0,
-                color: rgba(tint, 0.34),
-            },
-            D2D1_GRADIENT_STOP {
-                position: 0.7,
-                color: rgba(tint, 0.0),
-            },
-        ];
-        let target: &ID2D1RenderTarget = self.context;
-        let collection =
-            target.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
-        let glow = self.context.CreateRadialGradientBrush(
-            &D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
-                center: Vector2 { X: 0.0, Y: h },
-                gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 },
-                radiusX: w * 0.8,
-                radiusY: h * 0.6,
-            },
-            None,
-            &collection,
-        )?;
-        self.context.FillRectangle(&rect(0.0, 0.0, w, h), &glow);
-        Ok(())
-    }
-
     /// Runs `body` with a control's press feedback applied: the control sinks to `press` of its
     /// size about its centre and darkens by up to 4%, like `button.pressed` in the shell study.
     /// `effect` holds the scale and brightness amounts, where 1 is fully pressed and a negative
@@ -1237,18 +1248,13 @@ impl Canvas<'_> {
         &self,
         w: f32,
         h: f32,
-        span: f32,
         scene: &Scene,
         surface: Surface,
     ) -> Result<()> {
         use crate::frame::AppbarHit;
         let tint = scene.tint();
-        // A floating appbar is drawn over its own fill, and a hidden one leaves only the ground.
-        match surface {
-            Surface::Docked => self.ground(span, h, tint)?,
-            Surface::Gap => return self.ground(span, h, tint),
-            Surface::Floating => {}
-        }
+        // The docked appbar has no fill of its own: the window's ground lies under it. A floating
+        // appbar is drawn over its own fill.
         let left = 10.0;
         let inner = w - 18.0;
         let hover = scene.hover;
@@ -1627,7 +1633,6 @@ impl Canvas<'_> {
         let w = row.width / scale;
         let h = vh - oy;
         let clip_w = vw - ox;
-        self.fill(rect(0.0, 0.0, vw, oy), FRAME)?;
         self.fill(rect(0.0, oy, ox, h), PAPER)?;
         self.fill(rect(vw - row.reach_right / scale, oy, row.reach_right / scale, h), PAPER)?;
         let buttons = row_buttons(w, row.first, row.last);
@@ -1643,15 +1648,6 @@ impl Canvas<'_> {
             self.fill(rect(ox, oy, clip_w, h), PAPER)?;
             self.fill(rect(ox, oy + h - 1.0, clip_w, 1.0), HAIRLINE)?;
         }
-        // The rounded top corners of the page's panel, against the frame behind it.
-        let corners = D2D1_ROUNDED_RECT {
-            rect: rect(ox - PANEL_GAP, oy - PANEL_GAP, w + 2.0 * PANEL_GAP, h * 4.0),
-            radiusX: PANEL_RADIUS + PANEL_GAP,
-            radiusY: PANEL_RADIUS + PANEL_GAP,
-        };
-        self.context.PushAxisAlignedClip(&rect(0.0, 0.0, vw, vh), D2D1_ANTIALIAS_MODE_ALIASED);
-        self.context.DrawRoundedRectangle(&corners, &self.brush(FRAME)?, PANEL_GAP * 2.0, None);
-        self.context.PopAxisAlignedClip();
         for (button, x, width) in buttons {
             let area = rect(ox + x, oy + (h - 28.0) / 2.0, width, 28.0);
             let own = matches!(button, RowButton::Grip | RowButton::Popout | RowButton::Unsplit);
