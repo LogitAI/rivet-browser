@@ -236,6 +236,8 @@ pub struct Toolbar {
     pub back_icon: usize,
     pub forward_icon: usize,
     pub reload_icon: usize,
+    /// The names the back, forward and reload icons carry in this build, checked before the icons are replaced.
+    pub nav_icon_names: &'static [&'static [u8]],
     pub page_info_icon: usize,
     /// The Google G logos Chrome shows in the field while a person edits it, in colour and in one
     /// colour. The design shows a magnifier there.
@@ -751,6 +753,7 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     back_icon: ABSENT,
     forward_icon: ABSENT,
     reload_icon: ABSENT,
+    nav_icon_names: &[],
     page_info_icon: ABSENT,
     google_g_icon: ABSENT,
     google_g_monochrome_icon: ABSENT,
@@ -1219,6 +1222,7 @@ pub static CHROME: Build = Build {
         back_icon: 0x10E0_2EA8, // ?kBackArrowChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
         forward_icon: 0x10E0_55C0, // ?kForwardArrowChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
         reload_icon: 0x10E0_7DD0, // ?kReloadChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
+        nav_icon_names: &[b"kBackArrowChromeRefreshOldIcon", b"kForwardArrowChromeRefreshOldIcon", b"kReloadChromeRefreshOldIcon"],
         page_info_icon: 0x10F5_D470, // ?kSecurePageInfoChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
         google_g_icon: 0x10E0_A3F0, // ?kGoogleGLogoIcon@vector_icons@@3UVectorIcon@gfx@@B
         google_g_monochrome_icon: 0x10E0_A438, // ?kGoogleGLogoMonochromeIcon@vector_icons@@3UVectorIcon@gfx@@B
@@ -1704,24 +1708,25 @@ pub static EDGE: Build = Build {
         source_in_widget: 0x48, // Chrome value, not checked on Edge
         content_window_for_hwnd: 0x026A4DC6, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x028C8D78, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
-        back_icon: ABSENT, // not found in Edge
-        forward_icon: 0x12C62308, // ?kForwardArrowChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
-        reload_icon: ABSENT, // not found in Edge
+        back_icon: 0x12C694F8, // ?kEdgeSmtcBackArrowIcon@vector_icons@@3UVectorIcon@gfx@@B
+        forward_icon: 0x12C69F48, // ?kEdgeSmtcForwardArrowIcon@vector_icons@@3UVectorIcon@gfx@@B
+        reload_icon: 0x12C6AB48, // ?kEdgeSmtcReloadIcon@vector_icons@@3UVectorIcon@gfx@@B
+        nav_icon_names: &[b"kEdgeSmtcBackArrowIcon", b"kEdgeSmtcForwardArrowIcon", b"kEdgeSmtcReloadIcon"],
         page_info_icon: 0x12ED5050, // ?kSecurePageInfoChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
         google_g_icon: ABSENT, // not found in Edge
         google_g_monochrome_icon: ABSENT, // not found in Edge
-        edit_icons: &[0x10E0_5680, 0x10E0_56B8, 0x10E0_8278, 0x10E0_82C0, 0x10E0_82F8], // Chrome value, not checked on Edge
+        edit_icons: &[], // the search and globe icons of an edited address, not recorded for Edge yet
         http_icon: 0x12ED4BE8, // ?kHttpChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
-        http_icon_name: b"kHttpChromeRefreshOldIcon", // Chrome value, not checked on Edge
+        http_icon_name: b"kHttpChromeRefreshOldIcon",
         page_info_bytes: &[
         0x1C, 0, 0, 0, 0, 0, 0x80, 0x41, 1, 0, 0, 0, 7, 0, 0, 0,
         0x5C, 0x8F, 0x3A, 0x41, 0xEC, 0x51, 0x5C, 0x41, 0x12, 0, 0, 0, 0xD7, 0xA3, 0x30, 0xBF,
-    ], // Chrome value, not checked on Edge
-        page_info_reps: ABSENT, // not found in Edge
-        page_info_id: ABSENT, // not found in Edge
-        page_info_path: ABSENT, // not found in Edge
+    ], // the same path data as Chrome's, checked against msedge.dll
+        page_info_reps: 0x12ED5018, // ?kSecurePageInfoChromeRefreshOldRepList@omnibox@@3QBUVectorIconRep@gfx@@B
+        page_info_id: 0x12ED5028, // ?kSecurePageInfoChromeRefreshOldIconId@omnibox@@3QBDB
+        page_info_path: 0x12EDC5E0, // ?kSecurePageInfoChromeRefreshOldPath@omnibox@@3QBUPathElement@gfx@@B
         anchor_view_access_at: 0x28,
-        skip: "address icon updateicon anchor visible", // the address field, icons and bubble anchors are not recorded for Edge yet
+        skip: "address updateicon anchor visible", // the address field, icons and bubble anchors are not recorded for Edge yet
         anchor_tracker_offset: 0x378, // BubbleDialogDelegate anchor view tracker, read by GetAnchorRect
     },
     vertical: VerticalTabs {

@@ -1463,6 +1463,14 @@ unsafe extern "system" fn choose_icon(icon: usize) -> usize {
         return icon;
     }
     let Some(hooks) = hooks() else { return icon };
+    if crate::vertical_tabs::tracing() && crate::edge_vertical::skipped("icontrace") {
+        static ASKED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+        let mut asked = ASKED.lock().unwrap_or_else(|error| error.into_inner());
+        if !asked.contains(&icon) {
+            asked.push(icon);
+            crate::vertical_tabs::trace(&format!("icon asked {:#x}", icon.wrapping_sub(hooks.base)));
+        }
+    }
     let Some(icons) = ICONS.get() else { return icon };
     // Chrome's warning for plain HTTP is the icon of local files too. Local files get the
     // information mark, and a page that is not secure gets Rivet's warning.
@@ -1628,6 +1636,11 @@ pub(crate) unsafe fn replace_slot(slot: *mut usize, value: usize) -> Result<(), 
     write_recorded(slot.cast(), &value.to_le_bytes())
 }
 
+/// Whether `skip` lists `token` as a word of its own, so "icon" does not match "updateicon".
+fn skips(skip: &str, token: &str) -> bool {
+    skip.split_whitespace().any(|word| word == token)
+}
+
 unsafe fn patch(skip: &str) -> Result<Hooks, String> {
     let image = image::recorded().ok_or("this browser build has no recorded toolbar")?;
     let base = image.base;
@@ -1643,7 +1656,7 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
         return Err("this browser build has no recorded browser widget".into());
     }
     let address = !skip.contains("address");
-    let icons = !skip.contains("icon");
+    let icons = !skips(skip, "icon");
     if address
         && (!holds(bv().browser_delegate_vtable, bv().active_web_contents_slot, bv().active_web_contents)
             || !holds(bv().web_contents_vtable, bv().web_contents_title_slot, bv().web_contents_title))
@@ -1677,7 +1690,7 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
         && (!prologue(bv().from_vector_icon, &bv().from_vector_icon_prologue)
             || !prologue(bv().set_transform, &bv().set_transform_prologue)
             || !prologue(bv().set_brightness, &bv().set_brightness_prologue)
-            || (!skip.contains("updateicon") && !prologue(bv().update_icon, &bv().update_icon_prologue)))
+            || (!skips(skip, "updateicon") && !prologue(bv().update_icon, &bv().update_icon_prologue)))
     {
         return Err("this browser build has other icon functions".into());
     }
@@ -1710,6 +1723,7 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
     if [bv().back_icon, bv().forward_icon, bv().reload_icon, bv().page_info_icon, bv().google_g_icon, bv().google_g_monochrome_icon]
         .iter()
         .chain(bv().edit_icons.iter())
+        .filter(|rva| **rva != crate::builds::ABSENT)
         .any(|rva| image.at(*rva, std::mem::size_of::<VectorIcon>()).is_none())
         || image.at(bv().page_info_reps, std::mem::size_of::<IconRep>()).is_none()
     {
@@ -1723,6 +1737,14 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
         || !prologue(bv().page_info_path, &bv().page_info_bytes)
     {
         return Err("this browser build has another page info icon".into());
+    }
+    for (rva, name) in [bv().back_icon, bv().forward_icon, bv().reload_icon].into_iter().zip(bv().nav_icon_names) {
+        let icon = &*((base + rva) as *const VectorIcon);
+        if rva != crate::builds::ABSENT
+            && (icon.count == 0 || std::slice::from_raw_parts(icon.name, name.len()) != *name)
+        {
+            return Err("this browser build has other navigation icons".into());
+        }
     }
     let http = &*((base + bv().http_icon) as *const VectorIcon);
     if http.count != 1
@@ -1752,7 +1774,7 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
 /// Patches the browser once every check has passed and `HOOKS` is stored.
 unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
     let address = !skip.contains("address");
-    let icons = !skip.contains("icon");
+    let icons = !skips(skip, "icon");
     if icons {
         build_icons(base);
     }
@@ -1888,10 +1910,10 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
 }
 
 unsafe fn icons_and_slots(base: usize, skip: &str) -> Result<(), String> {
-    if skip.contains("icon") {
+    if skips(skip, "icon") {
         return slots(base, skip);
     }
-    if !skip.contains("updateicon") {
+    if !skips(skip, "updateicon") {
         detour(
         base,
         bv().update_icon,
@@ -2251,6 +2273,7 @@ unsafe fn build_icons(base: usize) {
         ]
         .into_iter()
         .chain(bv().edit_icons.iter().map(|&rva| (rva, leak(search_path()))))
+        .filter(|(rva, _)| *rva != crate::builds::ABSENT)
         .map(|(rva, path)| {
             let rep: &'static IconRep = Box::leak(Box::new(IconRep {
                 path: path.as_ptr(),
