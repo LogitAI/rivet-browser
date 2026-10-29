@@ -1421,8 +1421,6 @@ unsafe fn peek_tick(window: HWND) {
 unsafe fn end_drag(window: HWND) {
     if DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize))) {
         ReleaseCapture();
-        sync_strip(window);
-        relayout(window);
         APPBAR_STATE.with(|states| {
             if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
                 entry.0 = None;
@@ -1433,14 +1431,15 @@ unsafe fn end_drag(window: HWND) {
     }
 }
 
-/// Follows a drag of the resizer: the appbar's right edge goes to the pointer. Only the appbar
-/// redraws while the pointer moves. The browser lays the page out once, when the drag ends,
-/// because every browser layout shows its own frame for a moment before the page catches up.
+/// Follows a drag of the resizer: the appbar's right edge goes to the pointer and the browser lays
+/// the page out beside it as it moves. The Rivet ground covers everything but the page, so a
+/// layout in progress never shows the browser's own frame.
 unsafe fn drag_to(window: HWND, x: i32) {
     let factor = layout_dpi(window) as f32 / 96.0;
     let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
     if edit_layout(window, |layout| layout.set_width(wanted)) {
-        update_appbar(window);
+        sync_strip(window);
+        relayout(window);
     }
 }
 
