@@ -387,3 +387,22 @@
   슬롯은 16에서 15로 옮겼다.
 - 자동 맞춤만으로는 Whale을 지원할 수 없다. Chrome 150.0.7871.x 공식 빌드와 PDB를 기준으로 쓰면 차이를 패치
   수준으로 줄일 수 있다.
+
+## 2026-10-29: Brave 156.1.98.62 지원 가능성
+
+### 확인한 환경
+
+- Windows `10.0.26300`, Brave `156.1.98.62`(Chromium `156.0.8078.74`), 비교 기준 Google Chrome `156.0.8078.48`.
+
+### 결과
+
+- 브라우저 코드는 `156.1.98.62\chrome.dll`에 있고 파일 버전 리소스는 `156.1.98.62`이다.
+- Brave는 심볼을 공개한다. `https://brave-symbols.s3.brave.com/chrome.dll.pdb/<GUID+age>/chrome.dll.pdb`에 gzip으로
+  올라 있다(GUID `2FD98BDE5CE2F69C4C4C44205044422E`, age 1). Microsoft와 Google 서버는 404를 돌려준다. 그래서 Edge처럼
+  심볼로 행을 채웠다.
+- 창은 `BraveBrowserFrameViewWin`, `BraveBrowserView` 서브클래스이다. 프레임 vtable의 `OnPaint`와 `GetTopInset`은
+  Brave의 재정의를 가리킨다. 슬롯 번호와 주요 오프셋은 Chrome 156과 같다.
+- Chromium 색 ID는 Brave 자체 ID 때문에 17(`0x11`) 밀렸다. 캡션 글리프 ID는 `0x67D`, `0x67E`, `0x67F`이다.
+- 프레임 그리기 훅은 `ColorProvider::GetColor`를 부른다. 이 주소가 비어 있으면 브라우저가 죽는다.
+- 프레임, 캡션, 패널 클립, 클라이언트 영역 예약, 탭 목록, 시작 페이지 열기가 동작한다. 가로 탭 줄을 숨기면 캡션
+  버튼도 사라져서 켜지 않았다. 툴바, 세로 탭, 사이드 패널, 분할 보기는 아직 꺼져 있다.
