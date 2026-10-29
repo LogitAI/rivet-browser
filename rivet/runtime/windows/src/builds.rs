@@ -96,6 +96,9 @@ pub struct Toolbar {
     /// `gfx::RenderText::ApplyColor(this, colour, &range)` and `ApplyWeight(this, weight, &range)`.
     pub apply_color: usize,
     pub apply_color_bytes: &'static [u8],
+    /// The weight of the page title in the address field. Edge's font has a true semibold, which
+    /// looks lighter than the semibold face Chrome's draws, so the weight that matches differs.
+    pub title_weight: u32,
     pub apply_weight: usize,
     pub apply_weight_bytes: &'static [u8],
     /// `OmniboxViewViews::TitleWasSet` is the web contents observer entry of the omnibox, which is
@@ -253,6 +256,12 @@ pub struct Toolbar {
     pub page_info_reps: usize,
     pub page_info_id: usize,
     pub page_info_path: usize,
+    /// How many path elements the page info and plain HTTP icons have, and the other icons of this build
+    /// that show the same two states: more padlocks and more warnings, each with one path.
+    pub page_info_size: usize,
+    pub http_size: usize,
+    pub extra_lock_icons: &'static [usize],
+    pub extra_warning_icons: &'static [usize],
     /// Where the anchor view access starts inside `GetAnchorRect`.
     pub anchor_view_access_at: usize,
     /// Features this build leaves alone: "toolbar" (the whole top row), "address", "icon" and "updateicon".
@@ -311,6 +320,15 @@ pub struct EdgeVertical {
     pub field_y: i32,
     pub field_height: i32,
     pub field_margin: i32,
+    /// The page info icon's view and the text view inside the address field: the icon's bounds, and
+    /// the text's x, y, height and the room left after it.
+    pub icon_vtable: usize,
+    pub icon_bounds: [i32; 4],
+    pub text_vtable: usize,
+    pub text_x: i32,
+    pub text_y: i32,
+    pub text_height: i32,
+    pub text_margin: i32,
     pub size_slot: usize,
     pub caption_gap: i32,
     /// The room Rivet's toggle button takes before the toolbar's first button, in DIPs, so the back
@@ -671,6 +689,7 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     update_text_style_prologue: &[0],
     apply_color: ABSENT,
     apply_color_bytes: &[0],
+    title_weight: 600,
     apply_weight: ABSENT,
     apply_weight_bytes: &[0],
     title_was_set: ABSENT,
@@ -764,6 +783,10 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     page_info_reps: ABSENT,
     page_info_id: ABSENT,
     page_info_path: ABSENT,
+    page_info_size: 0,
+    http_size: 0,
+    extra_lock_icons: &[],
+    extra_warning_icons: &[],
     anchor_view_access_at: 0,
     skip: "",
     anchor_tracker_offset: 0,
@@ -1037,6 +1060,7 @@ pub static CHROME: Build = Build {
         apply_color_bytes: &[
         0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0xA0, 0, 0, 0,
     ],
+        title_weight: 600,
         apply_weight: 0x0AF1_1D20, // ?ApplyWeight@RenderText@gfx@@QEAAXW4Weight@Font@2@AEBVRange@2@@Z
         apply_weight_bytes: &[
         0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0, 0x01, 0, 0,
@@ -1236,6 +1260,10 @@ pub static CHROME: Build = Build {
         page_info_reps: 0x10F5_D438, // ?kSecurePageInfoChromeRefreshOldRepList@omnibox@@3QBUVectorIconRep@gfx@@B.llvm.2910200201067176236
         page_info_id: 0x10F5_D448, // ?kSecurePageInfoChromeRefreshOldIconId@omnibox@@3QBDB.llvm.2910200201067176236
         page_info_path: 0x10F6_6E40, // ?kSecurePageInfoChromeRefreshOldPath@omnibox@@3QBUPathElement@gfx@@B.llvm.2910200201067176236
+        page_info_size: 282,
+        http_size: 263,
+        extra_lock_icons: &[],
+        extra_warning_icons: &[],
         anchor_view_access_at: 0x2a,
         skip: "",
         anchor_tracker_offset: 0x300,
@@ -1520,8 +1548,8 @@ pub static EDGE: Build = Build {
         from_vector_icon_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x4C, 0x89, 0xC7],
         update_location: 0x02822D7A, // ?Update@LocationIconView@@QEAAX_N0@Z
         update_location_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00],
-        update_location_icon: ABSENT, // not found in Edge
-        update_location_icon_prologue: &[0x00], // function not found in Edge
+        update_location_icon: 0x02823520, // ?UpdateIcon@LocationIconView@@QEAAXXZ
+        update_location_icon_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00],
         layout_insets: 0x00FF3C3D, // ?GetLayoutInsets@@YA?AVInsets@gfx@@W4LayoutInset@@@Z
         layout_insets_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00],
         toolbar_button_inset: 12, // LayoutInset::TOOLBAR_BUTTON, read by ToolbarButton::GetTargetInsets
@@ -1539,48 +1567,49 @@ pub static EDGE: Build = Build {
         omnibox_revert_all_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0xB1, 0xC1, 0x9C, 0x11],
         omnibox_tab_changed: 0x02827D9C, // ?OnTabChanged@OmniboxViewViews@@QEAAXPEAVWebContents@content@@@Z
         omnibox_tab_changed_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD7, 0x48, 0x89, 0xCE],
-        omnibox_textfield: 0x10, // Chrome value, not checked on Edge
+        omnibox_textfield: 0x10, // where OmniboxViewViews' constructor stores the views::View vtable
         update_text_style: 0x02824F00, // ?UpdateTextStyle@OmniboxView@@IEAAXAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$all
         update_text_style_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xF0, 0x01, 0x00, 0x00],
         apply_color: 0x028D2F82, // ?ApplyColor@RenderText@gfx@@QEAAXIAEBVRange@2@@Z
         apply_color_bytes: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0xA0, 0x00, 0x00, 0x00],
+        title_weight: 700,
         apply_weight: 0x0B74E45C, // ?ApplyWeight@RenderText@gfx@@QEAAXW4Weight@Font@2@AEBVRange@2@@Z
         apply_weight_bytes: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0x00, 0x01, 0x00, 0x00],
         title_was_set: 0x033CB530, // ?TitleWasSet@OmniboxViewViews@@EEAAXPEAVNavigationEntry@content@@@Z
         title_was_set_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x89, 0x28, 0x01, 0x00, 0x00],
-        observer_offset: 0x720, // Chrome value, not checked on Edge
+        observer_offset: 0x7A0, // where OmniboxViewViews' constructor stores the web contents observer's vtable
         operator_new: 0x036CDF90, // ??2@YAPEAX_K@Z
         operator_new_bytes: &[0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B],
         operator_delete: 0x0023EE60, // ??3@YAXPEAX_K@Z
         operator_delete_bytes: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xD6],
-        model_delegate: 0x40, // Chrome value, not checked on Edge
-        browser_delegate_vtable: ABSENT, // not found in Edge
+        model_delegate: 0x40, // read by LocationBarModelImpl::GetURL
+        browser_delegate_vtable: 0x11742B58, // ??_7BrowserLocationBarModelDelegate@@6B@
         active_web_contents: 0x00FE1AC0, // ?GetActiveWebContents@BrowserLocationBarModelDelegate@@UEBAPEAVWebContents@content@@XZ
-        active_web_contents_slot: 19, // Chrome value, not checked on Edge
-        web_contents_vtable: ABSENT, // not found in Edge
+        active_web_contents_slot: 22,
+        web_contents_vtable: 0x116B5690, // ??_7WebContentsImpl@content@@6B@
         web_contents_title: 0x01119470, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?
-        web_contents_title_slot: 53, // Chrome value, not checked on Edge
-        location_bar_view_base: 0x100, // Chrome value, not checked on Edge
+        web_contents_title_slot: 56,
+        location_bar_view_base: 0x100, // RefreshBackground's views::View base
         hover_value: 0x5F8, // Chrome value, not checked on Edge
         field_background: 0x328, // Chrome value, not checked on Edge
         background_vtable: 0x114D6E80, // ??_7BackgroundPainter@views@@6B@
         painter_vtable: ABSENT, // not found in Edge
         painter_radii: 0x10, // Chrome value, not checked on Edge
         painter_insets: 0x20, // Chrome value, not checked on Edge
-        field_state: 0x4E8, // Chrome value, not checked on Edge
-        field_state_focused: 0x18, // Chrome value, not checked on Edge
-        focused_fill_id: 1013, // Chrome value, not checked on Edge
+        field_state: 0x540, // read by LocationBarView::RefreshBackground
+        field_state_focused: 0x18, // read by LocationBarView::RefreshBackground
+        focused_fill_id: -1, // none: Edge reports its field as focused at rest, so 3009 stays paper and only the hover id shows the tint
         focus_ring_remove: 0x027876CC, // ?Remove@FocusRing@views@@SAXPEAVView@2@@Z
         set_transform: 0x0B38D582, // ?SetTransform@View@views@@QEAAXAEBVTransform@gfx@@@Z
         set_transform_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x48, 0x89, 0xD6],
         set_brightness: 0x02DA797C, // ?SetLayerBrightness@Layer@ui@@QEAAXM@Z
         set_brightness_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x48, 0x0F, 0x29, 0x74, 0x24, 0x30, 0x0F, 0x28, 0xF1],
-        view_layer: 0x20, // Chrome value, not checked on Edge
-        view_size: 0x1D0, // Chrome value, not checked on Edge
-        refresh_background: ABSENT, // not found in Edge
-        refresh_background_prologue: &[0x00], // function not found in Edge
-        chip_text: ABSENT, // not found in Edge
-        chip_text_prologue: &[0x00], // function not found in Edge
+        view_layer: 0x20, // views::View::layer_, the same in the views that Edge shares with Chrome
+        view_size: 0x1D0, // views::View::bounds_.size
+        refresh_background: 0x02824122, // ?RefreshBackground@LocationBarView@@AEAAXXZ
+        refresh_background_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00],
+        chip_text: 0x0282389E, // ?GetSecurityChipText@location_bar@@YA?AV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator@_S@23@@std@@@Z
+        chip_text_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xD0, 0x00, 0x00, 0x00],
         textfield_theme: 0x02D30920, // ?OnThemeChanged@Textfield@views@@UEAAXXZ
         textfield_theme_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x10, 0x37, 0x4C, 0x11],
         textfield_set_font: 0x0278A88A, // ?SetFontList@Textfield@views@@QEAAXAEBVFontList@gfx@@@Z
@@ -1589,12 +1618,12 @@ pub static EDGE: Build = Build {
         font_size_bytes: &[0x48, 0x8B, 0x09, 0xE9, 0x00, 0x00, 0x00, 0x00, 0x56, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x41, 0x44],
         derive_size: 0x0101C9EA, // ?DeriveWithSizeDelta@FontList@gfx@@QEBA?AV12@H@Z
         derive_size_bytes: &[0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x44, 0x89, 0xC7, 0x48, 0x89, 0xD6],
-        textfield_render_text: 0x378, // Chrome value, not checked on Edge
-        render_text_font_list: 0x48, // Chrome value, not checked on Edge
+        textfield_render_text: 0x3C0, // read by Textfield::SetFontList
+        render_text_font_list: 0x48, // RenderText::font_list_, read by RenderText::SetFontList
         gurl_destructor: 0x00FDECAA, // ??1GURL@@QEAA@XZ
         gurl_destructor_bytes: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x79, 0x70],
-        gurl_scheme_begin: 0x20, // Chrome value, not checked on Edge
-        gurl_scheme_length: 0x24, // Chrome value, not checked on Edge
+        gurl_scheme_begin: 0x20, // read by GURL::SchemeIsHTTPOrHTTPS
+        gurl_scheme_length: 0x24,
         anchor_rect: 0x032D7810, // ?GetAnchorRect@BubbleDialogDelegate@views@@UEBA?AVRect@gfx@@XZ
         anchor_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xC8, 0x00, 0x00, 0x00],
         anchor_view_access: &[0x48, 0x8B, 0x81, 0x78, 0x03, 0x00, 0x00, 0x48, 0x85, 0xC0],
@@ -1676,6 +1705,8 @@ pub static EDGE: Build = Build {
         (2338, INK),         // kColorOmniboxResultsTextSelected
         (2339, 0xFF4A_4850), // kColorOmniboxResultsUrl
         (2340, INK),         // kColorOmniboxResultsUrlSelected
+        (2343, INK),         // kColorOmniboxSecurityChipDefault: the padlock at rest
+        (2346, INK),         // the padlock of a secure page
         (2347, SOFT_INK),    // kColorOmniboxSecurityChipText: the icon of the field while editing
         (2348, SELECTION),   // kColorOmniboxSelectionBackground: the accent at 25 percent over paper
         (2349, INK),         // kColorOmniboxSelectionForeground
@@ -1712,21 +1743,25 @@ pub static EDGE: Build = Build {
         forward_icon: 0x12C69F48, // ?kEdgeSmtcForwardArrowIcon@vector_icons@@3UVectorIcon@gfx@@B
         reload_icon: 0x12C6AB48, // ?kEdgeSmtcReloadIcon@vector_icons@@3UVectorIcon@gfx@@B
         nav_icon_names: &[b"kEdgeSmtcBackArrowIcon", b"kEdgeSmtcForwardArrowIcon", b"kEdgeSmtcReloadIcon"],
-        page_info_icon: 0x12ED5050, // ?kSecurePageInfoChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
+        page_info_icon: 0x12ED5778, // ?kEdgeVisualRefreshHttpsValidIcon@omnibox@@3UVectorIcon@gfx@@B
         google_g_icon: ABSENT, // not found in Edge
         google_g_monochrome_icon: ABSENT, // not found in Edge
         edit_icons: &[], // the search and globe icons of an edited address, not recorded for Edge yet
-        http_icon: 0x12ED4BE8, // ?kHttpChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
-        http_icon_name: b"kHttpChromeRefreshOldIcon",
+        http_icon: 0x12ED5728, // ?kEdgeVisualRefreshHttpIcon@omnibox@@3UVectorIcon@gfx@@B
+        http_icon_name: b"kEdgeVisualRefreshHttpIcon",
         page_info_bytes: &[
         0x1C, 0, 0, 0, 0, 0, 0x80, 0x41, 1, 0, 0, 0, 7, 0, 0, 0,
-        0x5C, 0x8F, 0x3A, 0x41, 0xEC, 0x51, 0x5C, 0x41, 0x12, 0, 0, 0, 0xD7, 0xA3, 0x30, 0xBF,
+        0, 0, 0x10, 0x41, 0, 0, 0x10, 0x41, 0x0A, 0, 0, 0, 0, 0, 0x80, 0x3F,
     ], // the same path data as Chrome's, checked against msedge.dll
-        page_info_reps: 0x12ED5018, // ?kSecurePageInfoChromeRefreshOldRepList@omnibox@@3QBUVectorIconRep@gfx@@B
-        page_info_id: 0x12ED5028, // ?kSecurePageInfoChromeRefreshOldIconId@omnibox@@3QBDB
-        page_info_path: 0x12EDC5E0, // ?kSecurePageInfoChromeRefreshOldPath@omnibox@@3QBUPathElement@gfx@@B
+        page_info_reps: 0x12ED5740, // ?kEdgeVisualRefreshHttpsValidRepList@omnibox@@3QBUVectorIconRep@gfx@@B
+        page_info_id: 0x12ED5750, // ?kEdgeVisualRefreshHttpsValidIconId@omnibox@@3QBDB
+        page_info_path: 0x12EE1130, // ?kEdgeVisualRefreshHttpsValidPath@omnibox@@3QBUPathElement@gfx@@B
+        page_info_size: 143,
+        http_size: 87,
+        extra_lock_icons: &[0x12ED57D0], // kEdgeVisualRefreshHttpsValidPageInfoIcon
+        extra_warning_icons: &[0x12ED5820, 0x12ED56E0], // kEdgeVisualRefreshNotSecureWarningIcon, kEdgeVisualRefreshDangerousIcon
         anchor_view_access_at: 0x28,
-        skip: "address updateicon anchor visible", // the address field, icons and bubble anchors are not recorded for Edge yet
+        skip: "updateicon anchor visible", // the address field, icons and bubble anchors are not recorded for Edge yet
         anchor_tracker_offset: 0x378, // BubbleDialogDelegate anchor view tracker, read by GetAnchorRect
     },
     vertical: VerticalTabs {
@@ -1977,6 +2012,13 @@ pub static EDGE: Build = Build {
         field_y: 5,
         field_height: 34,
         field_margin: 9,
+        icon_vtable: 0x11874418, // LocationIconView
+        icon_bounds: [5, 5, 26, 24],
+        text_vtable: 0x118C4218, // OmniboxViewViews
+        text_x: 35, // Edge insets its text 4 DIPs more than Chrome does
+        text_y: 5,
+        text_height: 24,
+        text_margin: 20,
         size_slot: 86,
         caption_gap: 34,
         toolbar_leading: 2,

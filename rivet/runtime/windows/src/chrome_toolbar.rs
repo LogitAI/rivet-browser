@@ -47,7 +47,6 @@ const LOCATION_ICON_SHIFT: i32 = 2;
 const TOOLBAR_BUTTON_PADDING: i32 = 4;
 /// `gfx::Font::Weight` values.
 const WEIGHT_NORMAL: u32 = 400;
-const WEIGHT_SEMIBOLD: u32 = 600;
 /// The title and the rest of the address text, as `0xAARRGGBB`.
 const TITLE_COLOUR: u32 = 0xFF4A_4850;
 const ADDRESS_COLOUR: u32 = 0xFF8A_8690;
@@ -853,7 +852,7 @@ unsafe extern "system" fn update_text_style(
     if display.title_len > 0 {
         let title = [0, display.title_len];
         apply_colour(render_text, TITLE_COLOUR, &title);
-        apply_weight(render_text, WEIGHT_SEMIBOLD, &title);
+        apply_weight(render_text, bv().title_weight, &title);
     }
 }
 
@@ -1723,6 +1722,8 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
     if [bv().back_icon, bv().forward_icon, bv().reload_icon, bv().page_info_icon, bv().google_g_icon, bv().google_g_monochrome_icon]
         .iter()
         .chain(bv().edit_icons.iter())
+        .chain(bv().extra_lock_icons.iter())
+        .chain(bv().extra_warning_icons.iter())
         .filter(|rva| **rva != crate::builds::ABSENT)
         .any(|rva| image.at(*rva, std::mem::size_of::<VectorIcon>()).is_none())
         || image.at(bv().page_info_reps, std::mem::size_of::<IconRep>()).is_none()
@@ -1733,7 +1734,7 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
     if icon.count != 1 || icon.reps as usize != base + bv().page_info_reps
         || icon.name as usize != base + bv().page_info_id
         || (*icon.reps).path as usize != base + bv().page_info_path
-        || (*icon.reps).size != 282
+        || (*icon.reps).size != bv().page_info_size
         || !prologue(bv().page_info_path, &bv().page_info_bytes)
     {
         return Err("this browser build has another page info icon".into());
@@ -1748,7 +1749,7 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
     }
     let http = &*((base + bv().http_icon) as *const VectorIcon);
     if http.count != 1
-        || (*http.reps).size != 263
+        || (*http.reps).size != bv().http_size
         || std::slice::from_raw_parts(http.name, bv().http_icon_name.len()) != bv().http_icon_name
     {
         return Err("this browser build has another icon for plain HTTP".into());
@@ -2273,6 +2274,8 @@ unsafe fn build_icons(base: usize) {
         ]
         .into_iter()
         .chain(bv().edit_icons.iter().map(|&rva| (rva, leak(search_path()))))
+        .chain(bv().extra_lock_icons.iter().map(|&rva| (rva, leak(lock_path()))))
+        .chain(bv().extra_warning_icons.iter().map(|&rva| (rva, leak(warning_path()))))
         .filter(|(rva, _)| *rva != crate::builds::ABSENT)
         .map(|(rva, path)| {
             let rep: &'static IconRep = Box::leak(Box::new(IconRep {

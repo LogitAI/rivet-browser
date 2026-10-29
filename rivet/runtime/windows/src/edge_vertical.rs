@@ -255,6 +255,19 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
             }
         }
     }
+    // Inside the address field the page info icon and the text keep the design's places.
+    if !skipped("edgechildren") && is_rivet_view_tree(view as usize) {
+        let table = *(view as *const usize);
+        let parent = *((view as usize + 0x198) as *const usize);
+        if parent > 0x10000 && *(parent as *const usize) == image.base + edge.field_vtable {
+            if table == image.base + edge.icon_vtable {
+                moved = edge.icon_bounds;
+            } else if table == image.base + edge.text_vtable {
+                let field_width = *((parent + 0x1C8 + 8) as *const i32);
+                moved = [edge.text_x, edge.text_y, field_width - edge.text_x - edge.text_margin, edge.text_height];
+            }
+        }
+    }
     // Bounds changes lay a view out at once, outside any widget layout or paint, so the layout of a
     // Rivet window's views runs in the window's scope.
     if !skipped("edgescope") && !crate::chrome_toolbar::active() && is_rivet_view_tree(view as usize) {
