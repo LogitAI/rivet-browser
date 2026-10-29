@@ -1696,6 +1696,12 @@ unsafe fn create_appbar(window: HWND) {
             "rivet: could not lay out caption buttons: {error}"
         ));
     }
+    if crate::whale_caption::supported() {
+        let placed = crate::whale_caption::install(|window| {
+            attached(window).then_some(crate::CAPTION_HEIGHT + chrome_layout::PANEL_TOP)
+        });
+        crate::vertical_tabs::trace(&format!("whale caption buttons: {placed:?}"));
+    }
     // The caption height and the top inset size the panel's top row, so they never depend on the
     // trace file. Failures show in the trace when it is on.
     let caption = chrome_layout::install_caption_height(|window| {

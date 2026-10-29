@@ -6,7 +6,8 @@
 //! The row that is left is laid out like Chrome's: Whale's layout puts its container 100 DIPs in, where
 //! the appbar's toggle needs 32, and makes the buttons 26 DIPs wide, where Chrome's are 28. Every layout
 //! ends in one `SetBoundsRect`, so that call is where the container, the buttons and the field get
-//! their Chrome rectangles, for the views of Rivet windows only.
+//! their Chrome rectangles, for the views of Rivet windows only. The layout places the three buttons once
+//! and not again while they stay as they are, so the container's own call is where they are moved.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,6 +34,10 @@ const FIRST_BUTTON: i32 = 6;
 /// The address field starts here, which puts its page info icon where Chrome's is, and is 34 DIPs tall.
 const FIELD_X: i32 = 107;
 const FIELD_HEIGHT: i32 = 34;
+/// Chrome's row is 44 DIPs: 5 above the field, 4 below it and the separator. Whale's is one shorter.
+const ROW_EXTRA: i32 = 1;
+/// The field and the buttons sit one DIP below the middle of what the container leaves, as Chrome's do.
+const CONTENT_SHIFT: i32 = 1;
 
 fn views() -> Option<&'static HiddenViews> {
     crate::builds::get().hidden_views.as_ref()
@@ -223,26 +228,48 @@ pub unsafe fn hide(window: HWND) -> bool {
     true
 }
 
+/// Whether `parent` is the root view of a Rivet window's browser view, where the toolbar and the page lie.
+unsafe fn is_root(row: &WhaleRow, parent: usize) -> bool {
+    parent > 0x10000 && crate::hide_strip::registered(parent.wrapping_sub(crate::builds::get().layout.browser_window_in_view))
+        && row.parent_offset != 0
+}
+
 /// The rectangle a view of the row gets in a Rivet window, or `None` to keep the browser's.
 /// `rect` is x, y, width and height in the parent's coordinates.
 unsafe fn placed(row: &WhaleRow, view: *mut c_void, rect: &[i32; 4]) -> Option<[i32; 4]> {
     let base = image::recorded()?.base;
     let class = (*(view as *const usize)).wrapping_sub(base);
-    let button = row.buttons.iter().position(|known| *known == class);
-    if class != row.container && class != row.field && button.is_none() {
-        return None;
-    }
-    if !in_rivet_window(view) {
-        return None;
-    }
     let parent = *((view as usize + row.parent_offset) as *const usize);
-    if parent < 0x10000 {
+    // Chrome's row is one DIP taller than Whale's, and everything the browser lays out below it moves down.
+    if class == row.toolbar && rect[3] == row.toolbar_height {
+        return is_root(row, parent).then_some([rect[0], rect[1], rect[2], rect[3] + ROW_EXTRA]);
+    }
+    if class == row.separator && rect[1] == row.toolbar_height - 1 && rect[3] == 1 {
+        // The line moves down with the row and runs the whole width, as Chrome's does.
+        if parent < 0x10000 || !in_rivet_window(view) {
+            return None;
+        }
+        let width = (*((parent + row.bounds_offset) as *const [i32; 4]))[2];
+        return (width >= rect[2]).then_some([0, rect[1] + ROW_EXTRA, width, rect[3]]);
+    }
+    if rect[1] == row.toolbar_height && rect[3] > ROW_EXTRA {
+        return is_root(row, parent).then_some([rect[0], rect[1] + ROW_EXTRA, rect[2], rect[3] - ROW_EXTRA]);
+    }
+    if class != row.container && class != row.field {
+        return None;
+    }
+    if !in_rivet_window(view) || parent < 0x10000 {
         return None;
     }
     let parent_bounds = *((parent + row.bounds_offset) as *const [i32; 4]);
     if class == row.container {
-        // The right edge stays where the browser put it, which is short of the caption buttons.
-        let right = rect[0] + rect[2];
+        // The right edge stays where the browser put it, which is short of the caption buttons, unless
+        // the buttons are moved: then the container reaches the room they leave.
+        let right = if crate::whale_caption::active() {
+            parent_bounds[2] - crate::whale_caption::RESERVE
+        } else {
+            rect[0] + rect[2]
+        };
         if rect[0] <= LEADING || right > parent_bounds[2] || right - LEADING <= 0 {
             return None;
         }
@@ -251,24 +278,47 @@ unsafe fn placed(row: &WhaleRow, view: *mut c_void, rect: &[i32; 4]) -> Option<[
     if (*(parent as *const usize)).wrapping_sub(base) != row.container {
         return None;
     }
-    let height = parent_bounds[3];
-    if class == row.field {
-        let right = rect[0] + rect[2];
-        if right - FIELD_X <= 0 {
-            return None;
-        }
-        return Some([FIELD_X, (height - FIELD_HEIGHT) / 2, right - FIELD_X, FIELD_HEIGHT]);
+    let right = rect[0] + rect[2];
+    if right - FIELD_X <= 0 {
+        return None;
     }
-    let index = button? as i32;
-    Some([FIRST_BUTTON + index * BUTTON_STEP, (height - BUTTON) / 2, BUTTON, BUTTON])
+    Some([FIELD_X, (parent_bounds[3] - FIELD_HEIGHT) / 2 + CONTENT_SHIFT, right - FIELD_X, FIELD_HEIGHT])
+}
+
+type SetBounds = unsafe extern "system" fn(*mut c_void, *const [i32; 4]);
+
+/// Moves the back, forward and reload buttons of a container, which the layout sets once and then leaves.
+unsafe fn place_buttons(row: &WhaleRow, container: *mut c_void, height: i32, set: SetBounds) {
+    let Some(image) = image::recorded() else { return };
+    let begin = *((container as usize + row.children_offset) as *const usize);
+    let end = *((container as usize + row.children_offset + 8) as *const usize);
+    if begin < 0x10000 || end < begin || (end - begin) / 8 > 512 {
+        return;
+    }
+    for index in 0..(end - begin) / 8 {
+        let child = *((begin + index * 8) as *const usize);
+        if child < 0x10000 {
+            continue;
+        }
+        let class = (*(child as *const usize)).wrapping_sub(image.base);
+        if let Some(position) = row.buttons.iter().position(|known| *known == class) {
+            let wanted = [FIRST_BUTTON + position as i32 * BUTTON_STEP, (height - BUTTON) / 2 + CONTENT_SHIFT, BUTTON, BUTTON];
+            set(child as *mut c_void, &wanted);
+        }
+    }
 }
 
 unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 4]) {
-    let original: unsafe extern "system" fn(*mut c_void, *const [i32; 4]) =
-        std::mem::transmute(ROW_ORIGINAL.load(Ordering::Acquire));
-    let moved = row().and_then(|row| placed(row, view, &*rect));
-    match moved {
-        Some(moved) => original(view, &moved),
+    let original: SetBounds = std::mem::transmute(ROW_ORIGINAL.load(Ordering::Acquire));
+    let Some(row) = row() else { return original(view, rect) };
+    match placed(row, view, &*rect) {
+        Some(moved) => {
+            original(view, &moved);
+            let base = image::recorded().map_or(0, |image| image.base);
+            if (*(view as *const usize)).wrapping_sub(base) == row.container {
+                place_buttons(row, view, moved[3], original);
+            }
+        }
         None => original(view, rect),
     }
 }
@@ -280,7 +330,7 @@ unsafe fn install_row() -> Result<(), String> {
             let row = row().ok_or("this browser build has no recorded top row")?;
             let image = image::recorded().ok_or("no recorded browser image")?;
             // Each class must hold functions of this image, so a build with other ones is left alone.
-            for vtable in [row.container, row.field].into_iter().chain(row.buttons) {
+            for vtable in [row.container, row.field, row.toolbar, row.separator].into_iter().chain(row.buttons) {
                 let first = *((image.base + vtable) as *const usize);
                 if first < image.base || first - image.base >= 0x1000_0000 {
                     return Err(format!("{vtable:#x} is not a recorded vtable"));
@@ -310,7 +360,9 @@ mod tests {
         assert_eq!((BUTTON, BUTTON_STEP - BUTTON), (28, 2));
         // Back, forward and reload fit before the address field with room left for it.
         assert!(FIRST_BUTTON + 2 * BUTTON_STEP + BUTTON < FIELD_X);
-        // The 34 DIP field and the 28 DIP buttons both fit the 42 DIP container Whale lays out.
-        assert!(FIELD_HEIGHT <= 42 && BUTTON <= FIELD_HEIGHT);
+        // The 34 DIP field and the 28 DIP buttons both fit the 42 DIP container Whale lays out, one DIP
+        // lower than centred, and the row Chrome has is one DIP taller than Whale's.
+        assert!(FIELD_HEIGHT + CONTENT_SHIFT <= 42 && BUTTON <= FIELD_HEIGHT);
+        assert_eq!((ROW_EXTRA, CONTENT_SHIFT), (1, 1));
     }
 }

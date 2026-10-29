@@ -313,6 +313,22 @@ pub struct WhaleRow {
     pub container: usize,
     pub buttons: [usize; 3],
     pub field: usize,
+    /// Whale keeps its caption buttons as children of the frame view, which has no caption container.
+    /// The frame's `Layout` sits in `frame_layout_slot` of `layout.frame_vtable`, and the start of its
+    /// children vector in `children_offset`. `caption` is the vtable of the minimize, maximize and close
+    /// buttons and `tab_search` that of the tab search button, a chevron the frame draws before them.
+    pub frame_layout_slot: usize,
+    pub frame_layout: usize,
+    /// The toolbar view's vtable and the height the browser's layout gives it, in DIPs. The layout does not
+    /// ask the toolbar for its size through its vtable, so a Rivet window grows the row where its rectangle is set.
+    pub toolbar: usize,
+    pub toolbar_height: i32,
+    /// The toolbar's separator, a 1 DIP tall view at its bottom edge that draws the line between the row and
+    /// the page. Whale lays it out 42 DIPs short of the right edge.
+    pub separator: usize,
+    pub children_offset: usize,
+    pub caption: usize,
+    pub tab_search: usize,
 }
 
 /// Values for `edge_page.rs`: Edge insets its page and paints a border around it, which would
@@ -2386,6 +2402,14 @@ pub static WHALE: Build = Build {
         container: 0xfaac4e0,
         buttons: [0xfb06c50, 0xfae1150, 0xfacbff0],
         field: 0xfabf960,
+        frame_layout_slot: 23,
+        frame_layout: 0x0E6D_E310,
+        toolbar: 0xfb84760,
+        toolbar_height: 43,
+        separator: 0xfb7f960,
+        children_offset: 0x198,
+        caption: 0xfb15d60,
+        tab_search: 0xfac5608,
     }),
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
@@ -2401,6 +2425,12 @@ pub static WHALE: Build = Build {
         top_inset_slot: 127,
         top_inset: 0xe2f32b0,
         frame_vtable: 0xfb16120,
+        // The caption buttons' `CalculatePreferredSize`, which lies among Whale's own overrides in their
+        // vtable. Their paint is the image button's, and the glyphs are resource images, so Chrome's ink
+        // colour swap has nothing to change here.
+        caption_vtable: 0xfb15d60,
+        caption_size_slot: 74,
+        caption_size: 0x0E2E_F360,
         frame_browser_window_offset: 0x338,
         browser_window_in_view: 0x210,
         ..UNCHECKED_LAYOUT
@@ -3349,6 +3379,7 @@ mod tests {
     #[test]
     fn fr12_whale_row_records_its_classes_and_the_bounds_function() {
         let row = WHALE.whale_row.as_ref().expect("Whale's top row is recorded");
+        let hidden = WHALE.hidden_views.as_ref().unwrap();
         let mut seen = std::collections::HashSet::new();
         for vtable in [row.container, row.field].into_iter().chain(row.buttons) {
             assert!(seen.insert(vtable), "{vtable:#x} is listed twice");
@@ -3357,8 +3388,16 @@ mod tests {
         assert!(row.set_bounds_rect_prologue.len() >= 12);
         assert_eq!(row.set_bounds_rect_prologue[row.set_bounds_rect_prologue.len() - 7..][..3], [0x48, 0x8B, 0x05]);
         assert_eq!((row.parent_offset, row.bounds_offset), (0x190, 0x1C0));
+        // The frame's layout and the caption buttons: their size is hooked like Chrome's, their paint is not.
+        assert_eq!((row.frame_layout_slot, row.children_offset), (23, 0x198));
+        assert_eq!(row.toolbar_height, 43);
+        assert!(![row.container, row.field, row.caption, row.tab_search, row.toolbar].contains(&row.separator));
+        assert!(![row.container, row.field, row.caption, row.tab_search].contains(&row.toolbar));
+        assert_ne!(row.caption, row.tab_search);
+        assert_eq!((WHALE.layout.caption_vtable, WHALE.layout.caption_size_slot), (row.caption, 74));
+        assert_ne!(WHALE.layout.caption_size, ABSENT);
+        assert_eq!(WHALE.layout.caption_paint, ABSENT);
         // The row sits among the classes the build already knows as its own.
-        let hidden = WHALE.hidden_views.as_ref().unwrap();
         assert_eq!(row.parent_offset, hidden.parent_offset);
         for vtable in [row.container, row.field].into_iter().chain(row.buttons) {
             assert!(hidden.classes.iter().all(|(hidden, _)| *hidden != vtable), "{vtable:#x} is hidden");

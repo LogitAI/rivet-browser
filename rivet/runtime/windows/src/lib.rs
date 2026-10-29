@@ -219,6 +219,7 @@ mod side_rail;
 mod chrome_tabs;
 mod hide_strip;
 #[cfg(windows)]
+mod whale_caption;
 mod whale_toolbar;
 #[cfg(windows)]
 mod chrome_toolbar;
