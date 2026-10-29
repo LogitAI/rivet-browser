@@ -124,6 +124,11 @@ const HEADER_PAD_LEFT: f32 = 14.0;
 const HEADER_PAD_RIGHT: f32 = 6.0;
 const HEADER_GAP: f32 = 8.0;
 const CLOSE_BUTTON: f32 = 28.0;
+/// How far the open panel's soft left shadow reaches over the page, as the mock-up's
+/// `box-shadow: -12px 0 32px rgba(40, 28, 30, .10)` does.
+const SHADOW_REACH: f32 = 44.0;
+const SHADOW_PEAK: f32 = 0.07;
+const SHADOW_INK: u32 = 0x281c1e;
 const CLOSE_GLYPH: char = '\u{E8BB}';
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,6 +524,18 @@ impl Rail {
     /// The header of an open extension panel, drawn like the mock-up's `.ext-panel header`: the
     /// accent icon, the name in 13 DIP semibold and a close button, over a hairline-bordered column.
     unsafe fn draw_panel(&self, context: &ID2D1DeviceContext, width: f32, height: f32, key: &PanelKey) -> Result<()> {
+        // The surface starts `SHADOW_REACH` left of the panel. A column at a time, the shadow falls
+        // off smoothly from the panel's edge.
+        let columns = SHADOW_REACH as i32;
+        for column in 0..columns {
+            let distance = (columns - column) as f32 / SHADOW_REACH;
+            let alpha = SHADOW_PEAK * (1.0 - distance).powi(2);
+            context.FillRectangle(&rect(column as f32, 0.0, 1.0, height), &context.CreateSolidColorBrush(&rgb(SHADOW_INK, alpha), None)?);
+        }
+        let mut base = Matrix3x2::identity();
+        context.GetTransform(&mut base);
+        context.SetTransform(&(Matrix3x2::translation(SHADOW_REACH, 0.0) * base));
+        let width = width - SHADOW_REACH;
         let hairline = context.CreateSolidColorBrush(&rgb(INK, 0.08), None)?;
         context.FillRectangle(&rect(0.0, 0.0, 1.0, height), &hairline);
         context.FillRectangle(&rect(1.0, 0.0, width - 1.0, HEADER_HEIGHT), &context.CreateSolidColorBrush(&rgb(PAPER, 1.0), None)?);
@@ -689,14 +706,15 @@ unsafe fn refresh_panel(rail: &mut Rail, geometry: PageGeometry, height: f32, dp
         return Ok(());
     };
     let scale = dpi as f32 / 96.0;
-    rail.panel.SetOffsetX2((panel_left(geometry) * scale).round())?;
+    rail.panel.SetOffsetX2(((panel_left(geometry) - SHADOW_REACH) * scale).round())?;
     rail.panel.SetOffsetY2((geometry.top as f32 * scale).round())?;
-    let (width_px, height_px) = ((PANEL_WIDTH as f32 * scale).round() as i32, (height * scale).round() as i32);
+    let panel_width = PANEL_WIDTH as f32 + SHADOW_REACH;
+    let (width_px, height_px) = ((panel_width * scale).round() as i32, (height * scale).round() as i32);
     let key = PanelKey { width: width_px, height: height_px, dpi, look, close_hover: rail.close_hover };
     if rail.panel_key.as_ref() != Some(&key) && width_px > 0 && height_px > 0 {
         let shown = key.clone();
         rail.paint(&rail.panel, width_px, height_px, dpi, |context| {
-            rail.draw_panel(context, PANEL_WIDTH as f32, height, &shown)
+            rail.draw_panel(context, panel_width, height, &shown)
         })?;
         rail.panel_key = Some(key);
     }

@@ -1,9 +1,9 @@
 //! Rivet's Sidebar, built on Chrome's own side panel.
 //!
-//! Chrome 156 keeps one `SidePanel` view in each browser window. It sits beside the page and
-//! hosts extension side panels, the reading list and the bookmarks. Rivet restyles that view in
+//! Chrome 156 keeps one `SidePanel` view in each browser window. It hosts extension side panels, the reading list and the bookmarks. Rivet restyles that view in
 //! its own windows only and opens its entries through Chrome's own side panel coordinator, so
-//! extension panels keep working.
+//! extension panels keep working. An open panel floats over the right part of the page, above it,
+//! and the page keeps its width up to the rail.
 //!
 //! Every address here belongs to Chrome 156.0.8078.48. Each one is checked against recorded
 //! instruction bytes before it is used.
@@ -620,6 +620,8 @@ const HOST_VIEW: usize = 0x38;
 /// The view behind the whole area below the top row, which the rail shares the height of.
 const PAGE_AREA: usize = 0x50;
 const CONTENTS_CONTAINER: usize = 0xb8;
+/// The browser's vertical tab list, which lies left of the page.
+const VERTICAL_TABS: usize = 0x80;
 /// The browser's top row: toolbar, address bar and the buttons around it.
 const TOOLBAR: usize = 0x60;
 /// The view that draws the outline around the contents, which has the contents' bounds.
@@ -652,27 +654,25 @@ unsafe fn bounds_of(map: *const c_void, view: usize) -> Option<*mut [i32; 4]> {
 
 /// The width of an open side panel, in DIPs. The mock-up's extension panel is 240 DIPs wide.
 pub const PANEL_WIDTH: i32 = 240;
-/// How far Chrome insets the contents from the left, top and bottom of the page area while a side
-/// panel is open, so they float. Rivet's page, panel and rail are one flat card, so the inset goes.
-const CONTENTS_INSET: i32 = 8;
 /// The height Rivet keeps free above an open side panel for its own header row.
 pub const HEADER_ROW: i32 = 40;
 
-/// Leaves `rail` DIPs at the right edge of the page area, and sizes an open side panel to
-/// `PANEL_WIDTH` beside the rail: the page, the open panel and the rail sit side by side with
-/// nothing between them, and the contents take what is left.
+/// Leaves `rail` DIPs at the right edge of the page area. The page keeps the width it has with no
+/// panel open. An open side panel is `PANEL_WIDTH` wide at the right end of the page, over it, and
+/// ends at the rail. `page` is the left and right edge the page has with no panel open.
 fn make_room(
     contents: &mut [i32; 4],
     outline: Option<&mut [i32; 4]>,
     side_panel: Option<&mut [i32; 4]>,
     animation: Option<&mut [i32; 4]>,
+    page: (i32, i32),
     rail: i32,
 ) {
     // The panel's right edge ends at the rail. While Chrome animates the panel in, it is narrower.
     let panel = side_panel
         .as_ref()
         .filter(|bounds| bounds[2] > 0)
-        .map(|bounds| (bounds[0] + bounds[2] - rail, bounds[2].min(PANEL_WIDTH), bounds[1], bounds[3]));
+        .map(|bounds| (page.1 - rail, bounds[2].min(PANEL_WIDTH), bounds[1], bounds[3]));
     for bounds in [side_panel, animation].into_iter().flatten() {
         bounds[0] = match panel {
             Some((edge, width, _, _)) => {
@@ -688,15 +688,30 @@ fn make_room(
     }
     for bounds in [Some(&mut *contents), outline].into_iter().flatten() {
         let right = match panel {
-            Some((edge, width, top, height)) => {
-                bounds[0] -= CONTENTS_INSET;
+            // Chrome shrank and insets the contents for the panel. The panel floats, so the
+            // contents are what they are with no panel: from the page's left to the rail. The caller
+            // gives both edges, because Chrome's own move while the panel slides in.
+            Some((edge, _, top, height)) => {
+                bounds[0] = page.0;
                 bounds[1] = top;
                 bounds[3] = height;
-                edge - width
+                edge
             }
             None => bounds[0] + bounds[2] - rail,
         };
         bounds[2] = (right - bounds[0]).max(1);
+    }
+}
+
+thread_local! {
+    static CONTENTS_SEEN: std::cell::Cell<[i32; 4]> = const { std::cell::Cell::new([0; 4]) };
+}
+
+/// Traces the page's bounds whenever a layout changes them, so a check can compare the page
+/// before and after a panel opens.
+fn trace_contents(window: HWND, contents: &[i32; 4]) {
+    if CONTENTS_SEEN.with(|seen| seen.replace(*contents)) != *contents {
+        trace(&format!("page {:x} bounds {contents:?}", window as isize));
     }
 }
 
@@ -745,13 +760,23 @@ unsafe extern "system" fn proposed_layout(
             let side_panel = bounds_of(out, field(SIDE_PANEL));
             let animation = bounds_of(out, field(SIDE_PANEL_ANIMATION));
             let outline = bounds_of(out, field(CONTENTS_OUTLINE));
+            let panel_view = field(SIDE_PANEL);
+            let area = bounds_of(out, field(PAGE_AREA)).map(|bounds| *bounds).unwrap_or([0; 4]);
+            // The page starts where the browser's vertical tab list ends.
+            let left = bounds_of(out, field(VERTICAL_TABS)).map_or((*contents)[0] - 8, |tabs| (*tabs)[0] + (*tabs)[2]);
             make_room(
                 &mut *contents,
                 outline.map(|bounds| &mut *bounds),
                 side_panel.map(|bounds| &mut *bounds),
                 animation.map(|bounds| &mut *bounds),
+                (left, area[0] + area[2]),
                 rail,
             );
+            // The panel floats over the page, so its layer paints above the page's.
+            if panel_view != 0 && side_panel.is_some_and(|bounds| (*bounds)[2] > 0) {
+                chrome_layout::raise_view(panel_view as *mut c_void);
+            }
+            trace_contents(window, &*contents);
         }
     }
     // In a split each page has its own top row, and the browser's is the active page's.
@@ -847,6 +872,8 @@ enum Command {
     Entries,
     Colours,
     Paint(Vec<(i32, u32)>),
+    /// Which view takes a click at a point of the browser view, to check what lies on top.
+    Hit(i32, i32),
 }
 
 impl Command {
@@ -861,6 +888,10 @@ impl Command {
             "layout" => return Some(Self::DumpLayout),
             "entries" => return Some(Self::Entries),
             "colours" => return Some(Self::Colours),
+            _ if text.starts_with("hit ") => {
+                let mut numbers = text["hit ".len()..].split_whitespace().filter_map(|word| word.parse().ok());
+                return Some(Self::Hit(numbers.next()?, numbers.next()?));
+            }
             _ if text.starts_with("paint") => {
                 let pairs = text["paint".len()..].split_whitespace().filter_map(|pair| {
                     let (id, value) = pair.split_once('=')?;
@@ -907,6 +938,24 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
             DUMP_LAYOUT.store(true, std::sync::atomic::Ordering::Relaxed);
             relayout_page_area(window);
         }
+        Some(Command::Hit(x, y)) => {
+            if let Some(found) = objects(window) {
+                let base = chrome_base();
+                let target: unsafe extern "system" fn(usize, *const [i32; 2]) -> usize =
+                    std::mem::transmute(base + 0x007C_6530);
+                let mut view = target(found.view, &[x, y]);
+                let mut chain = Vec::new();
+                for _ in 0..12 {
+                    if view == 0 || !readable(view, 8) {
+                        break;
+                    }
+                    let vtable = *(view as *const usize);
+                    chain.push(format!("{view:x}{}(vt {:x})", if view == found.side_panel { "=side panel" } else { "" }, vtable.wrapping_sub(base)));
+                    view = *((view + 0x198) as *const usize);
+                }
+                trace(&format!("hit {x} {y}: {}", chain.join(" < ")));
+            }
+        }
         Some(Command::Open(id)) => trace(&format!("open {id} -> {}", open_entry(window, id))),
         None => {}
     }
@@ -917,13 +966,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fr10_rail_takes_its_width_from_the_contents_and_moves_the_open_panel() {
+    fn fr10_open_panel_floats_over_the_page_and_leaves_its_width_alone() {
         let mut contents = [8, 47, 692, 591];
         let mut panel = [700, 46, 378, 600];
         let mut animation = [700, 46, 378, 600];
-        make_room(&mut contents, None, Some(&mut panel), Some(&mut animation), RAIL_WIDTH);
+        make_room(&mut contents, None, Some(&mut panel), Some(&mut animation), (0, 1078), RAIL_WIDTH);
         assert_eq!(panel, [799, 46 + HEADER_ROW, PANEL_WIDTH - 1, 600 - HEADER_ROW], "ends at the rail, below Rivet's header row, after its hairline");
-        assert_eq!(contents, [0, 46, 798, 600], "the contents lose Chrome's inset and end where the panel begins");
+        assert_eq!(contents, [0, 46, 1038, 600], "the page is as wide as with no panel open: up to the rail");
         assert_eq!(animation, panel);
     }
 
@@ -931,15 +980,29 @@ mod tests {
     fn fr10_rail_leaves_a_closed_side_panel_without_width_and_the_page_whole() {
         let mut contents = [0, 46, 1078, 600];
         let mut panel = [1078, 46, 0, 600];
-        make_room(&mut contents, None, Some(&mut panel), None, RAIL_WIDTH);
+        make_room(&mut contents, None, Some(&mut panel), None, (0, 1078), RAIL_WIDTH);
         assert_eq!(contents, [0, 46, 1038, 600]);
         assert_eq!(panel[2], 0);
     }
 
     #[test]
+    fn fr10_open_panel_keeps_the_page_whole_while_it_slides_in() {
+        // Chrome animates the panel in from outside the window and shifts the contents with it.
+        let mut contents = [270, 45, 900, 681];
+        let mut panel = [1200, 44, 120, 690];
+        make_room(&mut contents, None, Some(&mut panel), None, (268, 1092), RAIL_WIDTH);
+        assert_eq!(contents, [268, 44, 784, 690]);
+    }
+
+    #[test]
+    fn fr10_test_flag_asks_which_view_takes_a_click() {
+        assert!(matches!(Command::parse("hit 900 300"), Some(Command::Hit(900, 300))));
+    }
+
+    #[test]
     fn fr10_rail_never_collapses_the_page() {
         let mut contents = [0, 0, 20, 100];
-        make_room(&mut contents, None, None, None, RAIL_WIDTH);
+        make_room(&mut contents, None, None, None, (0, 20), RAIL_WIDTH);
         assert_eq!(contents[2], 1);
     }
 

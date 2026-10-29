@@ -1106,6 +1106,26 @@ unsafe fn raise_caption(container: *mut c_void) {
     }
 }
 
+/// Gives `view` its own layer and stacks it above its siblings' layers, so it paints over a
+/// sibling it overlaps, such as the page. Views order layers by tree position, so a later layout
+/// can undo it and the caller repeats it after each layout.
+pub unsafe fn raise_view(view: *mut c_void) {
+    let Some((set_layer, _, _)) = PANEL_LAYER.get() else { return };
+    let Some(stack_at_top) = STACK_AT_TOP.get() else { return };
+    let layer_of = || *(view.cast::<u8>().add(0x20) as *const *mut c_void);
+    if layer_of().is_null() {
+        set_layer(view, 1);
+    }
+    let layer = layer_of();
+    if layer.is_null() {
+        return;
+    }
+    let parent = *(layer.cast::<u8>().add(0x20) as *const *mut c_void);
+    if !parent.is_null() {
+        stack_at_top(parent, layer);
+    }
+}
+
 fn panel_caption_bounds(bounds: [i32; 4], height: i32) -> [i32; 4] {
     // The container ends at the window edge, but the panel ends one gap before it.
     [bounds[0] - PANEL_GAP, PANEL_GAP, bounds[2], height.max(0)]
