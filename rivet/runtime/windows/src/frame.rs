@@ -2444,6 +2444,25 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     crate::chrome_split::probe(window);
                 }
             }
+            // A checked build runs one tab command from `rivet-tab.txt` without a pointer: `new`,
+            // `activate N` or `close N`, and traces the tab list afterwards.
+            if let Some(flag) = runtime_directory().map(|dir| dir.join("rivet-tab.txt")) {
+                if let Ok(text) = std::fs::read_to_string(&flag) {
+                    let _ = std::fs::remove_file(&flag);
+                    let mut words = text.split_whitespace();
+                    let index = words.clone().nth(1).and_then(|word| word.parse::<usize>().ok()).unwrap_or(0);
+                    let done = match words.next() {
+                        Some("new") => crate::chrome_tabs::new_tab(window),
+                        Some("activate") => crate::chrome_tabs::activate_tab(window, index),
+                        Some("close") => crate::chrome_tabs::close_tab(window, index),
+                        _ => false,
+                    };
+                    let titles: Vec<String> = crate::chrome_tabs::tabs(window)
+                        .map(|tabs| tabs.iter().map(|tab| format!("{}{}", if tab.active { "*" } else { "" }, tab.title)).collect())
+                        .unwrap_or_default();
+                    crate::vertical_tabs::trace(&format!("tab command {:?}: {done} tabs {titles:?}", text.trim()));
+                }
+            }
             // A checked build drops the first inactive tab on a side of the page without a pointer.
             if let Some(flag) = runtime_directory().map(|dir| dir.join("rivet-drop.flag")) {
                 if let Ok(text) = std::fs::read_to_string(&flag) {

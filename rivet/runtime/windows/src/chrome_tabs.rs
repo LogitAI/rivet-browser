@@ -61,7 +61,7 @@ unsafe fn browser(base: usize, window: HWND) -> Option<*mut c_void> {
     if view.is_null() {
         return None;
     }
-    let holder = *(view.add(0x560) as *const *mut u8);
+    let holder = *(view.add(bv().browser_in_view) as *const *mut u8);
     if holder.is_null() {
         return None;
     }
@@ -114,7 +114,11 @@ pub unsafe fn tabs(window: HWND) -> Option<Vec<crate::tab_rows::Tab>> {
     let active_index = (0..count)
         .find(|index| function::<TabAt>(base, bv().tab_at)(model, *index) == active)
         .unwrap_or(0) as usize;
-    let group_model = *(model.cast::<u8>().add(8) as *const *mut c_void);
+    let group_model: *mut c_void = if bv().groups {
+        *(model.cast::<u8>().add(8) as *const *mut c_void)
+    } else {
+        std::ptr::null_mut()
+    };
     let mut tabs = Vec::with_capacity(titles.len());
     for (index, title) in titles.into_iter().enumerate() {
         let mut optional = [0u8; 24];
@@ -312,7 +316,11 @@ pub unsafe fn probe_group(window: HWND) {
     crate::vertical_tabs::trace(&format!("group probe: created {id:02x?}"));
     type Get = unsafe extern "system" fn(*mut c_void, *mut [u8; 24], i32) -> *mut [u8; 24];
     type Lookup = unsafe extern "system" fn(*mut c_void, *const u8) -> *mut u8;
-    let group_model = *(model.cast::<u8>().add(8) as *const *mut c_void);
+    let group_model: *mut c_void = if bv().groups {
+        *(model.cast::<u8>().add(8) as *const *mut c_void)
+    } else {
+        std::ptr::null_mut()
+    };
     for i in 0..3 {
         let mut optional = [0u8; 24];
         function::<Get>(base, 0x0311_2320)(model, &mut optional, i);
@@ -477,7 +485,11 @@ pub unsafe fn toggle_group(window: HWND, id: &[u8; 16]) -> bool {
     let Some(model) = tab_model(base, window) else {
         return false;
     };
-    let group_model = *(model.cast::<u8>().add(8) as *const *mut c_void);
+    let group_model: *mut c_void = if bv().groups {
+        *(model.cast::<u8>().add(8) as *const *mut c_void)
+    } else {
+        std::ptr::null_mut()
+    };
     if group_model.is_null() || !function::<HasGroup>(base, bv().has_group)(group_model, id.as_ptr()) {
         return false;
     }

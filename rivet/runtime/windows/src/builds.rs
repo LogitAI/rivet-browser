@@ -217,6 +217,10 @@ pub struct Toolbar {
     pub overrides: &'static [(i32, i32)],
     /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
     pub colours: &'static [(i32, u32)],
+    /// `ui::ColorProvider::GetColor(this, id)`. A provider makes a colour the first time it is asked
+    /// for it, so one that was never asked for is asked for before its value is replaced.
+    pub get_color: usize,
+    pub get_color_bytes: &'static [u8],
     /// `views::HWNDForWidget`, which is a call and a jump through two thunks.
     pub hwnd_for_widget: usize,
     pub hwnd_for_widget_head: &'static [u8],
@@ -367,6 +371,9 @@ pub struct Tabs {
     pub content_window_for_hwnd: usize,
     pub browser_view_for_window: usize,
     pub active_web_contents: usize,
+    /// Where the browser view keeps its `Browser`, and whether the tab groups of this build are read.
+    pub browser_in_view: usize,
+    pub groups: bool,
     /// Tab strip and browser actions for Chrome 156.0.8078.48.
     pub get_tab_model: usize,
     pub tab_count: usize,
@@ -845,6 +852,8 @@ pub static CHROME: Build = Build {
         (1611, 0x0F1F_2024), // kColorToolbarInkDropHover
         (1612, 0x1F1F_2024), // kColorToolbarInkDropRipple
     ],
+        get_color: 0x04AA24F0,
+        get_color_bytes: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x89, 0xD7],
         hwnd_for_widget: 0x0AC0_B080, // ?HWNDForWidget@views@@YAPEAUHWND__@@PEBVWidget@1@@Z
         hwnd_for_widget_head: &[0x48, 0x83, 0xEC, 0x28],
         hwnd_for_widget_tail: &[0x48, 0x89, 0xC1, 0x48, 0x83, 0xC4, 0x28, 0xE9],
@@ -934,6 +943,8 @@ pub static CHROME: Build = Build {
         content_window_for_hwnd: 0x00D5_64A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         browser_view_for_window: 0x0BC8_1E10, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
         active_web_contents: 0x0BC8_2340, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        browser_in_view: 0x560,
+        groups: true,
         get_tab_model: 0x04FB_01F0, // ?Client@WebLocalFrameImpl@blink@@UEBAPEAVWebLocalFrameClient@2@XZ
         tab_count: 0x0369_CBE0, // ?count@TabStripModel@@QEBAHXZ
         tab_at: 0x0311_22A0, // ?GetWebContentsAt@TabStripModel@@QEBAPEAVWebContents@content@@H@Z
@@ -1262,56 +1273,62 @@ pub static EDGE: Build = Build {
         paint_children_slot: 100,
         overrides: &[], // Edge numbers its layout constants differently; filled in once traced
         colours: &[
-        (0x13C, PAPER),      // kColorFrameActive
-        (796, PAPER),        // kColorLocationBarBackground
-        (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
-        (1003, 0),           // Page info chip background: clear, so the field is one surface
+        (316, PAPER),      // kColorFrameActive
+        (2082, PAPER),        // kColorLocationBarBackground
+        (2083, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
+        (2298, 0),           // Page info chip background: clear, so the field is one surface
         (159, FOCUS_RING),   // kColorSysStateFocusRing
         (314, FOCUS_RING),   // kColorFocusableBorderFocused
         (465, SELECTION),    // kColorTextfieldSelectionBackground
         (466, INK),          // kColorTextfieldSelectionForeground
-        (1004, 0),           // kColorOmniboxIconBackgroundTonal
-        (1005, SOFT_INK),    // kColorOmniboxIconForeground: the icon of the field while editing
-        (1006, SOFT_INK),    // kColorOmniboxIconForegroundTonal
-        (1007, INK),         // kColorOmniboxIconHover
-        (1013, PAPER),       // kColorOmniboxResultsBackground, the suggestion list and the field with it
-        (1014, 0xFFF0_EFEC), // kColorOmniboxResultsBackgroundHovered
-        (1015, 0x0F1F_2024), // kColorOmniboxResultsBackgroundHoverOverlay
-        (1016, ACCENT_TINT), // kColorOmniboxResultsBackgroundSelected: the accent at 9 percent over paper
-        (1019, SOFT_INK),    // kColorOmniboxResultsButtonIcon
-        (1020, INK),         // kColorOmniboxResultsButtonIconSelected
-        (1028, 0),           // kColorOmniboxResultsFocusIndicator: the design marks a row by its tint alone
-        (1029, SOFT_INK),    // kColorOmniboxResultsIcon
-        (1030, 0x0F1F_2024), // kColorOmniboxResultsIconGM3Background
-        (1031, INK),         // kColorOmniboxResultsIconSelected
-        (1032, INK),         // kColorOmniboxResultsIconHovered
-        (1035, 0xFF8A_8690), // kColorOmniboxResultsTextDimmed
-        (1036, 0xFF4A_4850), // kColorOmniboxResultsTextDimmedSelected
-        (1041, 0xFF8A_8690), // kColorOmniboxResultsTextSecondary
-        (1042, 0xFF4A_4850), // kColorOmniboxResultsTextSecondarySelected
-        (1043, INK),         // kColorOmniboxResultsTextSelected
-        (1044, 0xFF4A_4850), // kColorOmniboxResultsUrl
-        (1045, INK),         // kColorOmniboxResultsUrlSelected
-        (1052, SOFT_INK),    // kColorOmniboxSecurityChipText: the icon of the field while editing
-        (1053, SELECTION),   // kColorOmniboxSelectionBackground: the accent at 25 percent over paper
-        (1054, INK),         // kColorOmniboxSelectionForeground
-        (1046, 0xFFB3_261E), // kColorOmniboxSecurityChipDangerous: the "Not secure" label and its warning
-        (1047, 0x14B3_261E), // kColorOmniboxSecurityChipDangerousBackground: the label's tint, 8 percent
-        (1055, INK),         // kColorOmniboxText: the address while it is edited
-        (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
-        (1590, PAPER),       // kColorToolbar
-        (1644, 0xFF1A_1A1A), // Caption button glyph, active window
-        (1645, 0xFF1A_1A1A), // Caption button glyph, inactive window
-        (1646, 0xFF1A_1A1A), // Caption button glyph without a theme colour
-        (1647, 0xFFC4_2B1C), // Close button hover fill
-        (1650, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
-        (1595, 0xFF4A_4850), // kColorToolbarButtonIcon
-        (1598, 0xFF1F_2024), // kColorToolbarButtonIconHovered
-        (1599, 0xFFBD_BCBC), // kColorToolbarButtonIconInactive: the icon colour at 35 percent over paper
-        (1603, HAIRLINE),    // kColorToolbarContentAreaSeparator
-        (1611, 0x0F1F_2024), // kColorToolbarInkDropHover
-        (1612, 0x1F1F_2024), // kColorToolbarInkDropRipple
-    ], // Chrome value, not checked on Edge
+        (2299, 0),           // kColorOmniboxIconBackgroundTonal
+        (2300, SOFT_INK),    // kColorOmniboxIconForeground: the icon of the field while editing
+        (2301, SOFT_INK),    // kColorOmniboxIconForegroundTonal
+        (2302, INK),         // kColorOmniboxIconHover
+        (2308, PAPER),       // kColorOmniboxResultsBackground, the suggestion list and the field with it
+        (2309, 0xFFF0_EFEC), // kColorOmniboxResultsBackgroundHovered
+        (2310, 0x0F1F_2024), // kColorOmniboxResultsBackgroundHoverOverlay
+        (2311, ACCENT_TINT), // kColorOmniboxResultsBackgroundSelected: the accent at 9 percent over paper
+        (2314, SOFT_INK),    // kColorOmniboxResultsButtonIcon
+        (2315, INK),         // kColorOmniboxResultsButtonIconSelected
+        (2323, 0),           // kColorOmniboxResultsFocusIndicator: the design marks a row by its tint alone
+        (2324, SOFT_INK),    // kColorOmniboxResultsIcon
+        (2325, 0x0F1F_2024), // kColorOmniboxResultsIconGM3Background
+        (2326, INK),         // kColorOmniboxResultsIconSelected
+        (2327, INK),         // kColorOmniboxResultsIconHovered
+        (2330, 0xFF8A_8690), // kColorOmniboxResultsTextDimmed
+        (2331, 0xFF4A_4850), // kColorOmniboxResultsTextDimmedSelected
+        (2336, 0xFF8A_8690), // kColorOmniboxResultsTextSecondary
+        (2337, 0xFF4A_4850), // kColorOmniboxResultsTextSecondarySelected
+        (2338, INK),         // kColorOmniboxResultsTextSelected
+        (2339, 0xFF4A_4850), // kColorOmniboxResultsUrl
+        (2340, INK),         // kColorOmniboxResultsUrlSelected
+        (2347, SOFT_INK),    // kColorOmniboxSecurityChipText: the icon of the field while editing
+        (2348, SELECTION),   // kColorOmniboxSelectionBackground: the accent at 25 percent over paper
+        (2349, INK),         // kColorOmniboxSelectionForeground
+        (2341, 0xFFB3_261E), // kColorOmniboxSecurityChipDangerous: the "Not secure" label and its warning
+        (2342, 0x14B3_261E), // kColorOmniboxSecurityChipDangerousBackground: the label's tint, 8 percent
+        (2350, INK),         // kColorOmniboxText: the address while it is edited
+        (2351, 0xFF8A_8690), // kColorOmniboxTextDimmed
+        (2893, PAPER),       // kColorToolbar
+        (2947, 0xFF1A_1A1A), // Caption button glyph, active window
+        (2948, 0xFF1A_1A1A), // Caption button glyph, inactive window
+        (2949, 0xFF1A_1A1A), // Caption button glyph without a theme colour
+        (2950, 0xFFC4_2B1C), // Close button hover fill
+        (2953, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
+        (2898, 0xFF4A_4850), // kColorToolbarButtonIcon
+        (2901, 0xFF1F_2024), // kColorToolbarButtonIconHovered
+        (2902, 0xFFBD_BCBC), // kColorToolbarButtonIconInactive: the icon colour at 35 percent over paper
+        (2906, HAIRLINE),    // kColorToolbarContentAreaSeparator
+        (2914, 0x0F1F_2024), // kColorToolbarInkDropHover
+        (2915, 0x1F1F_2024), // kColorToolbarInkDropRipple
+        (3009, PAPER),       // the field's fill while it has focus, one of the two ids RefreshBackground picks
+        (3011, 0),           // the field's outline, which the design does not draw, in each of its states
+        (3013, 0),
+        (3014, 0),
+    ], // Chrome's ids moved to Edge's: +1286 for the field's background, +1295 for the omnibox block, +1303 for the toolbar block, found by matching the functions that ask for them
+        get_color: 0x0100309E,
+        get_color_bytes: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48],
         hwnd_for_widget: 0x0B379B4D, // ?HWNDForWidget@views@@YAPEAUHWND__@@PEBVWidget@1@@Z
         hwnd_for_widget_head: &[0x48, 0x83, 0xEC, 0x28], // Chrome value, not checked on Edge
         hwnd_for_widget_tail: &[0x48, 0x89, 0xC1, 0x48, 0x83, 0xC4, 0x28, 0xE9], // Chrome value, not checked on Edge
@@ -1388,10 +1405,12 @@ pub static EDGE: Build = Build {
         ],
     },
     tabs: Tabs {
-        supported: false, // not checked on Edge yet
+        supported: true, // tab list, switching, closing and new tabs checked on Edge 156.0.4314.50; groups are not
         content_window_for_hwnd: 0x026A4DC6, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         browser_view_for_window: 0x010CDAE8, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
         active_web_contents: 0x0CAE5550, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        browser_in_view: 0x618, // BrowserView::EdgeIsVerticalTabStripVisible reads the browser here
+        groups: false, // the group model's layout is not checked on Edge
         get_tab_model: 0x055E0CE0, // ?PdfSize@DocumentMetadata@datamodel@edge_pdf@@QEBA_KXZ
         tab_count: 0x010CBBCE, // ?count@TabStripModel@@QEBAHXZ
         tab_at: 0x0105E38E, // ?GetWebContentsAt@TabStripModel@@QEBAPEAVWebContents@content@@H@Z
@@ -1413,7 +1432,6 @@ pub static EDGE: Build = Build {
             (0x02698560, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD6, 0x45, 0x85, 0xC0, 0x0F]),
             (0x0A3F1DFE, &[0x48, 0x8B, 0x41, 0x08, 0x48, 0x85, 0xC0, 0x74, 0x3F, 0x48, 0x83, 0xC1]),
             (0x0A3F1E94, &[0x48, 0x8B, 0x41, 0x08, 0x48, 0x85, 0xC0, 0x0F, 0x84, 0x80, 0x00, 0x00]),
-            (0x7FFF0000, &[0x00]),
             (0x026A4DC6, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
             (0x010CDAE8, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
             (0x0CAE5550, &[0x48, 0x8B, 0x81, 0x18, 0x06, 0x00, 0x00]),
@@ -1513,7 +1531,7 @@ pub static EDGE: Build = Build {
         on_paint: 0x02B44110, // ?OnPaint@BrowserFrameViewWin@@MEAAXPEAVCanvas@gfx@@@Z
         get_color_provider: 0x01003060, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
         draw_color: 0x02A3F86A, // ?DrawColor@Canvas@gfx@@QEAAXI@Z
-        frame_ids: &[0x13C, 0x13D, 0x140, 321, 0x144], // Chrome value, not checked on Edge
+        frame_ids: &[0x13C, 0x13D, 0x140, 321, 0x144, 3406], // 3406 is what BrowserFrameViewWin::PaintTitlebar fills the caption row with
         corner_vtable: 0x118B7ED8, // CustomFloatingCorner vtable
         corner_paint: 0x0A66B240, // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         caption_vtable: 0x118F2478, // WindowsCaptionButton vtable
@@ -1716,5 +1734,20 @@ mod tests {
         }
         // A hidden class reads its own theme function, which is never the zero address.
         assert!(EDGE.toolbar.hidden.iter().all(|(_, theme)| *theme != 0));
+    }
+
+    #[test]
+    fn fr3_a_build_with_tabs_checks_only_functions_it_has() {
+        for build in all() {
+            if build.tabs.supported {
+                for (rva, _) in build.tabs.signatures {
+                    assert_ne!(*rva, ABSENT, "{} checks a function it does not have", build.module);
+                }
+                assert!(build.tabs.browser_in_view >= 0x100);
+            }
+        }
+        // Edge keeps its Browser at another place in the browser view, and its groups are not read.
+        assert_ne!(CHROME.tabs.browser_in_view, EDGE.tabs.browser_in_view);
+        assert!(CHROME.tabs.groups && !EDGE.tabs.groups);
     }
 }

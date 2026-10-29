@@ -252,6 +252,53 @@ unsafe fn is_live_view(view: usize) -> bool {
     image::recorded().is_some_and(|image| table >= image.base && table < image.base + image.size)
 }
 
+/// Trace only: colours to try, one `id=AARRGGBB` per line of `rivet-colours.txt` next to the runtime.
+fn trace_colours() -> Vec<(i32, u32)> {
+    static TRIED: OnceLock<Vec<(i32, u32)>> = OnceLock::new();
+    TRIED
+        .get_or_init(|| {
+            let text = unsafe { crate::frame::runtime_directory() }
+                .and_then(|dir| std::fs::read_to_string(dir.join("rivet-colours.txt")).ok())
+                .unwrap_or_default();
+            text.lines()
+                .filter_map(|line| {
+                    let (id, colour) = line.trim().split_once('=')?;
+                    Some((id.trim().parse().ok()?, u32::from_str_radix(colour.trim(), 16).ok()?))
+                })
+                .collect()
+        })
+        .clone()
+}
+
+/// Trace only: `scan=AARRGGBB` in `rivet-colours.txt` asks for every colour id that holds that value to
+/// be replaced, which finds the id of something drawn in a colour whose name is not known.
+fn scan_request() -> Option<(u32, u32)> {
+    let text = unsafe { crate::frame::runtime_directory() }
+        .and_then(|dir| std::fs::read_to_string(dir.join("rivet-colours.txt")).ok())?;
+    let line = text.lines().find_map(|line| line.trim().strip_prefix("scan="))?;
+    let (value, repl) = line.split_once(':')?;
+    Some((u32::from_str_radix(value.trim(), 16).ok()?, u32::from_str_radix(repl.trim(), 16).ok()?))
+}
+
+static SCANNED: Mutex<Vec<(i32, u32)>> = Mutex::new(Vec::new());
+static SCAN_DONE: AtomicBool = AtomicBool::new(false);
+
+unsafe fn scan_colours(hooks: &Hooks, provider: *const u8) {
+    if SCAN_DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let Some((value, repl)) = scan_request() else { return };
+    let get_color: unsafe extern "system" fn(*const u8, i32) -> u32 = std::mem::transmute(hooks.base + bv().get_color);
+    let mut found = Vec::new();
+    for id in 0..4000 {
+        if get_color(provider, id) == value {
+            found.push((id, repl));
+        }
+    }
+    crate::vertical_tabs::trace(&format!("scan {value:#010x}: {} ids {:?}", found.len(), found.iter().map(|(id, _)| *id).collect::<Vec<_>>()));
+    *SCANNED.lock().unwrap_or_else(|error| error.into_inner()) = found;
+}
+
 static COLOURS_DUMPED: AtomicBool = AtomicBool::new(false);
 
 unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
@@ -283,8 +330,17 @@ unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
     }
     SWAPPED.with(|swapped| {
         let mut swapped = swapped.borrow_mut();
-        for &(id, colour) in bv().colours {
-            if let Some(slot) = colour_slot(provider, id) {
+        scan_colours(hooks, provider);
+        let scanned = SCANNED.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        for (id, colour) in bv().colours.iter().copied().chain(trace_colours()).chain(scanned) {
+            let mut found = colour_slot(provider, id);
+            if found.is_none() {
+                // Asking makes the provider produce the colour and keep it.
+                let get_color: unsafe extern "system" fn(*const u8, i32) -> u32 = std::mem::transmute(hooks.base + bv().get_color);
+                get_color(provider, id);
+                found = colour_slot(provider, id);
+            }
+            if let Some(slot) = found {
                 let original = slot.read();
                 if first_swap(id) {
                     crate::vertical_tabs::trace(&format!("colour {id:#x} replaced {original:#010x} with {colour:#010x}"));
@@ -1563,6 +1619,7 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
         || !prologue(bv().theme_changed, &bv().theme_changed_prologue)
         || !prologue(bv().paint_layer, &bv().paint_layer_prologue)
         || !prologue(bv().set_visible, &bv().set_visible_prologue)
+        || !prologue(bv().get_color, &bv().get_color_bytes)
         || !prologue(bv().layout_insets, &bv().layout_insets_prologue)
         || !prologue(bv().anchor_rect, &bv().anchor_rect_prologue)
         || !prologue(bv().anchor_rect + bv().anchor_view_access_at, &bv().anchor_view_access)
