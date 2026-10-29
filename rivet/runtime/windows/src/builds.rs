@@ -2461,7 +2461,7 @@ pub static BRAVE: Build = Build {
         update_location: 0x01665520, // ?Update@LocationIconView@@QEAAX_N0@Z
         update_location_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00],
         update_location_icon: 0x01665BE0, // ?UpdateIcon@LocationIconView@@QEAAXXZ
-        update_location_icon_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x98, 0x00, 0x00, 0x00, 0x48, 0x89, 0xCE, 0x48],
+        update_location_icon_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x98, 0x00, 0x00, 0x00, 0x48, 0x89, 0xCE],
         layout_insets: 0x007F42E0, // ?GetLayoutInsets@@YA?AVInsets@gfx@@W4LayoutInset@@@Z
         layout_insets_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x89, 0xD7, 0x48, 0x89, 0xCE],
         toolbar_button_inset: 6,
@@ -2668,7 +2668,7 @@ pub static BRAVE: Build = Build {
         extra_lock_icons: &[],
         extra_warning_icons: &[],
         anchor_view_access_at: 0x2a,
-        skip: "address updateicon anchor",
+        skip: "anchor",
         anchor_tracker_offset: 0x300,
     },
     vertical: VerticalTabs {
@@ -3180,6 +3180,7 @@ mod tests {
     fn fr12_brave_156_toolbar_and_vertical_tab_hooks_match_the_installed_build() {
         // Brave shifts Chromium's colour ids after the first Chrome one by its own 17.
         assert!(!BRAVE.toolbar.skip.contains("toolbar"));
+        assert!(!BRAVE.toolbar.skip.contains("address"));
         assert_eq!(BRAVE.layout.caption_ink_ids, &[CHROME.layout.caption_ink_ids[0] + 17, CHROME.layout.caption_ink_ids[1] + 17, CHROME.layout.caption_ink_ids[2] + 17]);
         for (brave, chrome) in BRAVE.toolbar.colours.iter().zip(CHROME.toolbar.colours) {
             let shifted = if chrome.0 >= 574 { chrome.0 + 17 } else { chrome.0 };
@@ -3209,6 +3210,16 @@ mod tests {
             ("set brightness", toolbar.set_brightness, toolbar.set_brightness_prologue),
             ("update icon", toolbar.update_icon, toolbar.update_icon_prologue),
             ("update location icon", toolbar.update_location_icon, toolbar.update_location_icon_prologue),
+            ("update location", toolbar.update_location, toolbar.update_location_prologue),
+            ("textfield theme", toolbar.textfield_theme, toolbar.textfield_theme_prologue),
+            ("refresh background", toolbar.refresh_background, toolbar.refresh_background_prologue),
+            ("formatted url", toolbar.formatted_url, toolbar.formatted_url_prologue),
+            ("update text style", toolbar.update_text_style, toolbar.update_text_style_prologue),
+            ("title was set", toolbar.title_was_set, toolbar.title_was_set_prologue),
+            ("omnibox update", toolbar.omnibox_update, toolbar.omnibox_update_prologue),
+            ("omnibox revert all", toolbar.omnibox_revert_all, toolbar.omnibox_revert_all_prologue),
+            ("omnibox tab changed", toolbar.omnibox_tab_changed, toolbar.omnibox_tab_changed_prologue),
+            ("chip text", toolbar.chip_text, toolbar.chip_text_prologue),
             ("controller destructor", BRAVE.vertical.destructor, BRAVE.vertical.destructor_prologue),
         ] {
             assert_eq!(
