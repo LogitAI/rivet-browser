@@ -441,6 +441,13 @@ pub struct VerticalTabs {
     /// caller. Other callers ask the same question for other reasons, and the frame view takes the
     /// caption buttons away with the strip when it hears the answer.
     pub window_feature_callers: (usize, usize),
+    /// `View::SetBoundsRect` and the offset of the toolbar view in the browser view. With the strip
+    /// gone the toolbar runs under the caption buttons, so Rivet detours the bounds function to stop
+    /// the toolbar of a Rivet window short of them. The prologue must be 12 or more bytes with no
+    /// relative operand.
+    pub set_bounds_rect: usize,
+    pub set_bounds_rect_prologue: &'static [u8],
+    pub toolbar_in_view: usize,
     /// Whether a Rivet window leaves that function out of its layout by a detour, with this build's
     /// prologue copied to a trampoline. Only builds where this has been checked set it.
     pub detour_strip: bool,
@@ -899,6 +906,9 @@ const UNCHECKED_VERTICALTABS: VerticalTabs = VerticalTabs {
     window_feature_prologue: &[0],
     window_feature_tab_strip: 0,
     window_feature_callers: (0, 0),
+    set_bounds_rect: ABSENT,
+    set_bounds_rect_prologue: &[0],
+    toolbar_in_view: 0,
     detour_strip: false,
 };
 
@@ -1384,6 +1394,9 @@ pub static CHROME: Build = Build {
         window_feature_prologue: &[0],
         window_feature_tab_strip: 0,
         window_feature_callers: (0, 0),
+        set_bounds_rect: ABSENT,
+        set_bounds_rect_prologue: &[0],
+        toolbar_in_view: 0,
         detour_strip: false,
     },
     navigation: Navigation {
@@ -1891,6 +1904,9 @@ pub static EDGE: Build = Build {
         window_feature_prologue: &[0],
         window_feature_tab_strip: 0,
         window_feature_callers: (0, 0),
+        set_bounds_rect: ABSENT,
+        set_bounds_rect_prologue: &[0],
+        toolbar_in_view: 0,
         detour_strip: false,
     },
     navigation: Navigation {
@@ -2495,6 +2511,9 @@ pub static SAMSUNG: Build = Build {
         window_feature_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x44, 0x89, 0xC3, 0x89, 0xD6],
         window_feature_tab_strip: 2,
         window_feature_callers: (0x013C_8310, 0x013C_A742),
+        set_bounds_rect: 0x047C_EA60,
+        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        toolbar_in_view: 0x5B0,
         detour_strip: true,
         ..UNCHECKED_VERTICALTABS
     },
@@ -2868,6 +2887,8 @@ mod tests {
         assert_eq!(file_bytes(&file, 0x13c8510, 5).as_deref(), Some(&[0xE8, 0xFB, 0x35, 0xE3, 0xFE][..]));
         let callers = SAMSUNG.vertical.window_feature_callers;
         assert!(callers.0 <= 0x13c8510 && 0x13c8515 <= callers.1);
+        let bounds = SAMSUNG.vertical.set_bounds_rect_prologue;
+        assert_eq!(file_bytes(&file, SAMSUNG.vertical.set_bounds_rect, bounds.len()).as_deref(), Some(bounds));
         let bytes = SAMSUNG.vertical.window_feature_prologue;
         assert_eq!(file_bytes(&file, SAMSUNG.vertical.window_feature, bytes.len()).as_deref(), Some(bytes));
         for (rva, bytes) in SAMSUNG.tabs.signatures {

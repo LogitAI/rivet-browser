@@ -20,6 +20,7 @@ use crate::chrome_layout::image;
 type ShouldDraw = unsafe extern "system" fn(*const c_void) -> bool;
 
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+static BOUNDS_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static FEATURE_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 /// Each Rivet window and its browser, so a closed window's browser is forgotten by the window.
 static BROWSERS: Mutex<Vec<(isize, usize)>> = Mutex::new(Vec::new());
@@ -37,7 +38,9 @@ pub fn supported() -> bool {
         return false;
     }
     if vertical.window_feature != crate::builds::ABSENT {
-        return vertical.window_feature_prologue.len() >= SHORT_JUMP;
+        return vertical.window_feature_prologue.len() >= SHORT_JUMP
+            && (vertical.set_bounds_rect == crate::builds::ABSENT
+                || vertical.set_bounds_rect_prologue.len() >= SHORT_JUMP);
     }
     vertical.should_draw_tab_strip != crate::builds::ABSENT
         && vertical.should_draw_tab_strip_prologue.len() >= 14
@@ -97,6 +100,87 @@ unsafe extern "system" fn supports_feature(
     original(browser, feature, check)
 }
 
+type SetBounds = unsafe extern "system" fn(*mut c_void, *const [i32; 4]);
+
+/// A view keeps its parent at +0x190, the begin and end of its children at +0x198 and +0x1A0 and
+/// its bounds as x, y, width, height at +0x1C0, in the build this is recorded for.
+const PARENT: usize = 0x190;
+const CHILDREN: usize = 0x198;
+const BOUNDS: usize = 0x1C0;
+
+/// A word of memory that may not belong to a view, read so that a wrong guess cannot fault.
+unsafe fn read(address: usize, bytes: usize, out: *mut u8) -> bool {
+    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+    address > 0x10000
+        && ReadProcessMemory(
+            windows_sys::Win32::System::Threading::GetCurrentProcess(),
+            address as *const c_void,
+            out.cast(),
+            bytes,
+            std::ptr::null_mut(),
+        ) != 0
+}
+
+unsafe fn word(address: usize) -> Option<usize> {
+    let mut value = 0usize;
+    read(address, 8, (&mut value as *mut usize).cast()).then_some(value)
+}
+
+unsafe fn bounds_of(view: usize) -> Option<[i32; 4]> {
+    let mut value = [0i32; 4];
+    read(view + BOUNDS, 16, value.as_mut_ptr().cast()).then_some(value)
+}
+
+/// The left edge, in the frame's coordinates, of the caption buttons: the right-aligned short row
+/// among the frame's children, which is the caption button container.
+unsafe fn caption_left(frame: usize) -> Option<i32> {
+    let frame_width = bounds_of(frame)?[2];
+    let begin = word(frame + CHILDREN)?;
+    let end = word(frame + CHILDREN + 8)?;
+    if end < begin || (end - begin) / 8 > 64 {
+        return None;
+    }
+    let mut found = None;
+    for slot in (begin..end).step_by(8) {
+        let Some(child) = word(slot) else { continue };
+        let Some([x, y, width, height]) = bounds_of(child) else { continue };
+        if width > 0 && height > 0 && height <= 100 && y <= 20 && x + width >= frame_width - 20 && x > frame_width / 2 {
+            found = Some(found.map_or(x, |known: i32| known.min(x)));
+        }
+    }
+    found
+}
+
+/// The toolbar of a Rivet window stops short of the caption buttons, which the browser's layout
+/// left to the strip it no longer places.
+unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 4]) {
+    let original: SetBounds = std::mem::transmute(BOUNDS_ORIGINAL.load(Ordering::Acquire));
+    let vertical = &crate::builds::get().vertical;
+    let mut moved = *rect;
+    let known = locked().iter().any(|browser_view| {
+        word(browser_view + vertical.toolbar_in_view) == Some(view as usize)
+    });
+    if known {
+        let frame_vtable = image::recorded()
+            .map(|image| image.base + crate::builds::get().layout.frame_vtable);
+        let mut at = word(view as usize + PARENT);
+        let mut left = 0;
+        for _ in 0..8 {
+            let Some(ancestor) = at else { break };
+            if word(ancestor) == frame_vtable {
+                if let Some(caption) = caption_left(ancestor) {
+                    moved[2] = moved[2].min(caption - left - moved[0]).max(0);
+                }
+                break;
+            }
+            let Some(bounds) = bounds_of(ancestor) else { break };
+            left += bounds[0];
+            at = word(ancestor + PARENT);
+        }
+    }
+    original(view, &moved)
+}
+
 unsafe extern "system" fn should_draw(view: *const c_void) -> bool {
     if locked().contains(&(view as usize)) {
         return false;
@@ -138,8 +222,35 @@ unsafe fn patch() -> Result<(), String> {
             &ORIGINAL,
         )
     };
+    if vertical.set_bounds_rect != crate::builds::ABSENT
+        && !image.has(vertical.set_bounds_rect, vertical.set_bounds_rect_prologue)
+    {
+        return Err("SetBoundsRect is not the recorded function".into());
+    }
+    detour(&image, rva, prologue, hook, original)?;
+    if vertical.set_bounds_rect != crate::builds::ABSENT {
+        detour(
+            &image,
+            vertical.set_bounds_rect,
+            vertical.set_bounds_rect_prologue,
+            set_bounds_rect as *const () as usize,
+            &BOUNDS_ORIGINAL,
+        )?;
+    }
+    Ok(())
+}
+
+/// Replaces the first instructions of a function with a jump to `hook` and keeps them in a
+/// trampoline that resumes the function after them.
+unsafe fn detour(
+    image: &image::Image,
+    rva: usize,
+    prologue: &[u8],
+    hook: usize,
+    original: &AtomicUsize,
+) -> Result<(), String> {
     if !image.has(rva, prologue) {
-        return Err("the tab strip function is not the recorded function".into());
+        return Err(format!("{rva:#x} is not the recorded function"));
     }
     let function = image.at(rva, prologue.len()).ok_or("function outside the image")? as *mut u8;
     let trampoline = VirtualAlloc(std::ptr::null(), 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
