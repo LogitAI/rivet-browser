@@ -2439,6 +2439,13 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
             crate::chrome_side_panel::tick(window, runtime_directory().as_deref());
+            // A browser can write its own identity again, for example when a profile finishes
+            // loading. The taskbar groups by that identity, so Rivet puts its own back.
+            if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
+                crate::vertical_tabs::trace("taskbar identity was replaced; applying Rivet's again");
+                let _ = taskbar::apply(window as isize, runtime_directory().as_deref());
+                set_rivet_icons(window);
+            }
             if let Some(flag) = runtime_directory().map(|dir| dir.join("rivet-split-now.flag")) {
                 if std::fs::remove_file(&flag).is_ok() {
                     crate::chrome_split::probe(window);
@@ -2461,6 +2468,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         .map(|tabs| tabs.iter().map(|tab| format!("{}{}", if tab.active { "*" } else { "" }, tab.title)).collect())
                         .unwrap_or_default();
                     crate::vertical_tabs::trace(&format!("tab command {:?}: {done} tabs {titles:?}", text.trim()));
+                    let urls: Vec<String> = crate::chrome_tabs::open_tabs(window)
+                        .map(|tabs| tabs.into_iter().map(|tab| tab.saved.url).collect())
+                        .unwrap_or_default();
+                    crate::vertical_tabs::trace(&format!("tab urls {urls:?}"));
                 }
             }
             // A checked build drops the first inactive tab on a side of the page without a pointer.

@@ -65,7 +65,41 @@ unsafe fn browser(base: usize, window: HWND) -> Option<*mut c_void> {
     if holder.is_null() {
         return None;
     }
+    if crate::vertical_tabs::tracing() && crate::edge_vertical::skipped("scan") {
+        scan_holder(holder.cast());
+    }
     Some(holder.cast())
+}
+
+/// Trace-only: lists the words of the browser object that point at something shaped like a tab
+/// strip model, so a new build's offset can be found without guessing.
+unsafe fn scan_holder(holder: *mut u8) {
+    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    unsafe fn read<T: Copy + Default>(address: usize) -> Option<T> {
+        let mut value = T::default();
+        let mut done = 0usize;
+        let ok = ReadProcessMemory(
+            GetCurrentProcess(),
+            address as *const c_void,
+            (&mut value as *mut T).cast(),
+            std::mem::size_of::<T>(),
+            &mut done,
+        );
+        (ok != 0 && done == std::mem::size_of::<T>()).then_some(value)
+    }
+    thread_local!(static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    if DONE.with(|done| done.replace(true)) {
+        return;
+    }
+    for offset in (0..0x400usize).step_by(8) {
+        let Some(model) = read::<usize>(holder as usize + offset) else { continue };
+        let Some(collection) = read::<usize>(model) else { continue };
+        let Some(count) = read::<i32>(collection + 0x18) else { continue };
+        if (1..=4).contains(&count) {
+            crate::vertical_tabs::trace(&format!("scan: holder+{offset:#x} -> {model:#x} -> {collection:#x}, count word {count}"));
+        }
+    }
 }
 
 pub(crate) unsafe fn tab_model(base: usize, window: HWND) -> Option<*mut c_void> {
@@ -260,6 +294,17 @@ pub unsafe fn close_tab(window: HWND, index: usize) -> bool {
 
 pub unsafe fn new_tab(window: HWND) -> bool {
     let Some(base) = base() else { return false };
+    if bv().new_tab == crate::builds::ABSENT {
+        // The browser's own new-tab command, as its menu sends it.
+        const IDC_NEW_TAB: usize = 34014;
+        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+            window,
+            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
+            IDC_NEW_TAB,
+            0,
+        );
+        return true;
+    }
     let Some(browser) = browser(base, window) else {
         return false;
     };

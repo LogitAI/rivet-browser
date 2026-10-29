@@ -15,7 +15,7 @@ use crate::chrome_toolbar::{ACCENT_TINT, FOCUS_RING, HAIRLINE, INK, PAPER, SELEC
 
 /// An address the build does not have. Every check against it fails, so the feature that needs it
 /// stays off.
-const ABSENT: usize = 0x7FFF_0000;
+pub(crate) const ABSENT: usize = 0x7FFF_0000;
 
 /// One browser build.
 pub struct Build {
@@ -2008,7 +2008,40 @@ pub static WHALE: Build = Build {
     },
     vertical: UNCHECKED_VERTICALTABS,
     navigation: UNCHECKED_NAVIGATION,
-    tabs: UNCHECKED_TABS,
+    tabs: Tabs {
+        supported: true, // list, switch and close checked on Whale 5.39.412.57; groups are not
+        content_window_for_hwnd: 0x08F36620,
+        browser_view_for_window: 0x0E6CB8A0,
+        active_web_contents: 0x0E6CC090,
+        browser_in_view: 0x5C0, // the field `GetActiveWebContents` reads first
+        groups: false,
+        get_tab_model: 0x03E24F10, // `mov rax, [rcx + 0x228]; ret`, the holder's tab strip model
+        tab_count: 0x08181300,
+        tab_at: 0x0818A300,
+        activate_tab: 0x08187360,
+        close_tab: 0x0818BE60,
+        title: 0x06764D90,
+        // Whale's `chrome::NewTab` is not mapped; a new tab is the browser's own new-tab command.
+        new_tab: ABSENT,
+        last_committed_url: 0x06762170,
+        visible_url: 0x06762120,
+        get_group: 0x0818C770,
+        signatures: &[
+            (0x08F36620, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x0E6CB8A0, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0E6CC090, &[0x48, 0x8B, 0x81, 0xC0, 0x05, 0x00, 0x00]),
+            (0x03E24F10, &[0x48, 0x8B, 0x81, 0x28, 0x02, 0x00, 0x00, 0xC3]),
+            (0x08181300, &[0x48, 0x8B, 0x01, 0x8B, 0x40, 0x18, 0xC3]),
+            (0x0818A300, &[0x48, 0x83, 0xEC, 0x28, 0x85, 0xD2, 0x78, 0x08, 0x48, 0x8B, 0x09, 0x3B]),
+            (0x08187360, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81]),
+            (0x0818BE60, &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x44, 0x89, 0xC6, 0x89, 0xD3]),
+            (0x06764D90, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05]),
+            (0x0818C770, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD6, 0x45, 0x85, 0xC0, 0x78]),
+            (0x06762170, &[0x48, 0x63, 0x81, 0xAC, 0x02, 0x00, 0x00, 0x48, 0x83, 0xF8, 0xFF, 0x74]),
+            (0x06762120, &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x81, 0xC1, 0x58, 0x02, 0x00, 0x00, 0xE8]),
+        ],
+        ..UNCHECKED_TABS
+    },
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
     side_panel: UNCHECKED_SIDEPANEL,
@@ -2138,7 +2171,7 @@ mod tests {
     fn nfr3_whale_maps_only_the_frame_hooks() {
         assert_eq!(WHALE.module, "whale.dll");
         assert_eq!(WHALE.version, [5, 39, 412, 57]);
-        assert!(!WHALE.vertical.supported && !WHALE.tabs.supported && !WHALE.split.supported);
+        assert!(!WHALE.vertical.supported && WHALE.tabs.supported && !WHALE.tabs.groups && !WHALE.split.supported);
         assert!(!WHALE.navigation.supported && !WHALE.side_panel.supported);
         assert_eq!(WHALE.toolbar.skip, "toolbar");
         // Hooks without a verified address are absent, so their checks fail.

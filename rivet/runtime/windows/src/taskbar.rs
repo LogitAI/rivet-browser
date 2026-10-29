@@ -56,6 +56,13 @@ pub unsafe fn apply(window: isize, runtime_directory: Option<&std::path::Path>) 
     store.Commit()
 }
 
+/// The AppUserModelID the window carries now, for the trace.
+pub unsafe fn current_id(window: isize) -> Option<String> {
+    let store: IPropertyStore = SHGetPropertyStoreForWindow(HWND(window as _)).ok()?;
+    let value = store.GetValue(&PKEY_AppUserModel_ID).ok()?;
+    Some(value.to_string())
+}
+
 /// Removes the identity before the window is destroyed, as the shell requires.
 pub unsafe fn clear(window: isize) {
     if let Ok(store) = SHGetPropertyStoreForWindow::<IPropertyStore>(HWND(window as _)) {
