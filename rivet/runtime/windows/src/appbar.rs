@@ -1572,18 +1572,25 @@ impl Canvas<'_> {
         let clip_w = vw - ox;
         self.fill(rect(0.0, oy, ox, h), PAPER)?;
         self.fill(rect(vw - row.reach_right / scale, oy, row.reach_right / scale, h), PAPER)?;
-        let buttons = row_buttons(w, row.first, row.last);
-        if row.active {
-            // The browser's top row is under the middle of the row. Its sides are bare.
-            let popout = buttons.iter().find(|b| b.0 == RowButton::Popout).map_or(clip_w, |b| b.1 - 2.0);
-            if row.first {
-                self.fill(rect(ox, oy, crate::chrome_split::TOGGLE_ROOM, h), PAPER)?;
+        let buttons = row_buttons(w, row.first, row.caption / scale);
+        // The focused page's address is the browser's own address bar, which shows through a hole in
+        // the row. Everything else on every row is drawn here.
+        let hole = buttons
+            .iter()
+            .find(|b| b.0 == RowButton::Address && row.active)
+            .map(|b| (b.1, b.2));
+        match hole {
+            Some((left, width)) => {
+                self.fill(rect(ox, oy, left, h), PAPER)?;
+                let after = left + width;
+                self.fill(rect(ox + after, oy, clip_w - after, h), PAPER)?;
+                self.fill(rect(ox, oy + h - 1.0, left, 1.0), HAIRLINE)?;
+                self.fill(rect(ox + after, oy + h - 1.0, clip_w - after, 1.0), HAIRLINE)?;
             }
-            self.fill(rect(ox + popout, oy, vw - ox - popout, h), PAPER)?;
-            self.fill(rect(ox + popout, oy + h - 1.0, vw - ox - popout, 1.0), HAIRLINE)?;
-        } else {
-            self.fill(rect(ox, oy, clip_w, h), PAPER)?;
-            self.fill(rect(ox, oy + h - 1.0, clip_w, 1.0), HAIRLINE)?;
+            None => {
+                self.fill(rect(ox, oy, clip_w, h), PAPER)?;
+                self.fill(rect(ox, oy + h - 1.0, clip_w, 1.0), HAIRLINE)?;
+            }
         }
         if caption > 0.0 {
             let band = (h - 28.0) / 2.0;
@@ -1593,8 +1600,7 @@ impl Canvas<'_> {
         }
         for (button, x, width) in buttons {
             let area = rect(ox + x, oy + (h - 28.0) / 2.0, width, 28.0);
-            let own = matches!(button, RowButton::Grip | RowButton::Popout | RowButton::Unsplit);
-            if row.active && !own {
+            if row.active && button == RowButton::Address {
                 continue;
             }
             let hot = row.hover == Some(button);

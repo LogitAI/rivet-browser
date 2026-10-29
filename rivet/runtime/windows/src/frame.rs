@@ -401,8 +401,9 @@ thread_local! {
     static ROW_PRESS: RefCell<HashMap<isize, RowHit>> = RefCell::new(HashMap::new());
 }
 
-/// The top row button under a point in client pixels. The active page's row is the browser's own
-/// apart from Rivet's buttons, and the other pages' rows answer anywhere.
+/// The top row button under a point in client pixels. Every page's row is Rivet's apart from the
+/// focused page's address, which is the browser's own address bar. The other pages' rows answer
+/// anywhere.
 unsafe fn row_hit(window: HWND, point: POINT) -> Option<RowHit> {
     use crate::chrome_split::{row_buttons, RowButton, ROW_HEIGHT};
     let factor = layout_dpi(window) as f32 / 96.0;
@@ -413,12 +414,10 @@ unsafe fn row_hit(window: HWND, point: POINT) -> Option<RowHit> {
             continue;
         }
         let local = x - pane.x as f32;
-        let button = row_buttons(pane.width as f32, pane.first, pane.last)
+        let button = row_buttons(pane.width as f32, pane.first, pane.caption)
             .into_iter()
             .find(|(button, left, width)| {
-                local >= *left
-                    && local < left + width
-                    && (!pane.active || matches!(button, RowButton::Grip | RowButton::Popout | RowButton::Unsplit))
+                local >= *left && local < left + width
             })
             .map(|(button, _, _)| button);
         return match (button, pane.active) {
@@ -452,7 +451,7 @@ unsafe fn pane_rows(window: HWND) -> Vec<crate::appbar::PaneRow> {
                 height: ROW_HEIGHT as f32 * factor,
                 reach_left: 0.0,
                 reach_right: 0.0,
-                caption: if pane.last { crate::chrome_split::CAPTION_ROOM * factor } else { 0.0 },
+                caption: pane.caption * factor,
                 active: pane.active,
                 first: pane.first,
                 last: pane.last,
@@ -483,6 +482,18 @@ unsafe fn track_row_hover(window: HWND, point: Option<POINT>) {
     }
 }
 
+/// Back, forward or reload of the page the window shows, as the browser's own app commands.
+unsafe fn navigate(window: HWND, button: crate::chrome_split::RowButton) {
+    use crate::chrome_split::RowButton;
+    const APPCOMMAND: u32 = 0x0319;
+    let command: isize = match button {
+        RowButton::Back => 1,
+        RowButton::Forward => 2,
+        _ => 3,
+    };
+    PostMessageW(window, APPCOMMAND, window as usize, command << 16);
+}
+
 /// A button of a page's top row is released.
 unsafe fn row_action(window: HWND, hit: RowHit) {
     use crate::chrome_split::RowButton;
@@ -490,9 +501,15 @@ unsafe fn row_action(window: HWND, hit: RowHit) {
     let Some(pane) = panes.get(hit.0) else { return };
     match hit.1 {
         RowButton::Grip => {}
-        // The pages' own controls belong to the browser, which shows them on the active page.
-        RowButton::Back | RowButton::Forward | RowButton::Reload | RowButton::Address => {
+        RowButton::Address => {
             crate::chrome_tabs::activate_tab(window, pane.tab);
+        }
+        // The browser acts on the page it shows, so another page is focused first.
+        RowButton::Back | RowButton::Forward | RowButton::Reload => {
+            if !pane.active {
+                crate::chrome_tabs::activate_tab(window, pane.tab);
+            }
+            navigate(window, hit.1);
         }
         RowButton::Popout | RowButton::Unsplit => {
             crate::chrome_tabs::activate_tab(window, pane.tab);
@@ -1727,7 +1744,13 @@ unsafe fn ground_holes(window: HWND) -> Vec<crate::ground::Hole> {
             .map(|pane| chrome_layout::Rect { x: pane.x, y: pane.y, width: pane.width, height: pane.height })
             .collect();
         let active = panes.iter().position(|pane| pane.active).unwrap_or(0);
-        return crate::ground::split_holes(&pages, active, crate::chrome_split::ROW_HEIGHT);
+        let mut holes = crate::ground::split_holes(&pages, active, crate::chrome_split::ROW_HEIGHT);
+        // The Sidebar's rail and the caption buttons sit at the window's right edge, in the panel
+        // of the last page as in a window that is not split.
+        if let (Some(last), Some(panel)) = (holes.last_mut(), chrome_layout::panel_bounds(window)) {
+            last.rect.width = last.rect.width.max(panel.x + panel.width - last.rect.x);
+        }
+        return holes;
     }
     let leading = LAID_LEADING.with(|all| all.borrow().get(&(window as isize)).copied()).unwrap_or(0);
     chrome_layout::panel_bounds(window)
@@ -2285,6 +2308,28 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
             crate::chrome_side_panel::tick(window, runtime_directory().as_deref());
+            if let Some(flag) = runtime_directory().map(|dir| dir.join("rivet-split-now.flag")) {
+                if std::fs::remove_file(&flag).is_ok() {
+                    crate::chrome_split::probe(window);
+                }
+            }
+            // A checked build drops the first inactive tab on a side of the page without a pointer.
+            if let Some(flag) = runtime_directory().map(|dir| dir.join("rivet-drop.flag")) {
+                if let Ok(text) = std::fs::read_to_string(&flag) {
+                    let _ = std::fs::remove_file(&flag);
+                    use crate::chrome_split::Side;
+                    let side = match text.trim() {
+                        "left" => Side::Left,
+                        "top" => Side::Top,
+                        "bottom" => Side::Bottom,
+                        _ => Side::Right,
+                    };
+                    let tabs = crate::chrome_tabs::tabs(window).unwrap_or_default();
+                    let other = tabs.iter().find(|tab| !tab.active).map(|tab| tab.index);
+                    let done = other.is_some_and(|index| crate::chrome_split::split_beside(window, index, side));
+                    crate::vertical_tabs::trace(&format!("drop flag: {side:?} {other:?} {done}"));
+                }
+            }
             persist_tick(window);
             update_appbar(window);
             0

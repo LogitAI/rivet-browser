@@ -516,6 +516,55 @@ unsafe extern "system" fn calculate_layout(
     result
 }
 
+/// `views::FlexLayout::CalculateProposedLayout`, which lays out the children of the browser's top
+/// row. It is a method of a layout manager that keeps its host view at +0x38.
+const FLEX_LAYOUT: usize = 0x054F_CC60;
+const FLEX_LAYOUT_HOST: usize = 0x38;
+static ORIGINAL_FLEX: AtomicUsize = AtomicUsize::new(0);
+/// The primary vtable of `LocationBarView`, which tells the top row's container among all hosts.
+const LOCATION_BAR_VTABLE: usize = 0x0FE8_6BE8;
+/// The size of a view is two ints at +0x1d0.
+const VIEW_SIZE: usize = 0x1d0;
+
+/// The windows whose top row currently only holds the address of the focused page.
+static ADDRESS_ONLY: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+
+/// In a split the top row of the browser shrinks to the focused page's address, so its other
+/// children (back, forward, reload, the split button) are hidden by the layout, which restores them
+/// as soon as the window leaves the split. The address fills the row.
+unsafe extern "system" fn flex_layout(layout: *mut c_void, out: *mut u8, bounds: *const c_void) -> *mut u8 {
+    let original: CalculateLayout = std::mem::transmute(ORIGINAL_FLEX.load(Ordering::Acquire));
+    let result = original(layout, out, bounds);
+    if ADDRESS_ONLY.lock().unwrap_or_else(|error| error.into_inner()).is_empty() {
+        return result;
+    }
+    let Some(base) = base() else { return result };
+    let (data, count) = layout_children(out);
+    let location = (0..count).map(|index| data.add(index * 0x30)).find(|child| {
+        let view = *(*child as *const usize);
+        view != 0 && *(view as *const usize) == base + LOCATION_BAR_VTABLE
+    });
+    let Some(location) = location else { return result };
+    let host = *((layout as usize + FLEX_LAYOUT_HOST) as *const usize);
+    let in_split = crate::chrome_layout::hwnd_of_view(host as *const c_void).is_some_and(|window| {
+        ADDRESS_ONLY.lock().unwrap_or_else(|error| error.into_inner()).contains(&(window as isize))
+    });
+    if !in_split {
+        return result;
+    }
+    let width = *((host + VIEW_SIZE) as *const i32);
+    for index in 0..count {
+        let child = data.add(index * 0x30);
+        if child != location {
+            *child.add(8) = 0;
+        }
+    }
+    let rect = &mut *child_bounds(location);
+    rect[0] = 0;
+    rect[2] = width;
+    result
+}
+
 /// `views::View::SchedulePaint(this)`. The background only paints again when it is told to, so a
 /// change of the pages or of the focused one must tell it.
 const SCHEDULE_PAINT: usize = 0x054A_B3B0;
@@ -557,11 +606,9 @@ unsafe extern "system" fn web_contents_focused(view: *mut c_void, web_view: *mut
 
 const CONTAINER_LAYOUT: usize = 0x01FF_5270;
 const CONTAINER_DELEGATE_OFFSET: usize = 0x320;
-/// The member of a contents container that holds its mini toolbar.
+/// The member of a contents container that holds its mini toolbar, the chip with the page's address
+/// that Chrome floats over the lower corner of a page. Rivet's rows show the address, so it stays hidden.
 const MINI_TOOLBAR_MEMBER: usize = 0x440;
-/// Chrome parks the bottom mini toolbar in the page's lower right corner, under the panel's
-/// rounded corner. Rivet floats it this far in from both edges so it sits on the page.
-const MINI_TOOLBAR_MARGIN: i32 = 8;
 static ORIGINAL_CONTAINER_LAYOUT: AtomicUsize = AtomicUsize::new(0);
 
 unsafe extern "system" fn container_layout(
@@ -578,9 +625,7 @@ unsafe extern "system" fn container_layout(
         for index in 0..count {
             let child = data.add(index * 0x30);
             if toolbar != 0 && *(child as *const usize) == toolbar && *child.add(8) != 0 {
-                let rect = &mut *child_bounds(child);
-                rect[0] -= MINI_TOOLBAR_MARGIN;
-                rect[1] -= MINI_TOOLBAR_MARGIN;
+                *child.add(8) = 0;
             }
         }
     }
@@ -637,29 +682,53 @@ pub enum RowButton {
     Unsplit,
 }
 
+/// The narrowest address worth showing, with its margins.
+const ADDRESS_MIN: f32 = 56.0;
+const ADDRESS_LEAD: f32 = 6.0;
+const ADDRESS_TRAIL: f32 = 4.0;
+
 /// The buttons of a page's top row as (button, x, width) from the page's left edge, for a page
-/// `width` wide. The first page leaves room for the appbar toggle, and the last for the caption
-/// buttons.
-pub fn row_buttons(width: f32, first: bool, last: bool) -> Vec<(RowButton, f32, f32)> {
+/// `width` wide. The first page leaves room for the appbar toggle, and the page under the caption
+/// buttons for the `caption` width they take from its row. A row that is too narrow drops buttons instead of overlapping them: the Mini Window
+/// button first, then forward, the grip, reload and back. The button that ends the split stays.
+pub fn row_buttons(width: f32, first: bool, caption: f32) -> Vec<(RowButton, f32, f32)> {
     let start = if first { TOGGLE_ROOM } else { 0.0 } + 2.0;
-    let end = width - if last { CAPTION_ROOM } else { 0.0 } - ROW_PAD;
-    let unsplit = end - BUTTON;
-    let popout = unsplit - BUTTON_GAP - BUTTON;
-    let mut x = start;
+    let end = width - caption - ROW_PAD;
+    let free = end - start;
+    let mut left = vec![RowButton::Grip, RowButton::Back, RowButton::Forward, RowButton::Reload];
+    let mut right = vec![RowButton::Popout, RowButton::Unsplit];
+    let needed = |left: &[RowButton], right: &[RowButton]| {
+        let pitch = BUTTON + BUTTON_GAP;
+        pitch * left.len() as f32 + ADDRESS_LEAD + ADDRESS_MIN + ADDRESS_TRAIL + pitch * right.len() as f32
+            - BUTTON_GAP
+    };
+    for drop in [RowButton::Popout, RowButton::Forward, RowButton::Grip, RowButton::Reload, RowButton::Back] {
+        if needed(&left, &right) <= free {
+            break;
+        }
+        left.retain(|button| *button != drop);
+        right.retain(|button| *button != drop);
+    }
     let mut buttons = Vec::new();
-    for button in [RowButton::Grip, RowButton::Back, RowButton::Forward, RowButton::Reload] {
-        buttons.push((button, x, BUTTON));
+    let mut x = start;
+    for button in &left {
+        buttons.push((*button, x, BUTTON));
         x += BUTTON + BUTTON_GAP;
     }
-    let address = x + 6.0;
-    buttons.push((RowButton::Address, address, (popout - 4.0 - address).max(0.0)));
-    buttons.push((RowButton::Popout, popout, BUTTON));
-    buttons.push((RowButton::Unsplit, unsplit, BUTTON));
+    let right_start = end - right.len() as f32 * BUTTON - (right.len() as f32 - 1.0).max(0.0) * BUTTON_GAP;
+    let address = x + ADDRESS_LEAD;
+    let address_width = right_start - ADDRESS_TRAIL - address;
+    if address_width >= ADDRESS_MIN {
+        buttons.push((RowButton::Address, address, address_width));
+    }
+    for (index, button) in right.iter().enumerate() {
+        buttons.push((*button, right_start + index as f32 * (BUTTON + BUTTON_GAP), BUTTON));
+    }
     buttons
 }
 
 /// One page of a split in the window's client area, in device-independent pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pane {
     pub x: i32,
     pub y: i32,
@@ -668,6 +737,9 @@ pub struct Pane {
     pub active: bool,
     pub first: bool,
     pub last: bool,
+    /// How much of the row's right end the caption buttons cover. The buttons sit at the window's top
+    /// right, so a page that ends before the Sidebar's rail is covered by less than their full width.
+    pub caption: f32,
     /// The strip index of the tab this page shows.
     pub tab: usize,
 }
@@ -690,6 +762,23 @@ unsafe fn split_tabs(window: HWND) -> Vec<usize> {
         .collect()
 }
 
+/// The right edge of the window's client area in device-independent pixels.
+unsafe fn client_right(window: HWND) -> i32 {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    let dpi = GetDpiForWindow(window).max(96) as i32;
+    client.right * 96 / dpi
+}
+
+/// The width of the caption buttons that covers a row ending at `pane_right`, in a window whose
+/// client area ends at `window_right`.
+pub fn caption_over(window_right: i32, pane_right: i32) -> f32 {
+    (CAPTION_ROOM - (window_right - pane_right) as f32).clamp(0.0, CAPTION_ROOM)
+}
+
 /// The pages of the window's split, or none when the active tab is not in one.
 pub unsafe fn panes(window: HWND) -> Vec<Pane> {
     let Some(area) = page_area(window) else { return Vec::new() };
@@ -709,6 +798,7 @@ pub unsafe fn panes(window: HWND) -> Vec<Pane> {
     }
     let active = *((split.view + ACTIVE_MEMBER) as *const i32);
     let count = split.rects.len();
+    let window_right = client_right(window);
     split
         .rects
         .iter()
@@ -721,13 +811,15 @@ pub unsafe fn panes(window: HWND) -> Vec<Pane> {
             active: index as i32 == active,
             first: index == 0,
             last: index + 1 == count,
+            caption: caption_over(window_right, area[0] + rect.x + rect.width),
             tab: tabs.get(index).copied().unwrap_or(0),
         })
         .collect()
 }
 
-/// Narrows the browser's top row to the active page's row of a split, leaving room for the
-/// buttons Rivet draws on it. `contents` are the bounds of the pages in the same coordinates.
+/// Narrows the browser's top row to the address of the focused page of a split, so the browser's
+/// own address bar, with its completion and editing, sits where that page's address is. The rest
+/// of every row is drawn by Rivet. `contents` are the bounds of the pages in the same coordinates.
 pub unsafe fn fit_toolbar(window: HWND, toolbar: &mut [i32; 4], contents: &[i32; 4]) {
     {
         let mut all = CONTENTS.lock().unwrap_or_else(|error| error.into_inner());
@@ -736,25 +828,41 @@ pub unsafe fn fit_toolbar(window: HWND, toolbar: &mut [i32; 4], contents: &[i32;
             None => all.push((window as isize, *contents)),
         }
     }
+    let leave = || {
+        ADDRESS_ONLY.lock().unwrap_or_else(|error| error.into_inner()).retain(|key| *key != window as isize);
+    };
     let splits = SPLITS.lock().unwrap_or_else(|error| error.into_inner());
     let Some((_, split)) = splits.iter().find(|(_, split)| {
         crate::chrome_layout::hwnd_of_view(split.view as *const c_void)
             .is_some_and(|found| found as isize == window as isize)
     }) else {
-        return;
+        return leave();
     };
     if split.rects.len() < 2 || !side_by_side(&split.rects) || !active_is_split(window) {
-        return;
+        return leave();
     }
     let active = (*((split.view + ACTIVE_MEMBER) as *const i32)).max(0) as usize;
-    let Some(pane) = split.rects.get(active) else { return };
-    let first = active == 0;
-    let last = active + 1 == split.rects.len();
-    let buttons = row_buttons(pane.width as f32, first, last);
-    let left = if first { TOGGLE_ROOM as i32 } else { 0 };
-    let popout = buttons.iter().find(|button| button.0 == RowButton::Popout).map_or(0.0, |b| b.1);
-    toolbar[0] = contents[0] + pane.x + left;
-    toolbar[2] = (popout as i32 - 2 - left).max(1);
+    let Some(pane) = split.rects.get(active) else { return leave() };
+    let window_right = client_right(window);
+    let caption = caption_over(window_right, contents[0] + pane.x + pane.width);
+    let buttons = row_buttons(pane.width as f32, active == 0, caption);
+    {
+        let mut all = ADDRESS_ONLY.lock().unwrap_or_else(|error| error.into_inner());
+        if !all.contains(&(window as isize)) {
+            all.push(window as isize);
+        }
+    }
+    match buttons.iter().find(|button| button.0 == RowButton::Address) {
+        Some((_, x, width)) => {
+            toolbar[0] = contents[0] + pane.x + *x as i32;
+            toolbar[2] = *width as i32;
+        }
+        // No room for an address: the top row keeps a sliver that shows nothing.
+        None => {
+            toolbar[0] = contents[0] + pane.x;
+            toolbar[2] = 1;
+        }
+    }
 }
 
 /// Splits the active tab, or ends the split it is in. The keyboard shortcut and the appbar share
@@ -793,6 +901,13 @@ pub unsafe fn install_panels() -> Result<(), String> {
     )?;
     detour(
         base,
+        FLEX_LAYOUT,
+        &CALCULATE_LAYOUT_PROLOGUE,
+        flex_layout as *const () as usize,
+        &ORIGINAL_FLEX,
+    )?;
+    detour(
+        base,
         UPDATE_BORDER,
         &UPDATE_BORDER_PROLOGUE,
         update_border as *const () as usize,
@@ -803,7 +918,7 @@ pub unsafe fn install_panels() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{drop_zone, narrow_gap, row_buttons, RowButton, Side, CAPTION_ROOM, TOGGLE_ROOM};
+    use super::{caption_over, drop_zone, narrow_gap, row_buttons, RowButton, Side, CAPTION_ROOM, TOGGLE_ROOM};
 
     #[test]
     fn fr9_split_gap_is_eight_dips() {
@@ -842,7 +957,7 @@ mod tests {
 
     #[test]
     fn fr9_each_page_row_has_grip_popout_and_unsplit() {
-        let buttons = row_buttons(400.0, false, false);
+        let buttons = row_buttons(400.0, false, 0.0);
         let names: Vec<RowButton> = buttons.iter().map(|button| button.0).collect();
         assert_eq!(
             names,
@@ -862,10 +977,44 @@ mod tests {
 
     #[test]
     fn fr9_first_row_leaves_room_for_the_toggle_and_last_for_the_caption_buttons() {
-        let first = row_buttons(400.0, true, false);
+        let first = row_buttons(400.0, true, 0.0);
         assert!(first[0].1 >= TOGGLE_ROOM);
-        let last = row_buttons(500.0, false, true);
+        let last = row_buttons(500.0, false, CAPTION_ROOM);
         let unsplit = last.last().unwrap();
         assert!(unsplit.1 + unsplit.2 <= 500.0 - CAPTION_ROOM);
+    }
+
+    /// No two buttons of a row overlap, nothing leaves the row, and the caption buttons keep their
+    /// room, at every page width a 900 DIP window with the Sidebar can give.
+    #[test]
+    fn fr9_page_rows_never_overlap_at_any_width() {
+        for width in 200..=900 {
+            for (first, last) in [(true, false), (false, false), (false, true)] {
+                let covered = if last { CAPTION_ROOM } else { 0.0 };
+                let buttons = row_buttons(width as f32, first, covered);
+                let limit = width as f32 - covered;
+                let mut edge = if first { TOGGLE_ROOM } else { 0.0 };
+                for (_, x, w) in &buttons {
+                    assert!(*x >= edge, "overlap at {width} {first} {last}: {buttons:?}");
+                    edge = x + w;
+                }
+                assert!(edge <= limit, "row runs under the caption at {width}: {buttons:?}");
+                assert!(buttons.iter().any(|b| b.0 == RowButton::Unsplit));
+            }
+        }
+    }
+
+    #[test]
+    fn fr9_narrow_row_drops_the_mini_window_button_before_the_address() {
+        let names: Vec<RowButton> = row_buttons(303.0, false, CAPTION_ROOM).iter().map(|b| b.0).collect();
+        assert!(!names.contains(&RowButton::Popout));
+        assert!(names.contains(&RowButton::Address) && names.contains(&RowButton::Unsplit));
+    }
+
+    #[test]
+    fn fr9_caption_covers_only_what_the_pages_edge_leaves_of_it() {
+        assert_eq!(caption_over(1000, 1000), CAPTION_ROOM);
+        assert_eq!(caption_over(1000, 900), CAPTION_ROOM - 100.0);
+        assert_eq!(caption_over(1000, 800), 0.0);
     }
 }
