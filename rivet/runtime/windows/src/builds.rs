@@ -429,6 +429,18 @@ pub struct VerticalTabs {
     /// `BrowserView::ShouldDrawTabStrip` and its first bytes, for the tab strip experiment.
     pub should_draw_tab_strip: usize,
     pub should_draw_tab_strip_prologue: &'static [u8],
+    /// `Browser::SupportsWindowFeature(browser, feature, check)`, for builds whose layout has the tab
+    /// strip decision inlined so no function of its own answers it. Rivet detours it to answer no
+    /// for the tab strip feature of the browsers of Rivet windows. The prologue must be 12 or more
+    /// bytes, end on an instruction boundary and hold no relative operand.
+    pub window_feature: usize,
+    pub window_feature_prologue: &'static [u8],
+    /// The value of the tab strip feature.
+    pub window_feature_tab_strip: u32,
+    /// The code range whose questions Rivet answers, as start and end RVAs, or `(0, 0)` for every
+    /// caller. Other callers ask the same question for other reasons, and the frame view takes the
+    /// caption buttons away with the strip when it hears the answer.
+    pub window_feature_callers: (usize, usize),
     /// Whether a Rivet window leaves that function out of its layout by a detour, with this build's
     /// prologue copied to a trampoline. Only builds where this has been checked set it.
     pub detour_strip: bool,
@@ -883,6 +895,10 @@ const UNCHECKED_VERTICALTABS: VerticalTabs = VerticalTabs {
     region_minimum_prologue: &[0],
     should_draw_tab_strip: ABSENT,
     should_draw_tab_strip_prologue: &[0],
+    window_feature: ABSENT,
+    window_feature_prologue: &[0],
+    window_feature_tab_strip: 0,
+    window_feature_callers: (0, 0),
     detour_strip: false,
 };
 
@@ -1364,6 +1380,10 @@ pub static CHROME: Build = Build {
     ],
         should_draw_tab_strip: 0x0528_6C00, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
+        window_feature: ABSENT,
+        window_feature_prologue: &[0],
+        window_feature_tab_strip: 0,
+        window_feature_callers: (0, 0),
         detour_strip: false,
     },
     navigation: Navigation {
@@ -1867,6 +1887,10 @@ pub static EDGE: Build = Build {
     ], // Chrome value, not checked on Edge
         should_draw_tab_strip: 0x0100A550, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x89, 0x18, 0x06, 0x00, 0x00],
+        window_feature: ABSENT,
+        window_feature_prologue: &[0],
+        window_feature_tab_strip: 0,
+        window_feature_callers: (0, 0),
         detour_strip: false,
     },
     navigation: Navigation {
@@ -2461,7 +2485,19 @@ pub static SAMSUNG: Build = Build {
         skip: "toolbar",
         ..UNCHECKED_TOOLBAR
     },
-    vertical: UNCHECKED_VERTICALTABS,
+    vertical: VerticalTabs {
+        // The tabbed layout's function (0x13c8310) inlines `BrowserView::ShouldDrawTabStrip`, whose
+        // copies at 0x2b44ed0 and 0x2b44420 it never calls, and starts that test by asking this
+        // function for feature 2, the tab strip, at 0x13c8510. Its other callers, the frame's
+        // top inset among them, must keep the browser's answer or the caption buttons go with the
+        // strip. The prologue is 12 bytes and ends on an instruction boundary.
+        window_feature: 0x001F_BB10,
+        window_feature_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x44, 0x89, 0xC3, 0x89, 0xD6],
+        window_feature_tab_strip: 2,
+        window_feature_callers: (0x013C_8310, 0x013C_A742),
+        detour_strip: true,
+        ..UNCHECKED_VERTICALTABS
+    },
     navigation: UNCHECKED_NAVIGATION,
     tabs: Tabs {
         supported: true, // list, switch and close
@@ -2740,7 +2776,7 @@ mod tests {
         assert!(!WHALE.vertical.supported && WHALE.tabs.supported && !WHALE.tabs.groups && !WHALE.split.supported);
         assert!(WHALE.navigation.supported && !WHALE.side_panel.supported);
         assert!(WHALE.vertical.detour_strip && WHALE.vertical.should_draw_tab_strip_prologue.len() >= 14);
-        assert!(all().iter().filter(|build| build.vertical.detour_strip).count() == 1);
+        assert!(all().iter().filter(|build| build.vertical.detour_strip).count() == 2);
         assert_eq!(WHALE.toolbar.skip, "toolbar");
         // Hooks without a verified address are absent, so their checks fail.
         assert_eq!(WHALE.layout.corner_paint, ABSENT);
@@ -2828,6 +2864,12 @@ mod tests {
                 "{name} prologue does not match samsunginternet.dll"
             );
         }
+        // The inlined tab strip test: `call` of the window feature function from the layout.
+        assert_eq!(file_bytes(&file, 0x13c8510, 5).as_deref(), Some(&[0xE8, 0xFB, 0x35, 0xE3, 0xFE][..]));
+        let callers = SAMSUNG.vertical.window_feature_callers;
+        assert!(callers.0 <= 0x13c8510 && 0x13c8515 <= callers.1);
+        let bytes = SAMSUNG.vertical.window_feature_prologue;
+        assert_eq!(file_bytes(&file, SAMSUNG.vertical.window_feature, bytes.len()).as_deref(), Some(bytes));
         for (rva, bytes) in SAMSUNG.tabs.signatures {
             assert_eq!(
                 file_bytes(&file, *rva, bytes.len()).as_deref(),

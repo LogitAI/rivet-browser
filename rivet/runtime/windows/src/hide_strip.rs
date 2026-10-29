@@ -20,6 +20,9 @@ use crate::chrome_layout::image;
 type ShouldDraw = unsafe extern "system" fn(*const c_void) -> bool;
 
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+static FEATURE_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+/// Each Rivet window and its browser, so a closed window's browser is forgotten by the window.
+static BROWSERS: Mutex<Vec<(isize, usize)>> = Mutex::new(Vec::new());
 static VIEWS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 static INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();
 
@@ -30,9 +33,68 @@ fn locked() -> MutexGuard<'static, Vec<usize>> {
 /// Whether this build records the function and has room for a detour in its first instructions.
 pub fn supported() -> bool {
     let vertical = &crate::builds::get().vertical;
-    vertical.detour_strip
-        && vertical.should_draw_tab_strip != crate::builds::ABSENT
+    if !vertical.detour_strip {
+        return false;
+    }
+    if vertical.window_feature != crate::builds::ABSENT {
+        return vertical.window_feature_prologue.len() >= SHORT_JUMP;
+    }
+    vertical.should_draw_tab_strip != crate::builds::ABSENT
         && vertical.should_draw_tab_strip_prologue.len() >= 14
+}
+
+/// The shortest prologue the short detour replaces: `mov rax, imm64; jmp rax` is 12 bytes.
+const SHORT_JUMP: usize = 12;
+
+type SupportsFeature = unsafe extern "system" fn(*const c_void, u32, bool) -> bool;
+
+fn browsers() -> MutexGuard<'static, Vec<(isize, usize)>> {
+    BROWSERS.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// Whether the call came from code inside `callers`, an RVA range of the browser image, or from
+/// anywhere when it is `(0, 0)`.
+unsafe fn asked_by_layout(callers: (usize, usize), caller: usize) -> bool {
+    if callers == (0, 0) {
+        return true;
+    }
+    let Some(image) = image::recorded() else { return false };
+    let address = caller.wrapping_sub(image.base);
+    address >= callers.0 && address < callers.1
+}
+
+// The detour is entered by a jump, so the browser's return address is on top of the stack. The
+// stub hands it to the Rust function as a fourth argument and jumps there, which leaves the
+// stack exactly as the browser's call made it.
+std::arch::global_asm!(
+    ".globl rivet_supports_feature_stub",
+    "rivet_supports_feature_stub:",
+    "mov r9, [rsp]",
+    "jmp {target}",
+    target = sym supports_feature,
+);
+
+extern "C" {
+    fn rivet_supports_feature_stub();
+}
+
+/// Answers no to the tab strip feature for the browsers of Rivet windows, when the layout asks.
+unsafe extern "system" fn supports_feature(
+    browser: *const c_void,
+    feature: u32,
+    check: bool,
+    caller: usize,
+) -> bool {
+    let vertical = &crate::builds::get().vertical;
+    if feature == vertical.window_feature_tab_strip
+        && browsers().iter().any(|(_, known)| *known == browser as usize)
+    {
+        if asked_by_layout(vertical.window_feature_callers, caller) {
+            return false;
+        }
+    }
+    let original: SupportsFeature = std::mem::transmute(FEATURE_ORIGINAL.load(Ordering::Acquire));
+    original(browser, feature, check)
 }
 
 unsafe extern "system" fn should_draw(view: *const c_void) -> bool {
@@ -61,13 +123,25 @@ unsafe fn patch() -> Result<(), String> {
     }
     let vertical = &crate::builds::get().vertical;
     let image = image::recorded().ok_or("no recorded browser image")?;
-    let prologue = vertical.should_draw_tab_strip_prologue;
-    if !image.has(vertical.should_draw_tab_strip, prologue) {
-        return Err("ShouldDrawTabStrip is not the recorded function".into());
+    let (rva, prologue, hook, original) = if vertical.window_feature != crate::builds::ABSENT {
+        (
+            vertical.window_feature,
+            vertical.window_feature_prologue,
+            rivet_supports_feature_stub as *const () as usize,
+            &FEATURE_ORIGINAL,
+        )
+    } else {
+        (
+            vertical.should_draw_tab_strip,
+            vertical.should_draw_tab_strip_prologue,
+            should_draw as *const () as usize,
+            &ORIGINAL,
+        )
+    };
+    if !image.has(rva, prologue) {
+        return Err("the tab strip function is not the recorded function".into());
     }
-    let function = image
-        .at(vertical.should_draw_tab_strip, prologue.len())
-        .ok_or("function outside the image")? as *mut u8;
+    let function = image.at(rva, prologue.len()).ok_or("function outside the image")? as *mut u8;
     let trampoline = VirtualAlloc(std::ptr::null(), 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
         as *mut u8;
     if trampoline.is_null() {
@@ -76,12 +150,21 @@ unsafe fn patch() -> Result<(), String> {
     let resume = crate::vertical_tabs::absolute_jump(function as usize + prologue.len());
     std::ptr::copy_nonoverlapping(prologue.as_ptr(), trampoline, prologue.len());
     std::ptr::copy_nonoverlapping(resume.as_ptr(), trampoline.add(prologue.len()), resume.len());
-    ORIGINAL.store(trampoline as usize, Ordering::Release);
+    original.store(trampoline as usize, Ordering::Release);
+    // `mov rax, hook; jmp rax` when the prologue is too short for the 14 byte jump. rax is free at
+    // a function's entry.
+    let jump: Vec<u8> = if prologue.len() >= 14 {
+        crate::vertical_tabs::absolute_jump(hook).to_vec()
+    } else {
+        let mut code = vec![0x48, 0xB8];
+        code.extend_from_slice(&hook.to_le_bytes());
+        code.extend_from_slice(&[0xFF, 0xE0]);
+        code
+    };
     let mut previous: PAGE_PROTECTION_FLAGS = 0;
     if VirtualProtect(function.cast(), prologue.len(), PAGE_EXECUTE_READWRITE, &mut previous) == 0 {
-        return Err("could not unprotect ShouldDrawTabStrip".into());
+        return Err("could not unprotect the tab strip function".into());
     }
-    let jump = crate::vertical_tabs::absolute_jump(should_draw as *const () as usize);
     std::ptr::copy_nonoverlapping(jump.as_ptr(), function, jump.len());
     std::ptr::write_bytes(function.add(jump.len()), 0x90, prologue.len() - jump.len());
     VirtualProtect(function.cast(), prologue.len(), previous, &mut previous);
@@ -104,6 +187,13 @@ pub unsafe fn hide(window: HWND) -> bool {
         return false;
     }
     let Some(view) = view_of(window) else { return false };
+    if crate::builds::get().vertical.window_feature != crate::builds::ABSENT {
+        let Some(base) = image::recorded().map(|image| image.base) else { return false };
+        let Some(browser) = crate::chrome_tabs::browser(base, window) else { return false };
+        let mut known = browsers();
+        known.retain(|(owner, _)| *owner != window as isize);
+        known.push((window as isize, browser as usize));
+    }
     let mut views = locked();
     if !views.contains(&view) {
         views.push(view);
@@ -116,4 +206,5 @@ pub unsafe fn forget(window: HWND) {
     if let Some(view) = view_of(window) {
         locked().retain(|known| *known != view);
     }
+    browsers().retain(|(owner, _)| *owner != window as isize);
 }
