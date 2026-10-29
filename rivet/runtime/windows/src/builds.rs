@@ -2460,8 +2460,8 @@ pub static BRAVE: Build = Build {
         from_vector_icon_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20],
         update_location: 0x01665520, // ?Update@LocationIconView@@QEAAX_N0@Z
         update_location_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00],
-        update_location_icon: 0x01666410, // ?GetSecurityChipAccessibilityState@location_bar@@YA?AUSecurityChipAccessibilityState@1@PEBVLocationB
-        update_location_icon_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        update_location_icon: 0x01665BE0, // ?UpdateIcon@LocationIconView@@QEAAXXZ
+        update_location_icon_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x98, 0x00, 0x00, 0x00, 0x48, 0x89, 0xCE, 0x48],
         layout_insets: 0x007F42E0, // ?GetLayoutInsets@@YA?AVInsets@gfx@@W4LayoutInset@@@Z
         layout_insets_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x89, 0xD7, 0x48, 0x89, 0xCE],
         toolbar_button_inset: 6,
@@ -2664,11 +2664,11 @@ pub static BRAVE: Build = Build {
         page_info_id: 0x122DB790, // ?kSecurePageInfoChromeRefreshOldIconId@omnibox@@3QBDB.llvm.2910200201067176236
         page_info_path: 0x122E53F0, // ?kSecurePageInfoChromeRefreshOldPath@omnibox@@3QBUPathElement@gfx@@B.llvm.2910200201067176236
         page_info_size: 282,
-        http_size: 263,
+        http_size: 81,
         extra_lock_icons: &[],
         extra_warning_icons: &[],
         anchor_view_access_at: 0x2a,
-        skip: "address icon updateicon anchor",
+        skip: "address updateicon anchor",
         anchor_tracker_offset: 0x300,
     },
     vertical: VerticalTabs {
@@ -3204,6 +3204,11 @@ mod tests {
             ("colour", toolbar.get_color, toolbar.get_color_bytes),
             ("view invalidation", BRAVE.vertical.invalidate_layout, BRAVE.vertical.invalidate_layout_prologue),
             ("region minimum size", BRAVE.vertical.region_minimum_size, BRAVE.vertical.region_minimum_prologue),
+            ("from vector icon", toolbar.from_vector_icon, toolbar.from_vector_icon_prologue),
+            ("set transform", toolbar.set_transform, toolbar.set_transform_prologue),
+            ("set brightness", toolbar.set_brightness, toolbar.set_brightness_prologue),
+            ("update icon", toolbar.update_icon, toolbar.update_icon_prologue),
+            ("update location icon", toolbar.update_location_icon, toolbar.update_location_icon_prologue),
             ("controller destructor", BRAVE.vertical.destructor, BRAVE.vertical.destructor_prologue),
         ] {
             assert_eq!(
