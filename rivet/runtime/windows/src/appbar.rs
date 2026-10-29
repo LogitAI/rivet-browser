@@ -1241,7 +1241,7 @@ impl Canvas<'_> {
             INK,
             false,
         )?;
-        let badge_width = 26.0 + 6.0 * space.profile.chars().count() as f32;
+        let badge_width = 26.0 + 6.0 * space.badge().chars().count() as f32;
         let badge = rect(w - 8.0 - 8.0 - badge_width, 111.0, badge_width, 20.0);
         self.fill_rounded(badge, 6.0, rgba(WHITE, 0.5))?;
         self.dot(
@@ -1253,7 +1253,7 @@ impl Canvas<'_> {
         self.text(
             BADGE,
             rect(badge.left + 18.0, 111.0, badge_width - 22.0, 20.0),
-            &space.profile,
+            &space.badge(),
             SOFT_INK,
             false,
         )?;
@@ -1469,7 +1469,7 @@ impl Canvas<'_> {
                         self.text(
                             META,
                             rect(left + 30.0, y + 23.0, inner - 44.0, 17.0),
-                            &info.profile,
+                            &info.badge(),
                             MUTED,
                             false,
                         )
