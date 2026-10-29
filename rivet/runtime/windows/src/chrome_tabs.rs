@@ -23,6 +23,9 @@ type ChangeGroup = unsafe extern "system" fn(*mut c_void, *const u8, *const u8, 
 static BASE: OnceLock<Option<usize>> = OnceLock::new();
 pub(crate) fn base() -> Option<usize> {
     *BASE.get_or_init(|| unsafe {
+        if !bv().supported {
+            return None;
+        }
         let image = image::recorded()?;
         let signatures = bv().signatures;
         for (rva, bytes) in signatures {

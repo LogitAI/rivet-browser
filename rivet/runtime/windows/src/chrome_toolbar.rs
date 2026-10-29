@@ -1250,7 +1250,7 @@ unsafe extern "system" fn anchor_rect(
     type Drawn = unsafe extern "system" fn(*mut c_void) -> bool;
     let run: RectCall = original(&ORIGINAL_ANCHOR_RECT);
     let ret = run(delegate, result);
-    let observer = *(delegate.add(0x300) as *const *mut u8);
+    let observer = *(delegate.add(bv().anchor_tracker_offset) as *const *mut u8);
     if observer.is_null() {
         return ret;
     }
@@ -1393,7 +1393,6 @@ unsafe fn detour(
     base: usize,
     rva: usize,
     prologue: &[u8],
-    cookie: bool,
     hook: usize,
     store: &AtomicUsize,
 ) -> Result<(), String> {
@@ -1401,6 +1400,8 @@ unsafe fn detour(
     if std::slice::from_raw_parts(code, prologue.len()) != prologue {
         return Err(format!("{rva:#x} is not the recorded function"));
     }
+    // A prologue that ends with the seven byte stack cookie load is relocated, see above.
+    let cookie = prologue.len() >= 7 && prologue[prologue.len() - 7..prologue.len() - 4] == [0x48, 0x8B, 0x05];
     let mut trampoline = Vec::new();
     if cookie {
         // The load is the last seven bytes: its opcode and its four byte displacement.
@@ -1451,7 +1452,7 @@ unsafe fn replace_slot(slot: *mut usize, value: usize) -> Result<(), String> {
     write_recorded(slot.cast(), &value.to_le_bytes())
 }
 
-unsafe fn patch() -> Result<Hooks, String> {
+unsafe fn patch(skip: &str) -> Result<Hooks, String> {
     let image = image::recorded().ok_or("this browser build has no recorded toolbar")?;
     let base = image.base;
     let slot = |vtable: usize, index: usize| vtable.checked_add(index.checked_mul(8)?);
@@ -1465,8 +1466,11 @@ unsafe fn patch() -> Result<Hooks, String> {
     {
         return Err("this browser build has no recorded browser widget".into());
     }
-    if !holds(bv().browser_delegate_vtable, bv().active_web_contents_slot, bv().active_web_contents)
-        || !holds(bv().web_contents_vtable, bv().web_contents_title_slot, bv().web_contents_title)
+    let address = !skip.contains("address");
+    let icons = !skip.contains("icon");
+    if address
+        && (!holds(bv().browser_delegate_vtable, bv().active_web_contents_slot, bv().active_web_contents)
+            || !holds(bv().web_contents_vtable, bv().web_contents_title_slot, bv().web_contents_title))
     {
         return Err("this browser build has no recorded web contents".into());
     }
@@ -1482,41 +1486,50 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(bv().theme_changed, &bv().theme_changed_prologue)
         || !prologue(bv().paint_layer, &bv().paint_layer_prologue)
         || !prologue(bv().set_visible, &bv().set_visible_prologue)
-        || !prologue(bv().from_vector_icon, &bv().from_vector_icon_prologue)
-        || !prologue(bv().update_location, &bv().update_location_prologue)
-        || !prologue(bv().textfield_theme, &bv().textfield_theme_prologue)
-        || !prologue(bv().textfield_set_font, &bv().textfield_set_font_bytes)
-        || !prologue(bv().font_size, &bv().font_size_bytes)
-        || !prologue(bv().derive_size, &bv().derive_size_bytes)
-        || !prologue(bv().update_location_icon, &bv().update_location_icon_prologue)
-        || !prologue(bv().chip_text, &bv().chip_text_prologue)
-        || !prologue(bv().formatted_url, &bv().formatted_url_prologue)
-        || !prologue(bv().model_url, &bv().model_url_prologue)
-        || !prologue(bv().update_text_style, &bv().update_text_style_prologue)
-        || !prologue(bv().apply_color, &bv().apply_color_bytes)
-        || !prologue(bv().apply_weight, &bv().apply_weight_bytes)
-        || !prologue(bv().title_was_set, &bv().title_was_set_prologue)
-        || !prologue(bv().operator_new, &bv().operator_new_bytes)
-        || !prologue(bv().operator_delete, &bv().operator_delete_bytes)
-        || !prologue(bv().omnibox_update, &bv().omnibox_update_prologue)
-        || !prologue(bv().omnibox_revert_all, &bv().omnibox_revert_all_prologue)
-        || !prologue(bv().omnibox_tab_changed, &bv().omnibox_tab_changed_prologue)
         || !prologue(bv().layout_insets, &bv().layout_insets_prologue)
-        || !prologue(bv().update_icon, &bv().update_icon_prologue)
-        || !prologue(bv().refresh_background, &bv().refresh_background_prologue)
-        || !prologue(bv().gurl_destructor, &bv().gurl_destructor_bytes)
         || !prologue(bv().anchor_rect, &bv().anchor_rect_prologue)
-        || !prologue(bv().anchor_rect + 0x2a, &bv().anchor_view_access)
+        || !prologue(bv().anchor_rect + bv().anchor_view_access_at, &bv().anchor_view_access)
         || !prologue(bv().is_drawn, &bv().is_drawn_bytes)
         || !prologue(bv().bounds_in_screen, &bv().bounds_bytes)
-        || !prologue(bv().set_transform, &bv().set_transform_prologue)
-        || !prologue(bv().set_brightness, &bv().set_brightness_prologue)
         || !prologue(bv().hwnd_for_widget, &bv().hwnd_for_widget_head)
         || !prologue(bv().hwnd_for_widget + 9, &bv().hwnd_for_widget_tail)
     {
         return Err("this browser build has other toolbar functions".into());
     }
+    if icons
+        && (!prologue(bv().from_vector_icon, &bv().from_vector_icon_prologue)
+            || !prologue(bv().set_transform, &bv().set_transform_prologue)
+            || !prologue(bv().set_brightness, &bv().set_brightness_prologue)
+            || (!skip.contains("updateicon") && !prologue(bv().update_icon, &bv().update_icon_prologue)))
+    {
+        return Err("this browser build has other icon functions".into());
+    }
+    if address
+        && (!prologue(bv().update_location, &bv().update_location_prologue)
+            || !prologue(bv().textfield_theme, &bv().textfield_theme_prologue)
+            || !prologue(bv().textfield_set_font, &bv().textfield_set_font_bytes)
+            || !prologue(bv().font_size, &bv().font_size_bytes)
+            || !prologue(bv().derive_size, &bv().derive_size_bytes)
+            || !prologue(bv().update_location_icon, &bv().update_location_icon_prologue)
+            || !prologue(bv().chip_text, &bv().chip_text_prologue)
+            || !prologue(bv().formatted_url, &bv().formatted_url_prologue)
+            || !prologue(bv().model_url, &bv().model_url_prologue)
+            || !prologue(bv().update_text_style, &bv().update_text_style_prologue)
+            || !prologue(bv().apply_color, &bv().apply_color_bytes)
+            || !prologue(bv().apply_weight, &bv().apply_weight_bytes)
+            || !prologue(bv().title_was_set, &bv().title_was_set_prologue)
+            || !prologue(bv().operator_new, &bv().operator_new_bytes)
+            || !prologue(bv().operator_delete, &bv().operator_delete_bytes)
+            || !prologue(bv().omnibox_update, &bv().omnibox_update_prologue)
+            || !prologue(bv().omnibox_revert_all, &bv().omnibox_revert_all_prologue)
+            || !prologue(bv().omnibox_tab_changed, &bv().omnibox_tab_changed_prologue)
+            || !prologue(bv().refresh_background, &bv().refresh_background_prologue)
+            || !prologue(bv().gurl_destructor, &bv().gurl_destructor_bytes))
+    {
+        return Err("this browser build has other address field functions".into());
+    }
     // The icons are read through their addresses, so each must lie inside the image.
+    if icons {
     if [bv().back_icon, bv().forward_icon, bv().reload_icon, bv().page_info_icon, bv().google_g_icon, bv().google_g_monochrome_icon]
         .iter()
         .chain(bv().edit_icons.iter())
@@ -1541,6 +1554,7 @@ unsafe fn patch() -> Result<Hooks, String> {
     {
         return Err("this browser build has another icon for plain HTTP".into());
     }
+    }
     Ok(Hooks {
         base,
         paint: std::mem::transmute::<usize, WidgetPaint>(base + bv().paint),
@@ -1560,14 +1574,17 @@ unsafe fn patch() -> Result<Hooks, String> {
 
 /// Patches the browser once every check has passed and `HOOKS` is stored.
 unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
-    build_icons(base);
+    let address = !skip.contains("address");
+    let icons = !skip.contains("icon");
+    if icons {
+        build_icons(base);
+    }
     crate::vertical_tabs::trace(&format!("toolbar skip: {skip:?}"));
     if !skip.contains("anchor") {
         detour(
             base,
             bv().anchor_rect,
             &bv().anchor_rect_prologue,
-            false,
             anchor_rect as *const () as usize,
             &ORIGINAL_ANCHOR_RECT,
         )?;
@@ -1577,7 +1594,6 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
             base,
             bv().layout_constant,
             &bv().layout_constant_prologue,
-            true,
             layout_constant as usize,
             &ORIGINAL_LAYOUT_CONSTANT,
         )?;
@@ -1587,7 +1603,6 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
             base,
             bv().layout_insets,
             &bv().layout_insets_prologue,
-            false,
             layout_insets as *const () as usize,
             &ORIGINAL_LAYOUT_INSETS,
         )?;
@@ -1597,32 +1612,29 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
             base,
             bv().theme_changed,
             &bv().theme_changed_prologue,
-            true,
             theme_changed as usize,
             &ORIGINAL_THEME_CHANGED,
         )?;
     }
     if !skip.contains("layer") {
-        detour(base, bv().paint_layer, &bv().paint_layer_prologue, true, paint_layer as usize, &ORIGINAL_PAINT_LAYER)?;
+        detour(base, bv().paint_layer, &bv().paint_layer_prologue, paint_layer as usize, &ORIGINAL_PAINT_LAYER)?;
     }
     if !skip.contains("visible") {
         detour(
             base,
             bv().set_visible,
             &bv().set_visible_prologue,
-            false,
             set_visible as usize,
             &ORIGINAL_SET_VISIBLE,
         )?;
     }
-    if skip.contains("icon") {
-        return slots(base, skip);
+    if !address {
+        return icons_and_slots(base, skip);
     }
     detour(
         base,
         bv().update_location_icon,
         &bv().update_location_icon_prologue,
-        false,
         update_location_icon as *const () as usize,
         &ORIGINAL_UPDATE_LOCATION_ICON,
     )?;
@@ -1630,7 +1642,6 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         base,
         bv().textfield_theme,
         &bv().textfield_theme_prologue,
-        false,
         textfield_theme as *const () as usize,
         &ORIGINAL_TEXTFIELD_THEME,
     )?;
@@ -1638,7 +1649,6 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         base,
         bv().update_location,
         &bv().update_location_prologue,
-        false,
         update_location as *const () as usize,
         &ORIGINAL_UPDATE_LOCATION,
     )?;
@@ -1646,73 +1656,73 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         base,
         bv().refresh_background,
         &bv().refresh_background_prologue,
-        false,
         refresh_background as *const () as usize,
         &ORIGINAL_REFRESH_BACKGROUND,
     )?;
     detour(
         base,
-        bv().update_icon,
-        &bv().update_icon_prologue,
-        false,
-        update_icon as *const () as usize,
-        &ORIGINAL_UPDATE_ICON,
-    )?;
-    detour(
-        base,
         bv().formatted_url,
         &bv().formatted_url_prologue,
-        false,
         formatted_url as *const () as usize,
         &ORIGINAL_FORMATTED_URL,
     )?;
-    for (rva, prologue, cookie, hook, store) in [
+    for (rva, prologue, hook, store) in [
         (
             bv().update_text_style,
             &bv().update_text_style_prologue[..],
-            false,
             update_text_style as *const () as usize,
             &ORIGINAL_UPDATE_TEXT_STYLE,
         ),
         (
             bv().title_was_set,
             &bv().title_was_set_prologue[..],
-            false,
             title_was_set as *const () as usize,
             &ORIGINAL_TITLE_WAS_SET,
         ),
         (
             bv().omnibox_update,
             &bv().omnibox_update_prologue[..],
-            true,
             omnibox_update as *const () as usize,
             &ORIGINAL_OMNIBOX_UPDATE,
         ),
         (
             bv().omnibox_revert_all,
             &bv().omnibox_revert_all_prologue[..],
-            true,
             omnibox_revert_all as *const () as usize,
             &ORIGINAL_OMNIBOX_REVERT_ALL,
         ),
         (
             bv().omnibox_tab_changed,
             &bv().omnibox_tab_changed_prologue[..],
-            false,
             omnibox_tab_changed as *const () as usize,
             &ORIGINAL_OMNIBOX_TAB_CHANGED,
         ),
     ] {
-        detour(base, rva, prologue, cookie, hook, store)?;
+        detour(base, rva, prologue, hook, store)?;
     }
     detour(
         base,
         bv().chip_text,
         &bv().chip_text_prologue,
-        false,
         chip_text as *const () as usize,
         &ORIGINAL_CHIP_TEXT,
     )?;
+    icons_and_slots(base, skip)
+}
+
+unsafe fn icons_and_slots(base: usize, skip: &str) -> Result<(), String> {
+    if skip.contains("icon") {
+        return slots(base, skip);
+    }
+    if !skip.contains("updateicon") {
+        detour(
+        base,
+        bv().update_icon,
+        &bv().update_icon_prologue,
+        update_icon as *const () as usize,
+        &ORIGINAL_UPDATE_ICON,
+    )?;
+    }
     let mut icon_trampoline = bv().from_vector_icon_prologue.to_vec();
     jump(
         &mut icon_trampoline,
@@ -1753,7 +1763,11 @@ pub unsafe fn install(directory: Option<std::path::PathBuf>) -> Result<(), Strin
             .and_then(|dir| std::fs::read_to_string(dir.join(name)).ok())
             .unwrap_or_default()
     };
-    let skip = read("rivet-toolbar-skip.txt");
+    let skip = read("rivet-toolbar-skip.txt") + " " + bv().skip;
+    if skip.contains("toolbar") {
+        // This build keeps the browser's own toolbar, so nothing is patched.
+        return Ok(());
+    }
     FORCED.store(
         match read("rivet-toolbar-force.txt").trim() {
             "hover" => FORCE_HOVER,
@@ -1768,7 +1782,7 @@ pub unsafe fn install(directory: Option<std::path::PathBuf>) -> Result<(), Strin
     WIRED
         .get_or_init(|| {
             let hooks = HOOKS
-                .get_or_init(|| patch())
+                .get_or_init(|| patch(&skip))
                 .as_ref()
                 .map_err(Clone::clone)?;
             let result = transaction(|| wire(hooks.base, &skip));
@@ -2075,7 +2089,7 @@ mod tests {
             static STORE: AtomicUsize = AtomicUsize::new(0);
             let prologue = before[0x100..0x10c].to_vec();
             let result = transaction(|| {
-                detour(page as usize, 0x100, &prologue, false, 0x1122_3344, &STORE)?;
+                detour(page as usize, 0x100, &prologue, 0x1122_3344, &STORE)?;
                 replace_slot(page.add(0x200).cast(), 0xdead_beef)?;
                 write_code(page.add(0x300), &[0xcc; 7])?;
                 assert_ne!(std::slice::from_raw_parts(page, 0x1000), &before[..]);

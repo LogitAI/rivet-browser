@@ -1639,6 +1639,9 @@ unsafe fn create_appbar(window: HWND) {
     {
         crate::vertical_tabs::set_trace(path);
     }
+    if crate::vertical_tabs::tracing() {
+        crate::vertical_tabs::trace_crashes();
+    }
     let toolbar = crate::chrome_toolbar::install(runtime_directory());
     crate::vertical_tabs::trace(&format!("toolbar: {toolbar:?}"));
     if let Err(error) = toolbar {

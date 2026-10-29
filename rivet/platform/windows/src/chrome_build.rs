@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 /// The checked-in table of supported builds.
 pub const TABLE: &str = include_str!("../chrome-builds.json");
 
-/// Addresses inside one build, as offsets from its module base.
+/// Addresses inside one build, as offsets from its module base. Edge builds its windows from
+/// `EdgeBrowserFrameViewWin`, so its row names that class's vtable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChromeBuild {
     pub browser: String,
@@ -235,6 +236,9 @@ mod tests {
     fn nfr3_checked_in_build_table_is_valid() {
         let table: Vec<ChromeBuild> = serde_json::from_str(TABLE).unwrap();
         assert!(table.iter().any(|build| build.version == "156.0.8078.48"));
+        assert!(table
+            .iter()
+            .any(|build| build.module == "msedge.dll" && build.version == "156.0.4314.50"));
         assert!(table
             .iter()
             .all(|build| hex(&build.hwnd_for_view_prologue).is_some()));

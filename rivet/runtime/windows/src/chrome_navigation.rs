@@ -52,6 +52,9 @@ static BASE: OnceLock<Option<usize>> = OnceLock::new();
 
 fn base() -> Option<usize> {
     *BASE.get_or_init(|| unsafe {
+        if !bv().supported {
+            return None;
+        }
         let image = image::recorded()?;
         bv().signatures
             .iter()

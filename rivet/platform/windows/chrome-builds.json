@@ -8,5 +8,15 @@
     "client_view_bounds": 57270768,
     "hwnd_for_view": 57321808,
     "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Microsoft Edge",
+    "version": "156.0.4314.50",
+    "module": "msedge.dll",
+    "frame_view_vtable": 293959448,
+    "client_view_slot": 115,
+    "client_view_bounds": 54691616,
+    "hwnd_for_view": 17271385,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
   }
 ]

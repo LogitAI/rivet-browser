@@ -13,6 +13,10 @@ use std::sync::OnceLock;
 #[allow(unused_imports)]
 use crate::chrome_toolbar::{ACCENT_TINT, FOCUS_RING, HAIRLINE, INK, PAPER, SELECTION, SOFT_INK};
 
+/// An address the build does not have. Every check against it fails, so the feature that needs it
+/// stays off.
+const ABSENT: usize = 0x7FFF_0000;
+
 /// One browser build.
 pub struct Build {
     pub browser: &'static str,
@@ -233,10 +237,18 @@ pub struct Toolbar {
     pub page_info_reps: usize,
     pub page_info_id: usize,
     pub page_info_path: usize,
+    /// Where the anchor view access starts inside `GetAnchorRect`.
+    pub anchor_view_access_at: usize,
+    /// Features this build leaves alone: "toolbar" (the whole top row), "address", "icon" and "updateicon".
+    pub skip: &'static str,
+    /// Where a `BubbleDialogDelegate` keeps the tracker of its anchor view.
+    pub anchor_tracker_offset: usize,
 }
 
 /// Values for `vertical_tabs.rs`.
 pub struct VerticalTabs {
+    /// Whether this build has been checked for this feature. When it is false the feature is left alone.
+    pub supported: bool,
     /// The vtable slot of `VerticalTabStripStateControllerImpl::ShouldDisplayVerticalTabs`.
     pub slot: usize,
     pub should_display: usize,
@@ -278,6 +290,8 @@ pub struct VerticalTabs {
 
 /// Values for `chrome_navigation.rs`.
 pub struct Navigation {
+    /// Whether this build has been checked for this feature. When it is false the feature is left alone.
+    pub supported: bool,
     /// `views::DesktopWindowTreeHostWin::GetContentWindowForHWND`.
     pub content_window_for_hwnd: usize,
     /// `BrowserView::GetBrowserViewForNativeWindow`.
@@ -299,6 +313,8 @@ pub struct Navigation {
 
 /// Values for `chrome_tabs.rs`.
 pub struct Tabs {
+    /// Whether this build has been checked for this feature. When it is false the feature is left alone.
+    pub supported: bool,
     pub content_window_for_hwnd: usize,
     pub browser_view_for_window: usize,
     pub active_web_contents: usize,
@@ -328,6 +344,8 @@ pub struct Tabs {
 
 /// Values for `chrome_split.rs`.
 pub struct Split {
+    /// Whether this build has been checked for this feature. When it is false the feature is left alone.
+    pub supported: bool,
     pub add_to_new_split: usize,
     pub remove_split: usize,
     pub get_split_for_tab: usize,
@@ -385,6 +403,8 @@ pub struct Split {
 
 /// Values for `chrome_side_panel.rs`.
 pub struct SidePanel {
+    /// Whether this build has been checked for this feature. When it is false the feature is left alone.
+    pub supported: bool,
     /// `SidePanel`'s own vtable, which its `views::View` base shares as the object's first word.
     pub side_panel_vtable: usize,
     pub browser_offset: usize,
@@ -796,8 +816,12 @@ pub static CHROME: Build = Build {
         page_info_reps: 0x10F5_D438, // ?kSecurePageInfoChromeRefreshOldRepList@omnibox@@3QBUVectorIconRep@gfx@@B.llvm.2910200201067176236
         page_info_id: 0x10F5_D448, // ?kSecurePageInfoChromeRefreshOldIconId@omnibox@@3QBDB.llvm.2910200201067176236
         page_info_path: 0x10F6_6E40, // ?kSecurePageInfoChromeRefreshOldPath@omnibox@@3QBUPathElement@gfx@@B.llvm.2910200201067176236
+        anchor_view_access_at: 0x2a,
+        skip: "",
+        anchor_tracker_offset: 0x300,
     },
     vertical: VerticalTabs {
+        supported: true,
         slot: 0x0FDA_FE00, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
         should_display: 0x0369_C6E0, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
         browser_view_for_browser: 0x0034_D3E0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
@@ -823,6 +847,7 @@ pub static CHROME: Build = Build {
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
     },
     navigation: Navigation {
+        supported: true,
         content_window_for_hwnd: 0x00D5_64A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         browser_view_for_window: 0x0BC8_1E10, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
         active_web_contents: 0x0BC8_2340, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
@@ -854,6 +879,7 @@ pub static CHROME: Build = Build {
     ],
     },
     tabs: Tabs {
+        supported: true,
         content_window_for_hwnd: 0x00D5_64A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         browser_view_for_window: 0x0BC8_1E10, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
         active_web_contents: 0x0BC8_2340, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
@@ -917,6 +943,7 @@ pub static CHROME: Build = Build {
             ],
     },
     split: Split {
+        supported: true,
         add_to_new_split: 0x0A20_5410, // ?AddToNewSplit@TabStripModel@@QEAA?AVSplitTabId@split_tabs@@V?$vector@HV?$allocator@H@__Cr@std@@@__C
         remove_split: 0x0A20_7580, // ?RemoveSplit@TabStripModel@@QEAAXVSplitTabId@split_tabs@@@Z
         get_split_for_tab: 0x0311_2370, // ?GetSplitForTab@TabStripModel@@QEBA?AV?$optional@VSplitTabId@split_tabs@@@__Cr@std@@H@Z
@@ -965,6 +992,7 @@ pub static CHROME: Build = Build {
         ],
     },
     side_panel: SidePanel {
+        supported: true,
         side_panel_vtable: 0x0FE6_7CA8, // .weak.??_7SidePanel@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplate@
         browser_offset: 0x560,
         features_offset: 0xd0,
@@ -1050,8 +1078,428 @@ pub static CHROME: Build = Build {
     },
 };
 
+pub static EDGE: Build = Build {
+    browser: "Microsoft Edge",
+    module: "msedge.dll",
+    version: [156, 0, 4314, 50],
+    toolbar: Toolbar {
+        layout_constant: 0x00FF34C6, // ?GetLayoutConstant@@YAHW4LayoutConstant@@@Z
+        layout_constant_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x89, 0xCB, 0x48, 0x8B, 0x05, 0x6A, 0x0B, 0x20, 0x13],
+        theme_changed: 0x030E36C6, // ?ThemeChanged@Widget@views@@QEAAXXZ
+        theme_changed_prologue: &[0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00, 0x48, 0x89, 0xCE],
+        paint_layer: 0x0267EFF6, // ?PaintFromPaintRoot@View@views@@AEAAXAEBVPaintContext@ui@@@Z
+        paint_layer_prologue: &[0x56, 0x57, 0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00, 0x48, 0x89, 0xCE],
+        set_visible: 0x01056220, // ?SetVisible@View@views@@UEAAX_N@Z
+        set_visible_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE],
+        from_vector_icon: 0x0100567A, // ?FromVectorIcon@ImageModel@ui@@SA?AV12@AEBUVectorIcon@gfx@@VColorVariant@2@HPEBU34@@Z
+        from_vector_icon_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x4C, 0x89, 0xC7],
+        update_location: 0x02822D7A, // ?Update@LocationIconView@@QEAAX_N0@Z
+        update_location_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00],
+        update_location_icon: ABSENT, // not found in Edge
+        update_location_icon_prologue: &[0x00], // function not found in Edge
+        layout_insets: 0x00FF3C3D, // ?GetLayoutInsets@@YA?AVInsets@gfx@@W4LayoutInset@@@Z
+        layout_insets_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00],
+        toolbar_button_inset: 6, // Chrome value, not checked on Edge
+        toolbar_inset: 11, // Chrome value, not checked on Edge
+        location_icon_inset: 3, // Chrome value, not checked on Edge
+        update_icon: 0x033C8D50, // ?UpdateIcon@ToolbarButton@@UEAAXXZ
+        update_icon_prologue: &[0x80, 0xB9, 0x98, 0x07, 0x00, 0x00, 0x01, 0x75, 0x0C, 0x48, 0x8B, 0x91, 0x88, 0x07, 0x00, 0x00, 0xE9],
+        formatted_url: 0x027A8DC8, // ?GetFormattedURL@LocationBarModelImpl@@AEBA?AV?$basic_string@_SU?$char_traits@_S@__Cr@std@
+        formatted_url_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x10, 0x01, 0x00, 0x00],
+        model_url: 0x010F0BB0, // ?GetURL@LocationBarModelImpl@@UEBA?AVGURL@@XZ
+        model_url_prologue: &[0x56, 0x57, 0x48, 0x81, 0xEC, 0xB8, 0x00, 0x00, 0x00, 0x48, 0x89, 0xD6],
+        omnibox_update: 0x02821910, // ?Update@OmniboxViewViews@@UEAAXXZ
+        omnibox_update_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x21, 0x27, 0x9D, 0x11],
+        omnibox_revert_all: 0x02827E80, // ?RevertAll@OmniboxViewViews@@UEAAXXZ
+        omnibox_revert_all_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0xB1, 0xC1, 0x9C, 0x11],
+        omnibox_tab_changed: 0x02827D9C, // ?OnTabChanged@OmniboxViewViews@@QEAAXPEAVWebContents@content@@@Z
+        omnibox_tab_changed_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD7, 0x48, 0x89, 0xCE],
+        omnibox_textfield: 0x10, // Chrome value, not checked on Edge
+        update_text_style: 0x02824F00, // ?UpdateTextStyle@OmniboxView@@IEAAXAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$all
+        update_text_style_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xF0, 0x01, 0x00, 0x00],
+        apply_color: 0x028D2F82, // ?ApplyColor@RenderText@gfx@@QEAAXIAEBVRange@2@@Z
+        apply_color_bytes: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0xA0, 0x00, 0x00, 0x00],
+        apply_weight: 0x0B74E45C, // ?ApplyWeight@RenderText@gfx@@QEAAXW4Weight@Font@2@AEBVRange@2@@Z
+        apply_weight_bytes: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0x00, 0x01, 0x00, 0x00],
+        title_was_set: 0x033CB530, // ?TitleWasSet@OmniboxViewViews@@EEAAXPEAVNavigationEntry@content@@@Z
+        title_was_set_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x89, 0x28, 0x01, 0x00, 0x00],
+        observer_offset: 0x720, // Chrome value, not checked on Edge
+        operator_new: 0x036CDF90, // ??2@YAPEAX_K@Z
+        operator_new_bytes: &[0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B],
+        operator_delete: 0x0023EE60, // ??3@YAXPEAX_K@Z
+        operator_delete_bytes: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xD6],
+        model_delegate: 0x40, // Chrome value, not checked on Edge
+        browser_delegate_vtable: ABSENT, // not found in Edge
+        active_web_contents: 0x00FE1AC0, // ?GetActiveWebContents@BrowserLocationBarModelDelegate@@UEBAPEAVWebContents@content@@XZ
+        active_web_contents_slot: 19, // Chrome value, not checked on Edge
+        web_contents_vtable: ABSENT, // not found in Edge
+        web_contents_title: 0x01119470, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?
+        web_contents_title_slot: 53, // Chrome value, not checked on Edge
+        location_bar_view_base: 0x100, // Chrome value, not checked on Edge
+        hover_value: 0x5F8, // Chrome value, not checked on Edge
+        field_background: 0x328, // Chrome value, not checked on Edge
+        background_vtable: 0x114D6E80, // ??_7BackgroundPainter@views@@6B@
+        painter_vtable: ABSENT, // not found in Edge
+        painter_radii: 0x10, // Chrome value, not checked on Edge
+        painter_insets: 0x20, // Chrome value, not checked on Edge
+        field_state: 0x4E8, // Chrome value, not checked on Edge
+        field_state_focused: 0x18, // Chrome value, not checked on Edge
+        focused_fill_id: 1013, // Chrome value, not checked on Edge
+        focus_ring_remove: 0x027876CC, // ?Remove@FocusRing@views@@SAXPEAVView@2@@Z
+        set_transform: 0x0B38D582, // ?SetTransform@View@views@@QEAAXAEBVTransform@gfx@@@Z
+        set_transform_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x48, 0x89, 0xD6],
+        set_brightness: 0x02DA797C, // ?SetLayerBrightness@Layer@ui@@QEAAXM@Z
+        set_brightness_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x48, 0x0F, 0x29, 0x74, 0x24, 0x30, 0x0F, 0x28, 0xF1],
+        view_layer: 0x20, // Chrome value, not checked on Edge
+        view_size: 0x1D0, // Chrome value, not checked on Edge
+        refresh_background: ABSENT, // not found in Edge
+        refresh_background_prologue: &[0x00], // function not found in Edge
+        chip_text: ABSENT, // not found in Edge
+        chip_text_prologue: &[0x00], // function not found in Edge
+        textfield_theme: 0x02D30920, // ?OnThemeChanged@Textfield@views@@UEAAXXZ
+        textfield_theme_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x10, 0x37, 0x4C, 0x11],
+        textfield_set_font: 0x0278A88A, // ?SetFontList@Textfield@views@@QEAAXAEBVFontList@gfx@@@Z
+        textfield_set_font_bytes: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x81, 0xC0, 0x03, 0x00, 0x00],
+        font_size: 0x0101C850, // ?GetFontSize@FontList@gfx@@QEBAHXZ
+        font_size_bytes: &[0x48, 0x8B, 0x09, 0xE9, 0x00, 0x00, 0x00, 0x00, 0x56, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x41, 0x44],
+        derive_size: 0x0101C9EA, // ?DeriveWithSizeDelta@FontList@gfx@@QEBA?AV12@H@Z
+        derive_size_bytes: &[0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x44, 0x89, 0xC7, 0x48, 0x89, 0xD6],
+        textfield_render_text: 0x378, // Chrome value, not checked on Edge
+        render_text_font_list: 0x48, // Chrome value, not checked on Edge
+        gurl_destructor: 0x00FDECAA, // ??1GURL@@QEAA@XZ
+        gurl_destructor_bytes: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x79, 0x70],
+        gurl_scheme_begin: 0x20, // Chrome value, not checked on Edge
+        gurl_scheme_length: 0x24, // Chrome value, not checked on Edge
+        anchor_rect: 0x032D7810, // ?GetAnchorRect@BubbleDialogDelegate@views@@UEBA?AVRect@gfx@@XZ
+        anchor_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xC8, 0x00, 0x00, 0x00],
+        anchor_view_access: &[0x48, 0x8B, 0x81, 0x78, 0x03, 0x00, 0x00, 0x48, 0x85, 0xC0],
+        is_drawn: 0x0112D610, // ?IsDrawn@View@views@@UEBA_NXZ
+        is_drawn_bytes: &[0x80, 0xB9, 0xD8, 0x01, 0x00, 0x00, 0x01, 0x75, 0x1D, 0x48, 0x8B, 0x89, 0x98, 0x01, 0x00, 0x00],
+        bounds_in_screen: 0x028C8E20, // ?GetAnchorBoundsInScreen@View@views@@UEBA?AVRect@gfx@@XZ
+        bounds_bytes: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF],
+        parent_offset: 0x198, // Chrome value, not checked on Edge
+        is_drawn_slot: 20,
+        browser_widget_vtable: 0x11445140, // BrowserWidget NativeWidgetDelegate vtable
+        plain_widget_vtable: 0x114CC290, // views::Widget NativeWidgetDelegate vtable
+        paint_slot: 31,
+        paint: 0x033D8DC0, // ?OnNativeWidgetPaint@Widget@views@@UEAAXAEBVPaintContext@ui@@@Z
+        layout_slot: 45,
+        layout: 0x032C2200, // ?LayoutRootViewIfNecessary@Widget@views@@UEAAXXZ
+        color_provider: 0x01003060, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
+        root_view_offset: 0x1A0, // views::Widget::root_view_, read by GetRootView
+        theme_slot: 111,
+        hidden: &[
+                (0x11892678, 0x02C7C5E0), // BrowserAppMenuButton
+                (0x118CBBB8, 0x026C1FA0), // page_actions::PageActionView
+                (0x1181E978, 0x00FDE2C0), // VerticalTabStripRegionView
+                (0x11834A18, 0x00FDE2C0), // SidePanelHeader
+                (0x11890838, 0x02B70B40), // PinnedActionToolbarButton
+            ],
+        get_widget_slot: 10,
+        overrides: &[
+        (12, 8),  // kLocationBarChildCornerRadius
+        (16, 28), // kLocationBarHeight
+        (29, 12), // kMainBackgroundRegionCornerRadius
+        (46, 28), // kToolbarButtonHeight
+        (47, 18), // kToolbarButtonIconSize
+        (55, 8),  // kToolbarCornerRadius
+        (60, 0),  // kVerticalTabMinWidth
+    ], // Chrome value, not checked on Edge
+        colours: &[
+        (0x13C, PAPER),      // kColorFrameActive
+        (796, PAPER),        // kColorLocationBarBackground
+        (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
+        (1003, 0),           // Page info chip background: clear, so the field is one surface
+        (159, FOCUS_RING),   // kColorSysStateFocusRing
+        (314, FOCUS_RING),   // kColorFocusableBorderFocused
+        (465, SELECTION),    // kColorTextfieldSelectionBackground
+        (466, INK),          // kColorTextfieldSelectionForeground
+        (1004, 0),           // kColorOmniboxIconBackgroundTonal
+        (1005, SOFT_INK),    // kColorOmniboxIconForeground: the icon of the field while editing
+        (1006, SOFT_INK),    // kColorOmniboxIconForegroundTonal
+        (1007, INK),         // kColorOmniboxIconHover
+        (1013, PAPER),       // kColorOmniboxResultsBackground, the suggestion list and the field with it
+        (1014, 0xFFF0_EFEC), // kColorOmniboxResultsBackgroundHovered
+        (1015, 0x0F1F_2024), // kColorOmniboxResultsBackgroundHoverOverlay
+        (1016, ACCENT_TINT), // kColorOmniboxResultsBackgroundSelected: the accent at 9 percent over paper
+        (1019, SOFT_INK),    // kColorOmniboxResultsButtonIcon
+        (1020, INK),         // kColorOmniboxResultsButtonIconSelected
+        (1028, 0),           // kColorOmniboxResultsFocusIndicator: the design marks a row by its tint alone
+        (1029, SOFT_INK),    // kColorOmniboxResultsIcon
+        (1030, 0x0F1F_2024), // kColorOmniboxResultsIconGM3Background
+        (1031, INK),         // kColorOmniboxResultsIconSelected
+        (1032, INK),         // kColorOmniboxResultsIconHovered
+        (1035, 0xFF8A_8690), // kColorOmniboxResultsTextDimmed
+        (1036, 0xFF4A_4850), // kColorOmniboxResultsTextDimmedSelected
+        (1041, 0xFF8A_8690), // kColorOmniboxResultsTextSecondary
+        (1042, 0xFF4A_4850), // kColorOmniboxResultsTextSecondarySelected
+        (1043, INK),         // kColorOmniboxResultsTextSelected
+        (1044, 0xFF4A_4850), // kColorOmniboxResultsUrl
+        (1045, INK),         // kColorOmniboxResultsUrlSelected
+        (1052, SOFT_INK),    // kColorOmniboxSecurityChipText: the icon of the field while editing
+        (1053, SELECTION),   // kColorOmniboxSelectionBackground: the accent at 25 percent over paper
+        (1054, INK),         // kColorOmniboxSelectionForeground
+        (1046, 0xFFB3_261E), // kColorOmniboxSecurityChipDangerous: the "Not secure" label and its warning
+        (1047, 0x14B3_261E), // kColorOmniboxSecurityChipDangerousBackground: the label's tint, 8 percent
+        (1055, INK),         // kColorOmniboxText: the address while it is edited
+        (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
+        (1590, PAPER),       // kColorToolbar
+        (1644, 0xFF1A_1A1A), // Caption button glyph, active window
+        (1645, 0xFF1A_1A1A), // Caption button glyph, inactive window
+        (1646, 0xFF1A_1A1A), // Caption button glyph without a theme colour
+        (1647, 0xFFC4_2B1C), // Close button hover fill
+        (1650, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
+        (1595, 0xFF4A_4850), // kColorToolbarButtonIcon
+        (1598, 0xFF1F_2024), // kColorToolbarButtonIconHovered
+        (1599, 0xFFBD_BCBC), // kColorToolbarButtonIconInactive: the icon colour at 35 percent over paper
+        (1603, HAIRLINE),    // kColorToolbarContentAreaSeparator
+        (1611, 0x0F1F_2024), // kColorToolbarInkDropHover
+        (1612, 0x1F1F_2024), // kColorToolbarInkDropRipple
+    ], // Chrome value, not checked on Edge
+        hwnd_for_widget: 0x0B379B4D, // ?HWNDForWidget@views@@YAPEAUHWND__@@PEBVWidget@1@@Z
+        hwnd_for_widget_head: &[0x48, 0x83, 0xEC, 0x28], // Chrome value, not checked on Edge
+        hwnd_for_widget_tail: &[0x48, 0x89, 0xC1, 0x48, 0x83, 0xC4, 0x28, 0xE9], // Chrome value, not checked on Edge
+        source_in_widget: 0x48, // Chrome value, not checked on Edge
+        content_window_for_hwnd: 0x026A4DC6, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        widget_for_window: 0x028C8D78, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
+        back_icon: ABSENT, // not found in Edge
+        forward_icon: 0x12C62308, // ?kForwardArrowChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
+        reload_icon: ABSENT, // not found in Edge
+        page_info_icon: 0x12ED5050, // ?kSecurePageInfoChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
+        google_g_icon: ABSENT, // not found in Edge
+        google_g_monochrome_icon: ABSENT, // not found in Edge
+        edit_icons: &[0x10E0_5680, 0x10E0_56B8, 0x10E0_8278, 0x10E0_82C0, 0x10E0_82F8], // Chrome value, not checked on Edge
+        http_icon: 0x12ED4BE8, // ?kHttpChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
+        http_icon_name: b"kHttpChromeRefreshOldIcon", // Chrome value, not checked on Edge
+        page_info_bytes: &[
+        0x1C, 0, 0, 0, 0, 0, 0x80, 0x41, 1, 0, 0, 0, 7, 0, 0, 0,
+        0x5C, 0x8F, 0x3A, 0x41, 0xEC, 0x51, 0x5C, 0x41, 0x12, 0, 0, 0, 0xD7, 0xA3, 0x30, 0xBF,
+    ], // Chrome value, not checked on Edge
+        page_info_reps: ABSENT, // not found in Edge
+        page_info_id: ABSENT, // not found in Edge
+        page_info_path: ABSENT, // not found in Edge
+        anchor_view_access_at: 0x28,
+        skip: "toolbar", // Edge keeps its own toolbar for now
+        anchor_tracker_offset: 0x378, // BubbleDialogDelegate anchor view tracker, read by GetAnchorRect
+    },
+    vertical: VerticalTabs {
+        supported: false, // not checked on Edge yet
+        slot: 0x1172CF10, // VerticalTabStripStateControllerImpl vtable, ShouldDisplayVerticalTabs slot
+        should_display: 0x0A3D40D0, // ?loaded@TopSitesImpl@history@@UEBA_NXZ
+        browser_view_for_browser: 0x010CDA9A, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
+        hwnd_for_view: 0x01078A59, // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
+        notify_mode_changed: 0x0A3D3176, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
+        update_collapse_action: 0x0, // none in Edge
+        destructor: 0x0A3D4830, // ??_GVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
+        destructor_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0xE8],
+        browser_offset: 0x1B8, // Chrome value, not checked on Edge
+        mode_offset: 0x1E8, // Chrome value, not checked on Edge
+        width_offset: 0x1CC, // Chrome value, not checked on Edge
+        browser_view_view_vtable: 0x11937B18, // BrowserView View vtable
+        region_preferred_size: 0x0CAE1ED0, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@
+        region_preferred_size_slot: 0x1181EC28, // VerticalTabStripRegionView vtable, CalculatePreferredSize slot 86
+        invalidate_layout: 0x00FFA880, // ?InvalidateLayout@View@views@@QEAAX_N@Z
+        invalidate_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x38],
+        region_minimum_size: 0x0CAE1E50, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
+        region_minimum_prologue: &[
+        0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7, 0x02, 0, 0,
+        0, 0,
+    ], // Chrome value, not checked on Edge
+        should_draw_tab_strip: 0x0100A550, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
+        should_draw_tab_strip_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x89, 0x18, 0x06, 0x00, 0x00],
+    },
+    navigation: Navigation {
+        supported: false, // not checked on Edge yet
+        content_window_for_hwnd: 0x026A4DC6, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        browser_view_for_window: 0x010CDAE8, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
+        active_web_contents: 0x0CAE5550, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        gurl_from_text: 0x01016852, // ??0GURL@@QEAA@V?$basic_string_view@DU?$char_traits@D@__Cr@std@@@__Cr@std@@@Z
+        gurl_empty: 0x010FF97C, // ??0GURL@@QEAA@XZ
+        gurl_drop: 0x00FDECAA, // ??1GURL@@QEAA@XZ
+        open_url_params: 0x066E261C, // ??0OpenURLParams@content@@QEAA@AEBVGURL@@AEBUReferrer@1@W4WindowOpenDisposition@@W4PageTra
+        open_url_params_drop: 0x066E2C84, // ??1OpenURLParams@content@@QEAA@XZ
+        open_url: 0x07A598E0, // ?OpenURL@WebContentsImpl@content@@UEAAPEAVWebContents@2@AEBUOpenURLParams@2@V?$OnceCallbac
+        signatures: &[
+            (0x026A4DC6, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x010CDAE8, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x01016852, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]),
+            (0x010FF97C, &[0x48, 0x89, 0xC8, 0x0F, 0x57, 0xC0]),
+            (0x00FDECAA, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28]),
+            (0x066E261C, &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53]),
+            (0x066E2C84, &[0x56, 0x57, 0x48, 0x83, 0xEC]),
+            (0x07A598E0, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]),
+            (0x0CAE5550, &[0x48, 0x8B, 0x81, 0x18, 0x06, 0x00, 0x00]),
+        ],
+    },
+    tabs: Tabs {
+        supported: false, // not checked on Edge yet
+        content_window_for_hwnd: 0x026A4DC6, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        browser_view_for_window: 0x010CDAE8, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
+        active_web_contents: 0x0CAE5550, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        get_tab_model: 0x055E0CE0, // ?PdfSize@DocumentMetadata@datamodel@edge_pdf@@QEBA_KXZ
+        tab_count: 0x010CBBCE, // ?count@TabStripModel@@QEBAHXZ
+        tab_at: 0x0105E38E, // ?GetWebContentsAt@TabStripModel@@QEBAPEAVWebContents@content@@H@Z
+        activate_tab: 0x0A404C92, // ?ActivateTabAt@TabStripModel@@QEAAXHUTabStripUserGestureDetails@@@Z
+        close_tab: 0x0A4080EA, // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
+        title: 0x01119470, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?
+        new_tab: 0x0A2B68B0, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
+        last_committed_url: 0x0115B9E0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
+        visible_url: 0x01056C50, // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
+        get_group: 0x02698560, // ?GetTabGroupForTab@TabStripModel@@QEBA?AV?$optional@VTabGroupId@tab_groups@@@__Cr@std@@H@Z
+        has_group: 0x0A3F1DFE, // ?ContainsTabGroup@TabGroupModel@@QEBA_NAEBVTabGroupId@tab_groups@@@Z
+        lookup_group: 0x0A3F1E94, // ?GetTabGroup@TabGroupModel@@QEBAPEAVTabGroup@@AEBVTabGroupId@tab_groups@@@Z
+        change_group: ABSENT, // not found in Edge
+        allocate: 0x036CDF90, // ??2@YAPEAX_K@Z
+        add_to_new_group: ABSENT, // not found in Edge
+        allocate_prologue: &[0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9],
+        add_to_new_group_prologue: &[0x00], // function not found in Edge
+        signatures: &[
+            (0x02698560, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD6, 0x45, 0x85, 0xC0, 0x0F]),
+            (0x0A3F1DFE, &[0x48, 0x8B, 0x41, 0x08, 0x48, 0x85, 0xC0, 0x74, 0x3F, 0x48, 0x83, 0xC1]),
+            (0x0A3F1E94, &[0x48, 0x8B, 0x41, 0x08, 0x48, 0x85, 0xC0, 0x0F, 0x84, 0x80, 0x00, 0x00]),
+            (0x7FFF0000, &[0x00]),
+            (0x026A4DC6, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x010CDAE8, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0CAE5550, &[0x48, 0x8B, 0x81, 0x18, 0x06, 0x00, 0x00]),
+            (0x055E0CE0, &[0x48, 0x8B, 0x41, 0x30, 0xC3]),
+            (0x010CBBCE, &[0x48, 0x8B, 0x41, 0x10, 0x8B, 0x40, 0x20]),
+            (0x0105E38E, &[0x48, 0x83, 0xEC, 0x28, 0x85, 0xD2]),
+            (0x0A404C92, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38]),
+            (0x0A4080EA, &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC]),
+            (0x01119470, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x48]),
+            (0x0A2B68B0, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]),
+            (0x0115B9E0, &[0x48, 0x63, 0x81, 0xD4, 0x02, 0x00, 0x00]),
+            (0x01056C50, &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x81, 0xC1]),
+        ],
+    },
+    split: Split {
+        supported: false, // not checked on Edge yet
+        add_to_new_split: 0x0A40C036, // ?AddToNewSplit@TabStripModel@@QEAA?AVSplitTabId@split_tabs@@V?$vector@HV?$allocator@H@__Cr
+        remove_split: 0x0A40E340, // ?RemoveSplit@TabStripModel@@QEAAXVSplitTabId@split_tabs@@@Z
+        get_split_for_tab: 0x02BFCE34, // ?GetSplitForTab@TabStripModel@@QEBA?AV?$optional@VSplitTabId@split_tabs@@@__Cr@std@@H@Z
+        allocate: 0x036CDF90, // ??2@YAPEAX_K@Z
+        set_rounded_corners: 0x02E268A2, // ?SetRoundedCorners@ContentsContainerView@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_rounded_corners_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE, 0xF3, 0x0F, 0x10, 0x02],
+        set_rounded_corners_changed: ABSENT, // not found in Edge
+        set_rounded_corners_parity: ABSENT, // not found in Edge
+        update_border: 0x02E26912, // ?UpdateBorderAndOverlay@ContentsContainerView@@QEAAX_N00@Z
+        update_border_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x89, 0xD5],
+        set_border_slot: 0xf0 / 8, // Chrome value, not checked on Edge
+        set_visible_slot: 0x90 / 8, // Chrome value, not checked on Edge
+        outline_member: 0x448, // Chrome value, not checked on Edge
+        calculate_layout: 0x02C01AD0, // ?CalculateProposedLayout@MultiContentsView@@EEBA?AUProposedLayout@views@@AEBVSizeBounds@3@
+        calculate_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        layout_delegate_offset: 0x328, // Chrome value, not checked on Edge
+        split_insets_member: 0x404, // Chrome value, not checked on Edge
+        containers_member: 0x350, // Chrome value, not checked on Edge
+        container_count_member: 0x358, // Chrome value, not checked on Edge
+        active_member: 0x3c8, // Chrome value, not checked on Edge
+        schedule_paint: 0x010038F0, // ?SchedulePaint@View@views@@QEAAXXZ
+        web_contents_focused: ABSENT, // not found in Edge
+        web_contents_focused_prologue: &[0x00], // function not found in Edge
+        container_layout: ABSENT, // not found in Edge
+        container_delegate_offset: 0x320, // Chrome value, not checked on Edge
+        mini_toolbar_member: 0x440, // Chrome value, not checked on Edge
+        flex_layout: ABSENT, // not found in Edge
+        flex_layout_host: 0x38, // Chrome value, not checked on Edge
+        location_bar_vtable: ABSENT, // not found in Edge
+        view_size: 0x1D0, // Chrome value, not checked on Edge
+        signatures: &[
+            (0x0A40C036, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53]),
+            (0x0A40E340, &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x48]),
+            (0x02BFCE34, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x45, 0x85, 0xC0, 0x0F]),
+            (0x036CDF90, &[0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9]),
+        ],
+    },
+    side_panel: SidePanel {
+        supported: false, // not checked on Edge yet
+        side_panel_vtable: ABSENT, // not found in Edge
+        browser_offset: 0x560, // Chrome value, not checked on Edge
+        features_offset: 0xd0, // Chrome value, not checked on Edge
+        features_coordinator: 0x330, // Chrome value, not checked on Edge
+        browser_view_view_vtable: ABSENT, // not found in Edge
+        coordinator_vtable: ABSENT, // not found in Edge
+        show: 0x09402420, // ?Show@SidePanelUIBase@@UEAAXW4SidePanelEntryId@@V?$optional@W4SidePanelOpenTrigger@@@__Cr@
+        show_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x44, 0x89, 0xCB],
+        entry_id_to_string: 0x02971720, // ?SidePanelEntryIdToString@@YA?AV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@
+        entry_id_to_string_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0x05, 0x14, 0x29, 0x88, 0x11],
+        extension_entry: 0x17, // Chrome value, not checked on Edge
+        entry_count: 0x18, // Chrome value, not checked on Edge
+        toggle: 0x09351EF0, // ?Toggle@SidePanelCoordinator@@UEAAXVSidePanelEntryKey@@W4SidePanelOpenTrigger@@@Z
+        toggle_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x60, 0x44, 0x89, 0xC3],
+        entry_showing: 0x094027E0, // ?IsSidePanelEntryShowing@SidePanelUIBase@@UEBA_NAEBVSidePanelEntryKey@@@Z
+        entry_showing_prologue: &[0x48, 0x8B, 0x49, 0x10, 0x80, 0x79, 0x30, 0x01],
+        registry_from: 0x02ABEF42, // ?From@SidePanelRegistry@@SAPEAV1@PEAVBrowserWindowInterface@@@Z
+        registry_from_prologue: &[0x48, 0x81, 0xC1, 0xB0, 0x00, 0x00, 0x00],
+        get_color_provider: 0x0115D4C0, // ?GetColorProvider@WebContentsImpl@content@@EEBAAEBVColorProvider@ui@@XZ
+        get_color_provider_prologue: &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x83, 0xE9, 0x80, 0xE8, 0x53, 0xCA, 0xE8, 0xFF, 0x48],
+        source_in_widget: 0x48, // Chrome value, not checked on Edge
+        color_source: 0x98, // Chrome value, not checked on Edge
+        generate_colors_css: 0x08966BAC, // ?GenerateColorsCss@ThemeSource@@SA?AV?$optional@V?$basic_string@DU?$char_traits@D@__Cr@std
+        generate_colors_css_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        layout_vtable: ABSENT, // not found in Edge
+        proposed_slot: 16, // Chrome value, not checked on Edge
+        proposed: 0x0A65CF30, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl@@MEBA?AUProposedLayout@BrowserViewLay
+        host_view: 0x38, // Chrome value, not checked on Edge
+        page_area: 0x50, // Chrome value, not checked on Edge
+        contents_container: 0xb8, // Chrome value, not checked on Edge
+        vertical_tabs: 0x80, // Chrome value, not checked on Edge
+        toolbar: 0x60, // Chrome value, not checked on Edge
+        contents_outline: 0x58, // Chrome value, not checked on Edge
+        side_panel: 0xc0, // Chrome value, not checked on Edge
+        side_panel_animation: 0xc8, // Chrome value, not checked on Edge
+        layout_immediately: 0x01044270, // ?LayoutImmediately@View@views@@AEAAXXZ
+        layout_immediately_prologue: &[0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0xBE, 0xFD, 0x1A, 0x13],
+        event_handler_for_point: 0x0109FB78, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
+    },
+    layout: Layout {
+        on_paint_slot: 101,
+        on_paint: 0x02B44110, // ?OnPaint@BrowserFrameViewWin@@MEAAXPEAVCanvas@gfx@@@Z
+        get_color_provider: 0x01003060, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
+        draw_color: 0x02A3F86A, // ?DrawColor@Canvas@gfx@@QEAAXI@Z
+        frame_ids: &[0x13C, 0x13D, 0x140, 321, 0x144], // Chrome value, not checked on Edge
+        corner_vtable: 0x118B7ED8, // CustomFloatingCorner vtable
+        corner_paint: 0x0A66B240, // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
+        caption_vtable: 0x118F2478, // WindowsCaptionButton vtable
+        caption_size_slot: 86,
+        caption_size: 0x0A7EDBF0, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        caption_paint_slot: 127,
+        caption_paint: 0x02D1ECF0, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
+        top_inset_slot: 164,
+        top_inset: 0x033CA100, // ?GetTopInset@BrowserFrameViewWin@@UEBAH_N@Z
+        layout_slot: 24,
+        layout: 0x02930FA0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
+        set_bounds_rect: 0x01021E78, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
+        caption_container_offset: 0x440, // EdgeBrowserFrameViewWin::caption_button_container_, read by CaptionButtonsRegionWidth
+        view_bounds_offset: 0x1C8, // views::View::bounds_, unchanged
+        browser_view_view_vtable: 0x11937B18, // BrowserView View vtable
+        frame_vtable: 0x11857718, // EdgeBrowserFrameViewWin primary vtable (the View vtable)
+        layout_immediately: 0x01044270, // ?LayoutImmediately@View@views@@AEAAXXZ
+        layout_immediately_prologue: &[0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE, 0x48],
+        set_layer: 0x02782F98, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
+        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
+        set_radius: 0x02DA71BE, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
+        set_masks: 0x0306E54C, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
+        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
+        stack_at_top: 0x0B415B2E, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
+        stack_at_top_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48],
+        set_opaque: 0x0103A07E, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
+        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
+        on_paint_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x89],
+        draw_color_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38],
+        get_color_provider_prologue: &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B],
+        corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        layout_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x40, 0x48],
+        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        frame_browser_window_offset: 0x3B0, // frame view member that holds the BrowserWindow subobject, read by GetBrowserView
+        browser_window_in_view: 0x1F8, // BrowserWindow subobject distance from the BrowserView, read by GetBrowserView
+        caption_paint_prologue: &[0xE9, 0x01, 0x00, 0x00, 0x00, 0xCC, 0x41, 0x57],
+    },
+};
+
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 1] = [&CHROME];
+static TABLE: [&Build; 2] = [&CHROME, &EDGE];
 
 static CURRENT: OnceLock<Option<&'static Build>> = OnceLock::new();
 
@@ -1092,6 +1540,15 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn nfr3_chrome_and_edge_are_separate_rows() {
+        assert_eq!(CHROME.module, "chrome.dll");
+        assert_eq!(CHROME.version, [156, 0, 8078, 48]);
+        assert_eq!(EDGE.module, "msedge.dll");
+        assert_eq!(EDGE.version, [156, 0, 4314, 50]);
+        assert_ne!(CHROME.toolbar.layout_constant, EDGE.toolbar.layout_constant);
     }
 
     #[test]

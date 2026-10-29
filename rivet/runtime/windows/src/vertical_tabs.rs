@@ -45,7 +45,7 @@ struct Hook {
     view_for_browser: ViewForBrowser,
     hwnd_for_view: HwndForView,
     notify_mode_changed: ControllerCall,
-    update_collapse_action: ControllerCall,
+    update_collapse_action: Option<ControllerCall>,
     report: Report,
 }
 
@@ -62,6 +62,69 @@ static TRACE: OnceLock<std::path::PathBuf> = OnceLock::new();
 /// Turns the experiment trace on. The file's presence next to the runtime is the switch.
 pub fn set_trace(path: std::path::PathBuf) {
     let _ = TRACE.set(path);
+}
+
+/// Diagnostic: logs access violations with their offset in the browser module, so a crash on a
+/// new build shows which recorded address was wrong. Only while the trace is on.
+pub unsafe fn trace_crashes() {
+    #[repr(C)]
+    struct Record {
+        code: u32,
+        flags: u32,
+        chained: *mut Record,
+        address: *mut c_void,
+        parameters: u32,
+        information: [usize; 15],
+    }
+    #[repr(C)]
+    struct Pointers {
+        record: *mut Record,
+        context: *mut c_void,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut *mut c_void, hash: *mut u32) -> u16;
+        fn GetModuleHandleExW(flags: u32, address: *const c_void, module: *mut *mut c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut c_void, name: *mut u16, size: u32) -> u32;
+        fn AddVectoredExceptionHandler(
+            first: u32,
+            handler: unsafe extern "system" fn(*mut Pointers) -> i32,
+        ) -> *mut c_void;
+    }
+    unsafe extern "system" fn handler(info: *mut Pointers) -> i32 {
+        let record = &*(*info).record;
+        if record.code == 0xC000_0005 {
+            let rip = record.address as usize;
+            let base = crate::chrome_layout::image::recorded().map_or(0, |image| image.base);
+            trace(&format!(
+                "access violation at {rip:#x} (module offset {:#x}) touching {:#x}",
+                rip.wrapping_sub(base),
+                record.information[1]
+            ));
+            let mut frames = [std::ptr::null_mut::<c_void>(); 24];
+            let count = RtlCaptureStackBackTrace(0, 24, frames.as_mut_ptr(), std::ptr::null_mut());
+            for frame in &frames[..count as usize] {
+                let mut module = std::ptr::null_mut();
+                // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | UNCHANGED_REFCOUNT
+                GetModuleHandleExW(0x4 | 0x2, *frame, &mut module);
+                let mut name = [0u16; 260];
+                let length = GetModuleFileNameW(module, name.as_mut_ptr(), 260) as usize;
+                let name = String::from_utf16_lossy(&name[..length]);
+                trace(&format!(
+                    "  frame {:#x} {} +{:#x}",
+                    *frame as usize,
+                    name.rsplit('\\').next().unwrap_or(""),
+                    (*frame as usize).wrapping_sub(module as usize)
+                ));
+            }
+        }
+        0
+    }
+    AddVectoredExceptionHandler(1, handler);
+}
+
+pub fn tracing() -> bool {
+    TRACE.get().is_some()
 }
 
 pub fn trace(message: &str) {
@@ -168,7 +231,9 @@ pub unsafe fn offer(window: HWND, controller: usize) {
     // Keep Chromium's vertical-tab mode for its toolbar composition. The frame layout hook
     // accounts for the strip when it moves the page to the appbar edge.
     (hook.notify_mode_changed)(pointer);
-    (hook.update_collapse_action)(pointer);
+    if let Some(update) = hook.update_collapse_action {
+        update(pointer);
+    }
 }
 
 /// The width Rivet gives the vertical tab strip of each window, in DIPs. Chromium keeps the strip
@@ -220,6 +285,9 @@ pub unsafe fn install(report: Report) -> Result<(), String> {
 }
 
 unsafe fn patch(report: Report) -> Result<Hook, String> {
+    if !bv().supported {
+        return Err("this browser build has no recorded vertical-tab controller".into());
+    }
     let image = image::recorded().ok_or("this browser build has no recorded vertical tabs")?;
     let base = image.base;
     if !image.points_to(bv().slot, bv().should_display) {
@@ -228,13 +296,14 @@ unsafe fn patch(report: Report) -> Result<Hook, String> {
     if !image.points_to(bv().slot - 16, bv().destructor) || !image.has(bv().destructor, &bv().destructor_prologue) {
         return Err("this browser build has no recorded vertical-tab controller destructor".into());
     }
+    // Zero means the build has no separate collapse action to refresh.
     for function in [
         bv().browser_view_for_browser,
         bv().hwnd_for_view,
         bv().notify_mode_changed,
         bv().update_collapse_action,
     ] {
-        if image.at(function, 1).is_none() {
+        if function != 0 && image.at(function, 1).is_none() {
             return Err("a recorded vertical-tab function is outside the browser image".into());
         }
     }
@@ -249,9 +318,9 @@ unsafe fn patch(report: Report) -> Result<Hook, String> {
         notify_mode_changed: std::mem::transmute::<usize, ControllerCall>(
             base + bv().notify_mode_changed,
         ),
-        update_collapse_action: std::mem::transmute::<usize, ControllerCall>(
-            base + bv().update_collapse_action,
-        ),
+        update_collapse_action: (bv().update_collapse_action != 0).then(|| {
+            std::mem::transmute::<usize, ControllerCall>(base + bv().update_collapse_action)
+        }),
         report,
     };
     // Both slots are replaced or neither is: a controller must never be reported without the

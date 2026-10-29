@@ -1,9 +1,10 @@
 //! Adds a Chromium build to Rivet's supported-build table from the build's public symbols.
 //!
 //! `chrome-builds pdb-key <module>` prints the symbol-server path of the module's PDB.
-//! `chrome-builds extract <module> <pdb-directory> <browser> <version> <table>` resolves the
-//! layout hook's addresses with DbgHelp, checks them against the module file and updates the
-//! table.
+//! `chrome-builds extract <module> <pdb-directory> <browser> <version> <table> [frame-class]`
+//! resolves the layout hook's addresses with DbgHelp, checks them against the module file and
+//! updates the table. The frame class is `BrowserFrameViewWin` unless the browser builds its
+//! windows from a subclass, as Microsoft Edge does with `EdgeBrowserFrameViewWin`.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -17,10 +18,18 @@ fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let result = match arguments.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["pdb-key", module] => pdb_key(Path::new(module)),
-        ["extract", module, pdbs, browser, version, table] => {
-            extract(Path::new(module), Path::new(pdbs), browser, version, Path::new(table))
+        ["extract", module, pdbs, browser, version, table] => extract(
+            Path::new(module),
+            Path::new(pdbs),
+            browser,
+            version,
+            Path::new(table),
+            "BrowserFrameViewWin",
+        ),
+        ["extract", module, pdbs, browser, version, table, class] => {
+            extract(Path::new(module), Path::new(pdbs), browser, version, Path::new(table), class)
         }
-        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table>".into()),
+        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class]".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -56,19 +65,21 @@ fn extract(
     browser: &str,
     version: &str,
     table_path: &Path,
+    frame_class: &str,
 ) -> Result<(), String> {
     let bytes = read(module)?;
     let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
     let symbols = symbols::Session::open(module, pdbs)?;
+    // The function is declared on `BrowserFrameViewWin` whichever subclass builds the windows.
     let client_view_bounds = symbols.address("BrowserFrameViewWin::GetBoundsForClientView")?;
     let hwnd_for_view = symbols.address("views::HWNDForView")?;
     // The class has several vtables because of multiple inheritance. Exactly one of them holds
     // the client-view bounds function.
     let (frame_view_vtable, client_view_slot) = symbols
-        .vtables("BrowserFrameViewWin")?
+        .vtables(frame_class)?
         .into_iter()
         .find_map(|vtable| Some((vtable, pe.vtable_slot(vtable, client_view_bounds)?)))
-        .ok_or("no BrowserFrameViewWin vtable holds GetBoundsForClientView")?;
+        .ok_or("no vtable of the frame class holds GetBoundsForClientView")?;
     let prologue = pe
         .read(hwnd_for_view, PROLOGUE)
         .ok_or("views::HWNDForView is outside the image")?;

@@ -15,13 +15,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use windows_sys::Win32::Foundation::HWND;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{
     VirtualAlloc, VirtualProtect, VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_RESERVE,
     PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
 };
 
-use crate::chrome_layout;
+use crate::chrome_layout::{self, image};
 
 /// The values of the loaded browser build.
 fn bv() -> &'static crate::builds::SidePanel {
@@ -61,8 +60,9 @@ fn readable(address: usize, length: usize) -> bool {
     last <= region.1
 }
 
+/// The base of the recorded browser module, or 0 in any other build or process.
 fn chrome_base() -> usize {
-    unsafe { GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize }
+    image::recorded().map_or(0, |image| image.base)
 }
 
 /// The objects of one browser window that the Sidebar works with.
@@ -79,13 +79,16 @@ pub struct Objects {
 /// view the browser laid out last.
 pub unsafe fn objects(window: HWND) -> Option<Objects> {
     let base = chrome_base();
+    if base == 0 || !bv().supported {
+        return None;
+    }
     let frame = chrome_layout::frame_view(window)?;
     // The frame view holds the `BrowserWindow` subobject of `BrowserView` at +0x340.
-    let browser_window = *((frame + 0x340) as *const usize);
+    let browser_window = *((frame + crate::builds::get().layout.frame_browser_window_offset) as *const usize);
     if !readable(browser_window, 8) {
         return None;
     }
-    let browser_view = browser_window - 0x1f0;
+    let browser_view = browser_window - crate::builds::get().layout.browser_window_in_view;
     let find = |vtable: usize| {
         (0..0x400)
             .map(|index| browser_view + index * 8)
@@ -489,10 +492,16 @@ unsafe extern "system" fn generate_colors_css(
 /// Makes the style sheets of the side panel's pages in Rivet windows use the Rivet colours. It
 /// does nothing unless both functions still start with the recorded bytes.
 pub unsafe fn install_page_colours() -> Result<(), String> {
+    if !bv().supported {
+        return Err("this browser build has no recorded Sidebar".into());
+    }
     if ORIGINAL_CSS.load(Ordering::Acquire) != 0 {
         return Ok(());
     }
     let base = chrome_base();
+    if base == 0 {
+        return Err("this browser build has no recorded colour provider".into());
+    }
     let provider = (base + bv().get_color_provider) as *mut u8;
     let css = (base + bv().generate_colors_css) as *mut u8;
     if std::slice::from_raw_parts(provider, 14) != bv().get_color_provider_prologue
@@ -734,14 +743,21 @@ unsafe extern "system" fn proposed_layout(
 
 /// Patches the layout once per process. Without the recorded layout the Sidebar stays folded.
 pub unsafe fn install_layout() -> Result<(), String> {
+    if !bv().supported {
+        return Err("this browser build has no recorded layout for the Sidebar".into());
+    }
     if PROPOSED_LAYOUT.get().is_some() {
         return Ok(());
     }
-    let base = chrome_base();
-    let slot = (base + bv().layout_vtable + bv().proposed_slot * 8) as *mut usize;
-    if slot.read() != base + bv().proposed {
+    let Some(image) = image::recorded() else {
+        return Err("this browser build has no recorded layout for the Sidebar".into());
+    };
+    let base = image.base;
+    let slot_rva = bv().layout_vtable + bv().proposed_slot * 8;
+    if !image.points_to(slot_rva, bv().proposed) {
         return Err("this browser build has no recorded layout for the Sidebar".into());
     }
+    let slot = (base + slot_rva) as *mut usize;
     let _ = PROPOSED_LAYOUT.set(std::mem::transmute::<usize, ProposedLayout>(slot.read()));
     let mut previous: PAGE_PROTECTION_FLAGS = 0;
     if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
@@ -755,6 +771,9 @@ pub unsafe fn install_layout() -> Result<(), String> {
 /// Lays the browser view out again, which runs the patched layout.
 pub unsafe fn relayout_page_area(window: HWND) {
     let base = chrome_base();
+    if base == 0 {
+        return;
+    }
     let host = HOST_VIEWS
         .with(|views| views.borrow().get(&(window as isize)).copied())
         .or_else(|| objects(window).map(|found| found.view).filter(|view| *view != 0));

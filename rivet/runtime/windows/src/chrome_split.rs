@@ -41,6 +41,9 @@ const EVEN_RATIO: f64 = 0.5;
 const CREATED_SOURCE: u32 = 0;
 
 fn checked_base() -> Option<usize> {
+    if !bv().supported {
+        return None;
+    }
     static CHECK: OnceLock<bool> = OnceLock::new();
     let base = base()?;
     let signatures = bv().signatures;
@@ -263,6 +266,9 @@ fn absolute_jump(code: &mut Vec<u8>, to: usize) {
 /// Makes the pages of split tabs in Rivet windows rounded panels. It does nothing unless the
 /// function still starts with the recorded bytes.
 pub unsafe fn install() -> Result<(), String> {
+    if !bv().supported {
+        return Err("this browser build has no recorded split view".into());
+    }
     let base = checked_base().ok_or("this browser build has no recorded split view")?;
     let code = (base + bv().set_rounded_corners) as *mut u8;
     if std::slice::from_raw_parts(code, 13) != bv().set_rounded_corners_prologue {
@@ -849,6 +855,9 @@ pub unsafe fn toggle_split(window: HWND) -> bool {
 
 /// Rivet's panel look for the pages of a split: Chrome's outline goes.
 pub unsafe fn install_panels() -> Result<(), String> {
+    if !bv().supported {
+        return Err("this browser build has no recorded split view".into());
+    }
     let base = checked_base().ok_or("this browser build has no recorded split view")?;
     detour(
         base,
