@@ -39,8 +39,6 @@ fn bv() -> &'static crate::builds::Toolbar {
     &crate::builds::get().toolbar
 }
 
-const TOOLBAR_TOP: i32 = 5;
-const TOOLBAR_BOTTOM: i32 = 4;
 const LOCATION_ICON_SHIFT: i32 = 2;
 /// `gfx::Font::Weight` values.
 const WEIGHT_NORMAL: u32 = 400;
@@ -592,8 +590,8 @@ unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut 
         // The insets are top, left, bottom and right. The left one is where the back button
         // starts, and the appbar toggle sits in the space added before it. The row is 43 DIPs
         // tall around the 34 DIP field, with the buttons centred 28 DIPs in it.
-        (*out)[0] = TOOLBAR_TOP;
-        (*out)[2] = TOOLBAR_BOTTOM;
+        (*out)[0] = bv().toolbar_top;
+        (*out)[2] = bv().toolbar_bottom;
         (*out)[1] = (*out)[1].saturating_add(bv().leading_space);
     }
     if active() && inset == bv().location_icon_inset {
@@ -2565,7 +2563,7 @@ mod tests {
         assert_eq!(FIELD_RADIUS, 8.0);
         // Chrome's 34 DIP field, the 28 DIP fill inside it and the row around it.
         assert_eq!(28 + 2 * bv().field_fill_margin, 34);
-        assert_eq!(TOOLBAR_TOP + 34 + TOOLBAR_BOTTOM, 43);
+        assert_eq!(bv().toolbar_top + 34 + bv().toolbar_bottom, 43);
         // The page info chip paints nothing of its own, so no circle shows inside the field.
         assert!(bv().colours.contains(&(1003, 0)));
         assert_eq!(LOCATION_ICON_SHIFT, 2);

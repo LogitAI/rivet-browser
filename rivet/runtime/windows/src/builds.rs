@@ -283,6 +283,9 @@ pub struct Toolbar {
     /// Chrome's needs other numbers to reach the 28 DIP button and the 28 DIP fill of the design.
     /// The space before the first toolbar button, in DIPs, where the appbar's toggle sits.
     pub leading_space: i32,
+    /// The space above and below the row's content, in DIPs: with Chrome's 34 DIP field they make the 43 DIP row.
+    pub toolbar_top: i32,
+    pub toolbar_bottom: i32,
     pub button_padding: i32,
     pub field_fill_margin: i32,
 }
@@ -928,6 +931,8 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     toolbar_layout: ABSENT,
     toolbar_layout_prologue: &[0],
     leading_space: 32,
+    toolbar_top: 5,
+    toolbar_bottom: 4,
     button_padding: 4,
     field_fill_margin: 3,
     size_slots: (0, 0),
@@ -1424,6 +1429,8 @@ pub static CHROME: Build = Build {
         toolbar_layout: ABSENT,
         toolbar_layout_prologue: &[0],
         leading_space: 32,
+        toolbar_top: 5,
+        toolbar_bottom: 4,
         button_padding: 4,
         field_fill_margin: 3,
     },
@@ -1942,6 +1949,8 @@ pub static EDGE: Build = Build {
         toolbar_layout: ABSENT,
         toolbar_layout_prologue: &[0],
         leading_space: 32,
+        toolbar_top: 5,
+        toolbar_bottom: 4,
         button_padding: 4,
         field_fill_margin: 3,
     },
@@ -2609,7 +2618,6 @@ pub static BRAVE: Build = Build {
         (16, 28), // kLocationBarHeight
         (29, 12), // kMainBackgroundRegionCornerRadius
         (46, 28), // kToolbarButtonHeight
-        (47, 16), // kToolbarButtonIconSize
         (55, 8),  // kToolbarCornerRadius
         (60, 0),  // kVerticalTabMinWidth
     ],
@@ -2699,7 +2707,9 @@ pub static BRAVE: Build = Build {
         toolbar_layout: 0x036F_FFD0, // ?Layout@BraveToolbarView@@UEAAXVPassKey@@@Z
         toolbar_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE],
         leading_space: 27,
-        button_padding: 6,
+        toolbar_top: 6, // the content is 28 DIPs tall, not Chrome's 34, and Brave adds 4 of its own: 6 and 5 reach the 43 DIP row
+        toolbar_bottom: 5,
+        button_padding: 4,
         field_fill_margin: 0, // the field view is 28 DIPs tall already
     },
     vertical: VerticalTabs {
@@ -3214,7 +3224,9 @@ mod tests {
         assert_eq!(BRAVE.toolbar.skip, "");
         assert_eq!((BRAVE.toolbar.is_drawn_slot, BRAVE.toolbar.get_widget_slot, BRAVE.toolbar.anchor_tracker_offset), (19, 11, 0x300));
         // A 28 DIP button is its icon and the padding either side, and the fill of the field is as tall as the field.
-        let icon = BRAVE.toolbar.overrides.iter().find(|(id, _)| *id == 47).map(|(_, size)| *size);
+        // Brave draws its toolbar icons at 20 DIPs and the row leaves that size alone, so 4 either side make 28.
+        assert!(!BRAVE.toolbar.overrides.iter().any(|(id, _)| *id == 47));
+        let icon = Some(20);
         assert_eq!(icon.map(|size| size + 2 * BRAVE.toolbar.button_padding), Some(28));
         assert_eq!(BRAVE.toolbar.field_fill_margin, 0);
         assert_eq!(BRAVE.layout.caption_ink_ids, &[CHROME.layout.caption_ink_ids[0] + 17, CHROME.layout.caption_ink_ids[1] + 17, CHROME.layout.caption_ink_ids[2] + 17]);
