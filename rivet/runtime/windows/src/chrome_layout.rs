@@ -15,6 +15,8 @@ use std::sync::OnceLock;
 
 use rivet_platform_windows::chrome_build::{self, ChromeBuild};
 use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{VirtualProtect, PAGE_PROTECTION_FLAGS, PAGE_READWRITE};
 
@@ -583,6 +585,63 @@ const CORNER_VTABLE: usize = 0x0FEC_AFC8;
 const CORNER_PAINT: usize = 0x0A4C_73A0;
 static CORNER_ORIGINAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// Stacks the layers of `shadows` that cover the point `(x, y)` onto `colour`, as the frame
+/// paint does with filled rectangles.
+fn shadowed(colour: u32, x: f32, y: f32, panel: Rect, shadows: &[(i32, f32, u32, f32)]) -> u32 {
+    let mut rgb = [16, 8, 0].map(|shift| ((colour >> shift) & 0xff) as f32);
+    for &(offset, blur, shadow, peak) in shadows {
+        let layers = if blur == 0.0 {
+            vec![(1, (peak * 255.0).round() as u8)]
+        } else {
+            shadow_layers(blur, peak)
+        };
+        for (grow, alpha) in layers {
+            let (left, top) = ((panel.x - grow) as f32, (panel.y + offset - grow) as f32);
+            let (right, bottom) = (left + (panel.width + 2 * grow) as f32, top + (panel.height + 2 * grow) as f32);
+            if x >= left && x < right && y >= top && y < bottom {
+                let tone = [16, 8, 0].map(|shift| ((shadow >> shift) & 0xff) as f32);
+                rgb = over(rgb, tone, alpha as f32 / 255.0);
+            }
+        }
+    }
+    let [r, g, b] = rgb.map(|c| c.round().clamp(0.0, 255.0) as u32);
+    0xff00_0000 | (r << 16) | (g << 8) | b
+}
+
+/// Where the frame colour is sampled for a wedge, as a fraction of its size inward from the
+/// page's corner. The top one sits just outside the corner and the bottom one just inside, where
+/// the panel's shadow best matches the gap beside the wedge.
+const WEDGE_TOP_REACH: f32 = -0.1;
+const WEDGE_BOTTOM_REACH: f32 = 0.06;
+
+/// The colour the frame paint leaves at the centre of area of a corner wedge: the tint at that spot of
+/// the window with the panel's shadows over it. The wedge is flat, so it matches the frame
+/// within a few levels across its small size.
+unsafe fn wedge_colour(view: *const c_void, base: u32) -> u32 {
+    let Some(Ok(hook)) = HOOK.get() else { return base };
+    let window = (hook.hwnd_for_view)(view);
+    let mut client = std::mem::zeroed();
+    if GetClientRect(window, &mut client) == 0 {
+        return base;
+    }
+    let scale = GetDpiForWindow(window).max(96) as f32 / 96.0;
+    let (width, height) = (client.right as f32 / scale, client.bottom as f32 / scale);
+    let whole = Rect { x: 0, y: 0, width: width as i32, height: height as i32 };
+    let bounds = *(view.cast::<u8>().add(VIEW_BOUNDS_OFFSET) as *const [i32; 4]);
+    // The wedge sits at the page's left edge, so its own x is the width Rivet reserves.
+    let reserved = bounds[0];
+    let panel = inset_panel(Rect { x: reserved, ..whole });
+    let (wedge_width, wedge_height) = (bounds[2] as f32, bounds[3] as f32);
+    let x = panel.x as f32 + wedge_width * WEDGE_BOTTOM_REACH;
+    let y = if bounds[1] * 2 > panel.height {
+        (panel.y + panel.height) as f32 - wedge_height * WEDGE_BOTTOM_REACH
+    } else {
+        panel.y as f32 + wedge_height * WEDGE_TOP_REACH
+    };
+    let tinted = frame_tint(base, x, y, width, height);
+    shadowed(tinted, x, y, Rect { width: panel.width - reserved, ..panel }, &PANEL_SHADOWS)
+}
+
 unsafe extern "system" fn corner_paint(view: *const c_void, canvas: *const c_void) {
     let original: OnPaint = std::mem::transmute(CORNER_ORIGINAL.load(std::sync::atomic::Ordering::Relaxed));
     let colour = match (HOOK.get(), PAINT.get()) {
@@ -599,6 +658,7 @@ unsafe extern "system" fn corner_paint(view: *const c_void, canvas: *const c_voi
         .filter_map(|id| colour_slot(provider, *id))
         .map(|slot| (slot, slot.read()))
         .collect();
+    let colour = wedge_colour(view, colour);
     for (slot, _) in &saved {
         slot.write(colour);
     }
@@ -755,6 +815,15 @@ mod tests {
     #[test]
     fn fr12_caption_ink_is_independent_of_window_activation() {
         assert_eq!(caption_ink(), 0xff1a_1a1a);
+    }
+
+    #[test]
+    fn fr12_wedge_colour_darkens_inside_the_panel_shadow_and_not_outside_it() {
+        let panel = Rect { x: 0, y: 8, width: 400, height: 300 };
+        let base = 0xffec_e8e2;
+        assert_eq!(shadowed(base, 200.0, -100.0, panel, &PANEL_SHADOWS), base);
+        let inside = shadowed(base, 200.0, 300.0, panel, &PANEL_SHADOWS);
+        assert!((inside >> 16 & 0xff) < 0xec);
     }
 
     #[test]
