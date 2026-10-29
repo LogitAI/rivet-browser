@@ -471,7 +471,12 @@ impl Appbar {
                 if hot || effect.is_some() {
                     canvas.fill_rounded(area, 8.0, rgba(INK, 0.06))?;
                 }
-                canvas.icon('\u{E90C}', area, crate::TOGGLE_GLYPH, SOFT_INK)
+                // The design's glyph sits above where DirectWrite centres it, and darkens to the
+                // ink colour on hover like the other icons of the row.
+                let (w, h) = (area.right - area.left, area.bottom - area.top);
+                let glyph = rect(area.left, area.top - 0.6, w, h);
+                let colour = if hot || effect.is_some() { INK } else { SOFT_INK };
+                canvas.icon('\u{E90C}', glyph, crate::TOGGLE_GLYPH, colour)
             });
             surface.EndDraw()?;
             result?;

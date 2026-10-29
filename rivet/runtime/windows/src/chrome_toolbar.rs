@@ -24,7 +24,7 @@ use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetCursorPos, SetTimer, WindowFromPoint, GA_ROOT,
+    GetAncestor, GetCursorPos, KillTimer, SetTimer, WindowFromPoint, GA_ROOT, GA_ROOTOWNER,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
 use crate::chrome_layout::image;
@@ -260,6 +260,9 @@ const IS_DRAWN_SLOT: usize = 19;
 
 /// `BrowserWidget`'s vtable, with `OnNativeWidgetPaint` and `LayoutRootViewIfNecessary`.
 const BROWSER_WIDGET_VTABLE: usize = 0x0FBC_AD10;
+/// `views::Widget`'s own vtable, which popups such as the omnibox's suggestion list use. It holds
+/// the same paint and layout functions as the browser widget's.
+const PLAIN_WIDGET_VTABLE: usize = 0x0FC3_15C0;
 const PAINT_SLOT: usize = 30;
 const PAINT: usize = 0x0315_D050;
 const LAYOUT_SLOT: usize = 44;
@@ -297,13 +300,49 @@ const OVERRIDES: [(i32, i32); 7] = [
 
 const PAPER: u32 = 0xFFFB_FAF7;
 const HAIRLINE: u32 = 0xFFE9_E9E6;
+const INK: u32 = 0xFF1F_2024;
+const SOFT_INK: u32 = 0xFF4A_4850;
+/// The accent #9a5424 at 9 percent and at 25 percent over paper.
+const ACCENT_TINT: u32 = 0xFFF2_EBE4;
+const SELECTION: u32 = 0xFFE3_D0C2;
+/// Keyboard focus keeps a visible ring, in ink instead of the browser's blue.
+const FOCUS_RING: u32 = 0x661F_2024;
 /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
-const COLOURS: [(i32, u32); 19] = [
+const COLOURS: [(i32, u32); 48] = [
     (0x13C, PAPER),      // kColorFrameActive
     (796, PAPER),        // kColorLocationBarBackground
     (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
     (1003, 0),           // Page info chip background: clear, so the field is one surface
-    (1013, PAPER),       // Location bar background in the alternate state
+    (159, FOCUS_RING),   // kColorSysStateFocusRing
+    (314, FOCUS_RING),   // kColorFocusableBorderFocused
+    (465, SELECTION),    // kColorTextfieldSelectionBackground
+    (466, INK),          // kColorTextfieldSelectionForeground
+    (1004, 0),           // kColorOmniboxIconBackgroundTonal
+    (1005, SOFT_INK),    // kColorOmniboxIconForeground: the icon of the field while editing
+    (1006, SOFT_INK),    // kColorOmniboxIconForegroundTonal
+    (1007, INK),         // kColorOmniboxIconHover
+    (1013, PAPER),       // kColorOmniboxResultsBackground, the suggestion list and the field with it
+    (1014, 0xFFF0_EFEC), // kColorOmniboxResultsBackgroundHovered
+    (1015, 0x0F1F_2024), // kColorOmniboxResultsBackgroundHoverOverlay
+    (1016, ACCENT_TINT), // kColorOmniboxResultsBackgroundSelected: the accent at 9 percent over paper
+    (1019, SOFT_INK),    // kColorOmniboxResultsButtonIcon
+    (1020, INK),         // kColorOmniboxResultsButtonIconSelected
+    (1028, 0),           // kColorOmniboxResultsFocusIndicator: the design marks a row by its tint alone
+    (1029, SOFT_INK),    // kColorOmniboxResultsIcon
+    (1030, 0x0F1F_2024), // kColorOmniboxResultsIconGM3Background
+    (1031, INK),         // kColorOmniboxResultsIconSelected
+    (1032, INK),         // kColorOmniboxResultsIconHovered
+    (1035, 0xFF8A_8690), // kColorOmniboxResultsTextDimmed
+    (1036, 0xFF4A_4850), // kColorOmniboxResultsTextDimmedSelected
+    (1041, 0xFF8A_8690), // kColorOmniboxResultsTextSecondary
+    (1042, 0xFF4A_4850), // kColorOmniboxResultsTextSecondarySelected
+    (1043, INK),         // kColorOmniboxResultsTextSelected
+    (1044, 0xFF4A_4850), // kColorOmniboxResultsUrl
+    (1045, INK),         // kColorOmniboxResultsUrlSelected
+    (1053, SELECTION),   // kColorOmniboxSelectionBackground: the accent at 25 percent over paper
+    (1054, INK),         // kColorOmniboxSelectionForeground
+    (1046, 0xFFB3_261E), // kColorOmniboxSecurityChipDangerous: the "Not secure" label and its warning
+    (1047, 0x14B3_261E), // kColorOmniboxSecurityChipDangerousBackground: the label's tint, 8 percent
     (1055, 0xFF4A_4850), // kColorOmniboxText
     (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
     (1590, PAPER),       // kColorToolbar
@@ -314,7 +353,7 @@ const COLOURS: [(i32, u32); 19] = [
     (1650, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
     (1595, 0xFF4A_4850), // kColorToolbarButtonIcon
     (1598, 0xFF1F_2024), // kColorToolbarButtonIconHovered
-    (1599, 0xFFC4_C1C8), // kColorToolbarButtonIconInactive
+    (1599, 0xFFBD_BCBC), // kColorToolbarButtonIconInactive: the icon colour at 35 percent over paper
     (1603, HAIRLINE),    // kColorToolbarContentAreaSeparator
     (1611, 0x0F1F_2024), // kColorToolbarInkDropHover
     (1612, 0x1F1F_2024), // kColorToolbarInkDropRipple
@@ -375,6 +414,8 @@ static DISPLAYS: Mutex<Vec<(usize, address_display::Display)>> = Mutex::new(Vec:
 thread_local! {
     /// The Rivet widget the UI thread works for, or zero.
     static CURRENT: Cell<usize> = const { Cell::new(0) };
+    /// The widget whose provider holds the replaced colours: `CURRENT` itself, or a popup of it.
+    static SOURCE: Cell<usize> = const { Cell::new(0) };
     /// Whether the page the location icon was last updated for is a local file.
     static LOCAL_PAGE: Cell<bool> = const { Cell::new(false) };
     /// Provider colours replaced for the current Rivet widget, with their own values.
@@ -480,8 +521,8 @@ fn first_swap(id: i32) -> bool {
     true
 }
 
-unsafe fn switch_to(hooks: &Hooks, widget: usize) {
-    if CURRENT.with(Cell::get) == widget {
+unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
+    if CURRENT.with(Cell::get) == widget && SOURCE.with(Cell::get) == source {
         return;
     }
     SWAPPED.with(|swapped| {
@@ -490,10 +531,11 @@ unsafe fn switch_to(hooks: &Hooks, widget: usize) {
         }
     });
     CURRENT.with(|current| current.set(widget));
+    SOURCE.with(|current| current.set(source));
     if widget == 0 {
         return;
     }
-    let root = *((widget + ROOT_VIEW_OFFSET) as *const *mut c_void);
+    let root = *((source + ROOT_VIEW_OFFSET) as *const *mut c_void);
     if root.is_null() {
         return;
     }
@@ -520,10 +562,151 @@ unsafe fn switch_to(hooks: &Hooks, widget: usize) {
 /// browser's otherwise. Scopes nest, and leaving one restores the outer one.
 unsafe fn scoped<R>(widget: usize, work: impl FnOnce() -> R) -> R {
     let Some(hooks) = hooks() else { return work() };
-    let outer = CURRENT.with(Cell::get);
-    switch_to(hooks, if is_rivet(widget) { widget } else { 0 });
+    let (outer, outer_source) = (CURRENT.with(Cell::get), SOURCE.with(Cell::get));
+    let rivet = if is_rivet(widget) { widget } else { 0 };
+    switch_to(hooks, rivet, rivet);
     let result = work();
-    switch_to(hooks, outer);
+    switch_to(hooks, outer, outer_source);
+    result
+}
+
+/// `views::HWNDForWidget`, which is a call and a jump through two thunks.
+const HWND_FOR_WIDGET: usize = 0x0AC0_B080;
+const HWND_FOR_WIDGET_HEAD: [u8; 4] = [0x48, 0x83, 0xEC, 0x28];
+const HWND_FOR_WIDGET_TAIL: [u8; 8] = [0x48, 0x89, 0xC1, 0x48, 0x83, 0xC4, 0x28, 0xE9];
+
+/// The Rivet window that owns `widget` when it is one of its popups, such as the omnibox's
+/// suggestion list, which Chrome shows in a window of its own.
+unsafe fn popup_owner(hooks: &Hooks, widget: usize) -> usize {
+    if widget == 0 || is_rivet(widget) || WINDOWS.lock().unwrap_or_else(|error| error.into_inner()).is_empty() {
+        return 0;
+    }
+    let to_window: Pointer = std::mem::transmute(hooks.base + HWND_FOR_WIDGET);
+    let window = to_window(widget as *const c_void) as HWND;
+    if window.is_null() {
+        return 0;
+    }
+    let root = GetAncestor(window, GA_ROOTOWNER);
+    if root.is_null() || root == window {
+        return 0;
+    }
+    let owner = WINDOWS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(_, known)| *known == root as usize)
+        .map_or(0, |(owner, _)| *owner);
+    if owner != 0 {
+        hook_popup_class(hooks, widget);
+    }
+    owner
+}
+
+/// The popups of Rivet windows that have taken the Rivet colours, with their window handles, so
+/// that a popup built later at the same address is not mistaken for one of them.
+static THEMED_POPUPS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+/// Whether `widget` is a popup of a Rivet window that has not yet taken the Rivet colours.
+unsafe fn fresh_popup(hooks: &Hooks, widget: usize) -> bool {
+    if popup_owner(hooks, widget) == 0 {
+        return false;
+    }
+    let to_window: Pointer = std::mem::transmute(hooks.base + HWND_FOR_WIDGET);
+    let window = to_window(widget as *const c_void) as usize;
+    let mut themed = THEMED_POPUPS.lock().unwrap_or_else(|error| error.into_inner());
+    if themed.contains(&(widget, window)) {
+        return false;
+    }
+    if themed.len() > 64 {
+        themed.clear();
+    }
+    themed.push((widget, window));
+    true
+}
+
+/// The widget classes whose paint and layout already work in a Rivet scope.
+static HOOKED_CLASSES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// A popup of a Rivet window is of a widget class of its own, whose vtable repeats the paint and
+/// layout entries of `views::Widget`. Once one of its instances is known to belong to a Rivet
+/// window, the class takes the same scope hooks as the browser's own widgets. The hooks do
+/// nothing for instances that belong to other windows.
+unsafe fn hook_popup_class(hooks: &Hooks, widget: usize) {
+    let vtable = *(widget as *const usize);
+    let mut done = HOOKED_CLASSES.lock().unwrap_or_else(|error| error.into_inner());
+    if done.contains(&vtable) {
+        return;
+    }
+    done.push(vtable);
+    let slots = vtable as *mut usize;
+    if *slots.add(PAINT_SLOT) == hooks.base + PAINT && *slots.add(LAYOUT_SLOT) == hooks.base + LAYOUT {
+        let _ = write_raw(slots.add(PAINT_SLOT).cast(), &(widget_paint as usize).to_le_bytes());
+        let _ = write_raw(slots.add(LAYOUT_SLOT).cast(), &(widget_layout as usize).to_le_bytes());
+    }
+    // The popup's pages are web pages, which ask the widget for its colour provider through the
+    // colour provider source it is, and take their style sheet from what it holds.
+    let source_table = *((widget + SOURCE_IN_WIDGET) as *const usize) as *mut usize;
+    let original = *source_table.add(1);
+    if original != popup_provider as usize {
+        SOURCE_ORIGINALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push((source_table as usize, original));
+        let _ = write_raw(source_table.add(1).cast(), &(popup_provider as usize).to_le_bytes());
+    }
+}
+
+/// Where the colour provider source lies in a widget.
+const SOURCE_IN_WIDGET: usize = 0x48;
+/// The colour provider source tables of popup classes, with their own `GetColorProvider`.
+static SOURCE_ORIGINALS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+/// A popup of a Rivet window hands out its colour provider with the Rivet colours in place until
+/// the browser's message loop turns again, which is after the style sheet of the page that asked
+/// for it has been written. Nothing else runs in between.
+unsafe extern "system" fn popup_provider(source: *mut c_void) -> *const c_void {
+    let table = *(source as *const usize);
+    let original = SOURCE_ORIGINALS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(known, _)| *known == table)
+        .map_or(0, |(_, original)| *original);
+    if original == 0 {
+        return std::ptr::null();
+    }
+    let run: unsafe extern "system" fn(*mut c_void) -> *const c_void = std::mem::transmute(original);
+    let provider = run(source);
+    let widget = (source as usize).wrapping_sub(SOURCE_IN_WIDGET);
+    if let Some(hooks) = hooks() {
+        let owner = popup_owner(hooks, widget);
+        if owner != 0 && (CURRENT.with(Cell::get), SOURCE.with(Cell::get)) != (owner, widget) {
+            switch_to(hooks, owner, widget);
+            SetTimer(std::ptr::null_mut(), 0, 1, Some(popup_provider_done));
+        }
+    }
+    provider
+}
+
+unsafe extern "system" fn popup_provider_done(_window: HWND, _message: u32, id: usize, _time: u32) {
+    KillTimer(std::ptr::null_mut(), id);
+    if let Some(hooks) = hooks() {
+        switch_to(hooks, 0, 0);
+    }
+}
+
+/// Like `scoped`, for a widget that is really a widget: a popup of a Rivet window works in the
+/// owner's scope, with the colours of the popup's own provider replaced.
+unsafe fn scoped_widget<R>(widget: usize, work: impl FnOnce() -> R) -> R {
+    let Some(hooks) = hooks() else { return work() };
+    let owner = popup_owner(hooks, widget);
+    if owner == 0 {
+        return scoped(widget, work);
+    }
+    let (outer, outer_source) = (CURRENT.with(Cell::get), SOURCE.with(Cell::get));
+    switch_to(hooks, owner, widget);
+    let result = work();
+    switch_to(hooks, outer, outer_source);
     result
 }
 
@@ -586,7 +769,7 @@ unsafe extern "system" fn theme_changed(widget: *mut c_void) {
         0 => std::mem::transmute(hooks().map_or(0, |hooks| hooks.base) + THEME_CHANGED),
         _ => original(&ORIGINAL_THEME_CHANGED),
     };
-    scoped(widget as usize, || run(widget));
+    scoped_widget(widget as usize, || run(widget));
 }
 
 /// Layer-backed views paint separately from the widget paint callback.
@@ -598,17 +781,22 @@ unsafe extern "system" fn paint_layer(view: *mut c_void, context: *const c_void)
         crate::vertical_tabs::trace("rivet layer paint outside scope");
     }
     let run: WidgetPaint = original(&ORIGINAL_PAINT_LAYER);
-    scoped(widget, || run(view, context));
+    scoped_widget(widget, || run(view, context));
 }
 
 unsafe extern "system" fn widget_paint(widget: *mut c_void, context: *const c_void) {
     let hooks = hooks().expect("patched after it is stored");
-    scoped(widget as usize, || (hooks.paint)(widget, context));
+    scoped_widget(widget as usize, || (hooks.paint)(widget, context));
 }
 
 unsafe extern "system" fn widget_layout(widget: *mut c_void) {
     let hooks = hooks().expect("patched after it is stored");
-    scoped(widget as usize, || (hooks.layout)(widget));
+    if fresh_popup(hooks, widget as usize) {
+        // Views take their colours when they are added to a widget, before this layout, so the
+        // popup's tree takes them again in the scope of its owner.
+        theme_changed(widget);
+    }
+    scoped_widget(widget as usize, || (hooks.layout)(widget));
 }
 
 /// The icon is chosen while its view is being updated, which can happen outside any paint or
@@ -1318,18 +1506,16 @@ unsafe extern "system" fn choose_icon(icon: usize) -> usize {
         return icon;
     }
     let Some(hooks) = hooks() else { return icon };
-    match ICONS.get() {
-        Some(icons) => icons
-            .iter()
-            .find(|(rva, _)| hooks.base + rva == icon)
-            // Chrome's warning for plain HTTP is the icon of local files too. Only local files
-            // get the Rivet mark, so a page that is not secure keeps its warning.
-            .filter(|(rva, _)| *rva != HTTP_ICON || LOCAL_PAGE.with(Cell::get))
-            .map_or(icon, |(_, ours)| {
-                ours.as_ref() as *const VectorIcon as usize
-            }),
-        None => icon,
-    }
+    let Some(icons) = ICONS.get() else { return icon };
+    // Chrome's warning for plain HTTP is the icon of local files too. Local files get the
+    // information mark, and a page that is not secure gets Rivet's warning.
+    let key = icons
+        .iter()
+        .map(|(rva, _)| *rva)
+        .find(|rva| *rva != LOCAL_PAGE_ICON && hooks.base + rva == icon)
+        .map(|rva| if rva == HTTP_ICON && LOCAL_PAGE.with(Cell::get) { LOCAL_PAGE_ICON } else { rva });
+    key.and_then(|key| icons.iter().find(|(rva, _)| *rva == key))
+        .map_or(icon, |(_, ours)| ours.as_ref() as *const VectorIcon as usize)
 }
 
 /// What an installation overwrote, oldest first: the address and the bytes that were there. A
@@ -1493,6 +1679,8 @@ unsafe fn patch() -> Result<Hooks, String> {
     };
     if !holds(BROWSER_WIDGET_VTABLE, PAINT_SLOT, PAINT)
         || !holds(BROWSER_WIDGET_VTABLE, LAYOUT_SLOT, LAYOUT)
+        || !holds(PLAIN_WIDGET_VTABLE, PAINT_SLOT, PAINT)
+        || !holds(PLAIN_WIDGET_VTABLE, LAYOUT_SLOT, LAYOUT)
     {
         return Err("this browser build has no recorded browser widget".into());
     }
@@ -1542,6 +1730,8 @@ unsafe fn patch() -> Result<Hooks, String> {
         || !prologue(BOUNDS_IN_SCREEN, &BOUNDS_BYTES)
         || !prologue(SET_TRANSFORM, &SET_TRANSFORM_PROLOGUE)
         || !prologue(SET_BRIGHTNESS, &SET_BRIGHTNESS_PROLOGUE)
+        || !prologue(HWND_FOR_WIDGET, &HWND_FOR_WIDGET_HEAD)
+        || !prologue(HWND_FOR_WIDGET + 9, &HWND_FOR_WIDGET_TAIL)
     {
         return Err("this browser build has other toolbar functions".into());
     }
@@ -1759,9 +1949,11 @@ unsafe fn slots(base: usize, skip: &str) -> Result<(), String> {
     if skip.contains("widget") {
         return Ok(());
     }
-    let widget = (base + BROWSER_WIDGET_VTABLE) as *mut usize;
-    replace_slot(widget.add(PAINT_SLOT), widget_paint as usize)?;
-    replace_slot(widget.add(LAYOUT_SLOT), widget_layout as usize)?;
+    for vtable in [BROWSER_WIDGET_VTABLE, PLAIN_WIDGET_VTABLE] {
+        let widget = (base + vtable) as *mut usize;
+        replace_slot(widget.add(PAINT_SLOT), widget_paint as usize)?;
+        replace_slot(widget.add(LAYOUT_SLOT), widget_layout as usize)?;
+    }
     for (vtable, _) in HIDDEN {
         replace_slot(
             ((base + vtable) as *mut usize).add(THEME_SLOT),
@@ -1868,74 +2060,145 @@ const LINE_TO: u32 = 11;
 const CIRCLE: u32 = 24;
 const CANVAS_DIMENSIONS: u32 = 28;
 
-/// The stroke of the Rivet icons, in DIPs.
-const ICON_STROKE: f32 = 1.3;
+/// The stroke of the Rivet icons, in DIPs. The design's icon font draws one DIP lines.
+const ICON_STROKE: f32 = 1.0;
 
-/// A 13 DIP information mark on Chrome's 16 DIP icon canvas, centred 8.75 DIPs from its left edge
-/// and 7.1 from its top, which is where the page info mark sits in the Rivet design.
-static INFO_PATH: [PathElement; 20] = [
-    op(CANVAS_DIMENSIONS), at(16.0),
-    op(STROKE), at(ICON_STROKE),
-    op(CIRCLE), at(8.75), at(7.1), at(6.0),
-    op(MOVE_TO), at(8.75), at(6.55),
-    op(LINE_TO), at(8.75), at(9.85),
-    op(MOVE_TO), at(8.75), at(4.35),
-    op(LINE_TO), at(8.75), at(4.55),
-];
+const ROUND_RECT: u32 = 26;
+const CLOSE: u32 = 27;
+const QUADRATIC_TO: u32 = 20;
 
-/// The navigation icons are drawn on an 18 DIP canvas with 1.5 DIP strokes, and
-/// `kToolbarButtonIconSize` is 18 so that one canvas unit is one DIP.
-const NAV_CANVAS: f32 = 18.0;
+/// Chrome builds the page info icon as an 18 DIP image of a 16 DIP canvas. The marks are drawn on
+/// an 18 DIP canvas instead, so that one unit is one DIP, centred 9.1 DIPs from the left edge and
+/// 6.8 from the top, which is where the Rivet design puts its 13 DIP glyphs.
+const MARK_X: f32 = 9.1;
+const MARK_Y: f32 = 6.8;
+const MARK_CANVAS: f32 = 18.0;
 
-/// A line from `(x1, y)` to `(x2, y)` and the two strokes of a head at `tip_x`.
-fn arrow(line_from: f32, line_to: f32, tip_x: f32, head_x: f32) -> Vec<PathElement> {
-    vec![
-        op(CANVAS_DIMENSIONS), at(NAV_CANVAS),
-        op(STROKE), at(ICON_STROKE),
-        op(MOVE_TO), at(line_from), at(8.5),
-        op(LINE_TO), at(line_to), at(8.5),
-        op(MOVE_TO), at(head_x), at(2.5),
-        op(LINE_TO), at(tip_x), at(8.5),
-        op(LINE_TO), at(head_x), at(14.5),
-    ]
+fn mark(path: &mut Vec<PathElement>, x1: f32, y1: f32, x2: f32, y2: f32) {
+    path.extend([op(MOVE_TO), at(MARK_X + x1), at(MARK_Y + y1), op(LINE_TO), at(MARK_X + x2), at(MARK_Y + y2)]);
 }
 
-/// The Rivet back arrow: a 14.5 DIP line and a head 6 DIPs deep.
+fn mark_canvas() -> Vec<PathElement> {
+    vec![op(CANVAS_DIMENSIONS), at(MARK_CANVAS), op(STROKE), at(ICON_STROKE)]
+}
+
+/// The information mark of Rivet pages and local pages: a 12 DIP circle with an i.
+fn info_path() -> Vec<PathElement> {
+    let mut path = mark_canvas();
+    path.extend([op(CIRCLE), at(MARK_X), at(MARK_Y), at(5.75)]);
+    mark(&mut path, 0.0, -2.7, 0.0, -2.65);
+    mark(&mut path, 0.0, -0.6, 0.0, 2.7);
+    path
+}
+
+/// The padlock of secure pages: a 9.8 by 6 DIP body with a 6 DIP wide shackle and a keyhole dot.
+fn lock_path() -> Vec<PathElement> {
+    let mut path = mark_canvas();
+    path.extend([op(ROUND_RECT), at(MARK_X - 4.4), at(MARK_Y + 0.95), at(8.8), at(5.0), at(1.3)]);
+    let (radius, centre) = (2.5f32, MARK_Y - 3.45);
+    let steps = 16;
+    for step in 0..=steps {
+        let angle = std::f32::consts::PI * (1.0 + step as f32 / steps as f32);
+        path.extend([
+            op(if step == 0 { MOVE_TO } else { LINE_TO }),
+            at(MARK_X + radius * angle.cos()),
+            at(centre + radius * angle.sin()),
+        ]);
+    }
+    path.extend([op(LINE_TO), at(MARK_X + radius), at(MARK_Y + 0.95)]);
+    path.extend([op(MOVE_TO), at(MARK_X - radius), at(centre), op(LINE_TO), at(MARK_X - radius), at(MARK_Y + 0.95)]);
+    mark(&mut path, 0.0, 3.45, 0.0, 3.5);
+    path
+}
+
+/// The warning of pages that are not secure: a 12 DIP triangle with softened corners and a !.
+fn warning_path() -> Vec<PathElement> {
+    let mut path = mark_canvas();
+    let corners = [(0.0f32, -5.55f32), (5.55, 5.55), (-5.55, 5.55)];
+    let soften = 1.1f32;
+    let toward = |from: (f32, f32), to: (f32, f32)| {
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let length = dx.hypot(dy);
+        (from.0 + dx / length * soften, from.1 + dy / length * soften)
+    };
+    for (index, corner) in corners.iter().enumerate() {
+        let before = toward(*corner, corners[(index + 2) % 3]);
+        let after = toward(*corner, corners[(index + 1) % 3]);
+        path.extend([
+            op(if index == 0 { MOVE_TO } else { LINE_TO }),
+            at(MARK_X + before.0),
+            at(MARK_Y + before.1),
+            op(QUADRATIC_TO),
+            at(MARK_X + corner.0),
+            at(MARK_Y + corner.1),
+            at(MARK_X + after.0),
+            at(MARK_Y + after.1),
+        ]);
+    }
+    path.push(op(CLOSE));
+    mark(&mut path, 0.0, -2.0, 0.0, 0.6);
+    mark(&mut path, 0.0, 2.7, 0.0, 2.75);
+    path
+}
+
+/// The navigation icons are drawn on a canvas the size of the image Chrome builds for them (their
+/// 28 DIP button less 4 DIPs of padding on each side), so that one canvas unit is one DIP, around
+/// the centre of the button. Offsets from that
+/// centre are in DIPs.
+const NAV_CANVAS: f32 = 20.0;
+const NAV_CENTRE: f32 = NAV_CANVAS / 2.0;
+
+fn nav(x: f32, y: f32) -> [PathElement; 2] {
+    [at(NAV_CENTRE + x), at(NAV_CENTRE + y)]
+}
+
+/// A line along `dy` between `from` and `tip` and the two strokes of a head 7 DIPs either side.
+fn arrow(from: f32, tip: f32, head: f32, dy: f32) -> Vec<PathElement> {
+    let mut path = vec![op(CANVAS_DIMENSIONS), at(NAV_CANVAS), op(STROKE), at(ICON_STROKE)];
+    for (command, x, y) in [
+        (MOVE_TO, from, dy),
+        (LINE_TO, tip, dy),
+        (MOVE_TO, head, dy - 7.0),
+        (LINE_TO, tip, dy),
+        (LINE_TO, head, dy + 7.0),
+    ] {
+        path.push(op(command));
+        path.extend(nav(x, y));
+    }
+    path
+}
+
+/// The Rivet back arrow: a 15.5 DIP line and a head 7.3 DIPs deep, one DIP above the centre.
 fn back_path() -> Vec<PathElement> {
-    arrow(16.25, 1.75, 1.75, 7.75)
+    arrow(7.75, -7.75, -0.45, -1.0)
 }
 
 /// The Rivet forward arrow, the back arrow mirrored.
 fn forward_path() -> Vec<PathElement> {
-    arrow(1.75, 16.25, 16.25, 10.25)
+    arrow(-7.75, 7.75, 0.45, -1.0)
 }
 
-/// The Rivet reload mark: an open circle with its gap on the right and a head at the top right
-/// that points into the gap. It uses the same move and line commands as the arrows, because a
-/// generated arc produced a malformed vector path in Chrome 156.
+/// The Rivet reload mark: an open circle whose short gap sits just above its right side, and a
+/// corner at the gap that points along the circle. It uses the same move and line commands as
+/// the arrows, because a generated arc produced a malformed vector path in Chrome 156.
 fn reload_path() -> Vec<PathElement> {
-    let (centre, radius, arm) = (9.0f32, 6.5f32, 3.5f32);
+    let radius = 7.45f32;
     let point = |degrees: f32| {
         let angle = degrees.to_radians();
-        (centre + radius * angle.cos(), centre + radius * angle.sin())
+        (radius * angle.cos(), -0.5 + radius * angle.sin())
     };
     let mut path = vec![op(CANVAS_DIMENSIONS), at(NAV_CANVAS), op(STROKE), at(ICON_STROKE)];
-    // From the head counter-clockwise on screen to just below the right side.
-    let (start, sweep, steps) = (-25.0f32, -310.0f32, 31);
+    // From just above the right side clockwise on screen to 25 degrees above it again.
+    let (start, sweep, steps) = (-5.0f32, 340.0f32, 68);
     for step in 0..=steps {
         let (x, y) = point(start + sweep * step as f32 / steps as f32);
         path.push(op(if step == 0 { MOVE_TO } else { LINE_TO }));
-        path.push(at(x));
-        path.push(at(y));
+        path.extend(nav(x, y));
     }
-    // The head: two arms that run back from the tip, at 45 degrees either side of the arc.
-    let (tip_x, tip_y) = point(start);
-    let heading = (start + 90.0).to_radians();
-    let back = (-heading.cos(), -heading.sin());
-    for turn in [45.0f32, -45.0] {
-        let (sin, cos) = turn.to_radians().sin_cos();
-        let (x, y) = (back.0 * cos - back.1 * sin, back.0 * sin + back.1 * cos);
-        path.extend([op(MOVE_TO), at(tip_x + x * arm), at(tip_y + y * arm), op(LINE_TO), at(tip_x), at(tip_y)]);
+    let (tip_x, tip_y) = point(start + sweep);
+    for (command, x, y) in [(MOVE_TO, tip_x - 4.6, tip_y), (LINE_TO, tip_x, tip_y), (LINE_TO, tip_x, tip_y - 4.3)] {
+        path.push(op(command));
+        path.extend(nav(x, y));
     }
     path
 }
@@ -1964,6 +2227,8 @@ const RELOAD_ICON: usize = 0x10E0_7DD0;
 const PAGE_INFO_ICON: usize = 0x10F5_D470;
 /// `kHttpChromeRefreshOldIcon`, which Chrome shows for local files as well as for plain HTTP.
 const HTTP_ICON: usize = 0x10F5_CE60;
+/// The key of the information mark in `ICONS`, which replaces the HTTP icon on local pages.
+const LOCAL_PAGE_ICON: usize = 1;
 const HTTP_ICON_NAME: &[u8] = b"kHttpChromeRefreshOldIcon";
 const PAGE_INFO_BYTES: [u8; 32] = [
     0x1C, 0, 0, 0, 0, 0, 0x80, 0x41, 1, 0, 0, 0, 7, 0, 0, 0,
@@ -1979,8 +2244,9 @@ unsafe fn build_icons(base: usize) {
             (BACK_ICON, leak(back_path())),
             (FORWARD_ICON, leak(forward_path())),
             (RELOAD_ICON, leak(reload_path())),
-            (PAGE_INFO_ICON, &INFO_PATH[..]),
-            (HTTP_ICON, &INFO_PATH[..]),
+            (PAGE_INFO_ICON, leak(lock_path())),
+            (HTTP_ICON, leak(warning_path())),
+            (LOCAL_PAGE_ICON, leak(info_path())),
         ]
         .into_iter()
         .map(|(rva, path)| {
@@ -1988,7 +2254,8 @@ unsafe fn build_icons(base: usize) {
                 path: path.as_ptr(),
                 size: path.len(),
             }));
-            let original = (base + rva) as *const VectorIcon;
+            let named = if rva == LOCAL_PAGE_ICON { HTTP_ICON } else { rva };
+            let original = (base + named) as *const VectorIcon;
             let icon = Box::new(VectorIcon {
                 reps: rep,
                 count: 1,
@@ -2063,10 +2330,19 @@ mod tests {
     fn fr12_page_info_uses_a_thin_circle_without_replacing_warnings() {
         assert_eq!(PAGE_INFO_ICON, 0x10F5_D470);
         assert_ne!(PAGE_INFO_ICON, 0x10F5_CE60);
-        let commands: Vec<u32> = [0, 2, 4, 8, 11, 14]
-            .iter().map(|&index| unsafe { INFO_PATH[index].command }).collect();
+        let path = info_path();
+        let commands: Vec<u32> = [0, 2, 4, 8, 11, 14].iter().map(|&index| unsafe { path[index].command }).collect();
         assert_eq!(commands, [CANVAS_DIMENSIONS, STROKE, CIRCLE, MOVE_TO, LINE_TO, MOVE_TO]);
-        assert_eq!(unsafe { INFO_PATH[3].value }, ICON_STROKE);
+        assert_eq!(unsafe { path[3].value }, ICON_STROKE);
+    }
+
+    #[test]
+    fn fr12_secure_pages_get_a_padlock_and_insecure_pages_a_warning() {
+        let lock = lock_path();
+        assert_eq!(unsafe { lock[4].command }, ROUND_RECT);
+        let warning = warning_path();
+        assert!(warning.iter().any(|element| unsafe { element.command } == CLOSE));
+        assert!(warning.iter().any(|element| unsafe { element.command } == QUADRATIC_TO));
     }
 
     #[test]
@@ -2087,6 +2363,9 @@ mod tests {
         assert_eq!(colour(1595), Some(0xFF4A_4850));
         assert_eq!(colour(796), Some(PAPER));
         assert_eq!(colour(1013), Some(PAPER));
+        // "Not secure" is the design's red on an 8 percent tint of it.
+        assert_eq!(colour(1046), Some(0xFFB3_261E));
+        assert_eq!(colour(1047), Some(0x14B3_261E));
         assert_eq!(colour(1603), Some(HAIRLINE));
         assert_eq!(colour(1647), Some(0xFFC4_2B1C));
         assert_eq!(colour(1645), Some(0xFF1A_1A1A));
@@ -2138,16 +2417,17 @@ mod tests {
     #[test]
     fn fr12_navigation_buttons_use_a_fixed_pitch() {
         assert_eq!(LAYOUT_INSETS_PROLOGUE.len(), 13);
-        assert_eq!(NAV_CANVAS as i32, 18);
+        assert_eq!(NAV_CANVAS as i32, 20);
         assert!(OVERRIDES.contains(&(47, 18)));
         assert!(UPDATE_ICON_PROLOGUE.len() >= 12);
     }
 
     #[test]
     fn fr12_reload_icon_has_a_gap_and_a_head() {
+        // One open arc and the corner that sits in its gap.
         let path = reload_path();
         let moves = path.iter().filter(|element| unsafe { element.command } == MOVE_TO).count();
-        assert_eq!(moves, 3);
+        assert_eq!(moves, 2);
     }
 
     #[test]
