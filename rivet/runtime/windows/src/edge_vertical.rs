@@ -158,9 +158,7 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
             let origin = window_x(parent);
             let mut left = moved[0];
             let mut right = moved[0] + moved[2];
-            if origin + left < origin {
-                left = 0;
-            }
+            left = left.max(edge.toolbar_leading);
             if let Some(container) = caption_container(view as usize) {
                 let caption_x = *((container + 0x1C8) as *const i32);
                 right = right.min(caption_x - edge.caption_gap - origin);

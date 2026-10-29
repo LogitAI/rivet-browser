@@ -292,6 +292,9 @@ pub struct EdgeVertical {
     pub set_bounds_rect_prologue: &'static [u8],
     pub toolbar_vtable: usize,
     pub caption_gap: i32,
+    /// The room Rivet's toggle button takes before the toolbar's first button, in DIPs, so the back
+    /// button sits where Chrome's does.
+    pub toolbar_leading: i32,
     pub top_inset_adjust: i32,
     /// Where the browser view keeps its container view, and where that keeps its state.
     pub container_offset: usize,
@@ -1590,6 +1593,7 @@ pub static EDGE: Build = Build {
         set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
         toolbar_vtable: 0x1180FCB8,
         caption_gap: 25,
+        toolbar_leading: 34,
         top_inset_adjust: -8,
         container_offset: 0x958,
         state_offset: 0x610,
