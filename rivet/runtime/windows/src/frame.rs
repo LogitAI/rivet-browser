@@ -1703,7 +1703,7 @@ unsafe fn create_appbar(window: HWND) {
     });
     crate::vertical_tabs::trace(&format!("caption height: {caption:?}"));
     let top = chrome_layout::install_top_inset(|window| {
-        attached(window).then_some(chrome_layout::PANEL_TOP + crate::builds::get().edge_vertical.as_ref().map_or(0, |edge| edge.top_inset_adjust))
+        attached(window).then_some(chrome_layout::PANEL_TOP + crate::builds::get().layout.top_inset_adjust + crate::builds::get().edge_vertical.as_ref().map_or(0, |edge| edge.top_inset_adjust))
     });
     crate::vertical_tabs::trace(&format!("top inset: {top:?}"));
     if runtime_directory().is_some_and(|dir| dir.join("rivet-nav.log").exists()) {
