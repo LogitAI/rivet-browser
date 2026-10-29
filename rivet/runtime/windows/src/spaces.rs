@@ -36,10 +36,11 @@ pub enum BrowserKind {
     Chrome,
     Edge,
     Whale,
+    Brave,
 }
 
 impl BrowserKind {
-    const ALL: [Self; 3] = [Self::Chrome, Self::Edge, Self::Whale];
+    const ALL: [Self; 4] = [Self::Chrome, Self::Edge, Self::Whale, Self::Brave];
 
     /// The name the file keeps.
     pub fn key(self) -> &'static str {
@@ -47,6 +48,7 @@ impl BrowserKind {
             Self::Chrome => "chrome",
             Self::Edge => "edge",
             Self::Whale => "whale",
+            Self::Brave => "brave",
         }
     }
 
@@ -56,6 +58,7 @@ impl BrowserKind {
             Self::Chrome => "Chrome",
             Self::Edge => "Edge",
             Self::Whale => "Whale",
+            Self::Brave => "Brave",
         }
     }
 
@@ -65,6 +68,7 @@ impl BrowserKind {
             Self::Chrome => "chrome.exe",
             Self::Edge => "msedge.exe",
             Self::Whale => "whale.exe",
+            Self::Brave => "brave.exe",
         }
     }
 
@@ -940,7 +944,7 @@ mod tests {
         assert_eq!(loaded.list()[0].badge(), "Chrome \u{b7} Work");
         assert_eq!(loaded.list()[1].badge(), "Chrome \u{b7} Mine");
         // A browser this version does not know is read as Chrome rather than losing the file.
-        let future = text.replace("\"edge\"", "\"brave\"");
+        let future = text.replace("\"edge\"", "\"vivaldi\"");
         assert_eq!(Spaces::from_json(&future).unwrap().spaces.list()[1].browser, BrowserKind::Chrome);
         assert!(Spaces::from_json(&text.replace("\"edge\"", "7")).is_none());
     }
@@ -1047,7 +1051,8 @@ mod tests {
         assert_eq!(kind("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"), Some(BrowserKind::Chrome));
         assert_eq!(kind("C:/Edge/MSEdge.exe"), Some(BrowserKind::Edge));
         assert_eq!(kind("whale.exe"), Some(BrowserKind::Whale));
-        assert_eq!(kind("C:\\Brave\\brave.exe"), None);
+        assert_eq!(kind("C:\\Brave\\brave.exe"), Some(BrowserKind::Brave));
+        assert_eq!(kind("C:\\Vivaldi\\vivaldi.exe"), None);
     }
 
     #[test]
@@ -1061,6 +1066,10 @@ mod tests {
         assert_eq!(edge.user_data_dir, std::path::Path::new("D:\\Data\\Rivet\\profiles\\edge\\Lab"));
         let whale = hand_over(&spaces.list()[2], current, root).unwrap();
         assert_eq!(whale.user_data_dir, std::path::Path::new("D:\\Data\\Rivet\\profiles\\whale\\Personal"));
+        let brave = SpaceInfo { name: "Lab".into(), tint: 0, browser: BrowserKind::Brave, profile: "Test".into() };
+        let brave = hand_over(&brave, current, root).unwrap();
+        assert_eq!((brave.browser, BrowserKind::from_key("brave")), (BrowserKind::Brave, Some(BrowserKind::Brave)));
+        assert!(brave.user_data_dir.ends_with(std::path::Path::new("brave").join("Test")));
         // From an Edge window the Research space stays, and the Chrome one hands back.
         assert_eq!(hand_over(&spaces.list()[1], Some(BrowserKind::Edge), root), None);
         assert!(hand_over(&spaces.list()[0], Some(BrowserKind::Edge), root).is_some());
