@@ -1,4 +1,4 @@
-//! Whale's toolbar carries buttons a Rivet window does not want, and its right sidebar takes a column
+//! Whale's and Samsung Internet's toolbars carry buttons a Rivet window does not want, and its right sidebar takes a column
 //! of the page. A view cannot be hidden with `SetVisible` here: the layout shows it again, and a hook
 //! that refuses the call recurses until the stack is gone. Instead each of those classes answers
 //! that it needs no room, draws nothing, and is left alone in every window that is not a Rivet window.
@@ -100,6 +100,43 @@ unsafe extern "system" fn preferred_size(view: *mut c_void, out: *mut [i32; 2], 
     sized(view, out, bounds, views.slots[1])
 }
 
+/// Whether a view of a hidden class lies above `view`, in a Rivet window.
+unsafe fn below_hidden(view: *mut c_void) -> bool {
+    let (Some(views), Some(image)) = (views(), image::recorded()) else { return false };
+    let mut at = view as usize;
+    for _ in 0..8 {
+        at = *((at + views.parent_offset) as *const usize);
+        if at < 0x10000 {
+            return false;
+        }
+        let table = (*(at as *const usize)).wrapping_sub(image.base);
+        if views.classes.iter().any(|(vtable, _)| *vtable == table) {
+            return in_rivet_window(at as *mut c_void);
+        }
+    }
+    false
+}
+
+unsafe fn painted_inside(view: *mut c_void, argument: *const c_void, slot: usize) {
+    let table = *(view as *const usize);
+    let Some(function) = held(table, slot) else { return };
+    if below_hidden(view) {
+        return;
+    }
+    let run: unsafe extern "system" fn(*mut c_void, *const c_void) = std::mem::transmute(function);
+    run(view, argument)
+}
+
+unsafe extern "system" fn paint_children_inside(view: *mut c_void, info: *const c_void) {
+    let Some(views) = views() else { return };
+    painted_inside(view, info, views.slots[2])
+}
+
+unsafe extern "system" fn paint_inside(view: *mut c_void, canvas: *const c_void) {
+    let Some(views) = views() else { return };
+    painted_inside(view, canvas, views.slots[3])
+}
+
 /// A view that draws nothing paints neither itself nor its children, which are not clipped to it.
 unsafe fn painted(view: *mut c_void, argument: *const c_void, slot: usize) {
     let table = *(view as *const usize);
@@ -150,7 +187,26 @@ unsafe fn patch() -> Result<(), String> {
             }
         }
     }
+    for (vtable, functions) in views.inside {
+        for (index, slot) in views.slots[2..].iter().enumerate() {
+            let at = (base + vtable + slot * 8) as *const usize;
+            if *at != base + functions[index] {
+                return Err(format!("{vtable:#x} does not hold the recorded view functions"));
+            }
+        }
+    }
     crate::chrome_toolbar::transaction(|| {
+        for (vtable, functions) in views.inside {
+            for (index, slot) in views.slots[2..].iter().enumerate() {
+                HELD.lock().unwrap_or_else(|error| error.into_inner()).push((
+                    base + vtable,
+                    *slot,
+                    base + functions[index],
+                ));
+                let hook = [paint_children_inside as *const () as usize, paint_inside as *const () as usize][index];
+                crate::chrome_toolbar::replace_slot((base + vtable + slot * 8) as *mut usize, hook)?;
+            }
+        }
         for (vtable, functions) in views.classes {
             for (index, slot) in views.slots.iter().enumerate() {
                 HELD.lock().unwrap_or_else(|error| error.into_inner()).push((
@@ -160,6 +216,9 @@ unsafe fn patch() -> Result<(), String> {
                 ));
                 crate::chrome_toolbar::replace_slot((base + vtable + slot * 8) as *mut usize, hooks[index])?;
             }
+        }
+        if views.sidebar_minimum == crate::builds::ABSENT {
+            return Ok(());
         }
         crate::chrome_toolbar::detour(
             base,
@@ -185,6 +244,7 @@ unsafe fn invalidate(view: usize, base: usize, depth: usize, views: &HiddenViews
     let mut count = 0;
     if views.classes.iter().any(|(vtable, _)| *(view as *const usize) == base + vtable) {
         let layout: unsafe extern "system" fn(usize, i32) = std::mem::transmute(base + views.invalidate_layout);
+        crate::hide_strip::collapse(view);
         layout(view, 0);
         count += 1;
     }

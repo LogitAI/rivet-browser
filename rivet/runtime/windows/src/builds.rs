@@ -310,12 +310,17 @@ pub struct HiddenViews {
     pub invalidate_layout: usize,
     pub invalidate_layout_prologue: &'static [u8],
     /// The sidebar's own `GetMinimumSize`, which the layout of the page calls directly instead of
-    /// through the vtable to learn how much the sidebar must keep.
+    /// through the vtable to learn how much the sidebar must keep. `ABSENT` for a build whose sidebar
+    /// is not a view of the browser window.
     pub sidebar_minimum: usize,
     pub sidebar_minimum_prologue: &'static [u8],
     /// Each class: its vtable and the functions its four slots hold, which are checked before a slot
     /// is replaced and run for every view that is not in a Rivet window.
     pub classes: &'static [(usize, [usize; 4])],
+    /// Classes of views that only draw nothing while they lie below a view of one of `classes`:
+    /// their vtable and the functions of the `PaintChildren` and `OnPaint` slots. A button's image
+    /// can paint on a layer of its own, which its parent's silence does not stop.
+    pub inside: &'static [(usize, [usize; 2])],
 }
 
 /// Values for the row geometry in `whale_toolbar.rs`. Whale's toolbar view lays out one container view
@@ -503,6 +508,9 @@ pub struct VerticalTabs {
     pub set_bounds_rect: usize,
     pub set_bounds_rect_prologue: &'static [u8],
     pub toolbar_in_view: usize,
+    /// How far, in DIPs, the toolbar of a Rivet window starts to the right of the browser view's left
+    /// edge, so Rivet's toggle button has the room before the back button that Chrome's toolbar gives it.
+    pub toolbar_leading: i32,
     /// Whether a Rivet window leaves that function out of its layout by a detour, with this build's
     /// prologue copied to a trampoline. Only builds where this has been checked set it.
     pub detour_strip: bool,
@@ -979,6 +987,7 @@ const UNCHECKED_VERTICALTABS: VerticalTabs = VerticalTabs {
     set_bounds_rect: ABSENT,
     set_bounds_rect_prologue: &[0],
     toolbar_in_view: 0,
+    toolbar_leading: 0,
     detour_strip: false,
 };
 
@@ -2440,6 +2449,7 @@ pub static WHALE: Build = Build {
             (0xfac9e70, [0x83bb9b0, 0x227f080, 0x8f845c0, 0x901fc40]),
             (0xfb0e8e0, [0x24c3c10, 0xe2bcc70, 0x8f845c0, 0x8f84800]),
         ],
+        inside: &[],
     }),
     whale_row: Some(WhaleRow {
         set_bounds_rect: 0x08F7_C700,
@@ -2893,6 +2903,9 @@ pub static SAMSUNG: Build = Build {
         set_bounds_rect: 0x047C_EA60,
         set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
         toolbar_in_view: 0x5B0,
+        // The toggle ends 36 DIPs in and the toolbar keeps 8 before its first button; the back button
+        // then sits 30 DIPs from the toggle's centre, as Chrome's does.
+        toolbar_leading: 32,
         detour_strip: true,
         ..UNCHECKED_VERTICALTABS
     },
@@ -2944,7 +2957,40 @@ pub static SAMSUNG: Build = Build {
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
     edge_page: None,
-    hidden_views: None,
+
+    hidden_views: Some(HiddenViews {
+        slots: [15, 74, 88, 89],
+        parent_offset: 0x190,
+        children_offset: 0x198,
+        // `views::View::InvalidateLayout`, found by the fields it writes: the layout flag at +0x1f2, the
+        // counter at +0x200 and the list at +0x150.
+        invalidate_layout: 0x041F_1E70,
+        invalidate_layout_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58,
+        ],
+        // Samsung's sidebar is the root view of a widget of its own, so no layout function of the page
+        // asks it for a minimum.
+        sidebar_minimum: ABSENT,
+        sidebar_minimum_prologue: &[],
+        classes: &[
+            // Each class is told apart by the vtable the live view carries; its four slots are the
+            // functions the vtable holds in the installed build.
+            // The button the tab strip's row keeps at its left end, which would draw over Rivet's toggle.
+            (0xe2ee508, [0x48877c0, 0x5251150, 0x593140, 0x593450]),
+            // The home, split view, favourites, profile and menu buttons of the toolbar.
+            (0xe267ae8, [0x5252520, 0x51318c0, 0x593140, 0x2930de0]),
+            (0xe2a2908, [0x5252520, 0x51318c0, 0x593140, 0x2930de0]),
+            (0xe2a1568, [0x5252520, 0x51318c0, 0x593140, 0x2930de0]),
+            (0xe2bf7a8, [0x5252520, 0x51318c0, 0x593140, 0x2930de0]),
+            (0xe266988, [0x5252520, 0x51318c0, 0x593140, 0x2930de0]),
+            // The container of the location bar's page action icons, among them the bookmark star.
+            (0xe272a28, [0x3295c60, 0x5251150, 0x593140, 0x593450]),
+            // The bookmarks bar.
+            (0xe3027c8, [0x3819ab0, 0x2b49510, 0x381cda0, 0x593450]),
+        ],
+        // The profile button's picture and its notification dot paint on layers of their own.
+        inside: &[(0xe252008, [0x593140, 0x121bca0]), (0xe286f88, [0x593140, 0x90aa180])],
+    }),
     whale_row: None,
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
@@ -2964,6 +3010,9 @@ pub static SAMSUNG: Build = Build {
         // The tree walk is checked on 143.0.4.29: the frame colours swap live. `toolbar.get_color` is
         // not mapped, so no colour is created.
         provider_verified: true,
+        // The browser view's `views::View` lies this far inside the object `GetBrowserViewForNativeWindow`
+        // answers, read from the parent of its children.
+        browser_window_in_view: 0x1F8,
         ..UNCHECKED_LAYOUT
     },
 };
@@ -3380,6 +3429,35 @@ mod tests {
     }
 
     #[test]
+    fn fr12_samsung_hidden_view_classes_match_the_installed_build() {
+        let views = SAMSUNG.hidden_views.as_ref().expect("Samsung's extra views are recorded");
+        assert_eq!(views.slots, [15, 74, 88, 89]);
+        assert_eq!(views.sidebar_minimum, ABSENT);
+        assert_eq!(SAMSUNG.layout.browser_window_in_view, 0x1F8);
+        let mut seen = std::collections::HashSet::new();
+        for (vtable, functions) in views.classes {
+            assert!(seen.insert(*vtable), "{vtable:#x} is listed twice");
+        }
+        let path = r"C:\Program Files\Samsung\Internet\Applicationc.0.4.29\samsunginternet.dll";
+        let Ok(file) = std::fs::read(path) else {
+            return;
+        };
+        let image_base = 0x1_8000_0000u64;
+        for (vtable, functions) in views.classes {
+            for (index, slot) in views.slots.iter().enumerate() {
+                let word = file_bytes(&file, vtable + slot * 8, 8).unwrap();
+                assert_eq!(
+                    u64::from_le_bytes(word.try_into().unwrap()),
+                    image_base + functions[index] as u64,
+                    "{vtable:#x} slot {slot} does not hold the recorded function"
+                );
+            }
+        }
+        let prologue = views.invalidate_layout_prologue;
+        assert_eq!(file_bytes(&file, views.invalidate_layout, prologue.len()).as_deref(), Some(prologue));
+    }
+
+    #[test]
     fn nfr3_recorded_addresses_lie_inside_a_plausible_image() {
         for build in all() {
             for rva in [
@@ -3452,9 +3530,14 @@ mod tests {
         }
         assert_eq!((views.parent_offset, views.children_offset), (0x190, 0x198));
         assert!(views.invalidate_layout_prologue.len() >= 8 && views.sidebar_minimum_prologue.len() >= 14);
-        // Only Whale lists such views; every other build keeps its toolbar and sidebar.
+        // Only Whale and Samsung list such views; every other build keeps its toolbar and sidebar.
         for build in all() {
-            assert_eq!(build.hidden_views.is_some(), build.module == "whale.dll", "{}", build.module);
+            assert_eq!(
+                build.hidden_views.is_some(),
+                build.module == "whale.dll" || build.module == "samsunginternet.dll",
+                "{}",
+                build.module
+            );
         }
         // Whale's toolbar stays its own: no hidden toolbar views and no `SetVisible` hook.
         assert!(WHALE.toolbar.hidden.is_empty());

@@ -131,6 +131,22 @@ unsafe fn bounds_of(view: usize) -> Option<[i32; 4]> {
     read(view + BOUNDS, 16, value.as_mut_ptr().cast()).then_some(value)
 }
 
+/// Gives a view that has just been told to take no room a size of nothing, which also repaints the
+/// place it left. Without it the toolbar keeps the pixels the view drew there, since nothing else
+/// invalidates them. A build that records no `SetBoundsRect` leaves the view as it is.
+pub unsafe fn collapse(view: usize) {
+    let original = BOUNDS_ORIGINAL.load(Ordering::Acquire);
+    if original == 0 {
+        return;
+    }
+    if let Some([x, y, width, height]) = bounds_of(view) {
+        if width != 0 || height != 0 {
+            let original: SetBounds = std::mem::transmute(original);
+            original(view as *mut c_void, &[x, y, 0, 0]);
+        }
+    }
+}
+
 /// The left edge, in the frame's coordinates, of the caption buttons: the right-aligned short row
 /// among the frame's children, which is the caption button container.
 unsafe fn caption_left(frame: usize) -> Option<i32> {
@@ -144,7 +160,8 @@ unsafe fn caption_left(frame: usize) -> Option<i32> {
     for slot in (begin..end).step_by(8) {
         let Some(child) = word(slot) else { continue };
         let Some([x, y, width, height]) = bounds_of(child) else { continue };
-        if width > 0 && height > 0 && height <= 100 && y <= 20 && x + width >= frame_width - 20 && x > frame_width / 2 {
+        // The browser lays the client view out before the caption row, which has no height yet.
+        if width > 0 && height <= 100 && y <= 20 && x + width >= frame_width - 20 && x > frame_width / 2 {
             found = Some(found.map_or(x, |known: i32| known.min(x)));
         }
     }
@@ -161,6 +178,11 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
         word(browser_view + vertical.toolbar_in_view) == Some(view as usize)
     });
     if known {
+        // The toggle button of the appbar sits over the toolbar's first button unless the toolbar
+        // starts after it.
+        let lead = vertical.toolbar_leading.min(moved[2]).max(0);
+        moved[0] += lead;
+        moved[2] -= lead;
         let frame_vtable = image::recorded()
             .map(|image| image.base + crate::builds::get().layout.frame_vtable);
         let mut at = word(view as usize + PARENT);
