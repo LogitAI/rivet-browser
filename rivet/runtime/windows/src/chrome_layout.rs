@@ -766,6 +766,9 @@ static TOP: OnceLock<(TopInset, ExtraTop)> = OnceLock::new();
 unsafe extern "system" fn top_inset(view: *const c_void, restored: bool) -> i32 {
     let (original, extra) = TOP.get().expect("patched after it is stored");
     let inset = original(view, restored);
+    if crate::vertical_tabs::tracing() {
+        crate::vertical_tabs::trace(&format!("top inset original {inset} restored {restored}"));
+    }
     match HOOK.get() {
         Some(Ok(hook)) => inset + extra((hook.hwnd_for_view)(view)).unwrap_or(0),
         _ => inset,

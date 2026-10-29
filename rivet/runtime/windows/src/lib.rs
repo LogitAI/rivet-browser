@@ -229,6 +229,8 @@ mod spaces;
 #[cfg(windows)]
 mod taskbar;
 #[cfg(windows)]
+mod edge_vertical;
+#[cfg(windows)]
 mod vertical_tabs;
 
 #[cfg(test)]

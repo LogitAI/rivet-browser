@@ -1653,6 +1653,12 @@ unsafe fn create_appbar(window: HWND) {
     if attached(window) {
         return;
     }
+    if let Some(path) = runtime_directory()
+        .map(|dir| dir.join("rivet-vertical-tabs.log"))
+        .filter(|path| path.exists())
+    {
+        crate::vertical_tabs::set_trace(path);
+    }
     // Without the layout hook the browser would draw underneath the appbar, so an unknown
     // browser build keeps working without Rivet instead.
     if let Err(error) = chrome_layout::install(reserved_width) {
@@ -1682,7 +1688,7 @@ unsafe fn create_appbar(window: HWND) {
     });
     crate::vertical_tabs::trace(&format!("caption height: {caption:?}"));
     let top = chrome_layout::install_top_inset(|window| {
-        attached(window).then_some(chrome_layout::PANEL_TOP)
+        attached(window).then_some(chrome_layout::PANEL_TOP + crate::builds::get().edge_vertical.as_ref().map_or(0, |edge| edge.top_inset_adjust))
     });
     crate::vertical_tabs::trace(&format!("top inset: {top:?}"));
     if runtime_directory().is_some_and(|dir| dir.join("rivet-nav.log").exists()) {
@@ -1699,12 +1705,6 @@ unsafe fn create_appbar(window: HWND) {
     }
     // The file next to the runtime only switches the trace on. The toolbar and the vertical-tab
     // frame are what the top row needs, so they never depend on it.
-    if let Some(path) = runtime_directory()
-        .map(|dir| dir.join("rivet-vertical-tabs.log"))
-        .filter(|path| path.exists())
-    {
-        crate::vertical_tabs::set_trace(path);
-    }
     if crate::vertical_tabs::tracing() {
         crate::vertical_tabs::trace_crashes();
     }
@@ -1739,7 +1739,19 @@ unsafe fn create_appbar(window: HWND) {
             .entry(window as isize)
             .or_insert((None, None, 0xd08a52));
     });
-    if vertical_tabs {
+    if crate::vertical_tabs::tracing() && crate::edge_vertical::skipped("dump") {
+        let handle = window as isize;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            crate::vertical_tabs::trace("view tree after 5 s");
+            unsafe { crate::edge_vertical::dump_window(handle as HWND) };
+        });
+    }
+    if crate::builds::get().edge_vertical.is_some() {
+        let adopted = crate::edge_vertical::adopt(window);
+        crate::vertical_tabs::trace(&format!("edge vertical tabs: {adopted:?}"));
+    }
+    if vertical_tabs || crate::builds::get().edge_vertical.is_some() {
         crate::chrome_toolbar::adopt(window);
     }
     if runtime_directory().is_some_and(|dir| {
@@ -1982,6 +1994,7 @@ fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
 }
 
 pub(crate) fn log(message: &str) {
+    crate::vertical_tabs::trace(message);
     let text = wide(message);
     unsafe { OutputDebugStringW(text.as_ptr()) };
 }
@@ -2398,6 +2411,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::vertical_tabs::forget(window);
+            crate::edge_vertical::forget(window);
             chrome_layout::forget_view(window);
             crate::chrome_toolbar::forget(window);
             crate::side_rail::forget(window);

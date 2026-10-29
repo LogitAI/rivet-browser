@@ -30,6 +30,8 @@ pub struct Build {
     pub split: Split,
     pub side_panel: SidePanel,
     pub layout: Layout,
+    /// Edge's own vertical-tab architecture. Chrome has none.
+    pub edge_vertical: Option<EdgeVertical>,
 }
 
 /// Values for `chrome_toolbar.rs`.
@@ -201,6 +203,11 @@ pub struct Toolbar {
     /// `views::View` vtables of the buttons a Rivet window hides, with their `OnThemeChanged`.
     pub theme_slot: usize,
     pub hidden: &'static [(usize, usize)],
+    /// The vtable slots of `CalculatePreferredSize` and `GetMinimumSize`, or zero when hidden views are
+    /// hidden with `SetVisible`. Edge's toolbar lays itself out again whenever a button's visibility
+    /// differs from what it asked for, so a button kept hidden behind its back loops forever. Its views
+    /// stay visible and ask for no room instead, and nothing of them is drawn.
+    pub size_slots: (usize, usize),
     /// `views::View::GetWidget` is the twelfth entry of every view's vtable.
     pub get_widget_slot: usize,
     /// `LayoutConstant` values of this build and the sizes of the Rivet top row, in DIPs.
@@ -243,6 +250,49 @@ pub struct Toolbar {
     pub skip: &'static str,
     /// Where a `BubbleDialogDelegate` keeps the tracker of its anchor view.
     pub anchor_tracker_offset: usize,
+}
+
+/// Values for `edge_vertical.rs`: Edge keeps its vertical tabs in its own container view, which
+/// the browser view creates for every window and which a state number puts into vertical mode.
+pub struct EdgeVertical {
+    pub content_window_for_hwnd: usize,
+    pub content_window_for_hwnd_prologue: &'static [u8],
+    pub browser_view_for_window: usize,
+    pub browser_view_for_window_prologue: &'static [u8],
+    /// `BrowserView::EdgeSetTabStripState(this, state, animate)` puts the container view into a state.
+    pub set_state: usize,
+    pub set_state_prologue: &'static [u8],
+    /// The state that shows the strip expanded.
+    pub vertical_state: u32,
+    /// `BrowserView::EdgeShouldHideTitlebarForVerticalTabs(this)` reads the profile's setting. Its
+    /// prologue ends before the instruction after the stack cookie store, and the cookie load sits
+    /// `cookie_at` bytes into it.
+    pub hide_titlebar: usize,
+    pub hide_titlebar_prologue: &'static [u8],
+    pub cookie_at: usize,
+    /// `EdgeVerticalTabContainerView::CalculatePreferredSize(this, out)` and `GetMinimumSize(this,
+    /// out)`, which the layout asks for the strip's width. The second also starts with a cookie load.
+    pub container_preferred_size: usize,
+    pub container_preferred_size_prologue: &'static [u8],
+    pub container_minimum_size: usize,
+    pub container_minimum_size_prologue: &'static [u8],
+    pub container_minimum_cookie_at: usize,
+    /// `views::View::SetBoundsRect(this, const Rect*)`, the toolbar's vtable (`EdgeToolbarView`), the
+    /// gap Rivet keeps between the toolbar and the caption buttons, and how far the top inset Rivet adds
+    /// differs from Chrome's, in DIPs. Edge lays its toolbar out across the whole window width when the
+    /// title bar is hidden, from the window's left edge, so Rivet moves it to the page's edge.
+    pub set_bounds_rect: usize,
+    pub set_bounds_rect_prologue: &'static [u8],
+    pub toolbar_vtable: usize,
+    pub caption_gap: i32,
+    pub top_inset_adjust: i32,
+    /// The container's `views::View` vtable and the slot of `View::PaintChildren` in it.
+    pub container_vtable: usize,
+    pub paint_children_slot: usize,
+    pub paint_children: usize,
+    /// Where the browser view keeps its container view, and where that keeps its state.
+    pub container_offset: usize,
+    pub state_offset: usize,
 }
 
 /// Values for `vertical_tabs.rs`.
@@ -734,6 +784,7 @@ pub static CHROME: Build = Build {
             (0x0FEA_8908, 0x01D6_E1F0), // SplitTabsToolbarButton
     ],
         get_widget_slot: 11,
+        size_slots: (0, 0),
         overrides: &[
         (12, 8),  // kLocationBarChildCornerRadius
         (16, 28), // kLocationBarHeight
@@ -1076,6 +1127,7 @@ pub static CHROME: Build = Build {
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
     },
+    edge_vertical: None,
 };
 
 pub static EDGE: Build = Build {
@@ -1190,21 +1242,17 @@ pub static EDGE: Build = Build {
         theme_slot: 111,
         hidden: &[
                 (0x11892678, 0x02C7C5E0), // BrowserAppMenuButton
-                (0x118CBBB8, 0x026C1FA0), // page_actions::PageActionView
-                (0x1181E978, 0x00FDE2C0), // VerticalTabStripRegionView
+                (0x1181E578, 0x033F7530), // EdgeVerticalTabContainerView
                 (0x11834A18, 0x00FDE2C0), // SidePanelHeader
                 (0x11890838, 0x02B70B40), // PinnedActionToolbarButton
+                (0x1191FEF8, 0x029E1650), // EdgeAvatarToolbarButton
+                (0x1191FB58, 0x00FDE2C0), // EdgeCopilotToolbarSplitButtonContainer
+                (0x11811CB8, 0x02E8BD60), // ToolbarHubIconContainerView
+                (0x11894A78, 0x02B70B40), // HomeButton
             ],
         get_widget_slot: 10,
-        overrides: &[
-        (12, 8),  // kLocationBarChildCornerRadius
-        (16, 28), // kLocationBarHeight
-        (29, 12), // kMainBackgroundRegionCornerRadius
-        (46, 28), // kToolbarButtonHeight
-        (47, 18), // kToolbarButtonIconSize
-        (55, 8),  // kToolbarCornerRadius
-        (60, 0),  // kVerticalTabMinWidth
-    ], // Chrome value, not checked on Edge
+        size_slots: (86, 15),
+        overrides: &[], // Edge numbers its layout constants differently; filled in once traced
         colours: &[
         (0x13C, PAPER),      // kColorFrameActive
         (796, PAPER),        // kColorLocationBarBackground
@@ -1279,7 +1327,7 @@ pub static EDGE: Build = Build {
         page_info_id: ABSENT, // not found in Edge
         page_info_path: ABSENT, // not found in Edge
         anchor_view_access_at: 0x28,
-        skip: "toolbar", // Edge keeps its own toolbar for now
+        skip: "address icon updateicon anchor visible", // the address field, icons and bubble anchors are not recorded for Edge yet
         anchor_tracker_offset: 0x378, // BubbleDialogDelegate anchor view tracker, read by GetAnchorRect
     },
     vertical: VerticalTabs {
@@ -1496,6 +1544,33 @@ pub static EDGE: Build = Build {
         browser_window_in_view: 0x1F8, // BrowserWindow subobject distance from the BrowserView, read by GetBrowserView
         caption_paint_prologue: &[0xE9, 0x01, 0x00, 0x00, 0x00, 0xCC, 0x41, 0x57],
     },
+    edge_vertical: Some(EdgeVertical {
+        content_window_for_hwnd: 0x026A4DC6,
+        content_window_for_hwnd_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8],
+        browser_view_for_window: 0x010CDAE8,
+        browser_view_for_window_prologue: &[0x48, 0x83, 0xEC, 0x28, 0xE8],
+        set_state: 0x02AFA950,
+        set_state_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x8B, 0x05, 0xDD],
+        vertical_state: 2,
+        hide_titlebar: 0x028B5C7A,
+        hide_titlebar_prologue: &[0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B, 0x05, 0xBB, 0xE3, 0x93, 0x11, 0x48, 0x31, 0xE0, 0x48, 0x89, 0x44, 0x24, 0x30],
+        cookie_at: 4,
+        container_preferred_size: 0x03433540,
+        container_preferred_size_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD6, 0x8B, 0x81, 0x10, 0x06, 0x00, 0x00],
+        container_minimum_size: 0x028C98C0,
+        container_minimum_size_prologue: &[0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x89, 0xD6, 0x48, 0x8B, 0x05, 0x6E, 0xA7, 0x92, 0x11],
+        container_minimum_cookie_at: 11,
+        set_bounds_rect: 0x01021E78,
+        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        toolbar_vtable: 0x1180FCB8,
+        caption_gap: 25,
+        top_inset_adjust: -8,
+        container_vtable: 0x1181E578,
+        paint_children_slot: 100,
+        paint_children: 0x0109C270,
+        container_offset: 0x958,
+        state_offset: 0x610,
+    }),
 };
 
 /// The builds Rivet supports, in the order they are tried.
@@ -1584,5 +1659,39 @@ mod tests {
             assert!(!build.toolbar.layout_constant_prologue.is_empty());
             assert!(!build.layout.on_paint_prologue.is_empty());
         }
+    }
+
+    #[test]
+    fn fr12_only_edge_has_its_own_vertical_tab_container() {
+        assert!(CHROME.edge_vertical.is_none());
+        let edge = EDGE.edge_vertical.as_ref().expect("Edge keeps its vertical tabs in its own view");
+        // A jump over a function's start replaces at least twelve bytes, and the cookie load that
+        // the trampoline relocates sits where the row says.
+        for (prologue, cookie) in [
+            (edge.hide_titlebar_prologue, Some(edge.cookie_at)),
+            (edge.container_preferred_size_prologue, None),
+            (edge.container_minimum_size_prologue, Some(edge.container_minimum_cookie_at)),
+            (edge.set_bounds_rect_prologue, None),
+        ] {
+            assert!(prologue.len() >= 12);
+            if let Some(at) = cookie {
+                assert_eq!(&prologue[at..at + 3], &[0x48, 0x8B, 0x05]);
+            }
+        }
+        assert!(edge.vertical_state >= 2, "state 1 is the horizontal strip");
+    }
+
+    #[test]
+    fn fr12_hidden_toolbar_views_are_listed_once_per_vtable() {
+        for build in all() {
+            let mut seen = std::collections::HashSet::new();
+            for (vtable, _) in build.toolbar.hidden {
+                assert!(seen.insert(*vtable), "{} lists {vtable:#x} twice", build.module);
+            }
+        }
+        // Edge keeps its views visible and asks them for no room, because its toolbar lays itself out
+        // again whenever a button's visibility differs from the one it asked for.
+        assert_ne!(EDGE.toolbar.size_slots, (0, 0));
+        assert_eq!(CHROME.toolbar.size_slots, (0, 0));
     }
 }

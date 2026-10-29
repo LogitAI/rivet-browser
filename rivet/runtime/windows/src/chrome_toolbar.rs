@@ -1216,6 +1216,63 @@ unsafe extern "system" fn set_visible(view: *mut c_void, visible: bool) {
     run(view, visible && !hide);
 }
 
+/// The size functions each hidden vtable held before its slots were replaced: its vtable, the
+/// slot, and the function.
+static OWN_SIZE: Mutex<Vec<(usize, usize, usize)>> = Mutex::new(Vec::new());
+
+fn own_size(table: usize, slot: usize) -> Option<usize> {
+    let known = OWN_SIZE.lock().unwrap_or_else(|error| error.into_inner());
+    known
+        .iter()
+        .find(|(vtable, held_slot, _)| *vtable == table && *held_slot == slot)
+        .map(|(_, _, function)| *function)
+}
+
+/// Asks a view to ask for its size again, which also tells the layout above it.
+unsafe fn invalidate_layout_of(view: *mut c_void) {
+    let vertical = &crate::builds::get().vertical;
+    let Some(image) = image::recorded() else { return };
+    if image.has(vertical.invalidate_layout, vertical.invalidate_layout_prologue) {
+        let invalidate: unsafe extern "system" fn(*mut c_void, i32) = std::mem::transmute(image.base + vertical.invalidate_layout);
+        invalidate(view, 0);
+    }
+}
+
+/// Hides a view: through `SetVisible`, or, on a build whose toolbar objects to that, by asking its
+/// layout to give it no room.
+unsafe fn hide_view(view: *mut c_void) {
+    if bv().size_slots == (0, 0) {
+        original::<SetVisible>(&ORIGINAL_SET_VISIBLE)(view, false);
+    } else {
+        // The toolbar lays out again on the next pass.
+        invalidate_layout_of(view);
+    }
+}
+
+type SizeOf = unsafe extern "system" fn(*mut c_void, *mut [i32; 2], usize) -> *mut c_void;
+
+unsafe extern "system" fn hidden_preferred_size(view: *mut c_void, out: *mut [i32; 2], bounds: usize) -> *mut c_void {
+    let table = *(view as *const usize);
+    let Some(function) = own_size(table, bv().size_slots.0) else { return out.cast() };
+    let run: SizeOf = std::mem::transmute(function);
+    let result = run(view, out, bounds);
+    if hooks().is_some_and(|hooks| hidden_here(hooks, view)) {
+        *out = [0, 0];
+    }
+    result
+}
+
+unsafe extern "system" fn hidden_minimum_size(view: *mut c_void, out: *mut [i32; 2], bounds: usize) -> *mut c_void {
+    let table = *(view as *const usize);
+    let Some(function) = own_size(table, bv().size_slots.1) else { return out.cast() };
+    let run: SizeOf = std::mem::transmute(function);
+    let result = run(view, out, bounds);
+    if hooks().is_some_and(|hooks| hidden_here(hooks, view)) {
+        *out = [0, 0];
+    }
+    result
+}
+
 unsafe extern "system" fn hidden_theme_changed(view: *mut c_void) {
     let hooks = hooks().expect("patched after it is stored");
     let table = *(view as *const usize);
@@ -1223,7 +1280,7 @@ unsafe extern "system" fn hidden_theme_changed(view: *mut c_void) {
         theme(view);
     }
     if hidden_here(hooks, view) {
-        original::<SetVisible>(&ORIGINAL_SET_VISIBLE)(view, false);
+        hide_view(view);
     }
 }
 
@@ -1335,7 +1392,7 @@ unsafe fn write_recorded(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-unsafe fn write_code(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
+pub(crate) unsafe fn write_code(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
     write_recorded(target, bytes)
 }
 
@@ -1359,7 +1416,7 @@ unsafe fn transaction(install: impl FnOnce() -> Result<(), String>) -> Result<()
     result
 }
 
-unsafe fn executable(code: &[u8]) -> Result<usize, String> {
+pub(crate) unsafe fn executable(code: &[u8]) -> Result<usize, String> {
     let memory = VirtualAlloc(
         std::ptr::null(),
         code.len(),
@@ -1374,13 +1431,13 @@ unsafe fn executable(code: &[u8]) -> Result<usize, String> {
 }
 
 /// `mov rax, imm64`.
-fn load_rax(code: &mut Vec<u8>, value: usize) {
+pub(crate) fn load_rax(code: &mut Vec<u8>, value: usize) {
     code.extend_from_slice(&[0x48, 0xB8]);
     code.extend_from_slice(&(value as u64).to_le_bytes());
 }
 
 /// `jmp [rip + 0]` to `to`, which leaves every register as it is.
-fn jump(code: &mut Vec<u8>, to: usize) {
+pub(crate) fn jump(code: &mut Vec<u8>, to: usize) {
     code.extend_from_slice(&[0xFF, 0x25, 0, 0, 0, 0]);
     code.extend_from_slice(&(to as u64).to_le_bytes());
 }
@@ -1448,7 +1505,7 @@ unsafe fn second_argument_stub(choose: usize, original: usize) -> Result<usize, 
     executable(&code)
 }
 
-unsafe fn replace_slot(slot: *mut usize, value: usize) -> Result<(), String> {
+pub(crate) unsafe fn replace_slot(slot: *mut usize, value: usize) -> Result<(), String> {
     write_recorded(slot.cast(), &value.to_le_bytes())
 }
 
@@ -1743,14 +1800,36 @@ unsafe fn slots(base: usize, skip: &str) -> Result<(), String> {
     }
     for vtable in [bv().browser_widget_vtable, bv().plain_widget_vtable] {
         let widget = (base + vtable) as *mut usize;
-        replace_slot(widget.add(bv().paint_slot), widget_paint as usize)?;
-        replace_slot(widget.add(bv().layout_slot), widget_layout as usize)?;
+        if !skip.contains("wpaint") {
+            replace_slot(widget.add(bv().paint_slot), widget_paint as usize)?;
+        }
+        if !skip.contains("wlayout") {
+            replace_slot(widget.add(bv().layout_slot), widget_layout as usize)?;
+        }
     }
-    for (vtable, _) in bv().hidden {
+    for (index, (vtable, _)) in bv().hidden.iter().enumerate() {
+        if skip.contains("whidden") || skip.contains(&format!("h{index}h")) {
+            continue;
+        }
         replace_slot(
             ((base + vtable) as *mut usize).add(bv().theme_slot),
             hidden_theme_changed as usize,
         )?;
+        if bv().size_slots != (0, 0) {
+            for (slot_index, hook) in [
+                (bv().size_slots.0, hidden_preferred_size as usize),
+                (bv().size_slots.1, hidden_minimum_size as usize),
+            ] {
+                let slot = ((base + vtable) as *mut usize).add(slot_index);
+                let held = *slot;
+                let mut known = OWN_SIZE.lock().unwrap_or_else(|error| error.into_inner());
+                if !known.iter().any(|(table, at, _)| *table == base + vtable && *at == slot_index) {
+                    known.push((base + vtable, slot_index, held));
+                }
+                drop(known);
+                replace_slot(slot, hook)?;
+            }
+        }
     }
     Ok(())
 }

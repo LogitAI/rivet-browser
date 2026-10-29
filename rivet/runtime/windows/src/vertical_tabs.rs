@@ -93,11 +93,13 @@ pub unsafe fn trace_crashes() {
     }
     unsafe extern "system" fn handler(info: *mut Pointers) -> i32 {
         let record = &*(*info).record;
-        if record.code == 0xC000_0005 {
+        // Access violations, other failures (illegal instruction, fast fail, divide by zero) and breakpoints.
+        if record.code == 0xC000_0005 || (record.code & 0xFFFF_0000 == 0xC000_0000 && record.code != 0xC000_0194) || record.code == 0x8000_0003 {
             let rip = record.address as usize;
             let base = crate::chrome_layout::image::recorded().map_or(0, |image| image.base);
             trace(&format!(
-                "access violation at {rip:#x} (module offset {:#x}) touching {:#x}",
+                "exception {:#x} at {rip:#x} (module offset {:#x}) touching {:#x}",
+                record.code,
                 rip.wrapping_sub(base),
                 record.information[1]
             ));
@@ -121,6 +123,8 @@ pub unsafe fn trace_crashes() {
         0
     }
     AddVectoredExceptionHandler(1, handler);
+    // A panic inside a hook would abort the browser without a word, so it is written down first.
+    std::panic::set_hook(Box::new(|info| trace(&format!("panic: {info}"))));
 }
 
 pub fn tracing() -> bool {
