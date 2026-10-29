@@ -2207,8 +2207,78 @@ pub static WHALE: Build = Build {
     },
 };
 
+/// Brave 156.1.98.62 (Chromium 156.0.8078.74). Brave publishes its symbols, so this row is filled from
+/// them. Its windows are `BraveBrowserFrameViewWin` and `BraveBrowserView`, subclasses whose vtables are
+/// the ones the objects carry, and the two overrides that sit in the frame vtable are the targets of
+/// the slots Rivet replaces. Only the frame, caption and panel hooks are checked; every other feature
+/// stays off until its addresses are verified. Chromium's colour ids after the frame ones are shifted by
+/// Brave's own, so `caption_ink_ids` are read from this build's `PaintButtonContents`.
+pub static BRAVE: Build = Build {
+    browser: "Brave",
+    module: "chrome.dll",
+    version: [156, 1, 98, 62],
+    toolbar: Toolbar {
+        skip: "toolbar",
+        // The frame paints with colours the provider makes on demand, so its `GetColor` is the one toolbar function the frame hooks call.
+        get_color: 0x06A9A890, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
+        get_color_bytes: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x89, 0xD7],
+        ..UNCHECKED_TOOLBAR
+    },
+    vertical: UNCHECKED_VERTICALTABS,
+    navigation: UNCHECKED_NAVIGATION,
+    tabs: UNCHECKED_TABS,
+    split: UNCHECKED_SPLIT,
+    edge_vertical: None,
+    side_panel: UNCHECKED_SIDEPANEL,
+    layout: Layout {
+        on_paint_slot: 89,
+        on_paint: 0x036CEF30, // ?OnPaint@BraveBrowserFrameViewWin@@EEAAXPEAVCanvas@gfx@@@Z
+        on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x90, 0x00, 0x00, 0x00],
+        get_color_provider: 0x05836160, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
+        get_color_provider_prologue: &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x01],
+        draw_color: 0x03C29C10, // ?DrawColor@Canvas@gfx@@QEAAXI@Z
+        draw_color_prologue: &[0x48, 0x83, 0xEC, 0x38],
+        frame_ids: &[0x13C, 0x13D, 0x140, 321, 0x144],
+        corner_vtable: 0x111B08C0, // ??_7CustomFloatingCorner@@6BLayerDelegate@ui@@@
+        corner_paint: 0x0B762730, // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
+        corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        caption_vtable: 0x111E7580, // ??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@
+        caption_size_slot: 74,
+        caption_size: 0x03A4ABD0, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        caption_paint_slot: 114,
+        caption_paint: 0x02EBEF10, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
+        caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        top_inset_slot: 127,
+        top_inset: 0x036CF100, // ?GetTopInset@BraveBrowserFrameViewWin@@EEBAH_N@Z
+        layout_slot: 23,
+        layout: 0x039F55C0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
+        layout_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40],
+        set_bounds_rect: 0x06008490, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
+        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        caption_container_offset: 0x3C8,
+        view_bounds_offset: 0x1C8,
+        browser_view_view_vtable: 0x1112C600, // ??_7BraveBrowserView@@6BLayerDelegate@ui@@@
+        frame_vtable: 0x1112F460, // ??_7BraveBrowserFrameViewWin@@6BLayerDelegate@ui@@@
+        layout_immediately: 0x003E5B50, // ?LayoutImmediately@View@views@@AEAAXXZ
+        layout_immediately_prologue: &[0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE],
+        set_layer: 0x0087C150, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
+        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
+        set_radius: 0x01B50760, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
+        set_masks: 0x02EF7E10, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
+        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
+        stack_at_top: 0x0BF3E520, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
+        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
+        set_opaque: 0x02322E10, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
+        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
+        frame_browser_window_offset: 0x340,
+        browser_window_in_view: 0x1F0,
+        caption_ink_ids: &[0x67D, 0x67E, 0x67F],
+    },
+};
+
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 4] = [&CHROME, &EDGE, &CHROME_150, &WHALE];
+static TABLE: [&Build; 5] = [&CHROME, &EDGE, &CHROME_150, &WHALE, &BRAVE];
 
 static CURRENT: OnceLock<Option<&'static Build>> = OnceLock::new();
 
@@ -2406,6 +2476,55 @@ mod tests {
         assert_eq!(WHALE.layout.caption_paint, ABSENT);
         assert_eq!(WHALE.layout.layout, ABSENT);
         assert_eq!((WHALE.layout.frame_browser_window_offset, WHALE.layout.browser_window_in_view), (0x338, 0x210));
+    }
+
+    #[test]
+    fn nfr3_brave_156_frame_hooks_match_the_installed_build() {
+        assert_eq!(BRAVE.version, [156, 1, 98, 62]);
+        assert_eq!(BRAVE.toolbar.skip, "toolbar");
+        assert!(!BRAVE.vertical.supported && !BRAVE.tabs.supported && !BRAVE.navigation.supported);
+        assert!(!BRAVE.split.supported && !BRAVE.side_panel.supported && !BRAVE.vertical.detour_strip);
+        // Brave's frame is its own subclass, so the vtable is not Chrome's.
+        assert_ne!(BRAVE.layout.frame_vtable, CHROME.layout.frame_vtable);
+        let path = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\156.1.98.62\chrome.dll";
+        let Ok(file) = std::fs::read(path) else {
+            return;
+        };
+        let layout = &BRAVE.layout;
+        for (name, rva, prologue) in [
+            ("frame paint", layout.on_paint, layout.on_paint_prologue),
+            ("colour provider", layout.get_color_provider, layout.get_color_provider_prologue),
+            ("draw colour", layout.draw_color, layout.draw_color_prologue),
+            ("corner paint", layout.corner_paint, layout.corner_paint_prologue),
+            ("caption paint", layout.caption_paint, layout.caption_paint_prologue),
+            ("frame layout", layout.layout, layout.layout_prologue),
+            ("set bounds", layout.set_bounds_rect, layout.set_bounds_rect_prologue),
+            ("layout immediately", layout.layout_immediately, layout.layout_immediately_prologue),
+            ("paint to layer", layout.set_layer, layout.set_layer_prologue),
+            ("rounded corners", layout.set_radius, layout.set_radius_prologue),
+            ("masks to bounds", layout.set_masks, layout.set_masks_prologue),
+            ("stack at top", layout.stack_at_top, layout.stack_at_top_prologue),
+            ("fills opaquely", layout.set_opaque, layout.set_opaque_prologue),
+        ] {
+            assert_eq!(
+                file_bytes(&file, rva, prologue.len()).as_deref(),
+                Some(prologue),
+                "{name} prologue does not match Brave's chrome.dll"
+            );
+        }
+        // Each replaced slot holds the function the row names, at the vtable the objects carry.
+        for (name, vtable, slot, function) in [
+            ("frame paint", layout.frame_vtable, layout.on_paint_slot, layout.on_paint),
+            ("top inset", layout.frame_vtable, layout.top_inset_slot, layout.top_inset),
+            ("frame layout", layout.frame_vtable, layout.layout_slot, layout.layout),
+            ("corner paint", layout.corner_vtable, layout.on_paint_slot, layout.corner_paint),
+            ("caption size", layout.caption_vtable, layout.caption_size_slot, layout.caption_size),
+            ("caption paint", layout.caption_vtable, layout.caption_paint_slot, layout.caption_paint),
+        ] {
+            let word = file_bytes(&file, vtable + slot * 8, 8).expect("vtable inside the image");
+            let target = u64::from_le_bytes(word.try_into().unwrap()) as usize;
+            assert_eq!(target, 0x1_8000_0000 + function, "{name} slot");
+        }
     }
 
     #[test]

@@ -1,5 +1,15 @@
 [
   {
+    "browser": "Brave",
+    "version": "156.1.98.62",
+    "module": "chrome.dll",
+    "frame_view_vtable": 286454880,
+    "client_view_slot": 103,
+    "client_view_bounds": 60771104,
+    "hwnd_for_view": 62882208,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
     "browser": "Google Chrome",
     "version": "150.0.7871.187",
     "module": "chrome.dll",
