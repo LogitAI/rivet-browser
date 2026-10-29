@@ -605,6 +605,16 @@ unsafe fn switch_space(window: HWND, index: usize) {
     let Some(start) = start_url(&name) else {
         return;
     };
+    let target = with_spaces(window, |spaces| spaces.list()[index].clone());
+    let root = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    if let Some(hand_over) = root
+        .as_deref()
+        .and_then(|root| crate::spaces::hand_over(&target, crate::browsers::current(), root))
+    {
+        let saved: Vec<SavedTab> = open.into_iter().map(|tab| tab.saved).collect();
+        hand_over_to(window, index, saved, hand_over, start);
+        return;
+    }
     let old: Vec<usize> = open.iter().map(|tab| tab.id).collect();
     let saved: Vec<SavedTab> = open.into_iter().map(|tab| tab.saved).collect();
     let Some(restore) = with_spaces(window, |spaces| spaces.switch_to(index, saved, &start)) else {
@@ -621,6 +631,42 @@ unsafe fn switch_space(window: HWND, index: usize) {
         }
     });
     show_tabs(window, old, &restore);
+}
+
+/// Switches to a space that lives in another browser. This window keeps the space it shows, so a
+/// failed start loses nothing. The other browser's profile gets the spaces with `index` current,
+/// and the launcher starts it with the Rivet runtime. The window closes once that browser is up.
+unsafe fn hand_over_to(
+    window: HWND,
+    index: usize,
+    saved: Vec<SavedTab>,
+    hand_over: crate::spaces::HandOver,
+    start: String,
+) {
+    let Some(directory) = runtime_directory() else {
+        return;
+    };
+    save_spaces(window, saved.clone());
+    let layout = layout_of(window);
+    let dir = hand_over.user_data_dir.to_string_lossy().into_owned();
+    let (mut next, root) = (
+        with_spaces(window, |spaces| spaces.clone()),
+        std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from),
+    );
+    let Some(root) = root else {
+        return;
+    };
+    let Some(restore) = next.switch_to(index, saved, &start) else {
+        return;
+    };
+    let text = next.to_json(&restore, layout.side, layout.collapsed, &dir);
+    let path = crate::spaces::store_path(&root, Some(&dir));
+    if let Err(error) = crate::spaces::write_atomic(&path, &text) {
+        log(&format!("rivet: could not save the spaces for the other browser: {error}"));
+        return;
+    }
+    crate::vertical_tabs::trace(&format!("space: handing over to {}", hand_over.browser.label()));
+    crate::browsers::start_and_close(window, hand_over, start, directory);
 }
 
 /// Opens `restore` as the window's tabs and closes the tabs `old`, which are the ones shown now,
@@ -1865,7 +1911,7 @@ fn reserved_width(window: HWND, bounds: chrome_layout::Rect) -> Option<i32> {
     }
 }
 
-fn log(message: &str) {
+pub(crate) fn log(message: &str) {
     let text = wide(message);
     unsafe { OutputDebugStringW(text.as_ptr()) };
 }

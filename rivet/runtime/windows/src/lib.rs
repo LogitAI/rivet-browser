@@ -202,6 +202,8 @@ mod address_display;
 #[cfg(windows)]
 mod appbar;
 #[cfg(windows)]
+mod browsers;
+#[cfg(windows)]
 mod chrome_layout;
 #[cfg(windows)]
 mod chrome_navigation;
