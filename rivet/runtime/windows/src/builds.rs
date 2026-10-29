@@ -605,7 +605,337 @@ pub struct Layout {
     pub frame_browser_window_offset: usize,
     pub browser_window_in_view: usize,
     pub caption_paint_prologue: &'static [u8],
+    /// Colour ids `WindowsCaptionButton::PaintButtonContents` reads for its glyphs: active, inactive
+    /// and on the toolbar. Ids shift between milestones.
+    pub caption_ink_ids: &'static [i32],
 }
+
+const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
+    layout_constant: ABSENT,
+    layout_constant_prologue: &[0],
+    theme_changed: ABSENT,
+    theme_changed_prologue: &[0],
+    paint_layer: ABSENT,
+    paint_layer_prologue: &[0],
+    set_visible: ABSENT,
+    set_visible_prologue: &[0],
+    from_vector_icon: ABSENT,
+    from_vector_icon_prologue: &[0],
+    update_location: ABSENT,
+    update_location_prologue: &[0],
+    update_location_icon: ABSENT,
+    update_location_icon_prologue: &[0],
+    layout_insets: ABSENT,
+    layout_insets_prologue: &[0],
+    toolbar_button_inset: 0,
+    toolbar_inset: 0,
+    location_icon_inset: 0,
+    update_icon: ABSENT,
+    update_icon_prologue: &[0],
+    formatted_url: ABSENT,
+    formatted_url_prologue: &[0],
+    model_url: ABSENT,
+    model_url_prologue: &[0],
+    omnibox_update: ABSENT,
+    omnibox_update_prologue: &[0],
+    omnibox_revert_all: ABSENT,
+    omnibox_revert_all_prologue: &[0],
+    omnibox_tab_changed: ABSENT,
+    omnibox_tab_changed_prologue: &[0],
+    omnibox_textfield: 0,
+    update_text_style: ABSENT,
+    update_text_style_prologue: &[0],
+    apply_color: ABSENT,
+    apply_color_bytes: &[0],
+    apply_weight: ABSENT,
+    apply_weight_bytes: &[0],
+    title_was_set: ABSENT,
+    title_was_set_prologue: &[0],
+    observer_offset: 0,
+    operator_new: ABSENT,
+    operator_new_bytes: &[0],
+    operator_delete: ABSENT,
+    operator_delete_bytes: &[0],
+    model_delegate: 0,
+    browser_delegate_vtable: ABSENT,
+    active_web_contents: ABSENT,
+    active_web_contents_slot: 0,
+    web_contents_vtable: ABSENT,
+    web_contents_title: ABSENT,
+    web_contents_title_slot: 0,
+    location_bar_view_base: 0,
+    hover_value: 0,
+    field_background: 0,
+    background_vtable: ABSENT,
+    painter_vtable: ABSENT,
+    painter_radii: 0,
+    painter_insets: 0,
+    field_state: 0,
+    field_state_focused: 0,
+    focused_fill_id: 0,
+    focus_ring_remove: ABSENT,
+    set_transform: ABSENT,
+    set_transform_prologue: &[0],
+    set_brightness: ABSENT,
+    set_brightness_prologue: &[0],
+    view_layer: 0,
+    view_size: 0,
+    refresh_background: ABSENT,
+    refresh_background_prologue: &[0],
+    chip_text: ABSENT,
+    chip_text_prologue: &[0],
+    textfield_theme: ABSENT,
+    textfield_theme_prologue: &[0],
+    textfield_set_font: ABSENT,
+    textfield_set_font_bytes: &[0],
+    font_size: ABSENT,
+    font_size_bytes: &[0],
+    derive_size: ABSENT,
+    derive_size_bytes: &[0],
+    textfield_render_text: 0,
+    render_text_font_list: 0,
+    gurl_destructor: ABSENT,
+    gurl_destructor_bytes: &[0],
+    gurl_scheme_begin: 0,
+    gurl_scheme_length: 0,
+    anchor_rect: ABSENT,
+    anchor_rect_prologue: &[0],
+    anchor_view_access: &[0],
+    is_drawn: ABSENT,
+    is_drawn_bytes: &[0],
+    bounds_in_screen: ABSENT,
+    bounds_bytes: &[0],
+    parent_offset: 0,
+    is_drawn_slot: 0,
+    browser_widget_vtable: ABSENT,
+    plain_widget_vtable: ABSENT,
+    paint_slot: 0,
+    paint: ABSENT,
+    layout_slot: 0,
+    layout: ABSENT,
+    color_provider: ABSENT,
+    root_view_offset: 0,
+    theme_slot: 0,
+    hidden: &[],
+    get_widget_slot: 0,
+    overrides: &[],
+    colours: &[],
+    hwnd_for_widget: ABSENT,
+    hwnd_for_widget_head: &[0],
+    hwnd_for_widget_tail: &[0],
+    source_in_widget: 0,
+    content_window_for_hwnd: ABSENT,
+    widget_for_window: ABSENT,
+    back_icon: ABSENT,
+    forward_icon: ABSENT,
+    reload_icon: ABSENT,
+    page_info_icon: ABSENT,
+    google_g_icon: ABSENT,
+    google_g_monochrome_icon: ABSENT,
+    edit_icons: &[],
+    http_icon: ABSENT,
+    http_icon_name: &[0],
+    page_info_bytes: &[0],
+    page_info_reps: ABSENT,
+    page_info_id: ABSENT,
+    page_info_path: ABSENT,
+    anchor_view_access_at: 0,
+    skip: "",
+    anchor_tracker_offset: 0,
+    size_slots: (0, 0),
+    paint_children_slot: 0,
+    get_color: ABSENT,
+    get_color_bytes: &[0],
+};
+
+const UNCHECKED_VERTICALTABS: VerticalTabs = VerticalTabs {
+    supported: false,
+    slot: 0,
+    should_display: ABSENT,
+    browser_view_for_browser: ABSENT,
+    hwnd_for_view: ABSENT,
+    notify_mode_changed: ABSENT,
+    update_collapse_action: ABSENT,
+    destructor: ABSENT,
+    destructor_prologue: &[0],
+    browser_offset: 0,
+    mode_offset: 0,
+    width_offset: 0,
+    browser_view_view_vtable: ABSENT,
+    region_preferred_size: ABSENT,
+    region_preferred_size_slot: 0,
+    invalidate_layout: ABSENT,
+    invalidate_layout_prologue: &[0],
+    region_minimum_size: ABSENT,
+    region_minimum_prologue: &[0],
+    should_draw_tab_strip: ABSENT,
+    should_draw_tab_strip_prologue: &[0],
+};
+
+const UNCHECKED_NAVIGATION: Navigation = Navigation {
+    supported: false,
+    content_window_for_hwnd: ABSENT,
+    browser_view_for_window: ABSENT,
+    active_web_contents: ABSENT,
+    gurl_from_text: ABSENT,
+    gurl_empty: ABSENT,
+    gurl_drop: ABSENT,
+    open_url_params: ABSENT,
+    open_url_params_drop: ABSENT,
+    open_url: ABSENT,
+    signatures: &[],
+};
+
+const UNCHECKED_TABS: Tabs = Tabs {
+    supported: false,
+    content_window_for_hwnd: ABSENT,
+    browser_view_for_window: ABSENT,
+    active_web_contents: ABSENT,
+    get_tab_model: ABSENT,
+    tab_count: ABSENT,
+    tab_at: ABSENT,
+    activate_tab: ABSENT,
+    close_tab: ABSENT,
+    title: ABSENT,
+    new_tab: ABSENT,
+    last_committed_url: ABSENT,
+    visible_url: ABSENT,
+    get_group: ABSENT,
+    has_group: ABSENT,
+    lookup_group: ABSENT,
+    change_group: ABSENT,
+    allocate: ABSENT,
+    add_to_new_group: ABSENT,
+    allocate_prologue: &[0],
+    add_to_new_group_prologue: &[0],
+    signatures: &[],
+    browser_in_view: 0,
+    groups: false,
+};
+
+const UNCHECKED_SPLIT: Split = Split {
+    supported: false,
+    add_to_new_split: ABSENT,
+    remove_split: ABSENT,
+    get_split_for_tab: ABSENT,
+    allocate: ABSENT,
+    set_rounded_corners: ABSENT,
+    set_rounded_corners_prologue: &[0],
+    set_rounded_corners_changed: ABSENT,
+    set_rounded_corners_parity: ABSENT,
+    update_border: ABSENT,
+    update_border_prologue: &[0],
+    set_border_slot: 0,
+    set_visible_slot: 0,
+    outline_member: 0,
+    calculate_layout: ABSENT,
+    calculate_layout_prologue: &[0],
+    layout_delegate_offset: 0,
+    split_insets_member: 0,
+    containers_member: 0,
+    container_count_member: 0,
+    active_member: 0,
+    schedule_paint: ABSENT,
+    web_contents_focused: ABSENT,
+    web_contents_focused_prologue: &[0],
+    container_layout: ABSENT,
+    container_delegate_offset: 0,
+    mini_toolbar_member: 0,
+    flex_layout: ABSENT,
+    flex_layout_host: 0,
+    location_bar_vtable: ABSENT,
+    view_size: 0,
+    signatures: &[],
+};
+
+const UNCHECKED_SIDEPANEL: SidePanel = SidePanel {
+    supported: false,
+    side_panel_vtable: ABSENT,
+    browser_offset: 0,
+    features_offset: 0,
+    features_coordinator: 0,
+    browser_view_view_vtable: ABSENT,
+    coordinator_vtable: ABSENT,
+    show: ABSENT,
+    show_prologue: &[0],
+    entry_id_to_string: ABSENT,
+    entry_id_to_string_prologue: &[0],
+    extension_entry: 0,
+    entry_count: 0,
+    toggle: ABSENT,
+    toggle_prologue: &[0],
+    entry_showing: ABSENT,
+    entry_showing_prologue: &[0],
+    registry_from: ABSENT,
+    registry_from_prologue: &[0],
+    get_color_provider: ABSENT,
+    get_color_provider_prologue: &[0],
+    source_in_widget: 0,
+    color_source: 0,
+    generate_colors_css: ABSENT,
+    generate_colors_css_prologue: &[0],
+    layout_vtable: ABSENT,
+    proposed_slot: 0,
+    proposed: ABSENT,
+    host_view: 0,
+    page_area: 0,
+    contents_container: 0,
+    vertical_tabs: 0,
+    toolbar: 0,
+    contents_outline: 0,
+    side_panel: 0,
+    side_panel_animation: 0,
+    layout_immediately: ABSENT,
+    layout_immediately_prologue: &[0],
+    event_handler_for_point: ABSENT,
+};
+
+/// A layout section that records no address, so every frame hook stays off.
+const UNCHECKED_LAYOUT: Layout = Layout {
+    on_paint_slot: 0,
+    on_paint: ABSENT,
+    get_color_provider: ABSENT,
+    draw_color: ABSENT,
+    frame_ids: &[],
+    corner_vtable: ABSENT,
+    corner_paint: ABSENT,
+    caption_vtable: ABSENT,
+    caption_size_slot: 0,
+    caption_size: ABSENT,
+    caption_paint_slot: 0,
+    caption_paint: ABSENT,
+    top_inset_slot: 0,
+    top_inset: ABSENT,
+    layout_slot: 0,
+    layout: ABSENT,
+    set_bounds_rect: ABSENT,
+    caption_container_offset: 0,
+    view_bounds_offset: 0,
+    browser_view_view_vtable: ABSENT,
+    frame_vtable: ABSENT,
+    layout_immediately: ABSENT,
+    layout_immediately_prologue: &[0],
+    set_layer: ABSENT,
+    set_layer_prologue: &[0],
+    set_radius: ABSENT,
+    set_radius_prologue: &[0],
+    set_masks: ABSENT,
+    set_masks_prologue: &[0],
+    stack_at_top: ABSENT,
+    stack_at_top_prologue: &[0],
+    set_opaque: ABSENT,
+    set_opaque_prologue: &[0],
+    on_paint_prologue: &[0],
+    draw_color_prologue: &[0],
+    get_color_provider_prologue: &[0],
+    corner_paint_prologue: &[0],
+    layout_prologue: &[0],
+    set_bounds_rect_prologue: &[0],
+    frame_browser_window_offset: 0,
+    browser_window_in_view: 0,
+    caption_paint_prologue: &[0],
+    caption_ink_ids: &[],
+};
 
 pub static CHROME: Build = Build {
     browser: "Google Chrome",
@@ -1131,7 +1461,7 @@ pub static CHROME: Build = Build {
         stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
         set_opaque: 0x020A_FEF0, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
         set_opaque_prologue: &[0x56, 0x48, 0x83, 0xec, 0x20],
-        on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        on_paint_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89],
         draw_color_prologue: &[0x48, 0x83, 0xec, 0x38, 0x48, 0x8b],
         get_color_provider_prologue: &[0x56, 0x57, 0x48, 0x83, 0xec, 0x78],
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
@@ -1139,7 +1469,8 @@ pub static CHROME: Build = Build {
         set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         frame_browser_window_offset: 0x340,
         browser_window_in_view: 0x1f0,
-        caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        caption_paint_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89],
+        caption_ink_ids: &[0x66C, 0x66D, 0x66E],
     },
     edge_vertical: None,
 };
@@ -1572,6 +1903,7 @@ pub static EDGE: Build = Build {
         frame_browser_window_offset: 0x3B0, // frame view member that holds the BrowserWindow subobject, read by GetBrowserView
         browser_window_in_view: 0x1F8, // BrowserWindow subobject distance from the BrowserView, read by GetBrowserView
         caption_paint_prologue: &[0xE9, 0x01, 0x00, 0x00, 0x00, 0xCC, 0x41, 0x57],
+        caption_ink_ids: &[0x66C, 0x66D, 0x66E], // Chrome value, not checked on Edge
     },
     edge_vertical: Some(EdgeVertical {
         content_window_for_hwnd: 0x026A4DC6,
@@ -1600,8 +1932,106 @@ pub static EDGE: Build = Build {
     }),
 };
 
+/// Google Chrome 150.0.7871.187. Only the frame, caption and panel hooks are checked against this
+/// build's symbols; every other feature stays off until its addresses are verified.
+pub static CHROME_150: Build = Build {
+    browser: "Google Chrome",
+    module: "chrome.dll",
+    version: [150, 0, 7871, 187],
+    toolbar: Toolbar {
+        skip: "toolbar",
+        ..UNCHECKED_TOOLBAR
+    },
+    vertical: UNCHECKED_VERTICALTABS,
+    navigation: UNCHECKED_NAVIGATION,
+    tabs: UNCHECKED_TABS,
+    split: UNCHECKED_SPLIT,
+    edge_vertical: None,
+    side_panel: UNCHECKED_SIDEPANEL,
+    layout: Layout {
+        on_paint_slot: 89,
+        on_paint: 0x13a4880,
+        get_color_provider: 0x421ccb0,
+        draw_color: 0x3192520,
+        frame_ids: &[0x13C, 0x13D, 0x140, 321, 0x144],
+        corner_vtable: 0xef34798,
+        corner_paint: 0xe451e40,
+        caption_vtable: 0xef54f58,
+        caption_size_slot: 74,
+        caption_size: 0x322fdb0,
+        caption_paint_slot: 114,
+        caption_paint: 0x1d823e0,
+        top_inset_slot: 127,
+        top_inset: 0xe5435a0,
+        layout_slot: 23,
+        layout: 0x17e4cd0,
+        set_bounds_rect: 0x44cff90,
+        caption_container_offset: 0x3c0,
+        view_bounds_offset: 0x1c0,
+        browser_view_view_vtable: 0xeeaecd8,
+        frame_vtable: 0xef32f18,
+        layout_immediately: 0x44d1380,
+        layout_immediately_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        set_layer: 0xd28650,
+        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
+        set_radius: 0x2c89450,
+        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
+        set_masks: 0x2c893c0,
+        set_masks_prologue: &[0x48, 0x8B, 0x89, 0xC8, 0x01, 0x00, 0x00],
+        stack_at_top: 0x9baf850,
+        stack_at_top_prologue: &[0x4C, 0x8B, 0x41, 0x30, 0x48, 0x8B],
+        set_opaque: 0x126da80,
+        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
+        on_paint_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89],
+        draw_color_prologue: &[0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B],
+        get_color_provider_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x68],
+        corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
+        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        frame_browser_window_offset: 0x338,
+        browser_window_in_view: 0x1f0,
+        caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
+        caption_ink_ids: &[1593, 1594, 1595],
+    },
+};
+
+/// Naver Whale 5.39.412.57 (Chromium 150.0.7871.252). Whale builds its frame view as a subclass whose
+/// virtual functions override Chromium's, so the table names the overrides that sit in its vtable.
+/// Only the client-view bounds, frame paint and top inset are mapped; everything else stays off.
+pub static WHALE: Build = Build {
+    browser: "Naver Whale",
+    module: "whale.dll",
+    version: [5, 39, 412, 57],
+    toolbar: Toolbar {
+        skip: "toolbar",
+        ..UNCHECKED_TOOLBAR
+    },
+    vertical: UNCHECKED_VERTICALTABS,
+    navigation: UNCHECKED_NAVIGATION,
+    tabs: UNCHECKED_TABS,
+    split: UNCHECKED_SPLIT,
+    edge_vertical: None,
+    side_panel: UNCHECKED_SIDEPANEL,
+    layout: Layout {
+        on_paint_slot: 89,
+        on_paint: 0xe2f3b70,
+        on_paint_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89],
+        get_color_provider: 0x8f819d0,
+        get_color_provider_prologue: &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B],
+        draw_color: 0x9bc45b0,
+        draw_color_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38],
+        frame_ids: &[0x13C, 0x13D, 0x140, 321, 0x144],
+        top_inset_slot: 127,
+        top_inset: 0xe2f32b0,
+        frame_vtable: 0xfb16120,
+        frame_browser_window_offset: 0x338,
+        browser_window_in_view: 0x210,
+        ..UNCHECKED_LAYOUT
+    },
+};
+
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 2] = [&CHROME, &EDGE];
+static TABLE: [&Build; 4] = [&CHROME, &EDGE, &CHROME_150, &WHALE];
 
 static CURRENT: OnceLock<Option<&'static Build>> = OnceLock::new();
 
@@ -1654,6 +2084,31 @@ mod tests {
     }
 
     #[test]
+    fn nfr3_chrome_150_checks_only_the_frame_hooks() {
+        assert_eq!(CHROME_150.version, [150, 0, 7871, 187]);
+        assert_eq!(CHROME_150.toolbar.skip, "toolbar");
+        assert!(!CHROME_150.vertical.supported && !CHROME_150.tabs.supported);
+        assert_ne!(CHROME_150.layout.frame_vtable, CHROME.layout.frame_vtable);
+        // Colour ids and View member offsets moved between milestones 150 and 156.
+        assert_eq!(CHROME_150.layout.caption_ink_ids, &[1593, 1594, 1595]);
+        assert_eq!(CHROME_150.layout.view_bounds_offset, 0x1C0);
+    }
+
+    #[test]
+    fn nfr3_whale_maps_only_the_frame_hooks() {
+        assert_eq!(WHALE.module, "whale.dll");
+        assert_eq!(WHALE.version, [5, 39, 412, 57]);
+        assert!(!WHALE.vertical.supported && !WHALE.tabs.supported && !WHALE.split.supported);
+        assert!(!WHALE.navigation.supported && !WHALE.side_panel.supported);
+        assert_eq!(WHALE.toolbar.skip, "toolbar");
+        // Hooks without a verified address are absent, so their checks fail.
+        assert_eq!(WHALE.layout.corner_paint, ABSENT);
+        assert_eq!(WHALE.layout.caption_paint, ABSENT);
+        assert_eq!(WHALE.layout.layout, ABSENT);
+        assert_eq!((WHALE.layout.frame_browser_window_offset, WHALE.layout.browser_window_in_view), (0x338, 0x210));
+    }
+
+    #[test]
     fn nfr3_recorded_addresses_lie_inside_a_plausible_image() {
         for build in all() {
             for rva in [
@@ -1666,6 +2121,10 @@ mod tests {
                 build.vertical.slot,
                 build.navigation.open_url,
             ] {
+                // A feature the row leaves unchecked records no address.
+                if rva == ABSENT || rva == 0 {
+                    continue;
+                }
                 assert!((0x1000..0x2000_0000).contains(&rva), "{rva:#x} in {}", build.module);
             }
         }

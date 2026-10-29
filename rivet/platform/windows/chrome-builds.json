@@ -1,6 +1,16 @@
 [
   {
     "browser": "Google Chrome",
+    "version": "150.0.7871.187",
+    "module": "chrome.dll",
+    "frame_view_vtable": 250818328,
+    "client_view_slot": 103,
+    "client_view_bounds": 52624288,
+    "hwnd_for_view": 51826864,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Google Chrome",
     "version": "156.0.8078.48",
     "module": "chrome.dll",
     "frame_view_vtable": 266812968,
@@ -17,6 +27,16 @@
     "client_view_slot": 115,
     "client_view_bounds": 54691616,
     "hwnd_for_view": 17271385,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Naver Whale",
+    "version": "5.39.412.57",
+    "module": "whale.dll",
+    "frame_view_vtable": 263282976,
+    "client_view_slot": 103,
+    "client_view_bounds": 237974640,
+    "hwnd_for_view": 150289552,
     "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
   }
 ]

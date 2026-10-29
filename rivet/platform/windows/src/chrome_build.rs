@@ -236,6 +236,8 @@ mod tests {
     fn nfr3_checked_in_build_table_is_valid() {
         let table: Vec<ChromeBuild> = serde_json::from_str(TABLE).unwrap();
         assert!(table.iter().any(|build| build.version == "156.0.8078.48"));
+        assert!(table.iter().any(|build| build.version == "150.0.7871.187"));
+        assert!(table.iter().any(|build| build.module == "whale.dll" && build.version == "5.39.412.57"));
         assert!(table
             .iter()
             .any(|build| build.module == "msedge.dll" && build.version == "156.0.4314.50"));

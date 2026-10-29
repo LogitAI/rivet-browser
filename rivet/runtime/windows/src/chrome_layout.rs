@@ -467,7 +467,11 @@ pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
         paint,
     ));
     replace_vtable_slot(&image, slot_rva, bv().on_paint, on_paint as *const () as usize, "frame view vtable")?;
-    install_corner_paint(&image)
+    // The corner wedges are cosmetic. A build whose wedge paint is unmapped keeps the browser's.
+    if let Err(error) = install_corner_paint(&image) {
+        log(&format!("rivet: {error}"));
+    }
+    Ok(())
 }
 
 /// Decides the title bar colour of a window as `0xAARRGGBB`, or `None` to keep the browser's.
@@ -694,8 +698,8 @@ unsafe extern "system" fn caption_paint(button: *const c_void, canvas: *const c_
     if provider.is_null() {
         return original(button, canvas);
     }
-    let saved: Vec<_> = [0x66c, 0x66d, 0x66e]
-        .into_iter()
+    let saved: Vec<_> = bv().caption_ink_ids
+        .iter().copied()
         .filter_map(|id| colour_slot(provider, id))
         .map(|slot| (slot, slot.read()))
         .collect();
