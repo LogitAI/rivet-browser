@@ -43,7 +43,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::appbar::Appbar;
-use crate::chrome_side_panel::{self as panel, PageGeometry, RAIL_WIDTH};
+use crate::chrome_side_panel::{self as panel, PageGeometry, PANEL_WIDTH, RAIL_WIDTH};
 
 const PAPER: u32 = 0xfbfaf7;
 /// The tint of a window before it has a space, and the accent that does not follow the space.
@@ -117,6 +117,14 @@ const POLL_TIMER: usize = 0x5249_5253;
 const TIP_HEIGHT: f32 = 26.0;
 const TIP_PAD_X: f32 = 10.0;
 const TIP_GAP: f32 = 6.0;
+/// The open panel's header is 40 DIPs tall, pads its left by 14 and its right by 6, and puts the
+/// icon and the name 8 apart. Its close button is 28 DIPs square.
+const HEADER_HEIGHT: f32 = 40.0;
+const HEADER_PAD_LEFT: f32 = 14.0;
+const HEADER_PAD_RIGHT: f32 = 6.0;
+const HEADER_GAP: f32 = 8.0;
+const CLOSE_BUTTON: f32 = 28.0;
+const CLOSE_GLYPH: char = '\u{E8BB}';
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RailHit {
@@ -242,12 +250,28 @@ struct TipKey {
     dpi: u32,
 }
 
+/// What the open panel's header was painted for.
+#[derive(Debug, Clone, PartialEq)]
+struct PanelKey {
+    width: i32,
+    height: i32,
+    dpi: u32,
+    look: EntryLook,
+    close_hover: bool,
+}
+
 struct Rail {
     device: IDCompositionDesktopDevice,
     dwrite: IDWriteFactory5,
     column: IDCompositionVisual2,
     open: IDCompositionVisual2,
     tip: IDCompositionVisual2,
+    /// The open extension's panel: its left hairline and its header, over the browser's own.
+    panel: IDCompositionVisual2,
+    panel_key: Option<PanelKey>,
+    /// The index in `looks` of the entry the side panel shows, if any.
+    shown: Option<usize>,
+    close_hover: bool,
     column_key: Option<ColumnKey>,
     open_key: Option<OpenKey>,
     tip_key: Option<TipKey>,
@@ -280,6 +304,8 @@ impl Rail {
         let (device, root, dwrite) = appbar.composition();
         let column = device.CreateVisual()?;
         root.AddVisual(&column, true, None::<&IDCompositionVisual>)?;
+        let panel = device.CreateVisual()?;
+        root.AddVisual(&panel, true, None::<&IDCompositionVisual>)?;
         let open = device.CreateVisual()?;
         root.AddVisual(&open, true, None::<&IDCompositionVisual>)?;
         let tip = device.CreateVisual()?;
@@ -290,6 +316,10 @@ impl Rail {
             column,
             open,
             tip,
+            panel,
+            panel_key: None,
+            shown: None,
+            close_hover: false,
             column_key: None,
             open_key: None,
             tip_key: None,
@@ -486,6 +516,44 @@ impl Rail {
         button(height - RAIL_PAD - BUTTON, RailHit::Fold, &Look::Glyph(FOLD_GLYPH), false)
     }
 
+    /// The header of an open extension panel, drawn like the mock-up's `.ext-panel header`: the
+    /// accent icon, the name in 13 DIP semibold and a close button, over a hairline-bordered column.
+    unsafe fn draw_panel(&self, context: &ID2D1DeviceContext, width: f32, height: f32, key: &PanelKey) -> Result<()> {
+        let hairline = context.CreateSolidColorBrush(&rgb(INK, 0.08), None)?;
+        context.FillRectangle(&rect(0.0, 0.0, 1.0, height), &hairline);
+        context.FillRectangle(&rect(1.0, 0.0, width - 1.0, HEADER_HEIGHT), &context.CreateSolidColorBrush(&rgb(PAPER, 1.0), None)?);
+        context.FillRectangle(&rect(1.0, HEADER_HEIGHT - 1.0, width - 1.0, 1.0), &hairline);
+        let icon = rect(1.0 + HEADER_PAD_LEFT, 0.0, 16.0, HEADER_HEIGHT - 1.0);
+        match &key.look.look {
+            Look::Glyph(glyph) => self.icon(context, *glyph, icon, 15.0, rgb(ACCENT, 1.0))?,
+            Look::Picture(path) => self.picture(context, path, icon, ACCENT)?,
+            Look::Letter(letter) => self.letter(context, *letter, icon, ACCENT)?,
+        }
+        let close = rect(width - HEADER_PAD_RIGHT - CLOSE_BUTTON, (HEADER_HEIGHT - 1.0 - CLOSE_BUTTON) / 2.0, CLOSE_BUTTON, CLOSE_BUTTON);
+        if key.close_hover {
+            self.rounded(context, close, 8.0, rgb(INK, 0.06))?;
+        }
+        self.icon(context, CLOSE_GLYPH, close, 10.0, rgb(if key.close_hover { INK } else { SOFT_INK }, 1.0))?;
+        let name_left = 1.0 + HEADER_PAD_LEFT + 16.0 + HEADER_GAP;
+        let locale = HSTRING::from("en-us");
+        let format = self.dwrite.CreateTextFormat(
+            &HSTRING::from("Segoe UI Variable Text"),
+            None,
+            DWRITE_FONT_WEIGHT(600),
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            13.0,
+            PCWSTR(locale.as_ptr()),
+        )?;
+        format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        let text: Vec<u16> = key.look.name.encode_utf16().collect();
+        let layout = self.dwrite.CreateTextLayout(&text, &format, close.left - HEADER_GAP - name_left, HEADER_HEIGHT - 1.0)?;
+        let brush = context.CreateSolidColorBrush(&rgb(INK, 1.0), None)?;
+        context.DrawTextLayout(Vector2 { X: name_left, Y: 0.0 }, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        Ok(())
+    }
+
     unsafe fn draw_open(&self, context: &ID2D1DeviceContext, opacity: f32, over: bool) -> Result<()> {
         let area = rect(0.0, 0.0, BUTTON, BUTTON);
         let ground = if over { rgb(INK, 0.06 * opacity) } else { rgb(0xffffff, 0.4 * opacity) };
@@ -542,6 +610,9 @@ unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>,
     let (Some(geometry), true) = (geometry, unfolded) else {
         rail.column.SetContent(None)?;
         rail.column_key = None;
+        rail.panel.SetContent(None)?;
+        rail.panel_key = None;
+        rail.shown = None;
         rail.tip.SetContent(None)?;
         rail.tip_key = None;
         return refresh_open(rail, geometry.filter(|_| !unfolded), dpi);
@@ -571,6 +642,7 @@ unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>,
         tint: FORCED_TINT.with(|forced| forced.get()).unwrap_or_else(|| crate::frame::space_tint(window)),
         showing: showing_mask(window, &rail.entries),
     };
+    rail.shown = (0..rail.entries.len().min(32)).find(|index| key.showing & (1 << index) != 0);
     if rail.column_key.as_ref() != Some(&key) && width_px > 0 && height_px > 0 {
         let shown = key.clone();
         rail.paint(&rail.column, width_px, height_px, dpi, |context| {
@@ -579,8 +651,56 @@ unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>,
         rail.column_key = Some(key);
     }
     refresh_open(rail, None, dpi)?;
+    refresh_panel(rail, geometry, height, dpi)?;
     refresh_tip(rail, geometry, height, dpi)?;
     rail.device.Commit()
+}
+
+/// The open panel's left edge in window DIPs, which is where its header starts.
+fn panel_left(geometry: PageGeometry) -> f32 {
+    (geometry.right - RAIL_WIDTH - PANEL_WIDTH) as f32
+}
+
+/// The close button's rectangle in window DIPs as (left, top).
+fn close_button(geometry: PageGeometry) -> (f32, f32) {
+    (
+        geometry.right as f32 - RAIL_WIDTH as f32 - HEADER_PAD_RIGHT - CLOSE_BUTTON,
+        geometry.top as f32 + (HEADER_HEIGHT - 1.0 - CLOSE_BUTTON) / 2.0,
+    )
+}
+
+/// Whether a window point is on the header of an open panel, and whether on its close button.
+fn on_header(geometry: PageGeometry, x: f32, y: f32) -> (bool, bool) {
+    let left = panel_left(geometry);
+    let inside = x >= left
+        && x < left + PANEL_WIDTH as f32
+        && y >= geometry.top as f32
+        && y < geometry.top as f32 + HEADER_HEIGHT;
+    let (close_left, close_top) = close_button(geometry);
+    let on_close = (close_left..close_left + CLOSE_BUTTON).contains(&x) && (close_top..close_top + CLOSE_BUTTON).contains(&y);
+    (inside, inside && on_close)
+}
+
+/// Places and paints the header of the panel the browser shows, or removes it when none shows.
+unsafe fn refresh_panel(rail: &mut Rail, geometry: PageGeometry, height: f32, dpi: u32) -> Result<()> {
+    let Some(look) = rail.shown.and_then(|index| rail.looks.get(index)).cloned() else {
+        rail.panel.SetContent(None)?;
+        rail.panel_key = None;
+        return Ok(());
+    };
+    let scale = dpi as f32 / 96.0;
+    rail.panel.SetOffsetX2((panel_left(geometry) * scale).round())?;
+    rail.panel.SetOffsetY2((geometry.top as f32 * scale).round())?;
+    let (width_px, height_px) = ((PANEL_WIDTH as f32 * scale).round() as i32, (height * scale).round() as i32);
+    let key = PanelKey { width: width_px, height: height_px, dpi, look, close_hover: rail.close_hover };
+    if rail.panel_key.as_ref() != Some(&key) && width_px > 0 && height_px > 0 {
+        let shown = key.clone();
+        rail.paint(&rail.panel, width_px, height_px, dpi, |context| {
+            rail.draw_panel(context, PANEL_WIDTH as f32, height, &shown)
+        })?;
+        rail.panel_key = Some(key);
+    }
+    Ok(())
 }
 
 /// What a rail button is called.
@@ -673,11 +793,22 @@ fn to_dips(point: SysPoint, scale: f32) -> (f32, f32) {
 enum Target {
     Rail(RailHit),
     Open,
+    /// The close button of the open panel's header.
+    PanelClose,
+    /// The rest of that header, which the browser's own header lies under.
+    PanelHeader,
 }
 
 fn target_at(rail: &Rail, unfolded: bool, x: f32, y: f32) -> Option<Target> {
     let geometry = rail.geometry?;
     if unfolded {
+        if rail.shown.is_some() {
+            match on_header(geometry, x, y) {
+                (_, true) => return Some(Target::PanelClose),
+                (true, false) => return Some(Target::PanelHeader),
+                _ => {}
+            }
+        }
         let (left, top, height) = rail_rect(geometry);
         return rail_hit(x - left, y - top, height, rail.entries.len()).map(Target::Rail);
     }
@@ -703,7 +834,7 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
         let Some(rail) = rails.get_mut(&(window as isize)) else { return false };
         let unfolded = panel::is_unfolded(window);
         let (x, y) = to_dips(pointer, rail.scale);
-        let before = (rail.hover, rail.near, rail.over, rail.opacity);
+        let before = (rail.hover, rail.near, rail.over, rail.opacity, rail.close_hover);
         let forced = FORCED_POINTER.with(|forced| forced.get());
         rail.near = !unfolded
             && forced.map_or_else(
@@ -719,8 +850,10 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
             Some(Target::Rail(hit)) => Some(hit),
             _ => None,
         });
+        rail.close_hover = (FORCED_CLOSE.with(|forced| forced.get()) && rail.shown.is_some())
+            || (unfolded && target_at(rail, unfolded, x, y) == Some(Target::PanelClose));
         rail.opacity = fade(rail.opacity, open_opacity(rail.near, rail.over), 0.2);
-        before != (rail.hover, rail.near, rail.over, rail.opacity)
+        before != (rail.hover, rail.near, rail.over, rail.opacity, rail.close_hover)
     });
     if changed {
         crate::frame::update_appbar(window);
@@ -772,6 +905,8 @@ unsafe fn click(message: &MSG) -> bool {
         match target {
             Some(Target::Rail(hit)) => Some((pressed == Some(hit)).then_some(Target::Rail(hit))),
             Some(Target::Open) => Some(Some(Target::Open)),
+            Some(Target::PanelClose) => Some(Some(Target::PanelClose)),
+            Some(Target::PanelHeader) => Some(None),
             None => None,
         }
     });
@@ -792,6 +927,14 @@ fn entries_of(window: HWND) -> Vec<panel::EntryKey> {
 unsafe fn perform(window: HWND, target: Target) {
     match target {
         Target::Open => panel::set_unfolded(window, true),
+        Target::PanelHeader => {}
+        Target::PanelClose => {
+            for key in entries_of(window) {
+                if panel::entry_showing(window, &key) {
+                    panel::toggle_entry(window, &key);
+                }
+            }
+        }
         Target::Rail(RailHit::Entry(index)) => {
             if let Some(key) = entries_of(window).get(index) {
                 panel::toggle_entry(window, key);
@@ -818,6 +961,8 @@ thread_local! {
     static FORCED_TINT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
     /// Entries a test adds to the rail, to see how an extension's entry looks without one.
     static FAKE: RefCell<Vec<EntryLook>> = const { RefCell::new(Vec::new()) };
+    /// A test can hold the pointer over the open panel's close button.
+    static FORCED_CLOSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A test can hold the pointer over a rail button.
     static FORCED_HOVER: std::cell::Cell<Option<RailHit>> = const { std::cell::Cell::new(None) };
     /// A test can hold the pointer near the corner without a real pointer: (near, over).
@@ -831,6 +976,7 @@ pub unsafe fn simulate(window: HWND, command: &str) {
     let mut words = command.split_whitespace();
     let target = match (words.next(), words.next().and_then(|n| n.parse::<usize>().ok())) {
         (Some("open"), _) => Some(Target::Open),
+        (Some("close"), _) => Some(Target::PanelClose),
         (Some("fold"), _) => Some(Target::Rail(RailHit::Fold)),
         (Some("add"), _) => Some(Target::Rail(RailHit::Add)),
         (Some("entry"), Some(n)) => Some(Target::Rail(RailHit::Entry(n))),
@@ -847,6 +993,7 @@ pub unsafe fn simulate(window: HWND, command: &str) {
             None
         }
         (Some("hover"), None) => {
+            FORCED_CLOSE.with(|forced| forced.set(command.split_whitespace().nth(1) == Some("close")));
             let hit = match words.next() {
                 Some("add") => Some(RailHit::Add),
                 Some("fold") => Some(RailHit::Fold),
@@ -871,6 +1018,7 @@ pub unsafe fn simulate(window: HWND, command: &str) {
             None
         }
         (Some("away"), _) => {
+            FORCED_CLOSE.with(|forced| forced.set(false));
             FORCED_HOVER.with(|forced| forced.set(None));
             FORCED_POINTER.with(|forced| forced.set(None));
             None
@@ -941,6 +1089,18 @@ mod tests {
         assert_eq!(hit_top(RailHit::Entry(1), 600.0, 3), 6.0 + 32.0);
         assert_eq!(hit_top(RailHit::Fold, 600.0, 3), 600.0 - 6.0 - 30.0);
         assert!(hit_top(RailHit::Add, 600.0, 3) > hit_top(RailHit::Entry(2), 600.0, 3));
+    }
+
+    #[test]
+    fn fr10_open_panel_header_is_forty_dips_with_a_close_button_six_from_the_rail() {
+        let page = PageGeometry { x: 268, right: 1092, top: 44, bottom: 734 };
+        assert_eq!(panel_left(page), 812.0, "the panel is 240 wide and ends at the 40 wide rail");
+        assert_eq!(on_header(page, 900.0, 60.0), (true, false));
+        assert_eq!(on_header(page, 900.0, 85.0), (false, false), "below the header is the browser's own panel");
+        assert_eq!(on_header(page, 811.0, 60.0), (false, false));
+        assert_eq!(close_button(page), (1018.0, 44.0 + 5.5));
+        assert_eq!(on_header(page, 1030.0, 58.0), (true, true));
+        assert_eq!(on_header(page, 1055.0, 58.0), (false, false), "the rail is not the header");
     }
 
     #[test]
