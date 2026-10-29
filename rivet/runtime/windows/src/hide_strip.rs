@@ -43,6 +43,11 @@ unsafe extern "system" fn should_draw(view: *const c_void) -> bool {
     original(view)
 }
 
+/// Whether `view` is the browser view of a window that is hidden here.
+pub fn registered(view: usize) -> bool {
+    locked().contains(&view)
+}
+
 /// Detours the function once for the whole process. Nothing changes for a window until `hide`.
 pub unsafe fn install() -> Result<(), String> {
     INSTALLED

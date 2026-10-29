@@ -1543,7 +1543,7 @@ unsafe fn rollback() {
 }
 
 /// Runs `install` and undoes every change it made when it fails.
-unsafe fn transaction(install: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+pub(crate) unsafe fn transaction(install: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
     journal().clear();
     let result = install();
     match &result {

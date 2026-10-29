@@ -34,6 +34,8 @@ pub struct Build {
     pub edge_vertical: Option<EdgeVertical>,
     /// What Edge draws around its page on its own, which a Rivet window turns off.
     pub edge_page: Option<EdgePage>,
+    /// Views a Rivet window leaves out of Whale's top row and its right sidebar.
+    pub hidden_views: Option<HiddenViews>,
 }
 
 /// Values for `chrome_toolbar.rs`.
@@ -270,6 +272,28 @@ pub struct Toolbar {
     pub skip: &'static str,
     /// Where a `BubbleDialogDelegate` keeps the tracker of its anchor view.
     pub anchor_tracker_offset: usize,
+}
+
+/// Values for `whale_toolbar.rs`. Whale's toolbar holds buttons that a Rivet window does not want, and
+/// a sidebar that takes a column of the page. A view the layout cannot be told to skip is made to ask
+/// for no room and to draw nothing, which keeps `SetVisible` out of it: the layout shows a view again
+/// whenever its own idea of the view's visibility differs.
+pub struct HiddenViews {
+    /// The vtable slots of `GetMinimumSize`, `CalculatePreferredSize`, `PaintChildren` and `OnPaint`.
+    pub slots: [usize; 4],
+    /// Where a view keeps its parent, and the start and end of its vector of children.
+    pub parent_offset: usize,
+    pub children_offset: usize,
+    /// `views::View::InvalidateLayout(this, flag)`, which asks the layouts above a view to run again.
+    pub invalidate_layout: usize,
+    pub invalidate_layout_prologue: &'static [u8],
+    /// The sidebar's own `GetMinimumSize`, which the layout of the page calls directly instead of
+    /// through the vtable to learn how much the sidebar must keep.
+    pub sidebar_minimum: usize,
+    pub sidebar_minimum_prologue: &'static [u8],
+    /// Each class: its vtable and the functions its four slots hold, which are checked before a slot
+    /// is replaced and run for every view that is not in a Rivet window.
+    pub classes: &'static [(usize, [usize; 4])],
 }
 
 /// Values for `edge_page.rs`: Edge insets its page and paints a border around it, which would
@@ -1583,6 +1607,7 @@ pub static CHROME: Build = Build {
     },
     edge_vertical: None,
     edge_page: None,
+    hidden_views: None,
 };
 
 pub static EDGE: Build = Build {
@@ -2051,6 +2076,7 @@ pub static EDGE: Build = Build {
         corner_offset: 0x588,
         corner_set_visible: 0x02738640, // ?SetVisible@EdgeRoundedCornerView@@
     }),
+    hidden_views: None,
     edge_vertical: Some(EdgeVertical {
         content_window_for_hwnd: 0x026A4DC6,
         content_window_for_hwnd_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8],
@@ -2115,6 +2141,7 @@ pub static CHROME_150: Build = Build {
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
     edge_page: None,
+    hidden_views: None,
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
@@ -2251,6 +2278,30 @@ pub static WHALE: Build = Build {
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
     edge_page: None,
+    hidden_views: Some(HiddenViews {
+        slots: [15, 74, 88, 89],
+        parent_offset: 0x190,
+        children_offset: 0x198,
+        invalidate_layout: 0x08F7BEF0,
+        invalidate_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x38],
+        sidebar_minimum: 0x024C3C10,
+        sidebar_minimum_prologue: &[
+            0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0x8B, 0x05, 0x1C, 0x64, 0x7F, 0x11,
+        ],
+        classes: &[
+            // The toolbar's N button, translate flag, screenshot, split view, profile, AI Chat and menu
+            // buttons, then the root view of the right sidebar. Their classes have no symbols; each is
+            // told apart by the vtable the live view carries.
+            (0xfacb030, [0x9016f30, 0x83d45b0, 0x8f845c0, 0x901fc40]),
+            (0xfb070f0, [0x9016f30, 0x83d45b0, 0x8f845c0, 0x901fc40]),
+            (0xfb02710, [0x9016f30, 0x83d45b0, 0x8f845c0, 0x901fc40]),
+            (0xfb018d0, [0x9016f30, 0x83d45b0, 0x8f845c0, 0x901fc40]),
+            (0xfb63b90, [0xe5bd2f0, 0xe5bd200, 0x8f845c0, 0x901fc40]),
+            (0xfb010b0, [0x9016f30, 0x230c660, 0x8f845c0, 0x901fc40]),
+            (0xfac9e70, [0x83bb9b0, 0x227f080, 0x8f845c0, 0x901fc40]),
+            (0xfb0e8e0, [0x24c3c10, 0xe2bcc70, 0x8f845c0, 0x8f84800]),
+        ],
+    }),
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
@@ -2348,6 +2399,7 @@ pub static BRAVE: Build = Build {
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
     edge_page: None,
+    hidden_views: None,
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
@@ -2458,6 +2510,7 @@ pub static SAMSUNG: Build = Build {
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
     edge_page: None,
+    hidden_views: None,
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
@@ -2854,6 +2907,29 @@ mod tests {
             }
         }
         assert!(edge.vertical_state >= 2, "state 1 is the horizontal strip");
+    }
+
+    #[test]
+    fn fr12_whale_hides_its_toolbar_buttons_and_sidebar_by_size_and_paint() {
+        let views = WHALE.hidden_views.as_ref().expect("Whale's extra views are recorded");
+        // Slots of GetMinimumSize, CalculatePreferredSize, PaintChildren and OnPaint in a views::View vtable.
+        assert_eq!(views.slots, [15, 74, 88, 89]);
+        // Seven toolbar buttons and the sidebar's root view, each class once.
+        assert_eq!(views.classes.len(), 8);
+        let mut seen = std::collections::HashSet::new();
+        for (vtable, functions) in views.classes {
+            assert!(seen.insert(*vtable), "{vtable:#x} is listed twice");
+            assert!(functions.iter().all(|function| *function != 0 && *function != ABSENT));
+        }
+        assert_eq!((views.parent_offset, views.children_offset), (0x190, 0x198));
+        assert!(views.invalidate_layout_prologue.len() >= 8 && views.sidebar_minimum_prologue.len() >= 14);
+        // Only Whale lists such views; every other build keeps its toolbar and sidebar.
+        for build in all() {
+            assert_eq!(build.hidden_views.is_some(), build.module == "whale.dll", "{}", build.module);
+        }
+        // Whale's toolbar stays its own: no hidden toolbar views and no `SetVisible` hook.
+        assert!(WHALE.toolbar.hidden.is_empty());
+        assert_eq!(WHALE.toolbar.skip, "toolbar");
     }
 
     #[test]

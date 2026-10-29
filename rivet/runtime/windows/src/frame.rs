@@ -1790,6 +1790,10 @@ unsafe fn create_appbar(window: HWND) {
     if crate::hide_strip::supported() {
         let hidden = crate::hide_strip::hide(window);
         crate::vertical_tabs::trace(&format!("tab strip hidden: {hidden}"));
+        if hidden && crate::whale_toolbar::supported() {
+            let left = crate::whale_toolbar::hide(window);
+            crate::vertical_tabs::trace(&format!("whale toolbar views left out: {left}"));
+        }
     }
     // A frame change makes the browser lay out its frame again, now through the layout hook.
     SetWindowPos(
