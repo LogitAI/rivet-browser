@@ -358,6 +358,11 @@ pub unsafe fn open_entry(window: HWND, entry: u32) -> bool {
     if objects.coordinator == 0 || !prologue_is(base + SHOW, &SHOW_PROLOGUE) {
         return false;
     }
+    // Chrome checks that the window registered the entry and crashes the browser when it did not.
+    if !listed_entries(window).iter().any(|key| entry_id(key) == entry) {
+        trace(&format!("entry {entry} is not registered in this window"));
+        return false;
+    }
     let show: Show = std::mem::transmute(base + SHOW);
     show(objects.coordinator as *mut c_void, entry, 0, 0);
     true
