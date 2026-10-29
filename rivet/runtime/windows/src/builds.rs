@@ -1461,7 +1461,7 @@ pub static CHROME: Build = Build {
         stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
         set_opaque: 0x020A_FEF0, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
         set_opaque_prologue: &[0x56, 0x48, 0x83, 0xec, 0x20],
-        on_paint_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89],
+        on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         draw_color_prologue: &[0x48, 0x83, 0xec, 0x38, 0x48, 0x8b],
         get_color_provider_prologue: &[0x56, 0x57, 0x48, 0x83, 0xec, 0x78],
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
@@ -1469,7 +1469,7 @@ pub static CHROME: Build = Build {
         set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         frame_browser_window_offset: 0x340,
         browser_window_in_view: 0x1f0,
-        caption_paint_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89],
+        caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E],
     },
     edge_vertical: None,
@@ -2058,6 +2058,46 @@ pub fn all() -> &'static [&'static Build] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads `bytes.len()` bytes of the file image at `rva` from a PE file on disk.
+    fn file_bytes(file: &[u8], rva: usize, length: usize) -> Option<Vec<u8>> {
+        let pe = u32::from_le_bytes(file.get(0x3C..0x40)?.try_into().ok()?) as usize;
+        let sections = u16::from_le_bytes(file.get(pe + 6..pe + 8)?.try_into().ok()?) as usize;
+        let optional = u16::from_le_bytes(file.get(pe + 20..pe + 22)?.try_into().ok()?) as usize;
+        for index in 0..sections {
+            let header = pe + 24 + optional + 40 * index;
+            let field = |at: usize| -> Option<usize> {
+                Some(u32::from_le_bytes(file.get(header + at..header + at + 4)?.try_into().ok()?) as usize)
+            };
+            let (address, size, raw) = (field(12)?, field(16)?, field(20)?);
+            if (address..address + size).contains(&rva) {
+                let start = rva - address + raw;
+                return file.get(start..start + length).map(<[u8]>::to_vec);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn nfr3_chrome_156_frame_paint_prologues_match_the_installed_build() {
+        let path = r"C:\Program Files\Google\Chrome\Application\156.0.8078.48\chrome.dll";
+        let Ok(file) = std::fs::read(path) else {
+            return;
+        };
+        let layout = &CHROME.layout;
+        for (name, rva, prologue) in [
+            ("frame paint", layout.on_paint, layout.on_paint_prologue),
+            ("caption paint", layout.caption_paint, layout.caption_paint_prologue),
+            ("draw colour", layout.draw_color, layout.draw_color_prologue),
+            ("colour provider", layout.get_color_provider, layout.get_color_provider_prologue),
+        ] {
+            assert_eq!(
+                file_bytes(&file, rva, prologue.len()).as_deref(),
+                Some(prologue),
+                "{name} prologue does not match chrome.dll"
+            );
+        }
+    }
 
     #[test]
     fn nfr3_every_row_names_one_module_and_version() {
