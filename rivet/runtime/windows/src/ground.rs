@@ -49,9 +49,9 @@ pub struct Hole {
     pub cover: Option<i32>,
 }
 
-/// How long a page's newly exposed leading strip is covered, which is about as long as the
-/// browser takes to draw the page into its new width.
-pub const COVER_MS: u64 = 80;
+/// How long a page's newly exposed leading strip is covered. The browser lays a page out at once but
+/// draws it a few frames later, and under a fast drag it falls several layouts behind.
+pub const COVER_MS: u64 = 600;
 
 /// The leading edges a page panel had lately, to find the strip a layout exposed.
 #[derive(Default)]
@@ -330,10 +330,10 @@ mod tests {
         assert_eq!(trail.push(0, 300), None);
         assert_eq!(trail.push(16, 296), Some(300));
         assert_eq!(trail.push(32, 280), Some(300));
-        assert_eq!(trail.push(60, 280), Some(300));
+        assert_eq!(trail.push(500, 280), Some(300));
         // Once the older positions are past the cover time, only the later ones count.
-        assert_eq!(trail.push(90, 280), Some(296));
-        assert_eq!(trail.push(100, 280), None);
+        assert_eq!(trail.push(620, 280), Some(296));
+        assert_eq!(trail.push(700, 280), None);
     }
 
     #[test]

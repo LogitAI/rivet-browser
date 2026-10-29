@@ -1431,14 +1431,66 @@ unsafe fn end_drag(window: HWND) {
     }
 }
 
+/// Ticks while a pointer position of the width drag waits for its frame.
+const DRAG_TIMER: usize = 0x5249_5653 + 1;
+
+/// The shortest time between two layouts of the width drag, one displayed frame.
+const DRAG_FRAME_MS: f32 = 16.0;
+
+thread_local! {
+    /// The latest pointer x of a width drag that has not been laid out yet, and when the browser
+    /// was last laid out for the drag.
+    static DRAG_PENDING: RefCell<HashMap<isize, (Option<i32>, f32, bool)>> = RefCell::new(HashMap::new());
+}
+
 /// Follows a drag of the resizer: the appbar's right edge goes to the pointer and the browser lays
-/// the page out beside it as it moves. The Rivet ground covers everything but the page, so a
-/// layout in progress never shows the browser's own frame.
+/// the page out beside it. Pointer moves arrive faster than the browser can lay out and paint, so
+/// only the latest one is kept and laid out once per displayed frame. The Rivet ground covers
+/// everything but the page, so a layout in progress never shows the browser's own frame.
 unsafe fn drag_to(window: HWND, x: i32) {
+    let now = now_ms();
+    let due = DRAG_PENDING.with(|pending| {
+        let mut all = pending.borrow_mut();
+        let entry = all.entry(window as isize).or_insert((None, f32::MIN, false));
+        entry.0 = Some(x);
+        let wait = DRAG_FRAME_MS - (now - entry.1);
+        if wait <= 0.0 {
+            true
+        } else {
+            // Setting a running timer again would restart it and starve it under a flood of moves.
+            if !entry.2 {
+                entry.2 = true;
+                SetTimer(window, DRAG_TIMER, wait.ceil() as u32, None);
+            }
+            false
+        }
+    });
+    if due {
+        apply_drag(window);
+    }
+}
+
+/// Lays the browser out for the latest pointer position of the width drag, if one is waiting.
+unsafe fn apply_drag(window: HWND) {
+    let now = now_ms();
+    let latest = DRAG_PENDING.with(|pending| {
+        pending.borrow_mut().get_mut(&(window as isize)).and_then(|entry| {
+            entry.1 = now;
+            entry.2 = false;
+            entry.0.take()
+        })
+    });
+    KillTimer(window, DRAG_TIMER);
+    let Some(x) = latest else { return };
     let factor = layout_dpi(window) as f32 / 96.0;
     let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
     if edit_layout(window, |layout| layout.set_width(wanted)) {
+        let t0 = now_ms();
         sync_strip(window);
+        // The appbar takes its new width before the browser lays the page out, so what the
+        // browser exposes is only ever ground or appbar, never the appbar's old surface over a
+        // page that has already moved.
+        update_appbar(window);
         relayout(window);
     }
 }
@@ -1857,7 +1909,9 @@ unsafe fn sync_ground(window: HWND, appbar: &mut Appbar, visible: bool, dpi: u32
     GetClientRect(window, &mut client);
     let mut holes = ground_holes_at(window);
     cover_exposed_strip(window, &mut holes);
-    if let Err(error) = appbar.update_ground(visible, client.right, client.bottom, dpi, &holes) {
+    let t0 = now_ms();
+    let r = appbar.update_ground(visible, client.right, client.bottom, dpi, &holes);
+    if let Err(error) = r {
         log(&format!("rivet: could not draw the ground: {error}"));
     }
 }
