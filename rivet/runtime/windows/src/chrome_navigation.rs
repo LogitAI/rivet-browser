@@ -63,6 +63,11 @@ fn base() -> Option<usize> {
     })
 }
 
+/// Whether this build can open addresses, with every function it needs matching the record.
+pub(crate) fn ready() -> bool {
+    base().is_some()
+}
+
 unsafe fn function<T: Copy>(base: usize, rva: usize) -> T {
     std::mem::transmute_copy(&(base + rva))
 }

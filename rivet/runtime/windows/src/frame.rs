@@ -1556,6 +1556,11 @@ fn report_vertical_tabs(controller: usize) {
     }
 }
 
+/// The windows of this process that show the Rivet frame. Call it on the browser UI thread.
+pub(crate) fn rivet_windows() -> Vec<HWND> {
+    APPBARS.with(|appbars| appbars.borrow().keys().map(|window| *window as HWND).collect())
+}
+
 fn attached(window: HWND) -> bool {
     unsafe { attached_window(window) }
 }

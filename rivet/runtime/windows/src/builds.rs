@@ -457,6 +457,10 @@ pub struct Tabs {
     /// The first instructions of `chrome::NewTab`, which every new-tab command of the browser
     /// ends in. When this is not empty, a new tab in a Rivet window opens the Rivet start page.
     pub new_tab_prologue: &'static [u8],
+    /// Set when `chrome::NewTab` of this build takes the address to open as a third argument, which is
+    /// empty when the command asks for the browser's own new tab page. The value is how far past the
+    /// browser object the first argument points, since that build passes its window interface.
+    pub new_tab_address: Option<usize>,
     /// `WebContentsImpl::GetLastCommittedURL` and `GetVisibleURL`, which return a `const GURL&`.
     pub last_committed_url: usize,
     pub visible_url: usize,
@@ -885,6 +889,7 @@ const UNCHECKED_TABS: Tabs = Tabs {
     title: ABSENT,
     new_tab: ABSENT,
     new_tab_prologue: &[],
+    new_tab_address: None,
     last_committed_url: ABSENT,
     visible_url: ABSENT,
     get_group: ABSENT,
@@ -1383,6 +1388,7 @@ pub static CHROME: Build = Build {
         close_tab: 0x0A20_11B0, // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
         title: 0x00D7_8440, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator
         new_tab_prologue: &[],
+        new_tab_address: None,
         new_tab: 0x0A0B_8F50, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
         last_committed_url: 0x058A_48A0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
         visible_url: 0x05CF_8BA0, // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
@@ -1875,6 +1881,7 @@ pub static EDGE: Build = Build {
         close_tab: 0x0A4080EA, // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
         title: 0x01119470, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?
         new_tab_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x18, 0x01, 0x00, 0x00, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x71, 0xD7, 0xF3, 0x09],
+        new_tab_address: None,
         new_tab: 0x0A2B68B0, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
         last_committed_url: 0x0115B9E0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
         visible_url: 0x01056C50, // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
@@ -2174,7 +2181,29 @@ pub static WHALE: Build = Build {
         detour_strip: true,
         ..UNCHECKED_VERTICALTABS
     },
-    navigation: UNCHECKED_NAVIGATION,
+    navigation: Navigation {
+        supported: true, // opening an address in a tab checked on Whale 5.39.412.57
+        content_window_for_hwnd: 0x08F36620,
+        browser_view_for_window: 0x0E6CB8A0,
+        active_web_contents: 0x0E6CC090,
+        gurl_from_text: 0x03677F60,
+        gurl_empty: 0x037537F0,
+        gurl_drop: 0x02C212F0,
+        open_url_params: 0x05357FB0,
+        open_url_params_drop: 0x053585F0,
+        open_url: 0x06775BE0,
+        signatures: &[
+            (0x08F36620, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x0E6CB8A0, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0E6CC090, &[0x48, 0x8B, 0x81, 0xC0, 0x05, 0x00, 0x00]),
+            (0x03677F60, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53]),
+            (0x037537F0, &[0x48, 0x89, 0xC8, 0x0F, 0x57, 0xC0, 0x0F, 0x11, 0x41, 0x0B, 0x0F, 0x11, 0x01]),
+            (0x02C212F0, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x79, 0x70]),
+            (0x05357FB0, &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x44, 0x89, 0xCF]),
+            (0x053585F0, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x89, 0xCE]),
+            (0x06775BE0, &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xA0, 0x04, 0x00, 0x00]),
+        ],
+    },
     tabs: Tabs {
         supported: true, // list, switch and close checked on Whale 5.39.412.57; groups are not
         content_window_for_hwnd: 0x08F36620,
@@ -2188,9 +2217,14 @@ pub static WHALE: Build = Build {
         activate_tab: 0x08187360,
         close_tab: 0x0818BE60,
         title: 0x06764D90,
-        // Whale's `chrome::NewTab` is not mapped; a new tab is the browser's own new-tab command.
-        new_tab_prologue: &[],
-        new_tab: ABSENT,
+        // Whale's `chrome::NewTab(Browser*, NewTabTypes, const GURL&)`, mapped from Chrome 150's by the
+        // calls it makes. The prologue ends with the stack cookie load the detour relocates.
+        new_tab_prologue: &[
+            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x18, 0x01, 0x00, 0x00, 0x4C, 0x89, 0xC7, 0x89,
+            0xD3, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x75, 0x03, 0x75, 0x11,
+        ],
+        new_tab_address: Some(0x68),
+        new_tab: 0x02569CB0,
         last_committed_url: 0x06762170,
         visible_url: 0x06762120,
         get_group: 0x0818C770,
@@ -2514,6 +2548,20 @@ mod tests {
     }
 
     #[test]
+    fn fr3_whale_new_tab_hook_is_recorded_with_its_address_argument() {
+        let tabs = &WHALE.tabs;
+        let n = tabs.new_tab_prologue.len();
+        assert_eq!(tabs.new_tab_prologue[n - 7..n - 4], [0x48, 0x8B, 0x05]);
+        assert!(tabs.new_tab_address == Some(0x68) && tabs.new_tab != ABSENT);
+        assert!(EDGE.tabs.new_tab_address.is_none() && CHROME.tabs.new_tab_address.is_none());
+        // Every function the address navigation calls has a recorded signature.
+        let nav = &WHALE.navigation;
+        for rva in [nav.gurl_from_text, nav.gurl_empty, nav.gurl_drop, nav.open_url_params, nav.open_url_params_drop, nav.open_url] {
+            assert!(nav.signatures.iter().any(|(at, _)| *at == rva), "{rva:#x}");
+        }
+    }
+
+    #[test]
     fn nfr3_chrome_156_frame_paint_prologues_match_the_installed_build() {
         let path = r"C:\Program Files\Google\Chrome\Application\156.0.8078.48\chrome.dll";
         let Ok(file) = std::fs::read(path) else {
@@ -2633,7 +2681,7 @@ mod tests {
         assert_eq!(WHALE.module, "whale.dll");
         assert_eq!(WHALE.version, [5, 39, 412, 57]);
         assert!(!WHALE.vertical.supported && WHALE.tabs.supported && !WHALE.tabs.groups && !WHALE.split.supported);
-        assert!(!WHALE.navigation.supported && !WHALE.side_panel.supported);
+        assert!(WHALE.navigation.supported && !WHALE.side_panel.supported);
         assert!(WHALE.vertical.detour_strip && WHALE.vertical.should_draw_tab_strip_prologue.len() >= 14);
         assert!(all().iter().filter(|build| build.vertical.detour_strip).count() == 1);
         assert_eq!(WHALE.toolbar.skip, "toolbar");

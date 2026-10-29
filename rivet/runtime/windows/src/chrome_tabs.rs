@@ -336,11 +336,13 @@ thread_local! {
 /// Stands in for the browser's new-tab command. Every way of opening a tab ends in it, so the
 /// appbar, Ctrl+T and the browser's own menus all give a Rivet window's new tab the start page,
 /// and a window that is not Rivet's keeps the browser's own new tab page.
-pub(crate) unsafe extern "system" fn new_tab_hook(browser: *mut c_void, kind: i32) -> *mut c_void {
+pub(crate) unsafe extern "system" fn new_tab_hook(browser: *mut c_void, kind: i32, url: *const c_void) -> *mut c_void {
     let original: NewTab2 = std::mem::transmute_copy(&ORIGINAL_NEW_TAB.load(std::sync::atomic::Ordering::Acquire));
-    let contents = original(browser, kind);
-    if !contents.is_null() && !OWN_NEW_TAB.with(std::cell::Cell::get) {
-        if let Some(window) = crate::chrome_toolbar::current_window() {
+    let contents = original(browser, kind, url);
+    // A build that passes an address opens that address, and only an empty one asks for the new tab page.
+    let wanted = bv().new_tab_address.is_none() || (!url.is_null() && gurl_is_empty(url));
+    if !contents.is_null() && wanted && !OWN_NEW_TAB.with(std::cell::Cell::get) {
+        if let Some(window) = crate::chrome_toolbar::current_window().or_else(|| rivet_window_of(browser)) {
             if let Some(url) = crate::frame::start_url_of(window) {
                 let opened = crate::chrome_navigation::open_page(contents, &url);
                 crate::vertical_tabs::trace(&format!("new tab in a Rivet window opens the start page: {opened}"));
@@ -349,7 +351,25 @@ pub(crate) unsafe extern "system" fn new_tab_hook(browser: *mut c_void, kind: i3
     }
     contents
 }
-type NewTab2 = unsafe extern "system" fn(*mut c_void, i32) -> *mut c_void;
+/// The Rivet window whose browser object `browser` stands for, for a build that keeps the
+/// browser's own toolbar and so has no scope that names the window the command runs for.
+unsafe fn rivet_window_of(target: *mut c_void) -> Option<HWND> {
+    let past = bv().new_tab_address?;
+    let base = base()?;
+    crate::frame::rivet_windows().into_iter().find(|window| {
+        browser(base, *window).is_some_and(|holder| holder as usize + past == target as usize)
+    })
+}
+
+type NewTab2 = unsafe extern "system" fn(*mut c_void, i32, *const c_void) -> *mut c_void;
+
+/// Whether a `GURL` holds no address. Its first member is a `std::string`, which is empty when its
+/// first and last byte are zero in either layout of libc++'s string: a short string keeps its
+/// length in one of them and a long one flags itself in one of them, and a long one is never empty.
+unsafe fn gurl_is_empty(url: *const c_void) -> bool {
+    let bytes = url.cast::<u8>();
+    *bytes == 0 && *bytes.add(23) == 0
+}
 
 pub unsafe fn new_tab(window: HWND) -> bool {
     OWN_NEW_TAB.with(|own| own.set(true));
@@ -360,7 +380,7 @@ pub unsafe fn new_tab(window: HWND) -> bool {
 
 unsafe fn open_new_tab(window: HWND) -> bool {
     let Some(base) = base() else { return false };
-    if bv().new_tab == crate::builds::ABSENT {
+    if bv().new_tab == crate::builds::ABSENT || bv().new_tab_address.is_some() {
         // The browser's own new-tab command, as its menu sends it.
         const IDC_NEW_TAB: usize = 34014;
         windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(

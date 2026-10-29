@@ -2014,8 +2014,8 @@ pub unsafe fn install(directory: Option<std::path::PathBuf>) -> Result<(), Strin
     };
     let skip = read("rivet-toolbar-skip.txt") + " " + bv().skip;
     if skip.contains("toolbar") {
-        // This build keeps the browser's own toolbar, so nothing is patched.
-        return Ok(());
+        // This build keeps the browser's own toolbar, so only the new tab command is patched.
+        return install_new_tab(&skip);
     }
     FORCED.store(
         match read("rivet-toolbar-force.txt").trim() {
@@ -2041,6 +2041,33 @@ pub unsafe fn install(directory: Option<std::path::PathBuf>) -> Result<(), Strin
         .clone()
 }
 
+
+/// Hooks `chrome::NewTab` for a build that does not install the toolbar, once.
+unsafe fn install_new_tab(skip: &str) -> Result<(), String> {
+    let tabs = &crate::builds::get().tabs;
+    if skip.contains("newtab")
+        || tabs.new_tab_prologue.is_empty()
+        || crate::chrome_tabs::base().is_none()
+        || !crate::chrome_navigation::ready()
+    {
+        return Ok(());
+    }
+    static HOOKED: OnceLock<Result<(), String>> = OnceLock::new();
+    HOOKED
+        .get_or_init(|| {
+            let image = image::recorded().ok_or("this browser build has no recorded new tab command")?;
+            transaction(|| {
+                detour(
+                    image.base,
+                    tabs.new_tab,
+                    tabs.new_tab_prologue,
+                    crate::chrome_tabs::new_tab_hook as usize,
+                    &crate::chrome_tabs::ORIGINAL_NEW_TAB,
+                )
+            })
+        })
+        .clone()
+}
 
 /// Records `window` as a Rivet window, so the browser's work on it from now on runs in its scope.
 /// Returns its widget, or zero when the toolbar hooks are not in place.
