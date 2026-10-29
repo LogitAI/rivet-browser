@@ -36,6 +36,8 @@ pub struct Build {
     pub edge_page: Option<EdgePage>,
     /// Views a Rivet window leaves out of Whale's top row and its right sidebar.
     pub hidden_views: Option<HiddenViews>,
+    /// Where Whale's top row puts its buttons and address field, which a Rivet window moves to Chrome's.
+    pub whale_row: Option<WhaleRow>,
 }
 
 /// Values for `chrome_toolbar.rs`.
@@ -294,6 +296,23 @@ pub struct HiddenViews {
     /// Each class: its vtable and the functions its four slots hold, which are checked before a slot
     /// is replaced and run for every view that is not in a Rivet window.
     pub classes: &'static [(usize, [usize; 4])],
+}
+
+/// Values for the row geometry in `whale_toolbar.rs`. Whale's toolbar view lays out one container view
+/// whose children are the buttons and the address field. With the tab strip gone the container starts
+/// 100 DIPs in and stops 219 DIPs short of the right edge, and its buttons are 26 DIPs wide. The row
+/// is checked by classes, so a build with other ones is left as it is.
+pub struct WhaleRow {
+    /// `views::View::SetBoundsRect(this, rect)`, which every layout ends in.
+    pub set_bounds_rect: usize,
+    pub set_bounds_rect_prologue: &'static [u8],
+    /// A view keeps its parent here, and its bounds as x, y, width and height.
+    pub parent_offset: usize,
+    pub bounds_offset: usize,
+    /// The vtables of the container, of the back, forward and reload buttons and of the address field.
+    pub container: usize,
+    pub buttons: [usize; 3],
+    pub field: usize,
 }
 
 /// Values for `edge_page.rs`: Edge insets its page and paints a border around it, which would
@@ -1649,6 +1668,7 @@ pub static CHROME: Build = Build {
     edge_vertical: None,
     edge_page: None,
     hidden_views: None,
+    whale_row: None,
 };
 
 pub static EDGE: Build = Build {
@@ -2127,6 +2147,7 @@ pub static EDGE: Build = Build {
         corner_set_visible: 0x02738640, // ?SetVisible@EdgeRoundedCornerView@@
     }),
     hidden_views: None,
+    whale_row: None,
     edge_vertical: Some(EdgeVertical {
         content_window_for_hwnd: 0x026A4DC6,
         content_window_for_hwnd_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8],
@@ -2192,6 +2213,7 @@ pub static CHROME_150: Build = Build {
     edge_vertical: None,
     edge_page: None,
     hidden_views: None,
+    whale_row: None,
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
@@ -2352,6 +2374,18 @@ pub static WHALE: Build = Build {
             (0xfac9e70, [0x83bb9b0, 0x227f080, 0x8f845c0, 0x901fc40]),
             (0xfb0e8e0, [0x24c3c10, 0xe2bcc70, 0x8f845c0, 0x8f84800]),
         ],
+    }),
+    whale_row: Some(WhaleRow {
+        set_bounds_rect: 0x08F7_C700,
+        set_bounds_rect_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB8, 0x00, 0x00, 0x00, 0x0F, 0x29, 0xB4, 0x24,
+            0xA0, 0x00, 0x00, 0x00, 0x49, 0x89, 0xD6, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x18, 0xD9, 0xD3, 0x0A,
+        ],
+        parent_offset: 0x190,
+        bounds_offset: 0x1C0,
+        container: 0xfaac4e0,
+        buttons: [0xfb06c50, 0xfae1150, 0xfacbff0],
+        field: 0xfabf960,
     }),
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
@@ -2694,6 +2728,7 @@ pub static BRAVE: Build = Build {
     edge_vertical: None,
     edge_page: None,
     hidden_views: None,
+    whale_row: None,
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
@@ -2821,6 +2856,7 @@ pub static SAMSUNG: Build = Build {
     edge_vertical: None,
     edge_page: None,
     hidden_views: None,
+    whale_row: None,
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
@@ -3308,6 +3344,29 @@ mod tests {
         // Whale's toolbar stays its own: no hidden toolbar views and no `SetVisible` hook.
         assert!(WHALE.toolbar.hidden.is_empty());
         assert_eq!(WHALE.toolbar.skip, "toolbar");
+    }
+
+    #[test]
+    fn fr12_whale_row_records_its_classes_and_the_bounds_function() {
+        let row = WHALE.whale_row.as_ref().expect("Whale's top row is recorded");
+        let mut seen = std::collections::HashSet::new();
+        for vtable in [row.container, row.field].into_iter().chain(row.buttons) {
+            assert!(seen.insert(vtable), "{vtable:#x} is listed twice");
+        }
+        // The detour replaces twelve bytes and relocates the stack cookie load that ends the prologue.
+        assert!(row.set_bounds_rect_prologue.len() >= 12);
+        assert_eq!(row.set_bounds_rect_prologue[row.set_bounds_rect_prologue.len() - 7..][..3], [0x48, 0x8B, 0x05]);
+        assert_eq!((row.parent_offset, row.bounds_offset), (0x190, 0x1C0));
+        // The row sits among the classes the build already knows as its own.
+        let hidden = WHALE.hidden_views.as_ref().unwrap();
+        assert_eq!(row.parent_offset, hidden.parent_offset);
+        for vtable in [row.container, row.field].into_iter().chain(row.buttons) {
+            assert!(hidden.classes.iter().all(|(hidden, _)| *hidden != vtable), "{vtable:#x} is hidden");
+        }
+        // Only Whale moves its row.
+        for build in all() {
+            assert_eq!(build.whale_row.is_some(), build.module == "whale.dll", "{}", build.module);
+        }
     }
 
     #[test]
