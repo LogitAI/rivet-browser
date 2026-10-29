@@ -1853,6 +1853,7 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
             &crate::chrome_tabs::ORIGINAL_NEW_TAB,
         )?;
     }
+    crate::edge_page::install(base, skip)?;
     if !address {
         return icons_and_slots(base, skip);
     }

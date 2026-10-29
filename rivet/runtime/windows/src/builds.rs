@@ -32,6 +32,8 @@ pub struct Build {
     pub layout: Layout,
     /// Edge's own vertical-tab architecture. Chrome has none.
     pub edge_vertical: Option<EdgeVertical>,
+    /// What Edge draws around its page on its own, which a Rivet window turns off.
+    pub edge_page: Option<EdgePage>,
 }
 
 /// Values for `chrome_toolbar.rs`.
@@ -268,6 +270,18 @@ pub struct Toolbar {
     pub skip: &'static str,
     /// Where a `BubbleDialogDelegate` keeps the tracker of its anchor view.
     pub anchor_tracker_offset: usize,
+}
+
+/// Values for `edge_page.rs`: Edge insets its page and paints a border around it, which would
+/// fight Rivet's own panel.
+pub struct EdgePage {
+    /// `EdgeContentsContainerBorder::OnPaintBackground`, which paints the page's hairline.
+    pub paint_border: usize,
+    pub paint_border_prologue: &'static [u8],
+    /// `AppLayerStyle::GetContentsContainerMargin`, which insets the page from its container and
+    /// returns `gfx::Insets` through a hidden pointer.
+    pub container_margin: usize,
+    pub container_margin_prologue: &'static [u8],
 }
 
 /// Values for `edge_vertical.rs`: Edge keeps its vertical tabs in its own container view, which
@@ -1540,6 +1554,7 @@ pub static CHROME: Build = Build {
         caption_ink_ids: &[0x66C, 0x66D, 0x66E],
     },
     edge_vertical: None,
+    edge_page: None,
 };
 
 pub static EDGE: Build = Build {
@@ -1994,6 +2009,12 @@ pub static EDGE: Build = Build {
         caption_paint_prologue: &[0xE9, 0x01, 0x00, 0x00, 0x00, 0xCC, 0x41, 0x57],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E], // Chrome value, not checked on Edge
     },
+    edge_page: Some(EdgePage {
+        paint_border: 0x033F7B70, // ?OnPaintBackground@EdgeContentsContainerBorder@@
+        paint_border_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00],
+        container_margin: 0x02A1AA04, // ?GetContentsContainerMargin@AppLayerStyle@edge_app_layer@@
+        container_margin_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x38],
+    }),
     edge_vertical: Some(EdgeVertical {
         content_window_for_hwnd: 0x026A4DC6,
         content_window_for_hwnd_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8],
@@ -2056,6 +2077,7 @@ pub static CHROME_150: Build = Build {
     tabs: UNCHECKED_TABS,
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
+    edge_page: None,
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
@@ -2164,6 +2186,7 @@ pub static WHALE: Build = Build {
     },
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
+    edge_page: None,
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
         on_paint_slot: 89,
@@ -2230,6 +2253,16 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn fr12_edge_page_hooks_are_recorded_and_chrome_has_none() {
+        let page = EDGE.edge_page.as_ref().expect("Edge insets and outlines its page");
+        // Both functions start with a prologue the detour can copy whole.
+        assert!(page.paint_border_prologue.len() >= 12);
+        assert!(page.container_margin_prologue.len() >= 12);
+        assert!(CHROME.edge_page.is_none());
+        assert!(CHROME_150.edge_page.is_none());
     }
 
     #[test]
