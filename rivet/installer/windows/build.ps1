@@ -45,6 +45,8 @@ try {
 Copy-Item (Join-Path $rivet "target\release\rivet.exe") $stage
 Copy-Item (Join-Path $rivet "target\release\rivet-launcher.exe") $stage
 Copy-Item (Join-Path $rivet "target\release\rivet_runtime_windows.dll") $stage
+Copy-Item (Join-Path $rivet "target\release\start.html") $stage
+Copy-Item (Join-Path $rivet "target\release\Manrope.ttf") $stage
 Copy-Item (Join-Path $installer "setup-ui\assets\logo.ico") (Join-Path $stage "rivet.ico")
 Copy-Item (Join-Path $repository "LICENSE") (Join-Path $stage "LICENSE")
 Copy-Item (Join-Path $rivet "runtime\windows\fonts\OFL-*.txt") $stage

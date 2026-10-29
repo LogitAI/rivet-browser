@@ -36,6 +36,13 @@
             <Component Id="RivetRuntime" Guid="*">
                 <File Id="RivetRuntime" Source="$(SourceDir)\rivet_runtime_windows.dll" KeyPath="yes" />
             </Component>
+            <!-- The start page Rivet windows open for a new tab, and the font it loads beside it. -->
+            <Component Id="RivetStartPage" Guid="*">
+                <File Id="RivetStartPage" Source="$(SourceDir)\start.html" KeyPath="yes" />
+            </Component>
+            <Component Id="RivetStartPageFont" Guid="*">
+                <File Id="RivetStartPageFont" Source="$(SourceDir)\Manrope.ttf" KeyPath="yes" />
+            </Component>
             <Component Id="RivetIcon" Guid="*">
                 <File Id="RivetIcon" Source="$(SourceDir)\rivet.ico" KeyPath="yes" />
             </Component>
