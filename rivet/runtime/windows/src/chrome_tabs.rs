@@ -40,6 +40,25 @@ pub(crate) fn base() -> Option<usize> {
 pub(crate) unsafe fn function<T: Copy>(base: usize, rva: usize) -> T {
     std::mem::transmute_copy(&(base + rva))
 }
+/// The web contents at `index`, or null. A build without `GetWebContentsAt` reads it from the tab
+/// object the tab collection answers.
+unsafe fn contents_at(base: usize, model: *mut c_void, index: i32) -> *mut c_void {
+    if bv().tab_at != crate::builds::ABSENT {
+        return function::<TabAt>(base, bv().tab_at)(model, index);
+    }
+    if bv().tab_object == crate::builds::ABSENT || index < 0 || index >= function::<Count>(base, bv().tab_count)(model) {
+        return std::ptr::null_mut();
+    }
+    let collection = *(model.cast::<u8>().add(bv().tab_collection) as *const *mut c_void);
+    if collection.is_null() {
+        return std::ptr::null_mut();
+    }
+    let tab = function::<TabAt>(base, bv().tab_object)(collection, index);
+    if tab.is_null() {
+        return std::ptr::null_mut();
+    }
+    *(tab.cast::<u8>().add(bv().tab_contents) as *const *mut c_void)
+}
 unsafe fn web_contents(base: usize, window: HWND) -> Option<*mut c_void> {
     let content = function::<Pointer>(base, bv().content_window_for_hwnd)(window);
     if content.is_null() {
@@ -150,7 +169,7 @@ pub unsafe fn tabs(window: HWND) -> Option<Vec<crate::tab_rows::Tab>> {
     }
     let mut titles = Vec::with_capacity(count as usize);
     for index in 0..count {
-        let contents = function::<TabAt>(base, bv().tab_at)(model, index);
+        let contents = contents_at(base, model, index);
         if contents.is_null() {
             titles.push(String::from("New tab"));
             continue;
@@ -160,7 +179,7 @@ pub unsafe fn tabs(window: HWND) -> Option<Vec<crate::tab_rows::Tab>> {
     }
     let active = web_contents(base, window).unwrap_or(std::ptr::null_mut());
     let active_index = (0..count)
-        .find(|index| function::<TabAt>(base, bv().tab_at)(model, *index) == active)
+        .find(|index| contents_at(base, model, *index) == active)
         .unwrap_or(0) as usize;
     let group_model: *mut c_void = if bv().groups {
         *(model.cast::<u8>().add(8) as *const *mut c_void)
@@ -238,7 +257,7 @@ pub unsafe fn open_tabs(window: HWND) -> Option<Vec<OpenTab>> {
     let titles = tabs(window)?;
     let mut result = Vec::with_capacity(titles.len());
     for tab in titles {
-        let contents = function::<TabAt>(base, bv().tab_at)(model, tab.index as i32);
+        let contents = contents_at(base, model, tab.index as i32);
         if contents.is_null() {
             return None;
         }

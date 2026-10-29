@@ -437,6 +437,12 @@ pub struct Tabs {
     pub get_tab_model: usize,
     pub tab_count: usize,
     pub tab_at: usize,
+    /// For a build that has no `GetWebContentsAt` of its own: `tab_object(collection, index)` answers
+    /// the tab object, the collection sits `tab_collection` bytes into the model and the tab keeps
+    /// its web contents `tab_contents` bytes in. A build that records `tab_at` leaves these unused.
+    pub tab_object: usize,
+    pub tab_collection: usize,
+    pub tab_contents: usize,
     pub activate_tab: usize,
     pub close_tab: usize,
     pub title: usize,
@@ -864,6 +870,9 @@ const UNCHECKED_TABS: Tabs = Tabs {
     get_tab_model: ABSENT,
     tab_count: ABSENT,
     tab_at: ABSENT,
+    tab_object: ABSENT,
+    tab_collection: 0,
+    tab_contents: 0,
     activate_tab: ABSENT,
     close_tab: ABSENT,
     title: ABSENT,
@@ -1360,6 +1369,9 @@ pub static CHROME: Build = Build {
         get_tab_model: 0x04FB_01F0, // ?Client@WebLocalFrameImpl@blink@@UEBAPEAVWebLocalFrameClient@2@XZ
         tab_count: 0x0369_CBE0, // ?count@TabStripModel@@QEBAHXZ
         tab_at: 0x0311_22A0, // ?GetWebContentsAt@TabStripModel@@QEBAPEAVWebContents@content@@H@Z
+        tab_object: ABSENT,
+        tab_collection: 0,
+        tab_contents: 0,
         activate_tab: 0x0311_2220, // ?ActivateTabAt@TabStripModel@@QEAAXHUTabStripUserGestureDetails@@@Z
         close_tab: 0x0A20_11B0, // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
         title: 0x00D7_8440, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator
@@ -1849,6 +1861,9 @@ pub static EDGE: Build = Build {
         get_tab_model: 0x055E0CE0, // ?PdfSize@DocumentMetadata@datamodel@edge_pdf@@QEBA_KXZ
         tab_count: 0x010CBBCE, // ?count@TabStripModel@@QEBAHXZ
         tab_at: 0x0105E38E, // ?GetWebContentsAt@TabStripModel@@QEBAPEAVWebContents@content@@H@Z
+        tab_object: ABSENT,
+        tab_collection: 0,
+        tab_contents: 0,
         activate_tab: 0x0A404C92, // ?ActivateTabAt@TabStripModel@@QEAAXHUTabStripUserGestureDetails@@@Z
         close_tab: 0x0A4080EA, // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
         title: 0x01119470, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?
@@ -2347,7 +2362,50 @@ pub static SAMSUNG: Build = Build {
     },
     vertical: UNCHECKED_VERTICALTABS,
     navigation: UNCHECKED_NAVIGATION,
-    tabs: UNCHECKED_TABS,
+    tabs: Tabs {
+        supported: true, // list, switch and close
+        content_window_for_hwnd: 0x00B5_A010,
+        browser_view_for_window: 0x0D9A_0A50,
+        // `BrowserView::GetActiveWebContents` reads the browser at +0x550 and its tab strip model at
+        // +0x1e0, then jumps to `TabStripModel::GetActiveWebContents`.
+        active_web_contents: 0x0D9A_0C60,
+        browser_in_view: 0x550,
+        groups: false,
+        get_tab_model: 0x02EB_E870, // `mov rax, [rcx + 0x1e0]; ret`, the browser's tab strip model
+        tab_count: 0x0322_A1F0,
+        // 143 has no function of its own for the web contents at an index. The tab collection answers
+        // the tab object at an index, and the object keeps its web contents at +0x60, which is where
+        // `TabStripModel::GetActiveWebContents` reads it.
+        tab_at: ABSENT,
+        tab_object: 0x0476_99D0,
+        tab_collection: 0x8,
+        tab_contents: 0x60,
+        activate_tab: 0x0877_7350,
+        close_tab: 0x0877_A5C0,
+        title: 0x007D_4FD0, // slot 57 of the web contents vtable at 0xe0fd4a8
+        // A new tab is the browser's own new-tab command.
+        new_tab: ABSENT,
+        last_committed_url: 0x0553_29B0, // slot 19 of the same vtable
+        // `GetVisibleURL` is slot 18 of the vtable. The address list asks for it only when the
+        // committed address is empty.
+        visible_url: 0x0468_D1A0,
+        get_group: 0x0323_3340,
+        signatures: &[
+            (0x00B5_A010, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0D9A_0A50, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0D9A_0C60, &[0x48, 0x8B, 0x81, 0x50, 0x05, 0x00, 0x00, 0x48, 0x8B, 0x88, 0xE0, 0x01, 0x00, 0x00, 0xE9]),
+            (0x02EB_E870, &[0x48, 0x8B, 0x81, 0xE0, 0x01, 0x00, 0x00, 0xC3]),
+            (0x0322_A1F0, &[0x48, 0x8B, 0x41, 0x08, 0x8B, 0x40, 0x18, 0xC3]),
+            (0x0476_99D0, &[0x48, 0x8B, 0x89, 0x98, 0x00, 0x00, 0x00, 0xEB, 0x11]),
+            (0x0877_7350, &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x68, 0x01, 0x00, 0x00]),
+            (0x0877_A5C0, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x48, 0x48, 0x8B, 0x05]),
+            (0x007D_4FD0, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x81]),
+            (0x0553_29B0, &[0x48, 0x63, 0x81, 0x9C, 0x02, 0x00, 0x00, 0x48, 0x83, 0xF8, 0xFF, 0x74]),
+            (0x0468_D1A0, &[0x48, 0x8B, 0x81, 0x78, 0x02, 0x00, 0x00, 0x48, 0x85, 0xC0, 0x0F, 0x85]),
+            (0x0323_3340, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD6, 0x45, 0x85, 0xC0, 0x78, 0x0E, 0x48]),
+        ],
+        ..UNCHECKED_TABS
+    },
     split: UNCHECKED_SPLIT,
     edge_vertical: None,
     edge_page: None,
@@ -2631,7 +2689,7 @@ mod tests {
         assert_eq!(SAMSUNG.module, "samsunginternet.dll");
         assert_eq!(SAMSUNG.version, [30, 0, 4, 29]);
         assert_eq!(SAMSUNG.toolbar.skip, "toolbar");
-        assert!(!SAMSUNG.vertical.supported && !SAMSUNG.tabs.supported && !SAMSUNG.split.supported);
+        assert!(!SAMSUNG.vertical.supported && SAMSUNG.tabs.supported && !SAMSUNG.tabs.groups && !SAMSUNG.split.supported);
         // The vtable has one function fewer than Chrome 150's before the top inset.
         assert_eq!(SAMSUNG.layout.top_inset_slot, CHROME_150.layout.top_inset_slot - 1);
         // Hooks without a verified address are absent, so their checks fail.
@@ -2652,6 +2710,18 @@ mod tests {
                 Some(prologue),
                 "{name} prologue does not match samsunginternet.dll"
             );
+        }
+        for (rva, bytes) in SAMSUNG.tabs.signatures {
+            assert_eq!(
+                file_bytes(&file, *rva, bytes.len()).as_deref(),
+                Some(*bytes),
+                "{rva:#x} does not match samsunginternet.dll"
+            );
+        }
+        // The web contents vtable keeps the title, committed address and visible address getters.
+        for (slot, target) in [(57, SAMSUNG.tabs.title), (19, SAMSUNG.tabs.last_committed_url), (18, SAMSUNG.tabs.visible_url)] {
+            let word = file_bytes(&file, 0xe0fd4a8 + slot * 8, 8).unwrap();
+            assert_eq!(u64::from_le_bytes(word.try_into().unwrap()), 0x1_8000_0000u64 + target as u64);
         }
         for (slot_rva, target) in [
             (layout.frame_vtable + layout.on_paint_slot * 8, layout.on_paint),
