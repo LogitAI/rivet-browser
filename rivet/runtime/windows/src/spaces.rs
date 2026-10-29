@@ -259,8 +259,9 @@ pub fn is_blank_tab(url: &str) -> bool {
 const MAX_STORED_TABS: usize = 500;
 /// The longest address or title the file keeps.
 const MAX_TEXT: usize = 4096;
-/// The file format version. A file of another version is ignored rather than guessed at.
-const FORMAT: u64 = 1;
+/// The file format version. A file of an unknown version is ignored rather than guessed at.
+/// Version 1 is still read, and its sample spaces are moved to the current defaults.
+const FORMAT: u64 = 2;
 
 /// What the file holds besides the spaces.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -329,7 +330,8 @@ impl Spaces {
     /// window start with the default spaces.
     pub fn from_json(text: &str) -> Option<Stored> {
         let root = json::parse(text)?;
-        if root.get("version")?.as_u64()? != FORMAT {
+        let version = root.get("version")?.as_u64()?;
+        if version != FORMAT && version != 1 {
             return None;
         }
         let items = root.get("spaces")?.as_array()?;
@@ -397,7 +399,33 @@ impl Spaces {
         let appbar = root.get("appbar")?;
         let width = appbar.get("width")?.as_u64()?.min(i32::MAX as u64) as i32;
         let hidden = appbar.get("hidden")?.as_bool()?;
-        Some(Stored { spaces: Spaces { list, current, saved }, width, hidden })
+        let mut spaces = Spaces { list, current, saved };
+        if version == 1 {
+            spaces.migrate_sample();
+        }
+        Some(Stored { spaces, width, hidden })
+    }
+
+    /// Version 1 files either had no browser at all or were rewritten with every space on Chrome,
+    /// so a file holding exactly the old sample spaces Work, Personal and Research on Chrome
+    /// never chose those browsers. It moves to the current defaults and keeps each space's tabs
+    /// by name. Any other set of spaces is the user's own and stays as it was.
+    fn migrate_sample(&mut self) {
+        let mut names: Vec<&str> = self.list.iter().map(|info| info.name.as_str()).collect();
+        names.sort_unstable();
+        let is_sample = names == ["Personal", "Research", "Work"]
+            && self.list.iter().all(|info| info.browser == BrowserKind::Chrome);
+        if !is_sample {
+            return;
+        }
+        let current_name = self.list[self.current].name.clone();
+        let mut migrated = Spaces::new();
+        for index in 0..migrated.list.len() {
+            let old = self.list.iter().position(|old| old.name == migrated.list[index].name).unwrap();
+            migrated.saved[index] = std::mem::take(&mut self.saved[old]);
+        }
+        migrated.current = migrated.list.iter().position(|info| info.name == current_name).unwrap();
+        *self = migrated;
     }
 }
 
@@ -807,7 +835,7 @@ mod tests {
             "{}",
             "[]",
             cut,
-            &good.replace("\"version\": 1", "\"version\": 2"),
+            &good.replace("\"version\": 2", "\"version\": 3"),
             &good.replace("\"current\": 0", "\"current\": 7"),
             &good.replace("\"tint\": 13666898", "\"tint\": -1"),
             &good.replace("\"hidden\": false", "\"hidden\": \"no\""),
@@ -875,6 +903,102 @@ mod tests {
         let future = text.replace("\"edge\"", "\"brave\"");
         assert_eq!(Spaces::from_json(&future).unwrap().spaces.list()[1].browser, BrowserKind::Chrome);
         assert!(Spaces::from_json(&text.replace("\"edge\"", "7")).is_none());
+    }
+
+    fn v1_file(spaces: &[String], current: usize) -> String {
+        format!(
+            "{{\"version\":1,\"current\":{current},\"appbar\":{{\"width\":310,\"hidden\":false}},\"spaces\":[{}]}}",
+            spaces.join(",")
+        )
+    }
+
+    fn v1_space(name: &str, tint: u32, browser: Option<&str>, profile: &str, url: &str) -> String {
+        let browser = browser.map(|b| format!("\"browser\":\"{b}\",")).unwrap_or_default();
+        format!(
+            "{{\"name\":\"{name}\",\"tint\":{tint},{browser}\"profile\":\"{profile}\",\"tabs\":[{{\"url\":\"{url}\",\"title\":\"t\",\"active\":true}}]}}"
+        )
+    }
+
+    fn rows(spaces: &Spaces) -> Vec<(String, u32, String)> {
+        spaces.list().iter().map(|s| (s.name.clone(), s.tint, s.badge())).collect()
+    }
+
+    #[test]
+    fn fr3_version_1_sample_file_without_browsers_migrates_to_the_defaults_and_keeps_tabs() {
+        let text = v1_file(
+            &[
+                v1_space("Work", 13666898, None, "Chrome \u{b7} Work", "https://w.test/"),
+                v1_space("Personal", 5999531, None, "Chrome \u{b7} Personal", "https://p.test/"),
+                v1_space("Research", 12605311, None, "Chrome \u{b7} Research", "https://r.test/"),
+            ],
+            1,
+        );
+        let mut loaded = Spaces::from_json(&text).unwrap().spaces;
+        assert_eq!(rows(&loaded), rows(&Spaces::new()));
+        // The current space was Personal, which now sits third.
+        assert_eq!(loaded.current(), 2);
+        assert_eq!(loaded.take_current_tabs()[0].url, "https://p.test/");
+        assert_eq!(loaded.saved[0][0].url, "https://w.test/");
+        assert_eq!(loaded.saved[1][0].url, "https://r.test/");
+        assert!(loaded.to_json(&[], 310, false, "d").contains("\"version\": 2"));
+    }
+
+    #[test]
+    fn fr3_the_owners_rewritten_all_chrome_sample_file_migrates() {
+        let text = v1_file(
+            &[
+                v1_space("Work", 13666898, Some("chrome"), "Work", "https://w.test/"),
+                v1_space("Personal", 5999531, Some("chrome"), "Default", "https://p.test/"),
+                v1_space("Research", 12605311, Some("chrome"), "Default", "https://r.test/"),
+            ],
+            0,
+        );
+        let loaded = Spaces::from_json(&text).unwrap().spaces;
+        assert_eq!(rows(&loaded), rows(&Spaces::new()));
+        assert_eq!(loaded.current(), 0);
+        assert_eq!(loaded.list()[1].browser, BrowserKind::Edge);
+        assert_eq!(loaded.list()[2].browser, BrowserKind::Whale);
+        assert_eq!(loaded.saved[1][0].url, "https://r.test/");
+    }
+
+    #[test]
+    fn fr3_custom_spaces_in_an_older_file_keep_their_data_and_default_to_chrome() {
+        let renamed = v1_file(
+            &[
+                v1_space("Work", 1, Some("chrome"), "Work", "https://w.test/"),
+                v1_space("Play", 2, Some("chrome"), "Default", "https://p.test/"),
+                v1_space("Research", 3, Some("chrome"), "Default", "https://r.test/"),
+            ],
+            1,
+        );
+        let loaded = Spaces::from_json(&renamed).unwrap().spaces;
+        assert_eq!(rows(&loaded)[1], ("Play".to_owned(), 2, "Chrome \u{b7} Default".to_owned()));
+        assert!(loaded.list().iter().all(|s| s.browser == BrowserKind::Chrome));
+        assert_eq!(loaded.current(), 1);
+        let added = v1_file(
+            &[
+                v1_space("Work", 1, None, "Chrome \u{b7} Work", "https://w.test/"),
+                v1_space("Mine", 2, None, "Chrome \u{b7} Mine", "https://m.test/"),
+            ],
+            0,
+        );
+        let loaded = Spaces::from_json(&added).unwrap().spaces;
+        assert_eq!(loaded.list()[1].badge(), "Chrome \u{b7} Mine");
+        assert_eq!(loaded.list()[0].tint, 1);
+    }
+
+    #[test]
+    fn fr3_version_2_round_trips_and_is_not_migrated() {
+        // A version 2 file with the sample names on Chrome is the user's choice.
+        let mut spaces = Spaces::new();
+        for info in &mut spaces.list {
+            info.browser = BrowserKind::Chrome;
+        }
+        let text = spaces.to_json(&[], 268, false, "d");
+        assert!(text.contains("\"version\": 2"));
+        let loaded = Spaces::from_json(&text).unwrap();
+        assert_eq!(loaded.spaces.list(), spaces.list());
+        assert_eq!(loaded.spaces.to_json(&[], 268, false, "d"), text);
     }
 
     #[test]
