@@ -1469,6 +1469,39 @@ unsafe extern "system" fn toolbar_layout(view: *mut c_void, key: usize) {
     scoped(widget_holding(view), || run(view, key));
 }
 
+/// Set while a container is being cut to fit, so the bounds change does not fit it again.
+static FITTING: AtomicBool = AtomicBool::new(false);
+
+/// In a Rivet window the infobar container can come out as wide as the whole browser view while it
+/// sits right of the appbar, which pushes the end of the bar out of the window. It is cut to the
+/// room its parent has left of it before it lays out its bars.
+unsafe extern "system" fn infobar_layout(view: *mut c_void, key: usize) {
+    let base = hooks().map_or(0, |hooks| hooks.base);
+    let layout = &crate::builds::get().layout;
+    if layout.set_bounds_rect != crate::builds::ABSENT
+        && is_rivet(widget_holding(view))
+        && !FITTING.swap(true, Ordering::Relaxed)
+    {
+        let bounds = |view: usize| {
+            let at = view + layout.view_bounds_offset;
+            [*(at as *const i32), *((at + 4) as *const i32), *((at + 8) as *const i32), *((at + 12) as *const i32)]
+        };
+        let parent = *((view as usize + bv().parent_offset) as *const usize);
+        if parent != 0 {
+            let [x, y, width, height] = bounds(view as usize);
+            let room = bounds(parent)[2] - x;
+            if room > 0 && width > room {
+                let set: unsafe extern "system" fn(*mut c_void, *const [i32; 4]) =
+                    std::mem::transmute(base + layout.set_bounds_rect);
+                set(view, &[x, y, room, height]);
+            }
+        }
+        FITTING.store(false, Ordering::Relaxed);
+    }
+    let run: unsafe extern "system" fn(*mut c_void, usize) = std::mem::transmute(base + bv().infobar_layout);
+    run(view, key);
+}
+
 /// Chooses the icon a button image is built from.
 unsafe extern "system" fn choose_icon(icon: usize) -> usize {
     if !active() {
@@ -1674,6 +1707,14 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
             || !holds(bv().web_contents_vtable, bv().web_contents_title_slot, bv().web_contents_title))
     {
         return Err("this browser build has no recorded web contents".into());
+    }
+    let layout = &crate::builds::get().layout;
+    if bv().infobar_vtable != crate::builds::ABSENT
+        && (!holds(bv().infobar_vtable, bv().infobar_layout_slot, bv().infobar_layout)
+            || layout.set_bounds_rect == crate::builds::ABSENT
+            || !image.has(layout.set_bounds_rect, layout.set_bounds_rect_prologue))
+    {
+        return Err("this browser build has no recorded infobar container".into());
     }
     for &(vtable, theme) in bv().hidden {
         if !holds(vtable, bv().theme_slot, theme) {
@@ -1987,6 +2028,12 @@ unsafe fn slots(base: usize, skip: &str) -> Result<(), String> {
         if !skip.contains("wlayout") {
             replace_slot(widget.add(bv().layout_slot), widget_layout as usize)?;
         }
+    }
+    if bv().infobar_vtable != crate::builds::ABSENT && !skip.contains("infobar") {
+        replace_slot(
+            ((base + bv().infobar_vtable) as *mut usize).add(bv().infobar_layout_slot),
+            infobar_layout as *const () as usize,
+        )?;
     }
     for (index, (vtable, _)) in bv().hidden.iter().enumerate() {
         if skip.contains("whidden") || skip.contains(&format!("h{index}h")) {

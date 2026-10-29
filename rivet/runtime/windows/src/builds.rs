@@ -278,6 +278,12 @@ pub struct Toolbar {
     /// (Brave does, from its browser view), so the layout would miss the Rivet scope. `ABSENT` when not needed.
     pub toolbar_layout: usize,
     pub toolbar_layout_prologue: &'static [u8],
+    /// The vtable of the infobar container, its `Layout` and that function's slot. A browser whose layout hands the
+    /// container the width of the whole browser view while it moves it right by the appbar's width makes the
+    /// container overflow its parent by that much, so a Rivet window's container is cut to fit before it lays out.
+    pub infobar_vtable: usize,
+    pub infobar_layout: usize,
+    pub infobar_layout_slot: usize,
     /// The padding of a toolbar button around its icon, and the margin the field's fill keeps from the top and
     /// bottom of the field view, both in DIPs. A build whose buttons or field are laid out larger or smaller than
     /// Chrome's needs other numbers to reach the 28 DIP button and the 28 DIP fill of the design.
@@ -930,6 +936,9 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     anchor_tracker_offset: 0,
     toolbar_layout: ABSENT,
     toolbar_layout_prologue: &[0],
+    infobar_vtable: ABSENT,
+    infobar_layout: ABSENT,
+    infobar_layout_slot: 0,
     leading_space: 32,
     toolbar_top: 5,
     toolbar_bottom: 4,
@@ -1428,6 +1437,9 @@ pub static CHROME: Build = Build {
         anchor_tracker_offset: 0x300,
         toolbar_layout: ABSENT,
         toolbar_layout_prologue: &[0],
+        infobar_vtable: ABSENT,
+        infobar_layout: ABSENT,
+        infobar_layout_slot: 0,
         leading_space: 32,
         toolbar_top: 5,
         toolbar_bottom: 4,
@@ -1948,6 +1960,9 @@ pub static EDGE: Build = Build {
         anchor_tracker_offset: 0x378, // BubbleDialogDelegate anchor view tracker, read by GetAnchorRect
         toolbar_layout: ABSENT,
         toolbar_layout_prologue: &[0],
+        infobar_vtable: ABSENT,
+        infobar_layout: ABSENT,
+        infobar_layout_slot: 0,
         leading_space: 32,
         toolbar_top: 5,
         toolbar_bottom: 4,
@@ -2706,6 +2721,9 @@ pub static BRAVE: Build = Build {
         anchor_tracker_offset: 0x300,
         toolbar_layout: 0x036F_FFD0, // ?Layout@BraveToolbarView@@UEAAXVPassKey@@@Z
         toolbar_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE],
+        infobar_vtable: 0x1113_FDE0, // ??_7BraveInfoBarContainerView@@6B@
+        infobar_layout: 0x02EE_1D00, // ?Layout@InfoBarContainerView@@UEAAXVPassKey@@@Z
+        infobar_layout_slot: 23,
         leading_space: 27,
         toolbar_top: 6, // the content is 28 DIPs tall, not Chrome's 34, and Brave adds 4 of its own: 6 and 5 reach the 43 DIP row
         toolbar_bottom: 5,
@@ -3295,6 +3313,8 @@ mod tests {
         for (vtable, theme) in toolbar.hidden {
             assert_eq!(pointer(vtable + toolbar.theme_slot * 8), Some(*theme), "hidden view at {vtable:#x}");
         }
+        assert_eq!(pointer(toolbar.infobar_vtable + toolbar.infobar_layout_slot * 8), Some(toolbar.infobar_layout));
+        assert!(BRAVE.layout.set_bounds_rect != ABSENT && BRAVE.layout.view_bounds_offset == 0x1C8);
         // Each navigation icon carries the name recorded for it.
         for (rva, name) in [toolbar.back_icon, toolbar.forward_icon, toolbar.reload_icon].into_iter().zip(toolbar.nav_icon_names) {
             let name_pointer = pointer(rva + 16).expect("icon is mapped");
