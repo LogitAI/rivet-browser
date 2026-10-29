@@ -1807,7 +1807,7 @@ unsafe fn ground_holes(window: HWND) -> Vec<crate::ground::Hole> {
             let cut = (leading - rect.x).max(0).min(rect.width - 1);
             rect.x += cut;
             rect.width -= cut;
-            vec![Hole { rect, raise: Raise::Page }]
+            vec![Hole { rect, raise: Raise::Page, cover: None }]
         })
         .unwrap_or_default()
 }
@@ -1828,11 +1828,35 @@ unsafe fn ground_holes_at(window: HWND) -> Vec<crate::ground::Hole> {
     holes
 }
 
+thread_local! {
+    static EDGE_TRAILS: RefCell<HashMap<isize, crate::ground::EdgeTrail>> = RefCell::new(HashMap::new());
+}
+
+/// Ticks while a page's newly exposed strip is still covered, so the cover goes away on its own.
+const COVER_TIMER: usize = 0x5249_5653;
+
+/// A page that grows leftward has room the browser has not painted yet for a moment, and what
+/// shows there is the browser's own frame, which is blue. The ground covers that strip with paper
+/// until the browser has drawn the page into its new width.
+unsafe fn cover_exposed_strip(window: HWND, holes: &mut [crate::ground::Hole]) {
+    let [hole] = holes else { return };
+    let reach = EDGE_TRAILS.with(|trails| {
+        trails.borrow_mut().entry(window as isize).or_default().push(now_ms() as u64, hole.rect.x)
+    });
+    hole.cover = reach;
+    if reach.is_some() {
+        SetTimer(window, COVER_TIMER, 16, None);
+    } else {
+        KillTimer(window, COVER_TIMER);
+    }
+}
+
 /// Draws the window's ground for the pages the browser has laid out.
 unsafe fn sync_ground(window: HWND, appbar: &mut Appbar, visible: bool, dpi: u32) {
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
-    let holes = ground_holes_at(window);
+    let mut holes = ground_holes_at(window);
+    cover_exposed_strip(window, &mut holes);
     if let Err(error) = appbar.update_ground(visible, client.right, client.bottom, dpi, &holes) {
         log(&format!("rivet: could not draw the ground: {error}"));
     }
@@ -2345,6 +2369,12 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             if wparam == PEEK_TIMER && attached(window) =>
         {
             peek_tick(window);
+            0
+        }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
+            if wparam == COVER_TIMER && attached(window) =>
+        {
+            panel_moved(window);
             0
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER

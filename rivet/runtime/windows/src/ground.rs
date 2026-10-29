@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    CLSID_D2D1Shadow, ID2D1DeviceContext, ID2D1Geometry, ID2D1Image, ID2D1Layer, ID2D1RenderTarget,
+    CLSID_D2D1Shadow, ID2D1DeviceContext, ID2D1Factory, ID2D1Geometry, ID2D1Image, ID2D1Layer, ID2D1RenderTarget,
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2,
     D2D1_INTERPOLATION_MODE_LINEAR, D2D1_LAYER_OPTIONS1_NONE, D2D1_LAYER_PARAMETERS1,
     D2D1_PROPERTY_TYPE_UNKNOWN, D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES, D2D1_ROUNDED_RECT,
@@ -21,6 +21,8 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 /// The frame colour of the Work space.
 pub const FRAME: u32 = 0xece8e2;
+/// The paper of a page that has not painted yet.
+pub const PAPER: u32 = 0xfbfaf7;
 /// The radius of a page panel, in device-independent pixels.
 pub const RADIUS: f32 = 12.0;
 
@@ -41,6 +43,30 @@ pub enum Raise {
 pub struct Hole {
     pub rect: Rect,
     pub raise: Raise,
+    /// A strip of the page's leading edge, up to this x in the browser's layout, that the browser
+    /// has made room for but has not painted yet. The ground covers it with paper, so the
+    /// browser's own frame never shows there.
+    pub cover: Option<i32>,
+}
+
+/// How long a page's newly exposed leading strip is covered, which is about as long as the
+/// browser takes to draw the page into its new width.
+pub const COVER_MS: u64 = 80;
+
+/// The leading edges a page panel had lately, to find the strip a layout exposed.
+#[derive(Default)]
+pub struct EdgeTrail(Vec<(u64, i32)>);
+
+impl EdgeTrail {
+    /// Records that the page's leading edge is at `left` at time `now`, in milliseconds, and
+    /// returns how far right the strip between the edge and its recent positions reaches, when
+    /// the edge moved left within the last [`COVER_MS`].
+    pub fn push(&mut self, now: u64, left: i32) -> Option<i32> {
+        self.0.retain(|(at, _)| now.saturating_sub(*at) < COVER_MS);
+        let reach = self.0.iter().map(|(_, edge)| *edge).max().filter(|edge| *edge > left);
+        self.0.push((now, left));
+        reach
+    }
 }
 
 /// A page's shadows as the shell study gives them: the ring's opacity, then `(offset_y, blur,
@@ -97,6 +123,7 @@ pub fn split_holes(pages: &[Rect], active: usize, row: i32) -> Vec<Hole> {
         .map(|(index, page)| Hole {
             rect: Rect { x: page.x, y: page.y - row, width: page.width, height: page.height + row },
             raise: if index == active { Raise::Focused } else { Raise::Other },
+            cover: None,
         })
         .collect()
 }
@@ -196,7 +223,45 @@ pub unsafe fn paint(
         Ok(())
     })();
     context.PopLayer();
-    result
+    result?;
+    cover_strips(context, &factory, &stacked, &areas, scale, radius)
+}
+
+/// Paints the paper over the leading strip of every page that has one, inside the page's own
+/// rounded corners.
+unsafe fn cover_strips(
+    context: &ID2D1DeviceContext,
+    factory: &ID2D1Factory,
+    holes: &[Hole],
+    areas: &[D2D_RECT_F],
+    scale: f32,
+    radius: f32,
+) -> Result<()> {
+    for (hole, area) in holes.iter().zip(areas) {
+        let Some(reach) = hole.cover else { continue };
+        let right = (reach as f32 * scale).round().min(area.right);
+        if right <= area.left {
+            continue;
+        }
+        let page: ID2D1Geometry = factory
+            .CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT { rect: *area, radiusX: radius, radiusY: radius })?
+            .cast()?;
+        let mut layer = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: rect(-1.0e6, -1.0e6, 1.0e6, 1.0e6),
+            geometricMask: ManuallyDrop::new(Some(page)),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+        };
+        context.PushLayer(&layer, None::<&ID2D1Layer>);
+        ManuallyDrop::drop(&mut layer.geometricMask);
+        let strip = rect(area.left, area.top, right, area.bottom);
+        context.FillRectangle(&strip, &context.CreateSolidColorBrush(&rgba(PAPER, 1.0), None)?);
+        context.PopLayer();
+    }
+    Ok(())
 }
 
 /// One CSS box shadow of a rounded rectangle: the shape blurred by a Gaussian of half the blur
@@ -260,10 +325,30 @@ mod tests {
     }
 
     #[test]
+    fn fr12_a_page_that_grows_leftward_covers_the_strip_it_exposed_until_the_browser_paints() {
+        let mut trail = EdgeTrail::default();
+        assert_eq!(trail.push(0, 300), None);
+        assert_eq!(trail.push(16, 296), Some(300));
+        assert_eq!(trail.push(32, 280), Some(300));
+        assert_eq!(trail.push(60, 280), Some(300));
+        // Once the older positions are past the cover time, only the later ones count.
+        assert_eq!(trail.push(90, 280), Some(296));
+        assert_eq!(trail.push(100, 280), None);
+    }
+
+    #[test]
+    fn fr12_a_page_that_shrinks_or_rests_covers_nothing() {
+        let mut trail = EdgeTrail::default();
+        assert_eq!(trail.push(0, 280), None);
+        assert_eq!(trail.push(16, 296), None);
+        assert_eq!(trail.push(32, 296), None);
+    }
+
+    #[test]
     fn fr12_the_raised_page_is_painted_last() {
         let holes = [
-            Hole { rect: PAGE, raise: Raise::Focused },
-            Hole { rect: Rect { x: 0, ..PAGE }, raise: Raise::Other },
+            Hole { rect: PAGE, raise: Raise::Focused, cover: None },
+            Hole { rect: Rect { x: 0, ..PAGE }, raise: Raise::Other, cover: None },
         ];
         assert_eq!(stacked(&holes).last().map(|hole| hole.raise), Some(Raise::Focused));
     }
