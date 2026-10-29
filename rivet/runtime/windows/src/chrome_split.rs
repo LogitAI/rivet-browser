@@ -500,6 +500,20 @@ unsafe extern "system" fn calculate_layout(
             gap = *(between as *const usize);
             narrow_gap(&mut *child_bounds(first), &mut *child_bounds(between), &mut *child_bounds(second));
         }
+        // Pages stacked on top of each other: the lower page's top row goes into the space the
+        // resize area leaves, so the upper page ends higher.
+        let stacked_between = shown.iter().copied().find(|child| {
+            let rect = *child_bounds(*child);
+            a[0] == b[0] && a[2] == b[2] && rect[1] == a[1] + a[3] && rect[1] + rect[3] == b[1]
+        });
+        if let Some(between) = stacked_between {
+            gap = *(between as *const usize);
+            let bottom = b[1] - ROW_HEIGHT - PANEL_GAP;
+            (*child_bounds(first))[3] = (bottom - a[1]).max(1);
+            let strip = &mut *child_bounds(between);
+            strip[1] = bottom;
+            strip[3] = PANEL_GAP;
+        }
     }
     let rects = panes
         .iter()
@@ -749,6 +763,12 @@ fn side_by_side(rects: &[Rect]) -> bool {
     rects.windows(2).all(|pair| pair[0].y == pair[1].y)
 }
 
+/// Whether the pages are laid out as a row or as a column, which are the layouts Rivet draws rows
+/// for.
+fn in_a_line(rects: &[Rect]) -> bool {
+    side_by_side(rects) || rects.windows(2).all(|pair| pair[0].x == pair[1].x)
+}
+
 /// The tabs of the split the active tab is in, in strip order, which is the order of its pages.
 unsafe fn split_tabs(window: HWND) -> Vec<usize> {
     let Some(base) = checked_base() else { return Vec::new() };
@@ -793,7 +813,7 @@ pub unsafe fn panes(window: HWND) -> Vec<Pane> {
     }) else {
         return Vec::new();
     };
-    if !side_by_side(&split.rects) {
+    if !in_a_line(&split.rects) {
         return Vec::new();
     }
     let active = *((split.view + ACTIVE_MEMBER) as *const i32);
@@ -811,7 +831,11 @@ pub unsafe fn panes(window: HWND) -> Vec<Pane> {
             active: index as i32 == active,
             first: index == 0,
             last: index + 1 == count,
-            caption: caption_over(window_right, area[0] + rect.x + rect.width),
+            caption: if rect.y == split.rects[0].y {
+                caption_over(window_right, area[0] + rect.x + rect.width)
+            } else {
+                0.0
+            },
             tab: tabs.get(index).copied().unwrap_or(0),
         })
         .collect()
@@ -838,13 +862,14 @@ pub unsafe fn fit_toolbar(window: HWND, toolbar: &mut [i32; 4], contents: &[i32;
     }) else {
         return leave();
     };
-    if split.rects.len() < 2 || !side_by_side(&split.rects) || !active_is_split(window) {
+    if split.rects.len() < 2 || !in_a_line(&split.rects) || !active_is_split(window) {
         return leave();
     }
     let active = (*((split.view + ACTIVE_MEMBER) as *const i32)).max(0) as usize;
     let Some(pane) = split.rects.get(active) else { return leave() };
     let window_right = client_right(window);
-    let caption = caption_over(window_right, contents[0] + pane.x + pane.width);
+    let on_top = pane.y == split.rects[0].y;
+    let caption = if on_top { caption_over(window_right, contents[0] + pane.x + pane.width) } else { 0.0 };
     let buttons = row_buttons(pane.width as f32, active == 0, caption);
     {
         let mut all = ADDRESS_ONLY.lock().unwrap_or_else(|error| error.into_inner());
@@ -852,7 +877,10 @@ pub unsafe fn fit_toolbar(window: HWND, toolbar: &mut [i32; 4], contents: &[i32;
             all.push(window as isize);
         }
     }
-    match buttons.iter().find(|button| button.0 == RowButton::Address) {
+    // The browser clips its top row to the strip above the pages, so only a page whose row is that
+    // strip can show the browser's address bar. The row of a lower page draws its address itself.
+    let address = buttons.iter().find(|button| button.0 == RowButton::Address).filter(|_| on_top);
+    match address {
         Some((_, x, width)) => {
             toolbar[0] = contents[0] + pane.x + *x as i32;
             toolbar[2] = *width as i32;

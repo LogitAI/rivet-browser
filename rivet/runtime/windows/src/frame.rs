@@ -453,6 +453,7 @@ unsafe fn pane_rows(window: HWND) -> Vec<crate::appbar::PaneRow> {
                 reach_right: 0.0,
                 caption: pane.caption * factor,
                 active: pane.active,
+                editable: pane.active && pane.y == panes[0].y,
                 first: pane.first,
                 last: pane.last,
                 title: saved.map(|tab| tab.title.clone()).unwrap_or_default(),

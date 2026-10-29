@@ -200,6 +200,9 @@ pub(crate) struct PaneRow {
     /// The width at the row's right end that the native caption buttons keep, in pixels.
     pub caption: f32,
     pub active: bool,
+    /// Whether the browser's own address bar sits in this row, which is the focused page's row when
+    /// that is the topmost one.
+    pub editable: bool,
     pub first: bool,
     pub last: bool,
     pub title: String,
@@ -1577,7 +1580,7 @@ impl Canvas<'_> {
         // the row. Everything else on every row is drawn here.
         let hole = buttons
             .iter()
-            .find(|b| b.0 == RowButton::Address && row.active)
+            .find(|b| b.0 == RowButton::Address && row.editable)
             .map(|b| (b.1, b.2));
         match hole {
             Some((left, width)) => {
@@ -1600,7 +1603,7 @@ impl Canvas<'_> {
         }
         for (button, x, width) in buttons {
             let area = rect(ox + x, oy + (h - 28.0) / 2.0, width, 28.0);
-            if row.active && button == RowButton::Address {
+            if row.editable && button == RowButton::Address {
                 continue;
             }
             let hot = row.hover == Some(button);
