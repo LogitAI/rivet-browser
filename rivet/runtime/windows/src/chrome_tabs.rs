@@ -306,7 +306,40 @@ pub unsafe fn close_tab(window: HWND, index: usize) -> bool {
     true
 }
 
+/// The code that runs the browser's new-tab command, which the new-tab hook leaves to its caller.
+pub(crate) static ORIGINAL_NEW_TAB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+thread_local! {
+    /// Set while Rivet itself opens a tab, which then chooses its own page.
+    static OWN_NEW_TAB: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Stands in for the browser's new-tab command. Every way of opening a tab ends in it, so the
+/// appbar, Ctrl+T and the browser's own menus all give a Rivet window's new tab the start page,
+/// and a window that is not Rivet's keeps the browser's own new tab page.
+pub(crate) unsafe extern "system" fn new_tab_hook(browser: *mut c_void, kind: i32) -> *mut c_void {
+    let original: NewTab2 = std::mem::transmute_copy(&ORIGINAL_NEW_TAB.load(std::sync::atomic::Ordering::Acquire));
+    let contents = original(browser, kind);
+    if !contents.is_null() && !OWN_NEW_TAB.with(std::cell::Cell::get) {
+        if let Some(window) = crate::chrome_toolbar::current_window() {
+            if let Some(url) = crate::frame::start_url_of(window) {
+                let opened = crate::chrome_navigation::open_page(contents, &url);
+                crate::vertical_tabs::trace(&format!("new tab in a Rivet window opens the start page: {opened}"));
+            }
+        }
+    }
+    contents
+}
+type NewTab2 = unsafe extern "system" fn(*mut c_void, i32) -> *mut c_void;
+
 pub unsafe fn new_tab(window: HWND) -> bool {
+    OWN_NEW_TAB.with(|own| own.set(true));
+    let opened = open_new_tab(window);
+    OWN_NEW_TAB.with(|own| own.set(false));
+    opened
+}
+
+unsafe fn open_new_tab(window: HWND) -> bool {
     let Some(base) = base() else { return false };
     if bv().new_tab == crate::builds::ABSENT {
         // The browser's own new-tab command, as its menu sends it.

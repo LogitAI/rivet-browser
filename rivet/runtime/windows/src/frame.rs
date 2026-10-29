@@ -577,6 +577,12 @@ unsafe fn start_url(space: &str) -> Option<String> {
     runtime_directory().map(|directory| rivet_core::start_page_url(&directory, space))
 }
 
+/// The address of the Rivet start page for the space `window` shows.
+pub(crate) unsafe fn start_url_of(window: HWND) -> Option<String> {
+    let space = with_spaces(window, |spaces| spaces.list()[spaces.current()].name.clone());
+    start_url(&space)
+}
+
 unsafe fn start_page(window: HWND) {
     let space = with_spaces(window, |spaces| spaces.list()[spaces.current()].name.clone());
     if let Some(url) = start_url(&space) {

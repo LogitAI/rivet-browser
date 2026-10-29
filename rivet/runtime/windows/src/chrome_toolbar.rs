@@ -150,6 +150,17 @@ pub(crate) fn active() -> bool {
     CURRENT.with(Cell::get) != 0
 }
 
+/// The Rivet window the UI thread is working for, if any.
+pub(crate) fn current_window() -> Option<HWND> {
+    let widget = CURRENT.with(Cell::get);
+    WINDOWS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(known, _)| *known == widget && widget != 0)
+        .map(|(_, window)| *window as HWND)
+}
+
 unsafe fn colour_slot(provider: *const u8, id: i32) -> Option<*mut u32> {
     let mut node = *(provider.add(0x18) as *const *mut u8);
     while !node.is_null() {
@@ -1572,7 +1583,7 @@ pub(crate) fn jump(code: &mut Vec<u8>, to: usize) {
 /// original. `prologue` is checked first and is copied whole, unless the function reloads its
 /// stack cookie relative to itself: then `prologue` ends with that seven byte load, and the
 /// trampoline copies what comes before it and loads the same cookie from its absolute address.
-unsafe fn detour(
+pub(crate) unsafe fn detour(
     base: usize,
     rva: usize,
     prologue: &[u8],
@@ -1826,6 +1837,20 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
             &bv().set_visible_prologue,
             set_visible as usize,
             &ORIGINAL_SET_VISIBLE,
+        )?;
+    }
+    if !skip.contains("newtab")
+        && !crate::builds::get().tabs.new_tab_prologue.is_empty()
+        && crate::builds::get().tabs.supported
+        && crate::builds::get().navigation.supported
+    {
+        let tabs = &crate::builds::get().tabs;
+        detour(
+            base,
+            tabs.new_tab,
+            tabs.new_tab_prologue,
+            crate::chrome_tabs::new_tab_hook as usize,
+            &crate::chrome_tabs::ORIGINAL_NEW_TAB,
         )?;
     }
     if !address {

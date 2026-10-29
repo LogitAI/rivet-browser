@@ -86,6 +86,16 @@ pub unsafe fn open(window: HWND, url: &str) -> bool {
     let Some(contents) = web_contents(base, window) else {
         return false;
     };
+    open_in(base, contents, url)
+}
+
+/// Opens `url` in the page `contents`, for a page that is not yet the window's active one.
+pub unsafe fn open_page(contents: *mut c_void, url: &str) -> bool {
+    let Some(base) = base() else { return false };
+    open_in(base, contents, url)
+}
+
+unsafe fn open_in(base: usize, contents: *mut c_void, url: &str) -> bool {
     let mut target = Raw::<GURL_SIZE>::zeroed();
     let text = [url.as_ptr() as usize, url.len()];
     function::<GurlFromText>(base, bv().gurl_from_text)(target.at(), &text);

@@ -427,6 +427,9 @@ pub struct Tabs {
     pub close_tab: usize,
     pub title: usize,
     pub new_tab: usize,
+    /// The first instructions of `chrome::NewTab`, which every new-tab command of the browser
+    /// ends in. When this is not empty, a new tab in a Rivet window opens the Rivet start page.
+    pub new_tab_prologue: &'static [u8],
     /// `WebContentsImpl::GetLastCommittedURL` and `GetVisibleURL`, which return a `const GURL&`.
     pub last_committed_url: usize,
     pub visible_url: usize,
@@ -851,6 +854,7 @@ const UNCHECKED_TABS: Tabs = Tabs {
     close_tab: ABSENT,
     title: ABSENT,
     new_tab: ABSENT,
+    new_tab_prologue: &[],
     last_committed_url: ABSENT,
     visible_url: ABSENT,
     get_group: ABSENT,
@@ -1345,6 +1349,7 @@ pub static CHROME: Build = Build {
         activate_tab: 0x0311_2220, // ?ActivateTabAt@TabStripModel@@QEAAXHUTabStripUserGestureDetails@@@Z
         close_tab: 0x0A20_11B0, // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
         title: 0x00D7_8440, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator
+        new_tab_prologue: &[],
         new_tab: 0x0A0B_8F50, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
         last_committed_url: 0x058A_48A0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
         visible_url: 0x05CF_8BA0, // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
@@ -1797,7 +1802,7 @@ pub static EDGE: Build = Build {
         detour_strip: false,
     },
     navigation: Navigation {
-        supported: false, // not checked on Edge yet
+        supported: true, // opening an address in a tab checked on Edge 156.0.4314.50
         content_window_for_hwnd: 0x026A4DC6, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         browser_view_for_window: 0x010CDAE8, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
         active_web_contents: 0x0CAE5550, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
@@ -1832,6 +1837,7 @@ pub static EDGE: Build = Build {
         activate_tab: 0x0A404C92, // ?ActivateTabAt@TabStripModel@@QEAAXHUTabStripUserGestureDetails@@@Z
         close_tab: 0x0A4080EA, // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
         title: 0x01119470, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?
+        new_tab_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x18, 0x01, 0x00, 0x00, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x71, 0xD7, 0xF3, 0x09],
         new_tab: 0x0A2B68B0, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
         last_committed_url: 0x0115B9E0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
         visible_url: 0x01056C50, // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
@@ -1856,7 +1862,8 @@ pub static EDGE: Build = Build {
             (0x0A404C92, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38]),
             (0x0A4080EA, &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC]),
             (0x01119470, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x48]),
-            (0x0A2B68B0, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]),
+            // `chrome::NewTab` is checked by its own prologue when the hook is installed, which
+            // changes its first bytes, so it is not listed here.
             (0x0115B9E0, &[0x48, 0x63, 0x81, 0xD4, 0x02, 0x00, 0x00]),
             (0x01056C50, &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x81, 0xC1]),
         ],
@@ -2134,6 +2141,7 @@ pub static WHALE: Build = Build {
         close_tab: 0x0818BE60,
         title: 0x06764D90,
         // Whale's `chrome::NewTab` is not mapped; a new tab is the browser's own new-tab command.
+        new_tab_prologue: &[],
         new_tab: ABSENT,
         last_committed_url: 0x06762170,
         visible_url: 0x06762120,
@@ -2222,6 +2230,18 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn fr3_edge_new_tab_hook_is_recorded_and_chrome_keeps_its_own() {
+        let tabs = &EDGE.tabs;
+        assert!(!tabs.new_tab_prologue.is_empty());
+        // The prologue ends with the stack cookie load the detour relocates.
+        let n = tabs.new_tab_prologue.len();
+        assert_eq!(tabs.new_tab_prologue[n - 7..n - 4], [0x48, 0x8B, 0x05]);
+        assert!(EDGE.navigation.supported);
+        assert!(CHROME.tabs.new_tab_prologue.is_empty());
+        assert!(CHROME_150.tabs.new_tab_prologue.is_empty());
     }
 
     #[test]
