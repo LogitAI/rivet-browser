@@ -18,7 +18,7 @@ use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{VirtualProtect, PAGE_PROTECTION_FLAGS, PAGE_READWRITE};
 
-/// The loaded `chrome.dll`, checked before any recorded address is read.
+/// The loaded browser module, checked before any recorded address is read.
 ///
 /// Every address Rivet patches or calls is an offset into one exact Chrome build. Reading such an
 /// offset in another build can leave the mapped image and crash the browser, so the module's own
@@ -27,10 +27,8 @@ use windows_sys::Win32::System::Memory::{VirtualProtect, PAGE_PROTECTION_FLAGS, 
 pub mod image {
     use std::sync::OnceLock;
 
+    use crate::builds::{self, Build};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-
-    /// The only Chrome build whose offsets are recorded in the runtime.
-    pub const RECORDED_VERSION: [u16; 4] = [156, 0, 8078, 48];
 
     #[derive(Clone, Copy, Debug)]
     pub struct Image {
@@ -164,16 +162,26 @@ pub mod image {
         (file_version(bytes)? == version).then_some(Image { base, size })
     }
 
-    static IMAGE: OnceLock<Option<Image>> = OnceLock::new();
+    static IMAGE: OnceLock<Option<(Image, &'static Build)>> = OnceLock::new();
 
-    /// The loaded Chrome whose offsets are recorded, or `None` for any other build or process.
-    pub fn recorded() -> Option<Image> {
+    fn matched() -> Option<(Image, &'static Build)> {
         *IMAGE.get_or_init(|| unsafe {
-            verify(
-                GetModuleHandleW(windows_sys::w!("chrome.dll")) as usize,
-                RECORDED_VERSION,
-            )
+            builds::all().iter().find_map(|build| {
+                let module: Vec<u16> = build.module.encode_utf16().chain(Some(0)).collect();
+                let image = verify(GetModuleHandleW(module.as_ptr()) as usize, build.version)?;
+                Some((image, *build))
+            })
         })
+    }
+
+    /// The loaded browser whose offsets are recorded, or `None` for any other build or process.
+    pub fn recorded() -> Option<Image> {
+        matched().map(|(image, _)| image)
+    }
+
+    /// The table row of the loaded browser.
+    pub fn recorded_build() -> Option<&'static Build> {
+        matched().map(|(_, build)| build)
     }
 
     #[cfg(test)]
@@ -226,14 +234,14 @@ pub mod image {
         #[test]
         fn nfr3_version_resource_names_the_build() {
             let image = fake([156, 0, 8078, 48]);
-            assert_eq!(file_version(&image), Some(RECORDED_VERSION));
+            assert_eq!(file_version(&image), Some([156, 0, 8078, 48]));
             assert_eq!(size_of_image(&image), Some(0x2000));
         }
 
         #[test]
         fn nfr3_another_version_is_not_the_recorded_one() {
             let image = fake([157, 0, 8100, 1]);
-            assert_ne!(file_version(&image), Some(RECORDED_VERSION));
+            assert_ne!(file_version(&image), Some([156, 0, 8078, 48]));
         }
 
         #[test]
@@ -269,6 +277,11 @@ pub mod image {
 }
 
 use image::Image;
+
+/// The values of the loaded browser build.
+fn bv() -> &'static crate::builds::Layout {
+    &crate::builds::get().layout
+}
 
 fn recorded_image() -> Result<Image, String> {
     image::recorded().ok_or_else(|| "this browser build is not supported yet".to_owned())
@@ -348,20 +361,6 @@ struct Hook {
 
 static HOOK: OnceLock<Result<Hook, String>> = OnceLock::new();
 
-/// Experiment, Chrome 156.0.8078.48 only. The frame view paints its title bar with colours from
-/// a colour provider that other windows of the profile share. Rivet wraps the frame view's
-/// `OnPaint` and swaps the frame colours in that provider only while a Rivet window paints.
-///
-/// `views::View::GetColorProvider` returns the provider. It keeps generated colours in a tree
-/// whose nodes hold the colour id at `+0x20` and the colour at `+0x24`.
-const ON_PAINT_SLOT: usize = 89;
-const ON_PAINT: usize = 0x011B_5610;
-const GET_COLOR_PROVIDER: usize = 0x04AA_27D0;
-const DRAW_COLOR: usize = 0x036B_AD80;
-/// The active, inactive and unthemed-inactive frame colour ids. The last one fills the band
-/// behind the top row, which the panel's rounded corners now reveal. An active window with an
-/// unthemed frame may read 0x13D and 0x144, which hold the same blue as the active colour.
-const FRAME_IDS: [i32; 5] = [0x13C, 0x13D, 0x140, 321, 0x144];
 type OnPaint = unsafe extern "system" fn(*const c_void, *const c_void);
 type GetProvider = unsafe extern "system" fn(*const c_void) -> *const u8;
 type DrawColor = unsafe extern "system" fn(*const c_void, u32);
@@ -394,7 +393,7 @@ unsafe extern "system" fn on_paint(view: *const c_void, canvas: *const c_void) {
         return original(view, canvas);
     };
     draw_color(canvas, colour);
-    let saved: Vec<(*mut u32, u32)> = FRAME_IDS
+    let saved: Vec<(*mut u32, u32)> = bv().frame_ids
         .iter()
         .filter_map(|id| colour_slot(provider, *id))
         .map(|slot| (slot, slot.read()))
@@ -408,12 +407,6 @@ unsafe extern "system" fn on_paint(view: *const c_void, canvas: *const c_void) {
     }
 }
 
-/// Experiment, Chrome 156.0.8078.48 only. `CustomFloatingCorner::OnPaint`: the browser view's two
-/// corner views at the page's left edge fill a wedge with the browser's frame colour, which
-/// rounds the page's corners against the frame. In a Rivet window the frame is Rivet's, so the
-/// wedge is painted with Rivet's frame colour instead of Chrome's blue.
-const CORNER_VTABLE: usize = 0x0FEC_AFC8;
-const CORNER_PAINT: usize = 0x0A4C_73A0;
 static CORNER_ORIGINAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 unsafe extern "system" fn corner_paint(view: *const c_void, canvas: *const c_void) {
@@ -427,7 +420,7 @@ unsafe extern "system" fn corner_paint(view: *const c_void, canvas: *const c_voi
     let Some((colour, provider)) = colour.filter(|(_, provider)| !provider.is_null()) else {
         return original(view, canvas);
     };
-    let saved: Vec<(*mut u32, u32)> = FRAME_IDS
+    let saved: Vec<(*mut u32, u32)> = bv().frame_ids
         .iter()
         .filter_map(|id| colour_slot(provider, *id))
         .map(|slot| (slot, slot.read()))
@@ -442,12 +435,12 @@ unsafe extern "system" fn corner_paint(view: *const c_void, canvas: *const c_voi
 }
 
 unsafe fn install_corner_paint(image: &Image) -> Result<(), String> {
-    let slot_rva = CORNER_VTABLE + ON_PAINT_SLOT * 8;
-    if !image.has(CORNER_PAINT, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]) {
+    let slot_rva = bv().corner_vtable + bv().on_paint_slot * 8;
+    if !image.has(bv().corner_paint, bv().corner_paint_prologue) {
         return Err("this browser build has no recorded corner paint".into());
     }
-    CORNER_ORIGINAL.store(image.base + CORNER_PAINT, std::sync::atomic::Ordering::Relaxed);
-    replace_vtable_slot(image, slot_rva, CORNER_PAINT, corner_paint as *const () as usize, "corner view vtable")
+    CORNER_ORIGINAL.store(image.base + bv().corner_paint, std::sync::atomic::Ordering::Relaxed);
+    replace_vtable_slot(image, slot_rva, bv().corner_paint, corner_paint as *const () as usize, "corner view vtable")
 }
 
 /// Experiment: lets Rivet choose the title bar colour of its own windows only.
@@ -456,24 +449,24 @@ pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
         return Ok(());
     }
     let image = recorded_image()?;
-    let slot_rva = 0x0FE7_3E28 + ON_PAINT_SLOT * 8;
-    if !image.points_to(slot_rva, ON_PAINT) {
+    let slot_rva = bv().frame_vtable + bv().on_paint_slot * 8;
+    if !image.points_to(slot_rva, bv().on_paint) {
         return Err("this browser build has no recorded frame paint".into());
     }
-    if !image.has(ON_PAINT, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54])
-        || !image.has(DRAW_COLOR, &[0x48, 0x83, 0xec, 0x38, 0x48, 0x8b])
-        || !image.has(GET_COLOR_PROVIDER, &[0x56, 0x57, 0x48, 0x83, 0xec, 0x78])
+    if !image.has(bv().on_paint, bv().on_paint_prologue)
+        || !image.has(bv().draw_color, bv().draw_color_prologue)
+        || !image.has(bv().get_color_provider, bv().get_color_provider_prologue)
     {
         return Err("this browser build has no recorded frame paint helpers".into());
     }
     let base = image.base;
     let _ = PAINT.set((
-        std::mem::transmute::<usize, OnPaint>(base + ON_PAINT),
-        std::mem::transmute::<usize, GetProvider>(base + GET_COLOR_PROVIDER),
-        std::mem::transmute::<usize, DrawColor>(base + DRAW_COLOR),
+        std::mem::transmute::<usize, OnPaint>(base + bv().on_paint),
+        std::mem::transmute::<usize, GetProvider>(base + bv().get_color_provider),
+        std::mem::transmute::<usize, DrawColor>(base + bv().draw_color),
         paint,
     ));
-    replace_vtable_slot(&image, slot_rva, ON_PAINT, on_paint as *const () as usize, "frame view vtable")?;
+    replace_vtable_slot(&image, slot_rva, bv().on_paint, on_paint as *const () as usize, "frame view vtable")?;
     install_corner_paint(&image)
 }
 
@@ -677,20 +670,12 @@ mod tests {
     }
 }
 
-/// Experiment, Chrome 156.0.8078.48 only: `WindowsCaptionButton::CalculatePreferredSize` in the
-/// caption button's vtable. Rivet windows get caption buttons as tall as the shell study's top
-/// row, so the native buttons sit centred in it.
-const CAPTION_VTABLE: usize = 0x0FF0_25C8;
-const CAPTION_SIZE_SLOT: usize = 74;
-const CAPTION_SIZE: usize = 0x0313_2D90;
 type PreferredSize =
     unsafe extern "system" fn(*const c_void, *mut [i32; 2], *const c_void) -> *mut [i32; 2];
 /// Decides the caption button height of a window in DIPs, or `None` to keep the browser's.
 pub type CaptionHeight = fn(HWND) -> Option<i32>;
 static CAPTION: OnceLock<(PreferredSize, CaptionHeight)> = OnceLock::new();
 
-const CAPTION_PAINT_SLOT: usize = 114;
-const CAPTION_PAINT: usize = 0x0313_32A0;
 static CAPTION_PAINT_HOOK: OnceLock<(OnPaint, GetProvider)> = OnceLock::new();
 
 fn caption_ink() -> u32 {
@@ -728,18 +713,18 @@ pub unsafe fn install_caption_paint() -> Result<(), String> {
         return Ok(());
     }
     let image = recorded_image()?;
-    let slot_rva = CAPTION_VTABLE + CAPTION_PAINT_SLOT * 8;
-    if !image.points_to(slot_rva, CAPTION_PAINT)
-        || !image.has(CAPTION_PAINT, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54])
-        || !image.has(GET_COLOR_PROVIDER, &[0x56, 0x57, 0x48, 0x83, 0xec, 0x78])
+    let slot_rva = bv().caption_vtable + bv().caption_paint_slot * 8;
+    if !image.points_to(slot_rva, bv().caption_paint)
+        || !image.has(bv().caption_paint, bv().caption_paint_prologue)
+        || !image.has(bv().get_color_provider, bv().get_color_provider_prologue)
     {
         return Err("this browser build has no recorded caption paint".into());
     }
     let _ = CAPTION_PAINT_HOOK.set((
-        std::mem::transmute::<usize, OnPaint>(image.base + CAPTION_PAINT),
-        std::mem::transmute::<usize, GetProvider>(image.base + GET_COLOR_PROVIDER),
+        std::mem::transmute::<usize, OnPaint>(image.base + bv().caption_paint),
+        std::mem::transmute::<usize, GetProvider>(image.base + bv().get_color_provider),
     ));
-    replace_vtable_slot(&image, slot_rva, CAPTION_PAINT, caption_paint as *const () as usize, "caption paint slot")
+    replace_vtable_slot(&image, slot_rva, bv().caption_paint, caption_paint as *const () as usize, "caption paint slot")
 }
 
 unsafe extern "system" fn caption_size(
@@ -762,21 +747,17 @@ pub unsafe fn install_caption_height(height: CaptionHeight) -> Result<(), String
         return Ok(());
     }
     let image = recorded_image()?;
-    let slot_rva = CAPTION_VTABLE + CAPTION_SIZE_SLOT * 8;
-    if !image.points_to(slot_rva, CAPTION_SIZE) {
+    let slot_rva = bv().caption_vtable + bv().caption_size_slot * 8;
+    if !image.points_to(slot_rva, bv().caption_size) {
         return Err("this browser build has no recorded caption button size".into());
     }
     let _ = CAPTION.set((
-        std::mem::transmute::<usize, PreferredSize>(image.base + CAPTION_SIZE),
+        std::mem::transmute::<usize, PreferredSize>(image.base + bv().caption_size),
         height,
     ));
-    replace_vtable_slot(&image, slot_rva, CAPTION_SIZE, caption_size as *const () as usize, "caption button vtable")
+    replace_vtable_slot(&image, slot_rva, bv().caption_size, caption_size as *const () as usize, "caption button vtable")
 }
 
-/// Experiment, Chrome 156.0.8078.48 only: `BrowserFrameViewWin::GetTopInset` in the frame view's
-/// vtable. It is the height of the browser's own title bar, which also sizes the caption buttons.
-const TOP_INSET_SLOT: usize = 127;
-const TOP_INSET: usize = 0x0A40_33E0;
 type TopInset = unsafe extern "system" fn(*const c_void, bool) -> i32;
 /// Extra title bar height in DIPs for a window, or `None` to keep the browser's.
 pub type ExtraTop = fn(HWND) -> Option<i32>;
@@ -796,24 +777,14 @@ pub unsafe fn install_top_inset(extra: ExtraTop) -> Result<(), String> {
         return Ok(());
     }
     let image = recorded_image()?;
-    let slot_rva = 0x0FE7_3E28 + TOP_INSET_SLOT * 8;
-    if !image.points_to(slot_rva, TOP_INSET) {
+    let slot_rva = bv().frame_vtable + bv().top_inset_slot * 8;
+    if !image.points_to(slot_rva, bv().top_inset) {
         return Err("this browser build has no recorded top inset".into());
     }
-    let _ = TOP.set((std::mem::transmute::<usize, TopInset>(image.base + TOP_INSET), extra));
-    replace_vtable_slot(&image, slot_rva, TOP_INSET, top_inset as *const () as usize, "frame view vtable")
+    let _ = TOP.set((std::mem::transmute::<usize, TopInset>(image.base + bv().top_inset), extra));
+    replace_vtable_slot(&image, slot_rva, bv().top_inset, top_inset as *const () as usize, "frame view vtable")
 }
 
-/// Experiment, Chrome 156.0.8078.48 only: `BrowserFrameViewWin::Layout` in the frame view's
-/// vtable. It sizes the caption button container from the tab strip, not from the title bar
-/// height, so the container is resized once the browser's own layout is done.
-const LAYOUT_SLOT: usize = 23;
-const LAYOUT: usize = 0x017A_E5E0;
-/// `views::View::SetBoundsRect`, and where a frame view keeps its caption button container and a
-/// view keeps its bounds.
-const SET_BOUNDS_RECT: usize = 0x04F4_2540;
-const CAPTION_CONTAINER_OFFSET: usize = 0x3C8;
-const VIEW_BOUNDS_OFFSET: usize = 0x1C8;
 type Layout = unsafe extern "system" fn(*mut c_void);
 type SetBoundsRect = unsafe extern "system" fn(*mut c_void, *const [i32; 4]);
 static LAYOUT_HOOK: OnceLock<(Layout, SetBoundsRect, CaptionHeight)> = OnceLock::new();
@@ -830,20 +801,18 @@ fn panel_radii() -> [f32; 4] {
     [12.0; 4]
 }
 
-/// The vtable of the `views::View` part of `BrowserView`, which sits behind other base classes.
-const BROWSER_VIEW_VIEW_VTABLE: usize = 0x0FE7_BF68;
 
 unsafe fn clip_panel(frame: *mut c_void) {
     let Some((set_layer, set_radius, set_masks)) = PANEL_LAYER.get() else { return };
     // BrowserFrameViewWin holds BrowserView's BrowserWindow subobject at +0x340.
-    let browser_window = *(frame.cast::<u8>().add(0x340) as *const *mut u8);
+    let browser_window = *(frame.cast::<u8>().add(bv().frame_browser_window_offset) as *const *mut u8);
     if browser_window.is_null() {
         return;
     }
-    let browser = browser_window.sub(0x1f0).cast::<usize>();
+    let browser = browser_window.sub(bv().browser_window_in_view).cast::<usize>();
     let Some(image) = image::recorded() else { return };
     let base = image.base;
-    let Some(index) = (0..0x100).find(|index| *browser.add(*index) == base + BROWSER_VIEW_VIEW_VTABLE)
+    let Some(index) = (0..0x100).find(|index| *browser.add(*index) == base + bv().browser_view_view_vtable)
     else {
         return;
     };
@@ -965,14 +934,11 @@ pub unsafe fn relayout(window: HWND) -> bool {
             // `views::View::DeprecatedLayoutImmediately` does the bookkeeping around a layout
             // and then runs the view's own `Layout`, which is this hook. The wanted bytes are
             // its first instructions in this build.
-            const IMMEDIATELY: usize = 0x04BE_C780;
-            const PROLOGUE: [u8; 12] =
-                [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53];
-            if !image.has(IMMEDIATELY, &PROLOGUE) {
+            if !image.has(bv().layout_immediately, &bv().layout_immediately_prologue) {
                 return false;
             }
             let layout_immediately: unsafe extern "system" fn(*mut c_void) =
-                std::mem::transmute(base + IMMEDIATELY);
+                std::mem::transmute(base + bv().layout_immediately);
             layout_immediately(view as *mut c_void);
             true
         }
@@ -989,11 +955,11 @@ unsafe extern "system" fn frame_layout(view: *mut c_void) {
         return;
     };
     clip_panel(view);
-    let container = *(view.cast::<u8>().add(CAPTION_CONTAINER_OFFSET) as *const *mut c_void);
+    let container = *(view.cast::<u8>().add(bv().caption_container_offset) as *const *mut c_void);
     if container.is_null() {
         return;
     }
-    let bounds = *(container.cast::<u8>().add(VIEW_BOUNDS_OFFSET) as *const [i32; 4]);
+    let bounds = *(container.cast::<u8>().add(bv().view_bounds_offset) as *const [i32; 4]);
     let wanted = panel_caption_bounds(bounds, bottom);
     if wanted != bounds {
         set_bounds(container, &wanted);
@@ -1007,41 +973,36 @@ pub unsafe fn install_caption_layout(height: CaptionHeight) -> Result<(), String
         return Ok(());
     }
     let image = recorded_image()?;
-    let slot_rva = 0x0FE7_3E28 + LAYOUT_SLOT * 8;
-    if !image.points_to(slot_rva, LAYOUT) {
+    let slot_rva = bv().frame_vtable + bv().layout_slot * 8;
+    if !image.points_to(slot_rva, bv().layout) {
         return Err("this browser build has no recorded frame layout".into());
     }
-    if !image.has(LAYOUT, &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53])
-        || !image.has(SET_BOUNDS_RECT, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54])
+    if !image.has(bv().layout, bv().layout_prologue)
+        || !image.has(bv().set_bounds_rect, bv().set_bounds_rect_prologue)
     {
         return Err("this browser build has no recorded caption layout helpers".into());
     }
-    const SET_LAYER: usize = 0x00F0_5F10;
-    const SET_RADIUS: usize = 0x01D3_AB80;
-    const SET_MASKS: usize = 0x0316_7C40;
-    const STACK_AT_TOP_RVA: usize = 0x0ACC_8FD0;
-    const SET_OPAQUE_RVA: usize = 0x020A_FEF0;
-    if !image.has(SET_LAYER, &[0x56, 0x57, 0x48, 0x83, 0xec, 0x28])
-        || !image.has(SET_RADIUS, &[0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x30])
-        || !image.has(SET_MASKS, &[0x48, 0x8b, 0x89, 0x70, 0x01, 0x00, 0x00])
-        || !image.has(STACK_AT_TOP_RVA, &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57])
-        || !image.has(SET_OPAQUE_RVA, &[0x56, 0x48, 0x83, 0xec, 0x20])
+    if !image.has(bv().set_layer, bv().set_layer_prologue)
+        || !image.has(bv().set_radius, bv().set_radius_prologue)
+        || !image.has(bv().set_masks, bv().set_masks_prologue)
+        || !image.has(bv().stack_at_top, bv().stack_at_top_prologue)
+        || !image.has(bv().set_opaque, bv().set_opaque_prologue)
     {
         return Err("this browser build has no recorded panel layer helpers".into());
     }
     let base = image.base;
-    let _ = SET_OPAQUE.set(std::mem::transmute::<usize, SetOpaque>(base + SET_OPAQUE_RVA));
-    let _ = STACK_AT_TOP.set(std::mem::transmute::<usize, StackAtTop>(base + STACK_AT_TOP_RVA));
+    let _ = SET_OPAQUE.set(std::mem::transmute::<usize, SetOpaque>(base + bv().set_opaque));
+    let _ = STACK_AT_TOP.set(std::mem::transmute::<usize, StackAtTop>(base + bv().stack_at_top));
     let _ = PANEL_LAYER.set((
-        std::mem::transmute::<usize, SetPaintToLayer>(base + SET_LAYER),
-        std::mem::transmute::<usize, SetRadius>(base + SET_RADIUS),
-        std::mem::transmute::<usize, SetMasks>(base + SET_MASKS),
+        std::mem::transmute::<usize, SetPaintToLayer>(base + bv().set_layer),
+        std::mem::transmute::<usize, SetRadius>(base + bv().set_radius),
+        std::mem::transmute::<usize, SetMasks>(base + bv().set_masks),
     ));
     let _ = LAYOUT_HOOK.set((
-        std::mem::transmute::<usize, Layout>(base + LAYOUT),
-        std::mem::transmute::<usize, SetBoundsRect>(base + SET_BOUNDS_RECT),
+        std::mem::transmute::<usize, Layout>(base + bv().layout),
+        std::mem::transmute::<usize, SetBoundsRect>(base + bv().set_bounds_rect),
         height,
     ));
-    replace_vtable_slot(&image, slot_rva, LAYOUT, frame_layout as *const () as usize, "frame view vtable")
+    replace_vtable_slot(&image, slot_rva, bv().layout, frame_layout as *const () as usize, "frame view vtable")
 }
 

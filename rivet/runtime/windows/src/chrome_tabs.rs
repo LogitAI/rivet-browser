@@ -3,31 +3,18 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::HWND;
 use crate::chrome_layout::image;
-const CONTENT_WINDOW_FOR_HWND: usize = 0x00D5_64A0;
-const BROWSER_VIEW_FOR_WINDOW: usize = 0x0BC8_1E10;
-const ACTIVE_WEB_CONTENTS: usize = 0x0BC8_2340;
+
+/// The values of the loaded browser build.
+fn bv() -> &'static crate::builds::Tabs {
+    &crate::builds::get().tabs
+}
 type Pointer = unsafe extern "system" fn(*const c_void) -> *mut c_void;
-/// Tab strip and browser actions for Chrome 156.0.8078.48.
-const GET_TAB_MODEL: usize = 0x04FB_01F0;
-const TAB_COUNT: usize = 0x0369_CBE0;
-const TAB_AT: usize = 0x0311_22A0;
-const ACTIVATE_TAB: usize = 0x0311_2220;
-const CLOSE_TAB: usize = 0x0A20_11B0;
-const TITLE: usize = 0x00D7_8440;
-const NEW_TAB: usize = 0x0A0B_8F50;
-/// `WebContentsImpl::GetLastCommittedURL` and `GetVisibleURL`, which return a `const GURL&`.
-const LAST_COMMITTED_URL: usize = 0x058A_48A0;
-const VISIBLE_URL: usize = 0x05CF_8BA0;
 type Count = unsafe extern "system" fn(*mut c_void) -> i32;
 type TabAt = unsafe extern "system" fn(*mut c_void, i32) -> *mut c_void;
 type Activate = unsafe extern "system" fn(*mut c_void, i32, *const [u8; 16]);
 type Close = unsafe extern "system" fn(*mut c_void, i32, u32);
 type NewTab = unsafe extern "system" fn(*mut c_void, i32);
 
-const GET_GROUP: usize = 0x0311_2320;
-const HAS_GROUP: usize = 0x0a1f_10d0;
-const LOOKUP_GROUP: usize = 0x0a1f_1130;
-const CHANGE_GROUP: usize = 0x0a20_8550;
 type GetGroup = unsafe extern "system" fn(*mut c_void, *mut [u8; 24], i32) -> *mut [u8; 24];
 type HasGroup = unsafe extern "system" fn(*mut c_void, *const u8) -> bool;
 type LookupGroup = unsafe extern "system" fn(*mut c_void, *const u8) -> *mut u8;
@@ -37,47 +24,7 @@ static BASE: OnceLock<Option<usize>> = OnceLock::new();
 pub(crate) fn base() -> Option<usize> {
     *BASE.get_or_init(|| unsafe {
         let image = image::recorded()?;
-        let signatures: &[(usize, &[u8])] = &[
-            (
-                GET_GROUP,
-                &[
-                    0x56, 0x48, 0x83, 0xec, 0x20, 0x48, 0x89, 0xd6, 0x45, 0x85, 0xc0, 0x78,
-                ],
-            ),
-            (
-                HAS_GROUP,
-                &[
-                    0x56, 0x57, 0x48, 0x83, 0xec, 0x38, 0x49, 0x89, 0xd0, 0x48, 0x8b, 0x05,
-                ],
-            ),
-            (
-                LOOKUP_GROUP,
-                &[
-                    0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x38, 0x48, 0x89, 0xd6,
-                ],
-            ),
-            (
-                CHANGE_GROUP,
-                &[
-                    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-                ],
-            ),
-            (
-                CONTENT_WINDOW_FOR_HWND,
-                &[0x56, 0x48, 0x83, 0xec, 0x20, 0xe8],
-            ),
-            (BROWSER_VIEW_FOR_WINDOW, &[0x48, 0x83, 0xec, 0x28, 0xe8]),
-            (ACTIVE_WEB_CONTENTS, &[0x48, 0x8b, 0x81, 0x60, 0x05, 0, 0]),
-            (GET_TAB_MODEL, &[0x48, 0x8b, 0x41, 0x30, 0xc3]),
-            (TAB_COUNT, &[0x48, 0x8b, 0x01, 0x8b, 0x40, 0x20, 0xc3]),
-            (TAB_AT, &[0x48, 0x83, 0xec, 0x28, 0x85, 0xd2]),
-            (ACTIVATE_TAB, &[0x56, 0x57, 0x48, 0x83, 0xec, 0x38]),
-            (CLOSE_TAB, &[0x56, 0x57, 0x48, 0x83, 0xec, 0x28]),
-            (TITLE, &[0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x81]),
-            (NEW_TAB, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57]),
-            (LAST_COMMITTED_URL, &[0x48, 0x63, 0x81, 0xd4, 0x02, 0, 0]),
-            (VISIBLE_URL, &[0x48, 0x8b, 0x81, 0xb0, 0x02, 0, 0]),
-        ];
+        let signatures = bv().signatures;
         for (rva, bytes) in signatures {
             if !image.has(*rva, bytes) {
                 crate::vertical_tabs::trace(&format!("tabs: signature mismatch {rva:#x}"));
@@ -91,23 +38,23 @@ pub(crate) unsafe fn function<T: Copy>(base: usize, rva: usize) -> T {
     std::mem::transmute_copy(&(base + rva))
 }
 unsafe fn web_contents(base: usize, window: HWND) -> Option<*mut c_void> {
-    let content = function::<Pointer>(base, CONTENT_WINDOW_FOR_HWND)(window);
+    let content = function::<Pointer>(base, bv().content_window_for_hwnd)(window);
     if content.is_null() {
         return None;
     }
-    let view = function::<Pointer>(base, BROWSER_VIEW_FOR_WINDOW)(content);
+    let view = function::<Pointer>(base, bv().browser_view_for_window)(content);
     if view.is_null() {
         return None;
     }
-    let result = function::<Pointer>(base, ACTIVE_WEB_CONTENTS)(view);
+    let result = function::<Pointer>(base, bv().active_web_contents)(view);
     (!result.is_null()).then_some(result)
 }
 unsafe fn browser(base: usize, window: HWND) -> Option<*mut c_void> {
-    let content = function::<Pointer>(base, CONTENT_WINDOW_FOR_HWND)(window);
+    let content = function::<Pointer>(base, bv().content_window_for_hwnd)(window);
     if content.is_null() {
         return None;
     }
-    let view = function::<Pointer>(base, BROWSER_VIEW_FOR_WINDOW)(content);
+    let view = function::<Pointer>(base, bv().browser_view_for_window)(content);
     if view.is_null() {
         return None;
     }
@@ -120,7 +67,7 @@ unsafe fn browser(base: usize, window: HWND) -> Option<*mut c_void> {
 
 pub(crate) unsafe fn tab_model(base: usize, window: HWND) -> Option<*mut c_void> {
     let browser = browser(base, window)?;
-    let model = function::<Pointer>(base, GET_TAB_MODEL)(browser);
+    let model = function::<Pointer>(base, bv().get_tab_model)(browser);
     (!model.is_null()).then_some(model)
 }
 
@@ -146,35 +93,35 @@ fn chromium_string(value: *const u8) -> Option<String> {
 pub unsafe fn tabs(window: HWND) -> Option<Vec<crate::tab_rows::Tab>> {
     let base = base()?;
     let model = tab_model(base, window)?;
-    let count = function::<Count>(base, TAB_COUNT)(model);
+    let count = function::<Count>(base, bv().tab_count)(model);
     if !(0..=128).contains(&count) {
         return None;
     }
     let mut titles = Vec::with_capacity(count as usize);
     for index in 0..count {
-        let contents = function::<TabAt>(base, TAB_AT)(model, index);
+        let contents = function::<TabAt>(base, bv().tab_at)(model, index);
         if contents.is_null() {
             titles.push(String::from("New tab"));
             continue;
         }
-        let title = function::<Pointer>(base, TITLE)(contents).cast::<u8>();
+        let title = function::<Pointer>(base, bv().title)(contents).cast::<u8>();
         titles.push(chromium_string(title).unwrap_or_else(|| String::from("New tab")));
     }
     let active = web_contents(base, window).unwrap_or(std::ptr::null_mut());
     let active_index = (0..count)
-        .find(|index| function::<TabAt>(base, TAB_AT)(model, *index) == active)
+        .find(|index| function::<TabAt>(base, bv().tab_at)(model, *index) == active)
         .unwrap_or(0) as usize;
     let group_model = *(model.cast::<u8>().add(8) as *const *mut c_void);
     let mut tabs = Vec::with_capacity(titles.len());
     for (index, title) in titles.into_iter().enumerate() {
         let mut optional = [0u8; 24];
-        function::<GetGroup>(base, GET_GROUP)(model, &mut optional, index as i32);
+        function::<GetGroup>(base, bv().get_group)(model, &mut optional, index as i32);
         let group = if optional[16] != 0 && !group_model.is_null() {
             let mut id = [0; 16];
             id.copy_from_slice(&optional[..16]);
-            let present = function::<HasGroup>(base, HAS_GROUP)(group_model, id.as_ptr());
+            let present = function::<HasGroup>(base, bv().has_group)(group_model, id.as_ptr());
             if present {
-                let ptr = function::<LookupGroup>(base, LOOKUP_GROUP)(group_model, id.as_ptr());
+                let ptr = function::<LookupGroup>(base, bv().lookup_group)(group_model, id.as_ptr());
                 let visual = if ptr.is_null() {
                     std::ptr::null()
                 } else {
@@ -236,12 +183,12 @@ pub unsafe fn open_tabs(window: HWND) -> Option<Vec<OpenTab>> {
     let titles = tabs(window)?;
     let mut result = Vec::with_capacity(titles.len());
     for tab in titles {
-        let contents = function::<TabAt>(base, TAB_AT)(model, tab.index as i32);
+        let contents = function::<TabAt>(base, bv().tab_at)(model, tab.index as i32);
         if contents.is_null() {
             return None;
         }
         let mut url = String::new();
-        for rva in [LAST_COMMITTED_URL, VISIBLE_URL] {
+        for rva in [bv().last_committed_url, bv().visible_url] {
             let gurl = function::<Pointer>(base, rva)(contents).cast::<u8>();
             if !gurl.is_null() {
                 url = narrow_string(gurl).unwrap_or_default();
@@ -284,11 +231,11 @@ pub unsafe fn activate_tab(window: HWND, index: usize) -> bool {
     let Some(model) = tab_model(base, window) else {
         return false;
     };
-    if index >= function::<Count>(base, TAB_COUNT)(model).max(0) as usize {
+    if index >= function::<Count>(base, bv().tab_count)(model).max(0) as usize {
         return false;
     }
     let selection = [0u8; 16];
-    function::<Activate>(base, ACTIVATE_TAB)(model, index as i32, &selection);
+    function::<Activate>(base, bv().activate_tab)(model, index as i32, &selection);
     true
 }
 
@@ -297,10 +244,10 @@ pub unsafe fn close_tab(window: HWND, index: usize) -> bool {
     let Some(model) = tab_model(base, window) else {
         return false;
     };
-    if index >= function::<Count>(base, TAB_COUNT)(model).max(0) as usize {
+    if index >= function::<Count>(base, bv().tab_count)(model).max(0) as usize {
         return false;
     }
-    function::<Close>(base, CLOSE_TAB)(model, index as i32, 0);
+    function::<Close>(base, bv().close_tab)(model, index as i32, 0);
     true
 }
 
@@ -310,58 +257,21 @@ pub unsafe fn new_tab(window: HWND) -> bool {
         return false;
     };
     // Chrome accepts the new-tab command source value 5.
-    function::<NewTab>(base, NEW_TAB)(browser, 5);
+    function::<NewTab>(base, bv().new_tab)(browser, 5);
     true
 }
 
 /// One-shot diagnostic for the isolated test profile.
 pub unsafe fn probe_group(window: HWND) {
     let Some(base) = base() else { return };
-    let checks: &[(usize, &[u8])] = &[
-        (
-            0x05d3_d6a0,
-            &[0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9],
-        ),
-        (
-            0x0a20_60b0,
-            &[
-                0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
-            ],
-        ),
-        (
-            0x0311_2320,
-            &[
-                0x56, 0x48, 0x83, 0xec, 0x20, 0x48, 0x89, 0xd6, 0x45, 0x85, 0xc0, 0x78,
-            ],
-        ),
-        (
-            0x0a1f_10d0,
-            &[
-                0x56, 0x57, 0x48, 0x83, 0xec, 0x38, 0x49, 0x89, 0xd0, 0x48, 0x8b, 0x05,
-            ],
-        ),
-        (
-            0x0a1f_1130,
-            &[
-                0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x38, 0x48, 0x89, 0xd6,
-            ],
-        ),
-        (
-            0x0a20_8550,
-            &[
-                0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-            ],
-        ),
-    ];
-    let Some(image) = image::recorded() else { return };
-    if checks.iter().any(|(r, b)| !image.has(*r, b)) {
+    if !group_calls_known() {
         crate::vertical_tabs::trace("group probe: signature mismatch");
         return;
     }
     let Some(model) = tab_model(base, window) else {
         return;
     };
-    if function::<Count>(base, TAB_COUNT)(model) != 1 {
+    if function::<Count>(base, bv().tab_count)(model) != 1 {
         crate::vertical_tabs::trace("group probe: requires exactly one tab");
         return;
     }
@@ -374,7 +284,7 @@ pub unsafe fn probe_group(window: HWND) {
         return;
     }
     crate::vertical_tabs::trace("group probe: before add");
-    let count = function::<Count>(base, TAB_COUNT)(model);
+    let count = function::<Count>(base, bv().tab_count)(model);
     crate::vertical_tabs::trace(&format!("group probe: tab count {count}"));
     if count != 3 {
         return;
@@ -469,9 +379,6 @@ pub unsafe fn probe_group(window: HWND) {
     activate_tab(window, 0);
 }
 
-/// `operator new` of the browser and `TabStripModel::AddToNewGroup`, which the group probe uses.
-const ALLOCATE: usize = 0x05d3_d6a0;
-const ADD_TO_NEW_GROUP: usize = 0x0a20_60b0;
 type Allocate = unsafe extern "system" fn(usize) -> *mut i32;
 type AddToNewGroup = unsafe extern "system" fn(
     *mut c_void,
@@ -485,11 +392,8 @@ fn group_calls_known() -> bool {
     static KNOWN: OnceLock<bool> = OnceLock::new();
     *KNOWN.get_or_init(|| unsafe {
         let Some(image) = image::recorded() else { return false };
-        image.has(ALLOCATE, &[0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9])
-            && image.has(
-                ADD_TO_NEW_GROUP,
-                &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81],
-            )
+        image.has(bv().allocate, bv().allocate_prologue)
+            && image.has(bv().add_to_new_group, bv().add_to_new_group_prologue)
     })
 }
 
@@ -513,7 +417,7 @@ pub unsafe fn group_tabs(window: HWND, ids: &[usize], title: &str, color: i32) -
         return None;
     }
     // Chrome takes over this vector of a pointer, an element count and a capacity.
-    let indices = function::<Allocate>(base, ALLOCATE)(positions.len() * 4);
+    let indices = function::<Allocate>(base, bv().allocate)(positions.len() * 4);
     if indices.is_null() {
         return None;
     }
@@ -522,7 +426,7 @@ pub unsafe fn group_tabs(window: HWND, ids: &[usize], title: &str, color: i32) -
     }
     let span = [indices as usize, positions.len(), positions.len()];
     let mut id = [0u8; 16];
-    function::<AddToNewGroup>(base, ADD_TO_NEW_GROUP)(model, &mut id, &span, false);
+    function::<AddToNewGroup>(base, bv().add_to_new_group)(model, &mut id, &span, false);
     set_group_visuals(base, model, &id, title, color, false)?;
     Some(id)
 }
@@ -549,7 +453,7 @@ unsafe fn set_group_visuals(
         if !group_calls_known() {
             return None;
         }
-        let buffer = function::<Allocate>(base, ALLOCATE)((units.len() + 1) * 2).cast::<u16>();
+        let buffer = function::<Allocate>(base, bv().allocate)((units.len() + 1) * 2).cast::<u16>();
         if buffer.is_null() {
             return None;
         }
@@ -561,7 +465,7 @@ unsafe fn set_group_visuals(
     }
     visual[24..28].copy_from_slice(&color.to_le_bytes());
     visual[28] = collapsed as u8;
-    function::<ChangeGroup>(base, CHANGE_GROUP)(model, id.as_ptr(), visual.as_ptr(), false);
+    function::<ChangeGroup>(base, bv().change_group)(model, id.as_ptr(), visual.as_ptr(), false);
     Some(())
 }
 
@@ -571,10 +475,10 @@ pub unsafe fn toggle_group(window: HWND, id: &[u8; 16]) -> bool {
         return false;
     };
     let group_model = *(model.cast::<u8>().add(8) as *const *mut c_void);
-    if group_model.is_null() || !function::<HasGroup>(base, HAS_GROUP)(group_model, id.as_ptr()) {
+    if group_model.is_null() || !function::<HasGroup>(base, bv().has_group)(group_model, id.as_ptr()) {
         return false;
     }
-    let group = function::<LookupGroup>(base, LOOKUP_GROUP)(group_model, id.as_ptr());
+    let group = function::<LookupGroup>(base, bv().lookup_group)(group_model, id.as_ptr());
     if group.is_null() {
         return false;
     }

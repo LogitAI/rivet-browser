@@ -34,345 +34,42 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-/// `GetLayoutConstant(LayoutConstant)`.
-const LAYOUT_CONSTANT: usize = 0x0471_3020;
-const LAYOUT_CONSTANT_PROLOGUE: [u8; 16] = [
-    0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x10, 0xF0, 0x45, 0x0D,
-];
-/// `views::Widget::ThemeChanged`.
-const THEME_CHANGED: usize = 0x01DC_5870;
-const THEME_CHANGED_PROLOGUE: [u8; 16] = [
-    0x56, 0x57, 0x48, 0x83, 0xEC, 0x78, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0xC0, 0xC7, 0xDA, 0x0F,
-];
-/// `views::View::OnPaintLayer` implementation.
-const PAINT_LAYER: usize = 0x007E_1A30;
-const PAINT_LAYER_PROLOGUE: [u8; 16] = [
-    0x56, 0x57, 0x48, 0x83, 0xEC, 0x78, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x00, 0x06, 0x39, 0x11,
-];
-/// `views::View::SetVisible`. Its first sixteen bytes save registers and reserve the frame.
-const SET_VISIBLE: usize = 0x0573_5770;
-const SET_VISIBLE_PROLOGUE: [u8; 16] = [
-    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x48,
-];
-/// `ui::ImageModel::FromVectorIcon(out, icon, colour, size)`.
-const FROM_VECTOR_ICON: usize = 0x009F_C510;
-const FROM_VECTOR_ICON_PROLOGUE: [u8; 14] = [
-    0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-];
-/// `LocationIconView::Update(this, bool, bool)` sets the label and then the icon.
-const UPDATE_LOCATION: usize = 0x00EE_3320;
-const UPDATE_LOCATION_PROLOGUE: [u8; 15] = [
-    0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xA8, 0, 0, 0,
-];
-/// `LocationIconView::UpdateIcon` runs after navigation, outside widget painting.
-const UPDATE_LOCATION_ICON: usize = 0x00EE_4220;
-const UPDATE_LOCATION_ICON_PROLOGUE: [u8; 16] = [
-    0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0, 0, 0, 0x48, 0x89, 0xCE,
-];
-/// `GetLayoutInsets(out, LayoutInset)` answers the padding around a toolbar button's icon, which
-/// with the icon makes the button 28 DIPs wide, like its height.
-const LAYOUT_INSETS: usize = 0x03EE_A610;
-const LAYOUT_INSETS_PROLOGUE: [u8; 13] = [
-    0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x89, 0xD7, 0x48, 0x89, 0xCE,
-];
-/// `LayoutInset::TOOLBAR_BUTTON` of this build.
-const TOOLBAR_BUTTON_INSET: i32 = 6;
-/// `LayoutInset` that `ToolbarView::LayoutCommon` reads for the space around the whole toolbar,
-/// and the space Rivet windows leave before the back button, in DIPs.
-const TOOLBAR_INSET: i32 = 11;
+/// The values of the loaded browser build.
+fn bv() -> &'static crate::builds::Toolbar {
+    &crate::builds::get().toolbar
+}
+
 const LEADING_SPACE: i32 = 32;
 const TOOLBAR_TOP: i32 = 5;
 const TOOLBAR_BOTTOM: i32 = 4;
-/// `LayoutInset` that `LocationIconView::UpdateBorder` reads for the space around the page info
-/// icon, and how far Rivet moves the icon and the text after it from the field's left edge.
-const LOCATION_ICON_INSET: i32 = 3;
 const LOCATION_ICON_SHIFT: i32 = 2;
 /// The padding, in DIPs: a 26 DIP button around an 18 DIP icon, which Chrome pads to 28.
 const TOOLBAR_BUTTON_PADDING: i32 = 4;
-/// `ToolbarButton::UpdateIcon` rebuilds a button's images. The reload button does it when a page
-/// starts or stops loading, outside any paint, so it needs its own scope.
-const UPDATE_ICON: usize = 0x009F_C150;
-const UPDATE_ICON_PROLOGUE: [u8; 17] = [
-    0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x80, 0xB9, 0xD8, 0x06, 0, 0, 0x01,
-];
-/// `LocationBarModelImpl::GetFormattedURL(this, out, flags)` returns the address text, and
-/// `LocationBarModelImpl::GetURL(this, out)` the page address.
-const FORMATTED_URL: usize = 0x0160_9DB0;
-const FORMATTED_URL_PROLOGUE: [u8; 18] = [
-    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x80, 0x01, 0, 0,
-];
-const MODEL_URL: usize = 0x04F5_BBB0;
-const MODEL_URL_PROLOGUE: [u8; 16] = [
-    0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xB8, 0, 0, 0,
-];
-/// `OmniboxViewViews::Update`, `OmniboxViewViews::RevertAll` and `OmniboxViewViews::OnTabChanged`
-/// refresh the text of the address field. The omnibox object starts with `OmniboxView`, which is
-/// 0x10 bytes long, and its `views::Textfield` follows. They take the object as their first
-/// argument and need the Rivet scope, because they run outside any paint or layout.
-const OMNIBOX_UPDATE: usize = 0x00ED_FB30;
-const OMNIBOX_UPDATE_PROLOGUE: [u8; 15] = [
-    0x56, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x01, 0x25, 0xC9, 0x10,
-];
-const OMNIBOX_REVERT_ALL: usize = 0x00EE_8630;
-const OMNIBOX_REVERT_ALL_PROLOGUE: [u8; 15] = [
-    0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x01, 0x9A, 0xC8, 0x10,
-];
-const OMNIBOX_TAB_CHANGED: usize = 0x00EE_D110;
-const OMNIBOX_TAB_CHANGED_PROLOGUE: [u8; 13] = [
-    0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD7, 0x48, 0x89, 0xCE,
-];
-const OMNIBOX_TEXTFIELD: usize = 0x10;
-/// `OmniboxView::UpdateTextStyle(this, text, text_is_url, scheme)` colours the text of the field.
-const UPDATE_TEXT_STYLE: usize = 0x00EE_59C0;
-const UPDATE_TEXT_STYLE_PROLOGUE: [u8; 19] = [
-    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x88,
-    0, 0, 0,
-];
-/// `gfx::RenderText::ApplyColor(this, colour, &range)` and `ApplyWeight(this, weight, &range)`.
-const APPLY_COLOR: usize = 0x0318_5FA0;
-const APPLY_COLOR_BYTES: [u8; 15] = [
-    0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0xA0, 0, 0, 0,
-];
-const APPLY_WEIGHT: usize = 0x0AF1_1D20;
-const APPLY_WEIGHT_BYTES: [u8; 15] = [
-    0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0, 0x01, 0, 0,
-];
 /// `gfx::Font::Weight` values.
 const WEIGHT_NORMAL: u32 = 400;
 const WEIGHT_SEMIBOLD: u32 = 600;
 /// The title and the rest of the address text, as `0xAARRGGBB`.
 const TITLE_COLOUR: u32 = 0xFF4A_4850;
 const ADDRESS_COLOUR: u32 = 0xFF8A_8690;
-/// `OmniboxViewViews::TitleWasSet` is the web contents observer entry of the omnibox, which is
-/// 0x720 bytes into the object. The page title is not part of the text Chrome builds, so a new
-/// title refreshes it.
-const TITLE_WAS_SET: usize = 0x0312_8B70;
-const TITLE_WAS_SET_PROLOGUE: [u8; 13] = [
-    0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x81, 0x80, 0, 0, 0,
-];
-const OBSERVER_OFFSET: usize = 0x720;
-/// `operator new(size)` and `operator delete(pointer, size)`, which own Chrome's strings.
-const OPERATOR_NEW: usize = 0x05D3_D6A0;
-const OPERATOR_NEW_BYTES: [u8; 8] = [0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B];
-const OPERATOR_DELETE: usize = 0x03E0_6930;
-const OPERATOR_DELETE_BYTES: [u8; 14] = [
-    0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD6,
-];
-/// The location bar model keeps its delegate at `+0x40`. The browser's delegate answers the
-/// active web contents in its twentieth virtual function, and `WebContents::GetTitle` is the
-/// fifty-fourth of the web contents.
-const MODEL_DELEGATE: usize = 0x40;
-const BROWSER_DELEGATE_VTABLE: usize = 0x0FDB_7368;
-const ACTIVE_WEB_CONTENTS: usize = 0x057F_48C0;
-const ACTIVE_WEB_CONTENTS_SLOT: usize = 19;
-const WEB_CONTENTS_VTABLE: usize = 0x0FE5_7C10;
-const WEB_CONTENTS_TITLE: usize = 0x00D7_8440;
-const WEB_CONTENTS_TITLE_SLOT: usize = 53;
-/// `LocationBarView::RefreshBackground` bakes the field's fill colour into a background. Hover
-/// and focus refresh it outside any paint, so it needs its own scope.
-const LOCATION_BAR_VIEW_BASE: usize = 0x100;
-/// The field's hover animation value, a `double` in the `LocationBarView`, and the background the
-/// refresh sets: a `views::Background` at `+0x328` whose painter, at `+0x10`, keeps its four
-/// corner radii as floats from `+0x10`.
-const HOVER_VALUE: usize = 0x5F8;
-const FIELD_BACKGROUND: usize = 0x328;
-const BACKGROUND_VTABLE: usize = 0x0FC3_C730;
-const PAINTER_VTABLE: usize = 0x0FDC_F4F0;
-const PAINTER_RADII: usize = 0x10;
-const PAINTER_INSETS: usize = 0x20;
 const FIELD_FILL_MARGIN: i32 = 3;
-/// The omnibox state a `LocationBarView` reads while it refreshes its background: a pointer at
-/// `+0x4e8` to an object that keeps the state object at `+0x28`, whose `+0x18` is 1 while the
-/// field has focus.
-const FIELD_STATE: usize = 0x4E8;
-const FIELD_STATE_FOCUSED: usize = 0x18;
-/// The fill Chrome uses for a focused field is the colour of the suggestion list. The design
-/// keeps the hover fill instead, so the field stays the same rectangle while it is edited.
-const FOCUSED_FILL_ID: i32 = 1013;
 const FIELD_HOVER_FILL: u32 = 0xFFF0_EFEC;
-/// `views::FocusRing::Remove(View*)`, which does nothing when the view has no ring.
-const FOCUS_RING_REMOVE: usize = 0x024C_A860;
 /// The radius of the field's rectangle, in DIPs.
 const FIELD_RADIUS: f32 = 8.0;
-/// `views::View::SetTransform(this, &gfx::Transform)` and `ui::Layer::SetLayerBrightness(this,
-/// float)`. A transform that is a scale and a translation starts with a zero byte, then holds the
-/// scale at `+8` and the translation at `+0x10`, as floats. A view keeps its layer at `+0x20` and
-/// its size at `+0x1D0`.
-const SET_TRANSFORM: usize = 0x0AC2_1430;
-const SET_TRANSFORM_PROLOGUE: [u8; 14] = [
-    0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x48, 0x89, 0xD6,
-];
-const SET_BRIGHTNESS: usize = 0x0ACC_89D0;
-const SET_BRIGHTNESS_PROLOGUE: [u8; 11] = [
-    0x56, 0x57, 0x48, 0x83, 0xEC, 0x48, 0x0F, 0x29, 0x74, 0x24, 0x30,
-];
-const VIEW_LAYER: usize = 0x20;
-const VIEW_SIZE: usize = 0x1D0;
 const TRANSFORM_BYTES: usize = 256;
-const REFRESH_BACKGROUND: usize = 0x00EE_0120;
-const REFRESH_BACKGROUND_PROLOGUE: [u8; 14] = [
-    0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x60,
-];
-/// `location_bar::GetSecurityChipText(out, delegate, url, flag)` returns the label Chrome puts
-/// before the address: "File" for local pages and the connection state of the others.
-/// `GURL::~GURL` frees the page address that the delegate hands out by value.
-const CHIP_TEXT: usize = 0x00E4_D780;
-const CHIP_TEXT_PROLOGUE: [u8; 15] = [
-    0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB8, 0, 0, 0,
-];
-/// `views::Textfield::OnThemeChanged`, `Textfield::SetFontList`, `gfx::FontList::GetFontSize` and
-/// `gfx::FontList::DeriveWithSizeDelta`. The address field is the browser window's only text
-/// field, and Chrome chooses its font once, when the field is built.
-const TEXTFIELD_THEME: usize = 0x01FD_2870;
-const TEXTFIELD_THEME_PROLOGUE: [u8; 12] = [
-    0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x68,
-];
-const TEXTFIELD_SET_FONT: usize = 0x0316_0CB0;
-const TEXTFIELD_SET_FONT_BYTES: [u8; 16] = [
-    0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x81, 0x78, 0x03, 0, 0, 0x48,
-];
-const FONT_SIZE: usize = 0x036B_B960;
-const FONT_SIZE_BYTES: [u8; 16] = [
-    0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x31, 0x8B, 0x46, 0x44, 0x83, 0xF8, 0xFF, 0x74, 0x06,
-];
-const DERIVE_SIZE: usize = 0x0318_74F0;
-const DERIVE_SIZE_BYTES: [u8; 16] = [
-    0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x44, 0x89, 0xC7, 0x48, 0x89, 0xD6,
-];
-/// The Textfield's render text and its font list, as offsets.
-const TEXTFIELD_RENDER_TEXT: usize = 0x378;
-const RENDER_TEXT_FONT_LIST: usize = 0x48;
 /// The size of the address text, in DIPs.
 const ADDRESS_FONT_SIZE: i32 = 12;
-const GURL_DESTRUCTOR: usize = 0x03E0_01F0;
-const GURL_DESTRUCTOR_BYTES: [u8; 9] = [0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE];
-/// `GURL` layout of this build: the spec string, then the scheme's begin and length.
-const GURL_SCHEME_BEGIN: usize = 0x20;
-const GURL_SCHEME_LENGTH: usize = 0x24;
-/// `BubbleDialogDelegate::GetAnchorRect`, `View::IsDrawn` and `View::GetBoundsInScreen`.
-const ANCHOR_RECT: usize = 0x0ACA_C450;
-const ANCHOR_RECT_PROLOGUE: [u8; 18] = [
-    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC,
-    0xD0, 0, 0, 0,
-];
-const ANCHOR_VIEW_ACCESS: [u8; 21] = [
-    0x48, 0x8B, 0x81, 0, 3, 0, 0, 0x48, 0x85, 0xC0, 0x74, 0x56, 0x48, 0x8B, 0x58, 0x18,
-    0x48, 0x85, 0xDB, 0x74, 0x4D,
-];
-const IS_DRAWN: usize = 0x00CA_89C0;
-const IS_DRAWN_BYTES: [u8; 32] = [
-    0x80, 0xB9, 0xD8, 1, 0, 0, 1, 0x75, 0x1D, 0x48, 0x8B, 0x89, 0x98, 1, 0, 0,
-    0x48, 0x85, 0xC9, 0x74, 0x11, 0x48, 0x8B, 1, 0x48, 0x8B, 0x80, 0x98, 0, 0, 0, 0x48,
-];
-const BOUNDS_IN_SCREEN: usize = 0x0086_1140;
-const BOUNDS_BYTES: [u8; 13] = [0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF];
-const PARENT_OFFSET: usize = 0x198;
-const IS_DRAWN_SLOT: usize = 19;
 
-/// `BrowserWidget`'s vtable, with `OnNativeWidgetPaint` and `LayoutRootViewIfNecessary`.
-const BROWSER_WIDGET_VTABLE: usize = 0x0FBC_AD10;
-/// `views::Widget`'s own vtable, which popups such as the omnibox's suggestion list use. It holds
-/// the same paint and layout functions as the browser widget's.
-const PLAIN_WIDGET_VTABLE: usize = 0x0FC3_15C0;
-const PAINT_SLOT: usize = 30;
-const PAINT: usize = 0x0315_D050;
-const LAYOUT_SLOT: usize = 44;
-const LAYOUT: usize = 0x00F9_7180;
-/// `views::View::GetColorProvider`, asked of the widget's root view, which the widget keeps at
-/// `+0x1A0`.
-const COLOR_PROVIDER: usize = 0x04AA_27D0;
-const ROOT_VIEW_OFFSET: usize = 0x1A0;
 
-/// `views::View` vtables of the buttons a Rivet window hides, with their `OnThemeChanged`.
-const THEME_SLOT: usize = 99;
-const HIDDEN: [(usize, usize); 7] = [
-    (0x0FEA_63C8, 0x01D1_3080), // BrowserAppMenuButton
-    (0x0FEE_C268, 0x01AE_4DC0), // AvatarToolbarButton
-    (0x0FED_B708, 0x003B_A0E0), // page_actions::PageActionView
-    (0x0FF1_7AA8, 0x00A3_E970), // VerticalTabStripRegionView
-    // The side panel's own header: Rivet draws that row in the strip the layout leaves above the panel.
-    (0x0FE6_8688, 0x00A3_E970), // SidePanelHeader
-    // The toolbar button that shows the open side panel's entry: the Sidebar's rail shows it.
-    (0x0FEA_4988, 0x01D6_E1F0), // PinnedActionToolbarButton
-    // The button that Chrome shows while a window is split. Rivet's page rows carry the split controls.
-    (0x0FEA_8908, 0x01D6_E1F0), // SplitTabsToolbarButton
-];
-/// `views::View::GetWidget` is the twelfth entry of every view's vtable.
-const GET_WIDGET_SLOT: usize = 11;
-
-/// `LayoutConstant` values of this build and the sizes of the Rivet top row, in DIPs.
-const OVERRIDES: [(i32, i32); 7] = [
-    (12, 8),  // kLocationBarChildCornerRadius
-    (16, 28), // kLocationBarHeight
-    (29, 12), // kMainBackgroundRegionCornerRadius
-    (46, 28), // kToolbarButtonHeight
-    (47, 18), // kToolbarButtonIconSize
-    (55, 8),  // kToolbarCornerRadius
-    (60, 0),  // kVerticalTabMinWidth
-];
-
-const PAPER: u32 = 0xFFFB_FAF7;
-const HAIRLINE: u32 = 0xFFE9_E9E6;
-const INK: u32 = 0xFF1F_2024;
-const SOFT_INK: u32 = 0xFF4A_4850;
+pub(crate) const PAPER: u32 = 0xFFFB_FAF7;
+pub(crate) const HAIRLINE: u32 = 0xFFE9_E9E6;
+pub(crate) const INK: u32 = 0xFF1F_2024;
+pub(crate) const SOFT_INK: u32 = 0xFF4A_4850;
 /// The accent #9a5424 at 9 percent and at 25 percent over paper.
-const ACCENT_TINT: u32 = 0xFFF2_EBE4;
-const SELECTION: u32 = 0xFFE3_D0C2;
+pub(crate) const ACCENT_TINT: u32 = 0xFFF2_EBE4;
+pub(crate) const SELECTION: u32 = 0xFFE3_D0C2;
 /// Keyboard focus keeps a visible ring on the toolbar's buttons, in ink instead of the browser's
 /// blue. The address field has none: its fill is its focus.
-const FOCUS_RING: u32 = 0x661F_2024;
-/// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
-const COLOURS: [(i32, u32); 49] = [
-    (0x13C, PAPER),      // kColorFrameActive
-    (796, PAPER),        // kColorLocationBarBackground
-    (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
-    (1003, 0),           // Page info chip background: clear, so the field is one surface
-    (159, FOCUS_RING),   // kColorSysStateFocusRing
-    (314, FOCUS_RING),   // kColorFocusableBorderFocused
-    (465, SELECTION),    // kColorTextfieldSelectionBackground
-    (466, INK),          // kColorTextfieldSelectionForeground
-    (1004, 0),           // kColorOmniboxIconBackgroundTonal
-    (1005, SOFT_INK),    // kColorOmniboxIconForeground: the icon of the field while editing
-    (1006, SOFT_INK),    // kColorOmniboxIconForegroundTonal
-    (1007, INK),         // kColorOmniboxIconHover
-    (1013, PAPER),       // kColorOmniboxResultsBackground, the suggestion list and the field with it
-    (1014, 0xFFF0_EFEC), // kColorOmniboxResultsBackgroundHovered
-    (1015, 0x0F1F_2024), // kColorOmniboxResultsBackgroundHoverOverlay
-    (1016, ACCENT_TINT), // kColorOmniboxResultsBackgroundSelected: the accent at 9 percent over paper
-    (1019, SOFT_INK),    // kColorOmniboxResultsButtonIcon
-    (1020, INK),         // kColorOmniboxResultsButtonIconSelected
-    (1028, 0),           // kColorOmniboxResultsFocusIndicator: the design marks a row by its tint alone
-    (1029, SOFT_INK),    // kColorOmniboxResultsIcon
-    (1030, 0x0F1F_2024), // kColorOmniboxResultsIconGM3Background
-    (1031, INK),         // kColorOmniboxResultsIconSelected
-    (1032, INK),         // kColorOmniboxResultsIconHovered
-    (1035, 0xFF8A_8690), // kColorOmniboxResultsTextDimmed
-    (1036, 0xFF4A_4850), // kColorOmniboxResultsTextDimmedSelected
-    (1041, 0xFF8A_8690), // kColorOmniboxResultsTextSecondary
-    (1042, 0xFF4A_4850), // kColorOmniboxResultsTextSecondarySelected
-    (1043, INK),         // kColorOmniboxResultsTextSelected
-    (1044, 0xFF4A_4850), // kColorOmniboxResultsUrl
-    (1045, INK),         // kColorOmniboxResultsUrlSelected
-    (1052, SOFT_INK),    // kColorOmniboxSecurityChipText: the icon of the field while editing
-    (1053, SELECTION),   // kColorOmniboxSelectionBackground: the accent at 25 percent over paper
-    (1054, INK),         // kColorOmniboxSelectionForeground
-    (1046, 0xFFB3_261E), // kColorOmniboxSecurityChipDangerous: the "Not secure" label and its warning
-    (1047, 0x14B3_261E), // kColorOmniboxSecurityChipDangerousBackground: the label's tint, 8 percent
-    (1055, INK),         // kColorOmniboxText: the address while it is edited
-    (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
-    (1590, PAPER),       // kColorToolbar
-    (1644, 0xFF1A_1A1A), // Caption button glyph, active window
-    (1645, 0xFF1A_1A1A), // Caption button glyph, inactive window
-    (1646, 0xFF1A_1A1A), // Caption button glyph without a theme colour
-    (1647, 0xFFC4_2B1C), // Close button hover fill
-    (1650, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
-    (1595, 0xFF4A_4850), // kColorToolbarButtonIcon
-    (1598, 0xFF1F_2024), // kColorToolbarButtonIconHovered
-    (1599, 0xFFBD_BCBC), // kColorToolbarButtonIconInactive: the icon colour at 35 percent over paper
-    (1603, HAIRLINE),    // kColorToolbarContentAreaSeparator
-    (1611, 0x0F1F_2024), // kColorToolbarInkDropHover
-    (1612, 0x1F1F_2024), // kColorToolbarInkDropRipple
-];
+pub(crate) const FOCUS_RING: u32 = 0x661F_2024;
 
 type LayoutConstant = unsafe extern "system" fn(i32) -> i32;
 type WidgetCall = unsafe extern "system" fn(*mut c_void);
@@ -569,7 +266,7 @@ unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
     if widget == 0 {
         return;
     }
-    let root = *((source + ROOT_VIEW_OFFSET) as *const *mut c_void);
+    let root = *((source + bv().root_view_offset) as *const *mut c_void);
     // A widget that is still being built or already torn down can hold a root view that is not a
     // live view, and asking it for its colours would read freed memory.
     if root.is_null() || !is_live_view(root as usize) {
@@ -581,7 +278,7 @@ unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
     }
     SWAPPED.with(|swapped| {
         let mut swapped = swapped.borrow_mut();
-        for (id, colour) in COLOURS {
+        for &(id, colour) in bv().colours {
             if let Some(slot) = colour_slot(provider, id) {
                 let original = slot.read();
                 if first_swap(id) {
@@ -606,10 +303,6 @@ unsafe fn scoped<R>(widget: usize, work: impl FnOnce() -> R) -> R {
     result
 }
 
-/// `views::HWNDForWidget`, which is a call and a jump through two thunks.
-const HWND_FOR_WIDGET: usize = 0x0AC0_B080;
-const HWND_FOR_WIDGET_HEAD: [u8; 4] = [0x48, 0x83, 0xEC, 0x28];
-const HWND_FOR_WIDGET_TAIL: [u8; 8] = [0x48, 0x89, 0xC1, 0x48, 0x83, 0xC4, 0x28, 0xE9];
 
 /// The Rivet window that owns `widget` when it is one of its popups, such as the omnibox's
 /// suggestion list, which Chrome shows in a window of its own.
@@ -617,7 +310,7 @@ unsafe fn popup_owner(hooks: &Hooks, widget: usize) -> usize {
     if widget == 0 || is_rivet(widget) || WINDOWS.lock().unwrap_or_else(|error| error.into_inner()).is_empty() {
         return 0;
     }
-    let to_window: Pointer = std::mem::transmute(hooks.base + HWND_FOR_WIDGET);
+    let to_window: Pointer = std::mem::transmute(hooks.base + bv().hwnd_for_widget);
     let window = to_window(widget as *const c_void) as HWND;
     if window.is_null() {
         return 0;
@@ -647,7 +340,7 @@ unsafe fn fresh_popup(hooks: &Hooks, widget: usize) -> bool {
     if popup_owner(hooks, widget) == 0 {
         return false;
     }
-    let to_window: Pointer = std::mem::transmute(hooks.base + HWND_FOR_WIDGET);
+    let to_window: Pointer = std::mem::transmute(hooks.base + bv().hwnd_for_widget);
     let window = to_window(widget as *const c_void) as usize;
     let mut themed = THEMED_POPUPS.lock().unwrap_or_else(|error| error.into_inner());
     if themed.contains(&(widget, window)) {
@@ -675,13 +368,13 @@ unsafe fn hook_popup_class(hooks: &Hooks, widget: usize) {
     }
     done.push(vtable);
     let slots = vtable as *mut usize;
-    if *slots.add(PAINT_SLOT) == hooks.base + PAINT && *slots.add(LAYOUT_SLOT) == hooks.base + LAYOUT {
-        let _ = write_raw(slots.add(PAINT_SLOT).cast(), &(widget_paint as usize).to_le_bytes());
-        let _ = write_raw(slots.add(LAYOUT_SLOT).cast(), &(widget_layout as usize).to_le_bytes());
+    if *slots.add(bv().paint_slot) == hooks.base + bv().paint && *slots.add(bv().layout_slot) == hooks.base + bv().layout {
+        let _ = write_raw(slots.add(bv().paint_slot).cast(), &(widget_paint as usize).to_le_bytes());
+        let _ = write_raw(slots.add(bv().layout_slot).cast(), &(widget_layout as usize).to_le_bytes());
     }
     // The popup's pages are web pages, which ask the widget for its colour provider through the
     // colour provider source it is, and take their style sheet from what it holds.
-    let source_table = *((widget + SOURCE_IN_WIDGET) as *const usize) as *mut usize;
+    let source_table = *((widget + bv().source_in_widget) as *const usize) as *mut usize;
     let original = *source_table.add(1);
     if original != popup_provider as usize {
         SOURCE_ORIGINALS
@@ -692,8 +385,6 @@ unsafe fn hook_popup_class(hooks: &Hooks, widget: usize) {
     }
 }
 
-/// Where the colour provider source lies in a widget.
-const SOURCE_IN_WIDGET: usize = 0x48;
 /// The colour provider source tables of popup classes, with their own `GetColorProvider`.
 static SOURCE_ORIGINALS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
 
@@ -713,7 +404,7 @@ unsafe extern "system" fn popup_provider(source: *mut c_void) -> *const c_void {
     }
     let run: unsafe extern "system" fn(*mut c_void) -> *const c_void = std::mem::transmute(original);
     let provider = run(source);
-    let widget = (source as usize).wrapping_sub(SOURCE_IN_WIDGET);
+    let widget = (source as usize).wrapping_sub(bv().source_in_widget);
     if let Some(hooks) = hooks() {
         let owner = popup_owner(hooks, widget);
         if owner != 0 && (CURRENT.with(Cell::get), SOURCE.with(Cell::get)) != (owner, widget) {
@@ -748,8 +439,8 @@ unsafe fn scoped_widget<R>(widget: usize, work: impl FnOnce() -> R) -> R {
 
 unsafe fn widget_of(window: HWND) -> usize {
     let Some(hooks) = hooks() else { return 0 };
-    let content: Pointer = std::mem::transmute(hooks.base + CONTENT_WINDOW_FOR_HWND);
-    let widget_for: Pointer = std::mem::transmute(hooks.base + WIDGET_FOR_WINDOW);
+    let content: Pointer = std::mem::transmute(hooks.base + bv().content_window_for_hwnd);
+    let widget_for: Pointer = std::mem::transmute(hooks.base + bv().widget_for_window);
     let aura = content(window as *const c_void);
     if aura.is_null() {
         return 0;
@@ -771,7 +462,7 @@ unsafe fn original<T: Copy>(slot: &AtomicUsize) -> T {
 
 unsafe extern "system" fn layout_constant(constant: i32) -> i32 {
     if active() {
-        if let Some((_, value)) = OVERRIDES.iter().find(|(key, _)| *key == constant) {
+        if let Some((_, value)) = bv().overrides.iter().find(|(key, _)| *key == constant) {
             return *value;
         }
     }
@@ -779,14 +470,14 @@ unsafe extern "system" fn layout_constant(constant: i32) -> i32 {
 }
 
 unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut [i32; 4] {
-    if active() && inset == TOOLBAR_BUTTON_INSET {
+    if active() && inset == bv().toolbar_button_inset {
         out.write([TOOLBAR_BUTTON_PADDING; 4]);
         return out;
     }
     let result = original::<unsafe extern "system" fn(*mut [i32; 4], i32) -> *mut [i32; 4]>(
         &ORIGINAL_LAYOUT_INSETS,
     )(out, inset);
-    if active() && inset == TOOLBAR_INSET {
+    if active() && inset == bv().toolbar_inset {
         // The insets are top, left, bottom and right. The left one is where the back button
         // starts, and the appbar toggle sits in the space added before it. The row is 43 DIPs
         // tall around the 34 DIP field, with the buttons centred 28 DIPs in it.
@@ -794,7 +485,7 @@ unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut 
         (*out)[2] = TOOLBAR_BOTTOM;
         (*out)[1] = (*out)[1].saturating_add(LEADING_SPACE);
     }
-    if active() && inset == LOCATION_ICON_INSET {
+    if active() && inset == bv().location_icon_inset {
         (*out)[1] = (*out)[1].saturating_add(LOCATION_ICON_SHIFT);
     }
     result
@@ -802,7 +493,7 @@ unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut 
 
 unsafe extern "system" fn theme_changed(widget: *mut c_void) {
     let run: WidgetCall = match ORIGINAL_THEME_CHANGED.load(Ordering::Acquire) {
-        0 => std::mem::transmute(hooks().map_or(0, |hooks| hooks.base) + THEME_CHANGED),
+        0 => std::mem::transmute(hooks().map_or(0, |hooks| hooks.base) + bv().theme_changed),
         _ => original(&ORIGINAL_THEME_CHANGED),
     };
     scoped_widget(widget as usize, || run(widget));
@@ -811,7 +502,7 @@ unsafe extern "system" fn theme_changed(widget: *mut c_void) {
 /// Layer-backed views paint separately from the widget paint callback.
 unsafe extern "system" fn paint_layer(view: *mut c_void, context: *const c_void) {
     let table = *(view as *const usize);
-    let get_widget: Pointer = std::mem::transmute(*(table as *const usize).add(GET_WIDGET_SLOT));
+    let get_widget: Pointer = std::mem::transmute(*(table as *const usize).add(bv().get_widget_slot));
     let widget = get_widget(view) as usize;
     if is_rivet(widget) && !active() && !LAYER_LOGGED.swap(true, Ordering::Relaxed) {
         crate::vertical_tabs::trace("rivet layer paint outside scope");
@@ -877,19 +568,19 @@ unsafe fn rivet_display(model: *mut c_void) -> Option<address_display::Display> 
         return Some(address_display::compose(&[], &[], true));
     }
     let hooks = hooks()?;
-    let delegate = *((model as usize + MODEL_DELEGATE) as *const usize);
-    if delegate == 0 || *(delegate as *const usize) != hooks.base + BROWSER_DELEGATE_VTABLE {
+    let delegate = *((model as usize + bv().model_delegate) as *const usize);
+    if delegate == 0 || *(delegate as *const usize) != hooks.base + bv().browser_delegate_vtable {
         return None;
     }
     let active_contents: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(
-        *((hooks.base + BROWSER_DELEGATE_VTABLE) as *const usize).add(ACTIVE_WEB_CONTENTS_SLOT),
+        *((hooks.base + bv().browser_delegate_vtable) as *const usize).add(bv().active_web_contents_slot),
     );
     let contents = active_contents(delegate);
-    if contents == 0 || *(contents as *const usize) != hooks.base + WEB_CONTENTS_VTABLE {
+    if contents == 0 || *(contents as *const usize) != hooks.base + bv().web_contents_vtable {
         return None;
     }
     let title_of: unsafe extern "system" fn(usize) -> *const [u64; 3] = std::mem::transmute(
-        *((hooks.base + WEB_CONTENTS_VTABLE) as *const usize).add(WEB_CONTENTS_TITLE_SLOT),
+        *((hooks.base + bv().web_contents_vtable) as *const usize).add(bv().web_contents_title_slot),
     );
     let title = read_string(title_of(contents));
     let mut address = [0u64; 3];
@@ -918,7 +609,7 @@ unsafe fn free_string(text: &mut [u64; 3]) {
     if text[2] >> 63 == 1 {
         if let Some(hooks) = hooks() {
             let delete: unsafe extern "system" fn(*mut c_void, usize) =
-                std::mem::transmute(hooks.base + OPERATOR_DELETE);
+                std::mem::transmute(hooks.base + bv().operator_delete);
             delete(text[0] as *mut c_void, (text[2] & !(1 << 63)) as usize * 2);
         }
     }
@@ -940,7 +631,7 @@ unsafe fn write_string(out: *mut [u64; 3], text: &[u16]) {
         return;
     }
     let capacity = address_display::heap_capacity(text.len());
-    let allocate: unsafe extern "system" fn(usize) -> *mut u16 = std::mem::transmute(hooks.base + OPERATOR_NEW);
+    let allocate: unsafe extern "system" fn(usize) -> *mut u16 = std::mem::transmute(hooks.base + bv().operator_new);
     let data = allocate(capacity * 2);
     std::ptr::copy_nonoverlapping(text.as_ptr(), data, text.len());
     data.add(text.len()).write(0);
@@ -960,7 +651,7 @@ fn is_start_page(spec: &[u8]) -> bool {
 unsafe fn model_shows_start_page(model: *mut c_void) -> bool {
     let Some(hooks) = hooks() else { return false };
     let get_url: unsafe extern "system" fn(*mut c_void, *mut u8) -> *mut u8 =
-        std::mem::transmute(hooks.base + MODEL_URL);
+        std::mem::transmute(hooks.base + bv().model_url);
     let mut gurl = [0u64; 24];
     let gurl = gurl.as_mut_ptr() as *mut u8;
     get_url(model, gurl);
@@ -971,7 +662,7 @@ unsafe fn model_shows_start_page(model: *mut c_void) -> bool {
         (gurl as *const u8, *gurl.add(0x17) as usize)
     };
     let shows = is_start_page(std::slice::from_raw_parts(data, size));
-    let destroy: unsafe extern "system" fn(*mut u8) = std::mem::transmute(hooks.base + GURL_DESTRUCTOR);
+    let destroy: unsafe extern "system" fn(*mut u8) = std::mem::transmute(hooks.base + bv().gurl_destructor);
     destroy(gurl);
     shows
 }
@@ -979,7 +670,7 @@ unsafe fn model_shows_start_page(model: *mut c_void) -> bool {
 /// The omnibox refreshes its text outside any paint or layout, so the Rivet scope is found from
 /// its text field.
 unsafe fn in_omnibox_scope<R>(omnibox: *mut c_void, work: impl FnOnce() -> R) -> R {
-    let widget = widget_holding((omnibox as usize + OMNIBOX_TEXTFIELD) as *mut c_void);
+    let widget = widget_holding((omnibox as usize + bv().omnibox_textfield) as *mut c_void);
     scoped(widget, work)
 }
 
@@ -1002,9 +693,9 @@ unsafe extern "system" fn title_was_set(observer: *mut c_void, entry: *mut c_voi
     let run: unsafe extern "system" fn(*mut c_void, *mut c_void, usize) = original(&ORIGINAL_TITLE_WAS_SET);
     run(observer, entry, explicit);
     let Some(hooks) = hooks() else { return };
-    let omnibox = observer as usize - OBSERVER_OFFSET;
-    if is_rivet(widget_holding((omnibox + OMNIBOX_TEXTFIELD) as *mut c_void)) {
-        let update: WidgetCall = std::mem::transmute(hooks.base + OMNIBOX_UPDATE);
+    let omnibox = observer as usize - bv().observer_offset;
+    if is_rivet(widget_holding((omnibox + bv().omnibox_textfield) as *mut c_void)) {
+        let update: WidgetCall = std::mem::transmute(hooks.base + bv().omnibox_update);
         update(omnibox as *mut c_void);
     }
 }
@@ -1022,7 +713,7 @@ unsafe extern "system" fn update_text_style(
         original(&ORIGINAL_UPDATE_TEXT_STYLE);
     run(omnibox, text, is_url, scheme);
     let Some(hooks) = hooks() else { return };
-    let textfield = omnibox as usize + OMNIBOX_TEXTFIELD;
+    let textfield = omnibox as usize + bv().omnibox_textfield;
     let widget = widget_holding(textfield as *mut c_void);
     if !is_rivet(widget) {
         return;
@@ -1034,7 +725,7 @@ unsafe extern "system" fn update_text_style(
         .iter()
         .find(|(known, display)| *known == widget && display.text == shown)
         .map(|(_, display)| display.clone());
-    let holder = *((textfield + TEXTFIELD_RENDER_TEXT) as *const usize);
+    let holder = *((textfield + bv().textfield_render_text) as *const usize);
     if holder == 0 {
         return;
     }
@@ -1043,9 +734,9 @@ unsafe extern "system" fn update_text_style(
         return;
     }
     let apply_colour: unsafe extern "system" fn(usize, u32, *const [u32; 2]) =
-        std::mem::transmute(hooks.base + APPLY_COLOR);
+        std::mem::transmute(hooks.base + bv().apply_color);
     let apply_weight: unsafe extern "system" fn(usize, u32, *const [u32; 2]) =
-        std::mem::transmute(hooks.base + APPLY_WEIGHT);
+        std::mem::transmute(hooks.base + bv().apply_weight);
     // The text of an address being edited is the plain address: one weight and Chrome's colours,
     // not what the title of the resting text left behind.
     let Some(display) = display else {
@@ -1064,7 +755,7 @@ unsafe extern "system" fn update_text_style(
 
 unsafe extern "system" fn refresh_background(view: *mut c_void) {
     // The function takes the `LocationBarView`, whose `views::View` base starts 0x100 bytes in.
-    let top = widget_holding((view as usize + LOCATION_BAR_VIEW_BASE) as *mut c_void);
+    let top = widget_holding((view as usize + bv().location_bar_view_base) as *mut c_void);
     let run: WidgetCall = original(&ORIGINAL_REFRESH_BACKGROUND);
     scoped(top, || {
         if !active() {
@@ -1072,32 +763,32 @@ unsafe extern "system" fn refresh_background(view: *mut c_void) {
             return;
         }
         if FORCED.load(Ordering::Relaxed) >= FORCE_HOVER {
-            ((view as usize + HOVER_VALUE) as *mut f64).write(1.0);
+            ((view as usize + bv().hover_value) as *mut f64).write(1.0);
         }
         // Chrome draws a focus ring around the field. The design has none, so the view is taken
         // out; the call does nothing once it is gone.
         if let Some(hooks) = hooks() {
-            let remove: unsafe extern "system" fn(*mut c_void) = std::mem::transmute(hooks.base + FOCUS_RING_REMOVE);
-            let properties = (view as usize + LOCATION_BAR_VIEW_BASE + 0xE8) as *const usize;
+            let remove: unsafe extern "system" fn(*mut c_void) = std::mem::transmute(hooks.base + bv().focus_ring_remove);
+            let properties = (view as usize + bv().location_bar_view_base + 0xE8) as *const usize;
             let before = properties.read();
-            remove((view as usize + LOCATION_BAR_VIEW_BASE) as *mut c_void);
+            remove((view as usize + bv().location_bar_view_base) as *mut c_void);
             if first_swap(-1) {
                 crate::vertical_tabs::trace(&format!("focus ring: property map root {before:#x} -> {:#x}", properties.read()));
             }
         }
         // For captures: paint the field as it is while focused, without taking focus.
         let state = {
-            let holder = *((view as usize + FIELD_STATE) as *const usize);
+            let holder = *((view as usize + bv().field_state) as *const usize);
             if holder == 0 { 0 } else { *((holder + 0x28) as *const usize) }
         };
         let forced = FORCED.load(Ordering::Relaxed) == FORCE_FOCUS && state != 0;
-        let before = if forced { Some(((state + FIELD_STATE_FOCUSED) as *const i32).read()) } else { None };
+        let before = if forced { Some(((state + bv().field_state_focused) as *const i32).read()) } else { None };
         if forced {
-            ((state + FIELD_STATE_FOCUSED) as *mut i32).write(1);
+            ((state + bv().field_state_focused) as *mut i32).write(1);
         }
         let fill = (|| {
             let provider = provider_of(top)?;
-            colour_slot(provider, FOCUSED_FILL_ID)
+            colour_slot(provider, bv().focused_fill_id)
         })();
         let saved = fill.map(|slot| {
             let value = slot.read();
@@ -1109,7 +800,7 @@ unsafe extern "system" fn refresh_background(view: *mut c_void) {
             slot.write(value);
         }
         if let Some(value) = before {
-            ((state + FIELD_STATE_FOCUSED) as *mut i32).write(value);
+            ((state + bv().field_state_focused) as *mut i32).write(value);
         }
         round_field(view);
         watch_field(top, view as usize);
@@ -1119,7 +810,7 @@ unsafe extern "system" fn refresh_background(view: *mut c_void) {
 /// The colour provider of the Rivet window `widget`, when its root view is live.
 unsafe fn provider_of(widget: usize) -> Option<*const u8> {
     let hooks = hooks()?;
-    let root = *((widget + ROOT_VIEW_OFFSET) as *const *mut c_void);
+    let root = *((widget + bv().root_view_offset) as *const *mut c_void);
     if root.is_null() || !is_live_view(root as usize) {
         return None;
     }
@@ -1242,7 +933,7 @@ fn watch_field(widget: usize, view: usize) {
 
 unsafe fn screen_bounds(hooks: &Hooks, view: usize) -> [i32; 4] {
     let bounds: unsafe extern "system" fn(*mut u8, *mut [i32; 4]) -> *mut [i32; 4] =
-        std::mem::transmute(hooks.base + BOUNDS_IN_SCREEN);
+        std::mem::transmute(hooks.base + bv().bounds_in_screen);
     let mut rect = [0i32; 4];
     bounds(view as *mut u8, &mut rect);
     rect
@@ -1261,13 +952,13 @@ unsafe fn pointer_on_field(hooks: &Hooks, window: usize, widget: usize, view: us
     }
     ScreenToClient(window, &mut cursor);
     let scale = GetDpiForWindow(window).max(96) as f64 / 96.0;
-    let root = *((widget + ROOT_VIEW_OFFSET) as *const usize);
+    let root = *((widget + bv().root_view_offset) as *const usize);
     if root == 0 {
         return (held, false);
     }
     // Both rectangles are in screen DIPs, so their difference is the field's place in the widget.
     let origin = screen_bounds(hooks, root);
-    let field = screen_bounds(hooks, view + LOCATION_BAR_VIEW_BASE);
+    let field = screen_bounds(hooks, view + bv().location_bar_view_base);
     let (x, y) = (cursor.x as f64 / scale, cursor.y as f64 / scale);
     let (left, top) = ((field[0] - origin[0]) as f64, (field[1] - origin[1]) as f64);
     let inside = x >= left && x < left + field[2] as f64 && y >= top && y < top + field[3] as f64;
@@ -1276,15 +967,15 @@ unsafe fn pointer_on_field(hooks: &Hooks, window: usize, widget: usize, view: us
 
 /// The size of the field, in DIPs.
 unsafe fn field_size(view: usize) -> (i32, i32) {
-    let base = view + LOCATION_BAR_VIEW_BASE;
-    (*((base + VIEW_SIZE) as *const i32), *((base + VIEW_SIZE + 4) as *const i32))
+    let base = view + bv().location_bar_view_base;
+    (*((base + bv().view_size) as *const i32), *((base + bv().view_size + 4) as *const i32))
 }
 
 /// Sets the scale and brightness the press gives the field, or clears them at rest.
 unsafe fn show_press(hooks: &Hooks, view: usize, depth: Option<f64>) {
-    let base = view + LOCATION_BAR_VIEW_BASE;
+    let base = view + bv().location_bar_view_base;
     let set_transform: unsafe extern "system" fn(*mut c_void, *const u8) =
-        std::mem::transmute(hooks.base + SET_TRANSFORM);
+        std::mem::transmute(hooks.base + bv().set_transform);
     let mut transform = [0u8; TRANSFORM_BYTES];
     let mut write = |at: usize, value: f32| transform[at..at + 4].copy_from_slice(&value.to_le_bytes());
     let (width, height) = field_size(view);
@@ -1296,10 +987,10 @@ unsafe fn show_press(hooks: &Hooks, view: usize, depth: Option<f64>) {
     write(0x10, (1.0 - scale) * width as f32 / 2.0);
     write(0x14, (1.0 - scale) * height as f32 / 2.0);
     set_transform(base as *mut c_void, transform.as_ptr());
-    let layer = *((base + VIEW_LAYER) as *const usize);
+    let layer = *((base + bv().view_layer) as *const usize);
     if layer != 0 && depth != 0.0 {
         let brightness: unsafe extern "system" fn(*mut c_void, f32) =
-            std::mem::transmute(hooks.base + SET_BRIGHTNESS);
+            std::mem::transmute(hooks.base + bv().set_brightness);
         // The compositor adds this to every colour channel, so 0 is unchanged and -0.04 is darker.
         brightness(layer as *mut c_void, -(1.0 - PRESS_BRIGHTNESS) * depth.clamp(0.0, 1.0));
     }
@@ -1370,19 +1061,19 @@ unsafe fn start_press_timer() {
 /// like every other control of the top row.
 unsafe fn round_field(view: *mut c_void) {
     let Some(hooks) = hooks() else { return };
-    let background = *((view as usize + FIELD_BACKGROUND) as *const usize);
-    if background == 0 || *(background as *const usize) != hooks.base + BACKGROUND_VTABLE {
+    let background = *((view as usize + bv().field_background) as *const usize);
+    if background == 0 || *(background as *const usize) != hooks.base + bv().background_vtable {
         return;
     }
     let painter = *((background + 0x10) as *const usize);
-    if painter == 0 || *(painter as *const usize) != hooks.base + PAINTER_VTABLE {
+    if painter == 0 || *(painter as *const usize) != hooks.base + bv().painter_vtable {
         return;
     }
     for corner in 0..4 {
-        ((painter + PAINTER_RADII + corner * 4) as *mut f32).write(FIELD_RADIUS);
+        ((painter + bv().painter_radii + corner * 4) as *mut f32).write(FIELD_RADIUS);
     }
     // Chrome's field is 34 DIPs tall. The fill is 28, centred, like a button of the row.
-    ((painter + PAINTER_INSETS) as *mut [i32; 4]).write([FIELD_FILL_MARGIN, 0, FIELD_FILL_MARGIN, 0]);
+    ((painter + bv().painter_insets) as *mut [i32; 4]).write([FIELD_FILL_MARGIN, 0, FIELD_FILL_MARGIN, 0]);
 }
 
 /// The label is built here, which can also happen outside any paint or layout of the window.
@@ -1399,7 +1090,7 @@ unsafe extern "system" fn textfield_theme(view: *mut c_void) {
         return;
     }
     let Some(hooks) = hooks() else { return };
-    let holder = *((view as usize + TEXTFIELD_RENDER_TEXT) as *const usize);
+    let holder = *((view as usize + bv().textfield_render_text) as *const usize);
     if holder == 0 {
         return;
     }
@@ -1407,20 +1098,20 @@ unsafe extern "system" fn textfield_theme(view: *mut c_void) {
     if render_text == 0 {
         return;
     }
-    let font_list = (render_text + RENDER_TEXT_FONT_LIST) as *mut c_void;
+    let font_list = (render_text + bv().render_text_font_list) as *mut c_void;
     if (*(font_list as *const usize)) == 0 {
         return;
     }
-    let size: unsafe extern "system" fn(*mut c_void) -> i32 = std::mem::transmute(hooks.base + FONT_SIZE);
+    let size: unsafe extern "system" fn(*mut c_void) -> i32 = std::mem::transmute(hooks.base + bv().font_size);
     let current = size(font_list);
     if current == ADDRESS_FONT_SIZE {
         return;
     }
     let derive: unsafe extern "system" fn(*mut c_void, *mut usize, i32) -> *mut usize =
-        std::mem::transmute(hooks.base + DERIVE_SIZE);
+        std::mem::transmute(hooks.base + bv().derive_size);
     let mut smaller: usize = 0;
     derive(font_list, &mut smaller, ADDRESS_FONT_SIZE - current);
-    let set: unsafe extern "system" fn(*mut c_void, *const usize) = std::mem::transmute(hooks.base + TEXTFIELD_SET_FONT);
+    let set: unsafe extern "system" fn(*mut c_void, *const usize) = std::mem::transmute(hooks.base + bv().textfield_set_font);
     set(view, &smaller);
 }
 
@@ -1428,7 +1119,7 @@ unsafe extern "system" fn textfield_theme(view: *mut c_void) {
 unsafe fn window_top(view: *mut c_void) -> usize {
     let mut top = view as usize;
     for _ in 0..32 {
-        let parent = *((top + PARENT_OFFSET) as *const usize);
+        let parent = *((top + bv().parent_offset) as *const usize);
         // A view being built or destroyed can hold a parent that is no object at all.
         let object = parent != 0 && parent % 8 == 0 && parent < 0x0000_8000_0000_0000;
         if !object || is_rivet(top) {
@@ -1442,7 +1133,7 @@ unsafe fn window_top(view: *mut c_void) -> usize {
 /// The widget that holds `view`, which must point at a `views::View`.
 pub(crate) unsafe fn widget_holding(view: *mut c_void) -> usize {
     let table = *(view as *const usize);
-    let get_widget: Pointer = std::mem::transmute(*(table as *const usize).add(GET_WIDGET_SLOT));
+    let get_widget: Pointer = std::mem::transmute(*(table as *const usize).add(bv().get_widget_slot));
     get_widget(view) as usize
 }
 
@@ -1498,10 +1189,10 @@ unsafe fn page_is_local_file(delegate: *mut c_void) -> bool {
     };
     let local = is_file_scheme(
         std::slice::from_raw_parts(data, size),
-        *(gurl.add(GURL_SCHEME_BEGIN) as *const i32),
-        *(gurl.add(GURL_SCHEME_LENGTH) as *const i32),
+        *(gurl.add(bv().gurl_scheme_begin) as *const i32),
+        *(gurl.add(bv().gurl_scheme_length) as *const i32),
     );
-    let destroy: unsafe extern "system" fn(*mut u8) = std::mem::transmute(hooks.base + GURL_DESTRUCTOR);
+    let destroy: unsafe extern "system" fn(*mut u8) = std::mem::transmute(hooks.base + bv().gurl_destructor);
     destroy(gurl);
     local
 }
@@ -1515,7 +1206,7 @@ unsafe fn hidden_here(hooks: &Hooks, view: *mut c_void) -> bool {
     if active() {
         return true;
     }
-    let get_widget: Pointer = std::mem::transmute(*(table as *const usize).add(GET_WIDGET_SLOT));
+    let get_widget: Pointer = std::mem::transmute(*(table as *const usize).add(bv().get_widget_slot));
     is_rivet(get_widget(view) as usize)
 }
 
@@ -1568,22 +1259,22 @@ unsafe extern "system" fn anchor_rect(
         return ret;
     }
     let table = *(view as *const *const usize);
-    let get_widget: Pointer = std::mem::transmute(*table.add(GET_WIDGET_SLOT));
+    let get_widget: Pointer = std::mem::transmute(*table.add(bv().get_widget_slot));
     if !is_rivet(get_widget(view) as usize) {
         return ret;
     }
     let drawn = |v: usize| {
         let table = *(v as *const *const usize);
-        let call: Drawn = std::mem::transmute(*table.add(IS_DRAWN_SLOT));
+        let call: Drawn = std::mem::transmute(*table.add(bv().is_drawn_slot));
         call(v as *mut c_void)
     };
     if drawn(view as usize) {
         return ret;
     }
-    let parent = |v: usize| *((v + PARENT_OFFSET) as *const usize);
+    let parent = |v: usize| *((v + bv().parent_offset) as *const usize);
     if let Some(ancestor) = drawn_ancestor(parent(view as usize), parent, drawn) {
         if let Some(hooks) = hooks() {
-            let bounds: RectCall = std::mem::transmute(hooks.base + BOUNDS_IN_SCREEN);
+            let bounds: RectCall = std::mem::transmute(hooks.base + bv().bounds_in_screen);
             bounds(ancestor as *mut u8, result);
         }
     }
@@ -1603,7 +1294,7 @@ unsafe extern "system" fn choose_icon(icon: usize) -> usize {
         .iter()
         .map(|(rva, _)| *rva)
         .find(|rva| *rva != LOCAL_PAGE_ICON && hooks.base + rva == icon)
-        .map(|rva| if rva == HTTP_ICON && LOCAL_PAGE.with(Cell::get) { LOCAL_PAGE_ICON } else { rva });
+        .map(|rva| if rva == bv().http_icon && LOCAL_PAGE.with(Cell::get) { LOCAL_PAGE_ICON } else { rva });
     key.and_then(|key| icons.iter().find(|(rva, _)| *rva == key))
         .map_or(icon, |(_, ours)| ours.as_ref() as *const VectorIcon as usize)
 }
@@ -1767,95 +1458,95 @@ unsafe fn patch() -> Result<Hooks, String> {
     let holds = |vtable: usize, index: usize, function: usize| {
         slot(vtable, index).is_some_and(|rva| image.points_to(rva, function))
     };
-    if !holds(BROWSER_WIDGET_VTABLE, PAINT_SLOT, PAINT)
-        || !holds(BROWSER_WIDGET_VTABLE, LAYOUT_SLOT, LAYOUT)
-        || !holds(PLAIN_WIDGET_VTABLE, PAINT_SLOT, PAINT)
-        || !holds(PLAIN_WIDGET_VTABLE, LAYOUT_SLOT, LAYOUT)
+    if !holds(bv().browser_widget_vtable, bv().paint_slot, bv().paint)
+        || !holds(bv().browser_widget_vtable, bv().layout_slot, bv().layout)
+        || !holds(bv().plain_widget_vtable, bv().paint_slot, bv().paint)
+        || !holds(bv().plain_widget_vtable, bv().layout_slot, bv().layout)
     {
         return Err("this browser build has no recorded browser widget".into());
     }
-    if !holds(BROWSER_DELEGATE_VTABLE, ACTIVE_WEB_CONTENTS_SLOT, ACTIVE_WEB_CONTENTS)
-        || !holds(WEB_CONTENTS_VTABLE, WEB_CONTENTS_TITLE_SLOT, WEB_CONTENTS_TITLE)
+    if !holds(bv().browser_delegate_vtable, bv().active_web_contents_slot, bv().active_web_contents)
+        || !holds(bv().web_contents_vtable, bv().web_contents_title_slot, bv().web_contents_title)
     {
         return Err("this browser build has no recorded web contents".into());
     }
-    for (vtable, theme) in HIDDEN {
-        if !holds(vtable, THEME_SLOT, theme) {
+    for &(vtable, theme) in bv().hidden {
+        if !holds(vtable, bv().theme_slot, theme) {
             return Err(format!(
                 "this browser build has no recorded view at {vtable:#x}"
             ));
         }
     }
     let prologue = |rva: usize, bytes: &[u8]| image.has(rva, bytes);
-    if !prologue(LAYOUT_CONSTANT, &LAYOUT_CONSTANT_PROLOGUE)
-        || !prologue(THEME_CHANGED, &THEME_CHANGED_PROLOGUE)
-        || !prologue(PAINT_LAYER, &PAINT_LAYER_PROLOGUE)
-        || !prologue(SET_VISIBLE, &SET_VISIBLE_PROLOGUE)
-        || !prologue(FROM_VECTOR_ICON, &FROM_VECTOR_ICON_PROLOGUE)
-        || !prologue(UPDATE_LOCATION, &UPDATE_LOCATION_PROLOGUE)
-        || !prologue(TEXTFIELD_THEME, &TEXTFIELD_THEME_PROLOGUE)
-        || !prologue(TEXTFIELD_SET_FONT, &TEXTFIELD_SET_FONT_BYTES)
-        || !prologue(FONT_SIZE, &FONT_SIZE_BYTES)
-        || !prologue(DERIVE_SIZE, &DERIVE_SIZE_BYTES)
-        || !prologue(UPDATE_LOCATION_ICON, &UPDATE_LOCATION_ICON_PROLOGUE)
-        || !prologue(CHIP_TEXT, &CHIP_TEXT_PROLOGUE)
-        || !prologue(FORMATTED_URL, &FORMATTED_URL_PROLOGUE)
-        || !prologue(MODEL_URL, &MODEL_URL_PROLOGUE)
-        || !prologue(UPDATE_TEXT_STYLE, &UPDATE_TEXT_STYLE_PROLOGUE)
-        || !prologue(APPLY_COLOR, &APPLY_COLOR_BYTES)
-        || !prologue(APPLY_WEIGHT, &APPLY_WEIGHT_BYTES)
-        || !prologue(TITLE_WAS_SET, &TITLE_WAS_SET_PROLOGUE)
-        || !prologue(OPERATOR_NEW, &OPERATOR_NEW_BYTES)
-        || !prologue(OPERATOR_DELETE, &OPERATOR_DELETE_BYTES)
-        || !prologue(OMNIBOX_UPDATE, &OMNIBOX_UPDATE_PROLOGUE)
-        || !prologue(OMNIBOX_REVERT_ALL, &OMNIBOX_REVERT_ALL_PROLOGUE)
-        || !prologue(OMNIBOX_TAB_CHANGED, &OMNIBOX_TAB_CHANGED_PROLOGUE)
-        || !prologue(LAYOUT_INSETS, &LAYOUT_INSETS_PROLOGUE)
-        || !prologue(UPDATE_ICON, &UPDATE_ICON_PROLOGUE)
-        || !prologue(REFRESH_BACKGROUND, &REFRESH_BACKGROUND_PROLOGUE)
-        || !prologue(GURL_DESTRUCTOR, &GURL_DESTRUCTOR_BYTES)
-        || !prologue(ANCHOR_RECT, &ANCHOR_RECT_PROLOGUE)
-        || !prologue(ANCHOR_RECT + 0x2a, &ANCHOR_VIEW_ACCESS)
-        || !prologue(IS_DRAWN, &IS_DRAWN_BYTES)
-        || !prologue(BOUNDS_IN_SCREEN, &BOUNDS_BYTES)
-        || !prologue(SET_TRANSFORM, &SET_TRANSFORM_PROLOGUE)
-        || !prologue(SET_BRIGHTNESS, &SET_BRIGHTNESS_PROLOGUE)
-        || !prologue(HWND_FOR_WIDGET, &HWND_FOR_WIDGET_HEAD)
-        || !prologue(HWND_FOR_WIDGET + 9, &HWND_FOR_WIDGET_TAIL)
+    if !prologue(bv().layout_constant, &bv().layout_constant_prologue)
+        || !prologue(bv().theme_changed, &bv().theme_changed_prologue)
+        || !prologue(bv().paint_layer, &bv().paint_layer_prologue)
+        || !prologue(bv().set_visible, &bv().set_visible_prologue)
+        || !prologue(bv().from_vector_icon, &bv().from_vector_icon_prologue)
+        || !prologue(bv().update_location, &bv().update_location_prologue)
+        || !prologue(bv().textfield_theme, &bv().textfield_theme_prologue)
+        || !prologue(bv().textfield_set_font, &bv().textfield_set_font_bytes)
+        || !prologue(bv().font_size, &bv().font_size_bytes)
+        || !prologue(bv().derive_size, &bv().derive_size_bytes)
+        || !prologue(bv().update_location_icon, &bv().update_location_icon_prologue)
+        || !prologue(bv().chip_text, &bv().chip_text_prologue)
+        || !prologue(bv().formatted_url, &bv().formatted_url_prologue)
+        || !prologue(bv().model_url, &bv().model_url_prologue)
+        || !prologue(bv().update_text_style, &bv().update_text_style_prologue)
+        || !prologue(bv().apply_color, &bv().apply_color_bytes)
+        || !prologue(bv().apply_weight, &bv().apply_weight_bytes)
+        || !prologue(bv().title_was_set, &bv().title_was_set_prologue)
+        || !prologue(bv().operator_new, &bv().operator_new_bytes)
+        || !prologue(bv().operator_delete, &bv().operator_delete_bytes)
+        || !prologue(bv().omnibox_update, &bv().omnibox_update_prologue)
+        || !prologue(bv().omnibox_revert_all, &bv().omnibox_revert_all_prologue)
+        || !prologue(bv().omnibox_tab_changed, &bv().omnibox_tab_changed_prologue)
+        || !prologue(bv().layout_insets, &bv().layout_insets_prologue)
+        || !prologue(bv().update_icon, &bv().update_icon_prologue)
+        || !prologue(bv().refresh_background, &bv().refresh_background_prologue)
+        || !prologue(bv().gurl_destructor, &bv().gurl_destructor_bytes)
+        || !prologue(bv().anchor_rect, &bv().anchor_rect_prologue)
+        || !prologue(bv().anchor_rect + 0x2a, &bv().anchor_view_access)
+        || !prologue(bv().is_drawn, &bv().is_drawn_bytes)
+        || !prologue(bv().bounds_in_screen, &bv().bounds_bytes)
+        || !prologue(bv().set_transform, &bv().set_transform_prologue)
+        || !prologue(bv().set_brightness, &bv().set_brightness_prologue)
+        || !prologue(bv().hwnd_for_widget, &bv().hwnd_for_widget_head)
+        || !prologue(bv().hwnd_for_widget + 9, &bv().hwnd_for_widget_tail)
     {
         return Err("this browser build has other toolbar functions".into());
     }
     // The icons are read through their addresses, so each must lie inside the image.
-    if [BACK_ICON, FORWARD_ICON, RELOAD_ICON, PAGE_INFO_ICON, GOOGLE_G_ICON, GOOGLE_G_MONOCHROME_ICON]
+    if [bv().back_icon, bv().forward_icon, bv().reload_icon, bv().page_info_icon, bv().google_g_icon, bv().google_g_monochrome_icon]
         .iter()
-        .chain(EDIT_ICONS.iter())
+        .chain(bv().edit_icons.iter())
         .any(|rva| image.at(*rva, std::mem::size_of::<VectorIcon>()).is_none())
-        || image.at(0x10F5_D438, std::mem::size_of::<IconRep>()).is_none()
+        || image.at(bv().page_info_reps, std::mem::size_of::<IconRep>()).is_none()
     {
         return Err("this browser build has another page info icon".into());
     }
-    let icon = &*((base + PAGE_INFO_ICON) as *const VectorIcon);
-    if icon.count != 1 || icon.reps as usize != base + 0x10F5_D438
-        || icon.name as usize != base + 0x10F5_D448
-        || (*icon.reps).path as usize != base + 0x10F6_6E40
+    let icon = &*((base + bv().page_info_icon) as *const VectorIcon);
+    if icon.count != 1 || icon.reps as usize != base + bv().page_info_reps
+        || icon.name as usize != base + bv().page_info_id
+        || (*icon.reps).path as usize != base + bv().page_info_path
         || (*icon.reps).size != 282
-        || !prologue(0x10F6_6E40, &PAGE_INFO_BYTES)
+        || !prologue(bv().page_info_path, &bv().page_info_bytes)
     {
         return Err("this browser build has another page info icon".into());
     }
-    let http = &*((base + HTTP_ICON) as *const VectorIcon);
+    let http = &*((base + bv().http_icon) as *const VectorIcon);
     if http.count != 1
         || (*http.reps).size != 263
-        || std::slice::from_raw_parts(http.name, HTTP_ICON_NAME.len()) != HTTP_ICON_NAME
+        || std::slice::from_raw_parts(http.name, bv().http_icon_name.len()) != bv().http_icon_name
     {
         return Err("this browser build has another icon for plain HTTP".into());
     }
     Ok(Hooks {
         base,
-        paint: std::mem::transmute::<usize, WidgetPaint>(base + PAINT),
-        layout: std::mem::transmute::<usize, WidgetCall>(base + LAYOUT),
-        provider: std::mem::transmute::<usize, Provider>(base + COLOR_PROVIDER),
-        hidden: HIDDEN
+        paint: std::mem::transmute::<usize, WidgetPaint>(base + bv().paint),
+        layout: std::mem::transmute::<usize, WidgetCall>(base + bv().layout),
+        provider: std::mem::transmute::<usize, Provider>(base + bv().color_provider),
+        hidden: bv().hidden
             .iter()
             .map(|(vtable, theme)| {
                 (
@@ -1874,8 +1565,8 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
     if !skip.contains("anchor") {
         detour(
             base,
-            ANCHOR_RECT,
-            &ANCHOR_RECT_PROLOGUE,
+            bv().anchor_rect,
+            &bv().anchor_rect_prologue,
             false,
             anchor_rect as *const () as usize,
             &ORIGINAL_ANCHOR_RECT,
@@ -1884,8 +1575,8 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
     if !skip.contains("constant") {
         detour(
             base,
-            LAYOUT_CONSTANT,
-            &LAYOUT_CONSTANT_PROLOGUE,
+            bv().layout_constant,
+            &bv().layout_constant_prologue,
             true,
             layout_constant as usize,
             &ORIGINAL_LAYOUT_CONSTANT,
@@ -1894,8 +1585,8 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
     if !skip.contains("insets") {
         detour(
             base,
-            LAYOUT_INSETS,
-            &LAYOUT_INSETS_PROLOGUE,
+            bv().layout_insets,
+            &bv().layout_insets_prologue,
             false,
             layout_insets as *const () as usize,
             &ORIGINAL_LAYOUT_INSETS,
@@ -1904,21 +1595,21 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
     if !skip.contains("theme") {
         detour(
             base,
-            THEME_CHANGED,
-            &THEME_CHANGED_PROLOGUE,
+            bv().theme_changed,
+            &bv().theme_changed_prologue,
             true,
             theme_changed as usize,
             &ORIGINAL_THEME_CHANGED,
         )?;
     }
     if !skip.contains("layer") {
-        detour(base, PAINT_LAYER, &PAINT_LAYER_PROLOGUE, true, paint_layer as usize, &ORIGINAL_PAINT_LAYER)?;
+        detour(base, bv().paint_layer, &bv().paint_layer_prologue, true, paint_layer as usize, &ORIGINAL_PAINT_LAYER)?;
     }
     if !skip.contains("visible") {
         detour(
             base,
-            SET_VISIBLE,
-            &SET_VISIBLE_PROLOGUE,
+            bv().set_visible,
+            &bv().set_visible_prologue,
             false,
             set_visible as usize,
             &ORIGINAL_SET_VISIBLE,
@@ -1929,84 +1620,84 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
     }
     detour(
         base,
-        UPDATE_LOCATION_ICON,
-        &UPDATE_LOCATION_ICON_PROLOGUE,
+        bv().update_location_icon,
+        &bv().update_location_icon_prologue,
         false,
         update_location_icon as *const () as usize,
         &ORIGINAL_UPDATE_LOCATION_ICON,
     )?;
     detour(
         base,
-        TEXTFIELD_THEME,
-        &TEXTFIELD_THEME_PROLOGUE,
+        bv().textfield_theme,
+        &bv().textfield_theme_prologue,
         false,
         textfield_theme as *const () as usize,
         &ORIGINAL_TEXTFIELD_THEME,
     )?;
     detour(
         base,
-        UPDATE_LOCATION,
-        &UPDATE_LOCATION_PROLOGUE,
+        bv().update_location,
+        &bv().update_location_prologue,
         false,
         update_location as *const () as usize,
         &ORIGINAL_UPDATE_LOCATION,
     )?;
     detour(
         base,
-        REFRESH_BACKGROUND,
-        &REFRESH_BACKGROUND_PROLOGUE,
+        bv().refresh_background,
+        &bv().refresh_background_prologue,
         false,
         refresh_background as *const () as usize,
         &ORIGINAL_REFRESH_BACKGROUND,
     )?;
     detour(
         base,
-        UPDATE_ICON,
-        &UPDATE_ICON_PROLOGUE,
+        bv().update_icon,
+        &bv().update_icon_prologue,
         false,
         update_icon as *const () as usize,
         &ORIGINAL_UPDATE_ICON,
     )?;
     detour(
         base,
-        FORMATTED_URL,
-        &FORMATTED_URL_PROLOGUE,
+        bv().formatted_url,
+        &bv().formatted_url_prologue,
         false,
         formatted_url as *const () as usize,
         &ORIGINAL_FORMATTED_URL,
     )?;
     for (rva, prologue, cookie, hook, store) in [
         (
-            UPDATE_TEXT_STYLE,
-            &UPDATE_TEXT_STYLE_PROLOGUE[..],
+            bv().update_text_style,
+            &bv().update_text_style_prologue[..],
             false,
             update_text_style as *const () as usize,
             &ORIGINAL_UPDATE_TEXT_STYLE,
         ),
         (
-            TITLE_WAS_SET,
-            &TITLE_WAS_SET_PROLOGUE[..],
+            bv().title_was_set,
+            &bv().title_was_set_prologue[..],
             false,
             title_was_set as *const () as usize,
             &ORIGINAL_TITLE_WAS_SET,
         ),
         (
-            OMNIBOX_UPDATE,
-            &OMNIBOX_UPDATE_PROLOGUE[..],
+            bv().omnibox_update,
+            &bv().omnibox_update_prologue[..],
             true,
             omnibox_update as *const () as usize,
             &ORIGINAL_OMNIBOX_UPDATE,
         ),
         (
-            OMNIBOX_REVERT_ALL,
-            &OMNIBOX_REVERT_ALL_PROLOGUE[..],
+            bv().omnibox_revert_all,
+            &bv().omnibox_revert_all_prologue[..],
             true,
             omnibox_revert_all as *const () as usize,
             &ORIGINAL_OMNIBOX_REVERT_ALL,
         ),
         (
-            OMNIBOX_TAB_CHANGED,
-            &OMNIBOX_TAB_CHANGED_PROLOGUE[..],
+            bv().omnibox_tab_changed,
+            &bv().omnibox_tab_changed_prologue[..],
             false,
             omnibox_tab_changed as *const () as usize,
             &ORIGINAL_OMNIBOX_TAB_CHANGED,
@@ -2016,23 +1707,23 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
     }
     detour(
         base,
-        CHIP_TEXT,
-        &CHIP_TEXT_PROLOGUE,
+        bv().chip_text,
+        &bv().chip_text_prologue,
         false,
         chip_text as *const () as usize,
         &ORIGINAL_CHIP_TEXT,
     )?;
-    let mut icon_trampoline = FROM_VECTOR_ICON_PROLOGUE.to_vec();
+    let mut icon_trampoline = bv().from_vector_icon_prologue.to_vec();
     jump(
         &mut icon_trampoline,
-        base + FROM_VECTOR_ICON + FROM_VECTOR_ICON_PROLOGUE.len(),
+        base + bv().from_vector_icon + bv().from_vector_icon_prologue.len(),
     );
     let stub = second_argument_stub(choose_icon as usize, executable(&icon_trampoline)?)?;
     let mut icon_patch = Vec::new();
     load_rax(&mut icon_patch, stub);
     icon_patch.extend_from_slice(&[0xFF, 0xE0]);
-    icon_patch.resize(FROM_VECTOR_ICON_PROLOGUE.len(), 0xCC);
-    write_code((base + FROM_VECTOR_ICON) as *mut u8, &icon_patch)?;
+    icon_patch.resize(bv().from_vector_icon_prologue.len(), 0xCC);
+    write_code((base + bv().from_vector_icon) as *mut u8, &icon_patch)?;
     slots(base, skip)
 }
 
@@ -2040,14 +1731,14 @@ unsafe fn slots(base: usize, skip: &str) -> Result<(), String> {
     if skip.contains("widget") {
         return Ok(());
     }
-    for vtable in [BROWSER_WIDGET_VTABLE, PLAIN_WIDGET_VTABLE] {
+    for vtable in [bv().browser_widget_vtable, bv().plain_widget_vtable] {
         let widget = (base + vtable) as *mut usize;
-        replace_slot(widget.add(PAINT_SLOT), widget_paint as usize)?;
-        replace_slot(widget.add(LAYOUT_SLOT), widget_layout as usize)?;
+        replace_slot(widget.add(bv().paint_slot), widget_paint as usize)?;
+        replace_slot(widget.add(bv().layout_slot), widget_layout as usize)?;
     }
-    for (vtable, _) in HIDDEN {
+    for (vtable, _) in bv().hidden {
         replace_slot(
-            ((base + vtable) as *mut usize).add(THEME_SLOT),
+            ((base + vtable) as *mut usize).add(bv().theme_slot),
             hidden_theme_changed as usize,
         )?;
     }
@@ -2087,10 +1778,6 @@ pub unsafe fn install(directory: Option<std::path::PathBuf>) -> Result<(), Strin
         .clone()
 }
 
-/// `views::DesktopWindowTreeHostWin::GetContentWindowForHWND` and
-/// `views::Widget::GetWidgetForNativeWindow`.
-const CONTENT_WINDOW_FOR_HWND: usize = 0x00D5_64A0;
-const WIDGET_FOR_WINDOW: usize = 0x0315_C7C0;
 
 /// Makes `window` a Rivet window and rebuilds its views the way a theme change does, so it
 /// picks up the Rivet look.
@@ -2319,27 +2006,8 @@ struct VectorIcon {
 unsafe impl Sync for VectorIcon {}
 unsafe impl Send for VectorIcon {}
 
-/// The navigation icons of this build: `kBackArrowChromeRefreshOldIcon`,
-/// `kForwardArrowChromeRefreshOldIcon` and `kReloadChromeRefreshOldIcon`.
-const BACK_ICON: usize = 0x10E0_2EA8;
-const FORWARD_ICON: usize = 0x10E0_55C0;
-const RELOAD_ICON: usize = 0x10E0_7DD0;
-const PAGE_INFO_ICON: usize = 0x10F5_D470;
-/// The Google G logos Chrome shows in the field while a person edits it, in colour and in one
-/// colour. The design shows a magnifier there.
-const GOOGLE_G_ICON: usize = 0x10E0_A3F0;
-const GOOGLE_G_MONOCHROME_ICON: usize = 0x10E0_A438;
-/// The globe Chrome shows for an address being edited, and its search icons.
-const EDIT_ICONS: [usize; 5] = [0x10E0_5680, 0x10E0_56B8, 0x10E0_8278, 0x10E0_82C0, 0x10E0_82F8];
-/// `kHttpChromeRefreshOldIcon`, which Chrome shows for local files as well as for plain HTTP.
-const HTTP_ICON: usize = 0x10F5_CE60;
 /// The key of the information mark in `ICONS`, which replaces the HTTP icon on local pages.
 const LOCAL_PAGE_ICON: usize = 1;
-const HTTP_ICON_NAME: &[u8] = b"kHttpChromeRefreshOldIcon";
-const PAGE_INFO_BYTES: [u8; 32] = [
-    0x1C, 0, 0, 0, 0, 0, 0x80, 0x41, 1, 0, 0, 0, 7, 0, 0, 0,
-    0x5C, 0x8F, 0x3A, 0x41, 0xEC, 0x51, 0x5C, 0x41, 0x12, 0, 0, 0, 0xD7, 0xA3, 0x30, 0xBF,
-];
 
 static ICONS: OnceLock<Vec<(usize, Box<VectorIcon>)>> = OnceLock::new();
 
@@ -2347,23 +2015,23 @@ unsafe fn build_icons(base: usize) {
     ICONS.get_or_init(|| {
         let leak = |path: Vec<PathElement>| -> &'static [PathElement] { Box::leak(path.into_boxed_slice()) };
         [
-            (BACK_ICON, leak(back_path())),
-            (FORWARD_ICON, leak(forward_path())),
-            (RELOAD_ICON, leak(reload_path())),
-            (PAGE_INFO_ICON, leak(lock_path())),
-            (HTTP_ICON, leak(warning_path())),
+            (bv().back_icon, leak(back_path())),
+            (bv().forward_icon, leak(forward_path())),
+            (bv().reload_icon, leak(reload_path())),
+            (bv().page_info_icon, leak(lock_path())),
+            (bv().http_icon, leak(warning_path())),
             (LOCAL_PAGE_ICON, leak(info_path())),
-            (GOOGLE_G_ICON, leak(search_path())),
-            (GOOGLE_G_MONOCHROME_ICON, leak(search_path())),
+            (bv().google_g_icon, leak(search_path())),
+            (bv().google_g_monochrome_icon, leak(search_path())),
         ]
         .into_iter()
-        .chain(EDIT_ICONS.map(|rva| (rva, leak(search_path()))))
+        .chain(bv().edit_icons.iter().map(|&rva| (rva, leak(search_path()))))
         .map(|(rva, path)| {
             let rep: &'static IconRep = Box::leak(Box::new(IconRep {
                 path: path.as_ptr(),
                 size: path.len(),
             }));
-            let named = if rva == LOCAL_PAGE_ICON { HTTP_ICON } else { rva };
+            let named = if rva == LOCAL_PAGE_ICON { bv().http_icon } else { rva };
             let original = (base + named) as *const VectorIcon;
             let icon = Box::new(VectorIcon {
                 reps: rep,
@@ -2437,8 +2105,8 @@ mod tests {
 
     #[test]
     fn fr12_page_info_uses_a_thin_circle_without_replacing_warnings() {
-        assert_eq!(PAGE_INFO_ICON, 0x10F5_D470);
-        assert_ne!(PAGE_INFO_ICON, 0x10F5_CE60);
+        assert_eq!(bv().page_info_icon, 0x10F5_D470);
+        assert_ne!(bv().page_info_icon, 0x10F5_CE60);
         let path = info_path();
         let commands: Vec<u32> = [0, 2, 4, 8, 11, 14].iter().map(|&index| unsafe { path[index].command }).collect();
         assert_eq!(commands, [CANVAS_DIMENSIONS, STROKE, CIRCLE, MOVE_TO, LINE_TO, MOVE_TO]);
@@ -2465,7 +2133,7 @@ mod tests {
 
     #[test]
     fn fr12_toolbar_colours_use_distinct_stock_keys() {
-        let colour = |id| COLOURS.iter().find(|(key, _)| *key == id).map(|(_, value)| *value);
+        let colour = |id| bv().colours.iter().find(|(key, _)| *key == id).map(|(_, value)| *value);
         assert_eq!(colour(1055), Some(INK));
         // The focused field keeps the hover fill instead of the list colour, and has no ring colour of its own.
         assert_eq!(FIELD_HOVER_FILL, 0xFFF0_EFEC);
@@ -2485,8 +2153,8 @@ mod tests {
         assert_eq!(colour(1644), Some(0xFF1A_1A1A));
         assert_eq!(colour(1646), Some(0xFF1A_1A1A));
         assert_eq!(colour(1650), Some(0xFF1A_1A1A));
-        for (index, (id, _)) in COLOURS.iter().enumerate() {
-            assert!(!COLOURS[..index].iter().any(|(other, _)| other == id));
+        for (index, (id, _)) in bv().colours.iter().enumerate() {
+            assert!(!bv().colours[..index].iter().any(|(other, _)| other == id));
         }
     }
 
@@ -2504,10 +2172,10 @@ mod tests {
     #[test]
     fn fr12_label_hooks_copy_whole_instructions() {
         // `sub rsp, imm32` is seven bytes after the eight bytes of pushes.
-        assert_eq!(CHIP_TEXT_PROLOGUE.len(), 15);
-        assert_eq!(UPDATE_LOCATION_PROLOGUE.len(), 15);
-        assert_eq!(&CHIP_TEXT_PROLOGUE[8..11], &[0x48, 0x81, 0xEC]);
-        assert_eq!(&UPDATE_LOCATION_PROLOGUE[8..11], &[0x48, 0x81, 0xEC]);
+        assert_eq!(bv().chip_text_prologue.len(), 15);
+        assert_eq!(bv().update_location_prologue.len(), 15);
+        assert_eq!(&bv().chip_text_prologue[8..11], &[0x48, 0x81, 0xEC]);
+        assert_eq!(&bv().update_location_prologue[8..11], &[0x48, 0x81, 0xEC]);
     }
 
     #[test]
@@ -2522,16 +2190,16 @@ mod tests {
     #[test]
     fn fr12_background_refresh_hook_copies_whole_instructions() {
         // Seven pushes, then `sub rsp, 0x60`, and no relative operand within the copy.
-        assert_eq!(REFRESH_BACKGROUND_PROLOGUE.len(), 14);
-        assert_eq!(&REFRESH_BACKGROUND_PROLOGUE[10..], &[0x48, 0x83, 0xEC, 0x60]);
+        assert_eq!(bv().refresh_background_prologue.len(), 14);
+        assert_eq!(&bv().refresh_background_prologue[10..], &[0x48, 0x83, 0xEC, 0x60]);
     }
 
     #[test]
     fn fr12_navigation_buttons_use_a_fixed_pitch() {
-        assert_eq!(LAYOUT_INSETS_PROLOGUE.len(), 13);
+        assert_eq!(bv().layout_insets_prologue.len(), 13);
         assert_eq!(NAV_CANVAS as i32, 20);
-        assert!(OVERRIDES.contains(&(47, 18)));
-        assert!(UPDATE_ICON_PROLOGUE.len() >= 12);
+        assert!(bv().overrides.contains(&(47, 18)));
+        assert!(bv().update_icon_prologue.len() >= 12);
     }
 
     #[test]
@@ -2554,24 +2222,24 @@ mod tests {
 
     #[test]
     fn fr12_cookie_hooks_end_with_the_cookie_load() {
-        for prologue in [&OMNIBOX_UPDATE_PROLOGUE[..], &OMNIBOX_REVERT_ALL_PROLOGUE[..]] {
+        for prologue in [&bv().omnibox_update_prologue[..], &bv().omnibox_revert_all_prologue[..]] {
             assert_eq!(&prologue[prologue.len() - 7..prologue.len() - 4], [0x48, 0x8B, 0x05]);
             assert!(prologue.len() >= 12);
         }
-        assert!(OMNIBOX_TAB_CHANGED_PROLOGUE.len() >= 12);
+        assert!(bv().omnibox_tab_changed_prologue.len() >= 12);
     }
 
     #[test]
     fn fr12_rivet_toolbar_leaves_thirty_two_dips_before_the_back_button() {
         assert_eq!(LEADING_SPACE, 32);
-        assert_ne!(TOOLBAR_INSET, TOOLBAR_BUTTON_INSET);
+        assert_ne!(bv().toolbar_inset, bv().toolbar_button_inset);
         assert_eq!(i32::MAX.saturating_add(LEADING_SPACE), i32::MAX);
     }
 
     #[test]
     fn fr12_address_text_is_twelve_dips() {
         assert_eq!(ADDRESS_FONT_SIZE, 12);
-        assert_eq!(TEXTFIELD_THEME_PROLOGUE.len(), 12);
+        assert_eq!(bv().textfield_theme_prologue.len(), 12);
     }
 
     #[test]
@@ -2581,7 +2249,7 @@ mod tests {
         assert_eq!(28 + 2 * FIELD_FILL_MARGIN, 34);
         assert_eq!(TOOLBAR_TOP + 34 + TOOLBAR_BOTTOM, 43);
         // The page info chip paints nothing of its own, so no circle shows inside the field.
-        assert!(COLOURS.contains(&(1003, 0)));
+        assert!(bv().colours.contains(&(1003, 0)));
         assert_eq!(LOCATION_ICON_SHIFT, 2);
     }
 
@@ -2626,14 +2294,14 @@ mod tests {
 
     #[test]
     fn fr12_only_local_pages_replace_the_plain_http_icon() {
-        assert_ne!(HTTP_ICON, PAGE_INFO_ICON);
-        assert_eq!(HTTP_ICON_NAME.len(), 25);
+        assert_ne!(bv().http_icon, bv().page_info_icon);
+        assert_eq!(bv().http_icon_name.len(), 25);
         assert!(ICON_STROKE < 1.5);
     }
 
     #[test]
     fn fr12_overrides_only_known_constants() {
-        assert!(OVERRIDES
+        assert!(bv().overrides
             .iter()
             .all(|(constant, _)| (0..75).contains(constant)));
     }

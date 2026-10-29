@@ -23,30 +23,13 @@ use windows_sys::Win32::Foundation::HWND;
 use crate::chrome_layout::image;
 use windows_sys::Win32::System::Memory::{VirtualProtect, PAGE_PROTECTION_FLAGS, PAGE_READWRITE};
 
-/// The vtable slot of `VerticalTabStripStateControllerImpl::ShouldDisplayVerticalTabs`.
-const SLOT: usize = 0x0FDA_FE00;
-const SHOULD_DISPLAY: usize = 0x0369_C6E0;
-/// `BrowserView::GetBrowserViewForBrowser`.
-const BROWSER_VIEW_FOR_BROWSER: usize = 0x0034_D3E0;
-/// `views::HWNDForView`.
-const HWND_FOR_VIEW: usize = 0x036A_A950;
-/// `VerticalTabStripStateController::NotifyModeChanged`.
-const NOTIFY_MODE_CHANGED: usize = 0x0A1D_B330;
-/// `VerticalTabStripStateControllerImpl::UpdateCollapseActionItem`.
-const UPDATE_COLLAPSE_ACTION: usize = 0x020F_3D90;
+/// The values of the loaded browser build.
+fn bv() -> &'static crate::builds::VerticalTabs {
+    &crate::builds::get().vertical
+}
+
 /// The vtable slot of the controller's scalar deleting destructor, two words before
 /// `ShouldDisplayVerticalTabs`, and the function it holds.
-const DESTRUCTOR_SLOT: usize = SLOT - 16;
-const DESTRUCTOR: usize = 0x0296_C3F0;
-const DESTRUCTOR_PROLOGUE: [u8; 12] =
-    [0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x89, 0xd7, 0x48, 0x89, 0xce, 0xe8];
-/// Where the controller keeps its browser, its mode and its strip width.
-const BROWSER_OFFSET: usize = 0x1B8;
-const MODE_OFFSET: usize = 0x1E8;
-const WIDTH_OFFSET: usize = 0x1CC;
-/// `BrowserView`'s vtable for its `views::View` base. The browser view is reached through another
-/// base, so the view base is found by this vtable before asking for the window.
-const BROWSER_VIEW_VIEW_VTABLE: usize = 0x0FE7_BF68;
 
 type ShouldDisplay = unsafe extern "system" fn(*const c_void) -> bool;
 type ViewForBrowser = unsafe extern "system" fn(*const c_void) -> *const c_void;
@@ -130,7 +113,7 @@ unsafe extern "system" fn should_display(controller: *const c_void) -> bool {
     let Some(Ok(hook)) = HOOK.get() else {
         unreachable!("the vtable is only patched after the hook is stored");
     };
-    if *controller.cast::<u8>().add(MODE_OFFSET) == 0 {
+    if *controller.cast::<u8>().add(bv().mode_offset) == 0 {
         if note_report(controller as usize) {
             trace(&format!("reported controller={controller:?}"));
             (hook.report)(controller as usize);
@@ -141,7 +124,7 @@ unsafe extern "system" fn should_display(controller: *const c_void) -> bool {
 
 /// The window a controller belongs to. Only safe once the window is built.
 unsafe fn controller_window(hook: &Hook, controller: *const c_void) -> Option<HWND> {
-    let browser = *(controller.cast::<u8>().add(BROWSER_OFFSET) as *const *const c_void);
+    let browser = *(controller.cast::<u8>().add(bv().browser_offset) as *const *const c_void);
     if browser.is_null() {
         return None;
     }
@@ -151,7 +134,7 @@ unsafe fn controller_window(hook: &Hook, controller: *const c_void) -> Option<HW
     }
     let base = image::recorded()?.base;
     let words = view as *const usize;
-    let index = (0..0x100).find(|index| *words.add(*index) == base + BROWSER_VIEW_VIEW_VTABLE)?;
+    let index = (0..0x100).find(|index| *words.add(*index) == base + bv().browser_view_view_vtable)?;
     trace(&format!("view base at +{:#x}", index * 8));
     let window = (hook.hwnd_for_view)(words.add(index).cast());
     (!window.is_null()).then_some(window)
@@ -174,7 +157,7 @@ pub unsafe fn offer(window: HWND, controller: usize) {
     if owner != Some(window) {
         return;
     }
-    let mode = pointer.cast::<u8>().add(MODE_OFFSET);
+    let mode = pointer.cast::<u8>().add(bv().mode_offset);
     if *mode != 0 {
         return;
     }
@@ -213,7 +196,7 @@ fn strip_override(window: HWND) -> Option<i32> {
 pub fn layout_width(window: HWND) -> Option<i32> {
     let controller = *locked(&SWITCHED).as_ref()?.get(&(window as isize))?;
     Some(strip_override(window).unwrap_or_else(|| unsafe {
-        *((controller + WIDTH_OFFSET) as *const i32)
+        *((controller + bv().width_offset) as *const i32)
     }))
 }
 
@@ -239,35 +222,35 @@ pub unsafe fn install(report: Report) -> Result<(), String> {
 unsafe fn patch(report: Report) -> Result<Hook, String> {
     let image = image::recorded().ok_or("this browser build has no recorded vertical tabs")?;
     let base = image.base;
-    if !image.points_to(SLOT, SHOULD_DISPLAY) {
+    if !image.points_to(bv().slot, bv().should_display) {
         return Err("this browser build has no recorded vertical-tab controller".into());
     }
-    if !image.points_to(DESTRUCTOR_SLOT, DESTRUCTOR) || !image.has(DESTRUCTOR, &DESTRUCTOR_PROLOGUE) {
+    if !image.points_to(bv().slot - 16, bv().destructor) || !image.has(bv().destructor, &bv().destructor_prologue) {
         return Err("this browser build has no recorded vertical-tab controller destructor".into());
     }
     for function in [
-        BROWSER_VIEW_FOR_BROWSER,
-        HWND_FOR_VIEW,
-        NOTIFY_MODE_CHANGED,
-        UPDATE_COLLAPSE_ACTION,
+        bv().browser_view_for_browser,
+        bv().hwnd_for_view,
+        bv().notify_mode_changed,
+        bv().update_collapse_action,
     ] {
         if image.at(function, 1).is_none() {
             return Err("a recorded vertical-tab function is outside the browser image".into());
         }
     }
-    let slot = image.at(SLOT, 8).ok_or("recorded slot outside the image")? as *mut usize;
-    let destructor = image.at(DESTRUCTOR_SLOT, 8).ok_or("recorded slot outside the image")? as *mut usize;
+    let slot = image.at(bv().slot, 8).ok_or("recorded slot outside the image")? as *mut usize;
+    let destructor = image.at(bv().slot - 16, 8).ok_or("recorded slot outside the image")? as *mut usize;
     let hook = Hook {
         original: std::mem::transmute::<usize, ShouldDisplay>(slot.read()),
         view_for_browser: std::mem::transmute::<usize, ViewForBrowser>(
-            base + BROWSER_VIEW_FOR_BROWSER,
+            base + bv().browser_view_for_browser,
         ),
-        hwnd_for_view: std::mem::transmute::<usize, HwndForView>(base + HWND_FOR_VIEW),
+        hwnd_for_view: std::mem::transmute::<usize, HwndForView>(base + bv().hwnd_for_view),
         notify_mode_changed: std::mem::transmute::<usize, ControllerCall>(
-            base + NOTIFY_MODE_CHANGED,
+            base + bv().notify_mode_changed,
         ),
         update_collapse_action: std::mem::transmute::<usize, ControllerCall>(
-            base + UPDATE_COLLAPSE_ACTION,
+            base + bv().update_collapse_action,
         ),
         report,
     };
@@ -293,9 +276,6 @@ unsafe fn patch(report: Report) -> Result<Hook, String> {
     trace("installed");
     Ok(hook)
 }
-/// `VerticalTabStripRegionView::CalculatePreferredSize`, and the vtable slot that holds it.
-const REGION_PREFERRED_SIZE: usize = 0x0BC7_FA80;
-const REGION_PREFERRED_SIZE_SLOT: usize = 0x0FF1_7CF8;
 static REGION_ORIGINAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 static REGIONS: Mutex<Vec<(isize, usize)>> = Mutex::new(Vec::new());
@@ -308,10 +288,6 @@ fn remember_region(window: HWND, view: *mut c_void) {
     }
 }
 
-/// `views::View::InvalidateLayout`, with the first bytes that identify it in this build.
-const INVALIDATE_LAYOUT: usize = 0x0411_6480;
-const INVALIDATE_LAYOUT_PROLOGUE: [u8; 12] =
-    [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53];
 
 /// Makes the strip's view ask for its width again. Chromium caches the size it asked for, so a
 /// width Rivet changed is only seen after this.
@@ -324,11 +300,11 @@ pub unsafe fn invalidate_strip(window: HWND) {
         return;
     };
     let Some(image) = image::recorded() else { return };
-    if !image.has(INVALIDATE_LAYOUT, &INVALIDATE_LAYOUT_PROLOGUE) {
+    if !image.has(bv().invalidate_layout, &bv().invalidate_layout_prologue) {
         return;
     }
     let invalidate: unsafe extern "system" fn(*mut c_void, i32) =
-        std::mem::transmute(image.base + INVALIDATE_LAYOUT);
+        std::mem::transmute(image.base + bv().invalidate_layout);
     invalidate(view as *mut c_void, 0);
 }
 
@@ -353,17 +329,6 @@ unsafe extern "system" fn region_preferred_size(
     result
 }
 
-/// `VerticalTabStripRegionView::GetMinimumSize`. The browser lays the page out after at least
-/// this width, 126 DIPs while the strip is expanded, however little the strip asks for, so a
-/// hidden appbar would leave that much of the frame bare. The class is final, so callers reach
-/// the function directly and its vtable slot is never used. Rivet detours the function instead:
-/// its first instructions are copied to a trampoline and replaced by a jump to Rivet's version.
-const REGION_MINIMUM_SIZE: usize = 0x0BC7_F9F0;
-/// `push rsi; push rdi; sub rsp, 0x28; mov rsi, rdx; mov rdi, rcx; mov qword ptr [rdx], 0`.
-const REGION_MINIMUM_PROLOGUE: [u8; 19] = [
-    0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7, 0x02, 0, 0,
-    0, 0,
-];
 static REGION_MINIMUM_ORIGINAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// A Rivet window's strip is never required to be wider than the width Rivet gives it.
@@ -393,19 +358,19 @@ unsafe fn patch_region_minimum(image: &image::Image) -> Result<(), String> {
     use windows_sys::Win32::System::Memory::{
         VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
     };
-    let length = REGION_MINIMUM_PROLOGUE.len();
-    if !image.has(REGION_MINIMUM_SIZE, &REGION_MINIMUM_PROLOGUE) {
+    let length = bv().region_minimum_prologue.len();
+    if !image.has(bv().region_minimum_size, &bv().region_minimum_prologue) {
         return Err("the region view's minimum size is not the recorded function".into());
     }
-    let function = image.at(REGION_MINIMUM_SIZE, length).ok_or("function outside the image")? as *mut u8;
+    let function = image.at(bv().region_minimum_size, length).ok_or("function outside the image")? as *mut u8;
     let trampoline = VirtualAlloc(std::ptr::null(), 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
         as *mut u8;
     if trampoline.is_null() {
         return Err("could not allocate the minimum size trampoline".into());
     }
-    let resume = absolute_jump(function as usize + REGION_MINIMUM_PROLOGUE.len());
-    std::ptr::copy_nonoverlapping(REGION_MINIMUM_PROLOGUE.as_ptr(), trampoline, REGION_MINIMUM_PROLOGUE.len());
-    std::ptr::copy_nonoverlapping(resume.as_ptr(), trampoline.add(REGION_MINIMUM_PROLOGUE.len()), resume.len());
+    let resume = absolute_jump(function as usize + bv().region_minimum_prologue.len());
+    std::ptr::copy_nonoverlapping(bv().region_minimum_prologue.as_ptr(), trampoline, bv().region_minimum_prologue.len());
+    std::ptr::copy_nonoverlapping(resume.as_ptr(), trampoline.add(bv().region_minimum_prologue.len()), resume.len());
     REGION_MINIMUM_ORIGINAL.store(trampoline as usize, Ordering::Release);
     let mut previous: PAGE_PROTECTION_FLAGS = 0;
     if VirtualProtect(function.cast(), 19, PAGE_EXECUTE_READWRITE, &mut previous) == 0 {
@@ -414,21 +379,21 @@ unsafe fn patch_region_minimum(image: &image::Image) -> Result<(), String> {
     let jump = absolute_jump(region_minimum_size as *const () as usize);
     std::ptr::copy_nonoverlapping(jump.as_ptr(), function, jump.len());
     // Pad the rest of the replaced instructions with nops.
-    std::ptr::write_bytes(function.add(jump.len()), 0x90, REGION_MINIMUM_PROLOGUE.len() - jump.len());
+    std::ptr::write_bytes(function.add(jump.len()), 0x90, bv().region_minimum_prologue.len() - jump.len());
     VirtualProtect(function.cast(), 19, previous, &mut previous);
     windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache(
         windows_sys::Win32::System::Threading::GetCurrentProcess(),
         function.cast(),
-        REGION_MINIMUM_PROLOGUE.len(),
+        bv().region_minimum_prologue.len(),
     );
     Ok(())
 }
 
 unsafe fn patch_region_size(image: &image::Image) -> Result<(), String> {
-    if !image.points_to(REGION_PREFERRED_SIZE_SLOT, REGION_PREFERRED_SIZE) {
+    if !image.points_to(bv().region_preferred_size_slot, bv().region_preferred_size) {
         return Err("the region view's size slot is not the recorded function".into());
     }
-    let slot = image.at(REGION_PREFERRED_SIZE_SLOT, 8).ok_or("slot outside the image")? as *mut usize;
+    let slot = image.at(bv().region_preferred_size_slot, 8).ok_or("slot outside the image")? as *mut usize;
     REGION_ORIGINAL.store(slot.read(), Ordering::Release);
     let mut previous: PAGE_PROTECTION_FLAGS = 0;
     if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
@@ -448,13 +413,11 @@ pub fn reported() -> Vec<usize> {
 /// Experiment for the other direction: makes `BrowserView::ShouldDrawTabStrip` answer no for
 /// every window of the process by overwriting its first instructions. Never for production.
 pub unsafe fn hide_tab_strip_everywhere() -> Result<(), String> {
-    const SHOULD_DRAW_TAB_STRIP: usize = 0x0528_6C00;
-    const PROLOGUE: [u8; 3] = [0x56, 0x57, 0x53];
     let image = image::recorded().ok_or("this browser build has no recorded tab strip")?;
-    if !image.has(SHOULD_DRAW_TAB_STRIP, &PROLOGUE) {
+    if !image.has(bv().should_draw_tab_strip, &bv().should_draw_tab_strip_prologue) {
         return Err("ShouldDrawTabStrip is not the recorded function".into());
     }
-    let code = (image.base + SHOULD_DRAW_TAB_STRIP) as *mut u8;
+    let code = (image.base + bv().should_draw_tab_strip) as *mut u8;
     let mut previous: PAGE_PROTECTION_FLAGS = 0;
     let execute_write = windows_sys::Win32::System::Memory::PAGE_EXECUTE_READWRITE;
     if VirtualProtect(code.cast(), 3, execute_write, &mut previous) == 0 {
@@ -505,6 +468,6 @@ mod tests {
         let jump = absolute_jump(0x1122_3344_5566_7788);
         assert_eq!(&jump[..6], &[0xff, 0x25, 0, 0, 0, 0]);
         assert_eq!(&jump[6..], &0x1122_3344_5566_7788usize.to_le_bytes());
-        assert!(jump.len() <= REGION_MINIMUM_PROLOGUE.len());
+        assert!(jump.len() <= bv().region_minimum_prologue.len());
     }
 }

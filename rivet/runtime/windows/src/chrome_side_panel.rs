@@ -23,26 +23,11 @@ use windows_sys::Win32::System::Memory::{
 
 use crate::chrome_layout;
 
-/// `SidePanel`'s own vtable, which its `views::View` base shares as the object's first word.
-const SIDE_PANEL_VTABLE: usize = 0x0FE6_7CA8;
-const BROWSER_OFFSET: usize = 0x560;
-const FEATURES_OFFSET: usize = 0xd0;
-/// Where `BrowserWindowFeatures` keeps its `SidePanelCoordinator`.
-const FEATURES_COORDINATOR: usize = 0x330;
-/// The vtable of the `views::View` part of `BrowserView`.
-const BROWSER_VIEW_VIEW_VTABLE: usize = 0x0FE7_BF68;
-/// `SidePanelCoordinator`'s vtable.
-const COORDINATOR_VTABLE: usize = 0x0FE5_9440;
-/// `SidePanelUIBase::Show(this, SidePanelEntryId, optional<SidePanelOpenTrigger>, bool)`.
-const SHOW: usize = 0x0997_6C50;
-const SHOW_PROLOGUE: [u8; 9] = [0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x58];
-/// `SidePanelEntryIdToString(std::string*, SidePanelEntryId)`.
-const ENTRY_ID_TO_STRING: usize = 0x01E7_18C0;
-const ENTRY_ID_TO_STRING_PROLOGUE: [u8; 8] = [0x56, 0x48, 0x83, 0xec, 0x30, 0x48, 0x89, 0xce];
-/// The id of the entries that extensions register.
-const EXTENSION_ENTRY: u32 = 0x17;
-/// How many entry ids Chrome 156 defines.
-const ENTRY_COUNT: u32 = 0x18;
+/// The values of the loaded browser build.
+fn bv() -> &'static crate::builds::SidePanel {
+    &crate::builds::get().side_panel
+}
+
 
 type Show = unsafe extern "system" fn(*mut c_void, u32, u64, u32);
 type EntryIdToString = unsafe extern "system" fn(*mut [u8; 24], u32) -> *mut [u8; 24];
@@ -115,16 +100,16 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
         let at = from.wrapping_add(offset);
         if readable(at, 8) { *(at as *const usize) } else { 0 }
     };
-    let coordinator = step(step(step(browser_view, BROWSER_OFFSET), FEATURES_OFFSET), FEATURES_COORDINATOR);
-    let coordinator = if readable(coordinator, 8) && *(coordinator as *const usize) == base + COORDINATOR_VTABLE {
+    let coordinator = step(step(step(browser_view, bv().browser_offset), bv().features_offset), bv().features_coordinator);
+    let coordinator = if readable(coordinator, 8) && *(coordinator as *const usize) == base + bv().coordinator_vtable {
         coordinator
     } else {
         0
     };
-    let side_panel = find(SIDE_PANEL_VTABLE);
+    let side_panel = find(bv().side_panel_vtable);
     let view = (0..0x400)
         .map(|index| browser_view + index * 8)
-        .find(|slot| readable(*slot, 8) && *(*slot as *const usize) == base + BROWSER_VIEW_VIEW_VTABLE)
+        .find(|slot| readable(*slot, 8) && *(*slot as *const usize) == base + bv().browser_view_view_vtable)
         .unwrap_or(0);
     Some(Objects { browser_view, coordinator, side_panel, view })
 }
@@ -133,17 +118,6 @@ fn prologue_is(address: usize, expected: &[u8]) -> bool {
     readable(address & !7, 8) && unsafe { std::slice::from_raw_parts(address as *const u8, expected.len()) } == expected
 }
 
-/// `SidePanelCoordinator::Toggle(this, key*, trigger)` opens an entry or closes it when it is
-/// showing, and `SidePanelUIBase::IsSidePanelEntryShowing(this, key*)` tells which.
-const TOGGLE: usize = 0x0997_F450;
-const TOGGLE_PROLOGUE: [u8; 11] = [0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x60];
-const ENTRY_SHOWING: usize = 0x0369_1A10;
-const ENTRY_SHOWING_PROLOGUE: [u8; 8] = [0x48, 0x8b, 0x49, 0x10, 0x80, 0x79, 0x30, 0x01];
-/// `SidePanelRegistry::From(BrowserWindowInterface*)` returns the window's global registry. It
-/// keeps its entries as a pointer at +0x38 and a count at +0x40, and each entry keeps its
-/// `SidePanelEntryKey` at +0x30.
-const REGISTRY_FROM: usize = 0x030B_E3C0;
-const REGISTRY_FROM_PROLOGUE: [u8; 7] = [0x48, 0x81, 0xc1, 0xa8, 0x00, 0x00, 0x00];
 
 /// A `SidePanelEntryKey`: the entry id, and the extension id of an extension's panel.
 pub type EntryKey = [u8; 0x28];
@@ -157,7 +131,7 @@ pub fn entry_id(key: &EntryKey) -> u32 {
 /// holds an optional `std::string` at +8: libc++'s alternate layout keeps a long string as a
 /// pointer, a size and a capacity whose top bit marks it long, and the optional's flag follows.
 pub fn extension_id(key: &EntryKey) -> Option<String> {
-    if key[0x20] == 0 || entry_id(key) != EXTENSION_ENTRY {
+    if key[0x20] == 0 || entry_id(key) != bv().extension_entry {
         return None;
     }
     let word = |at: usize| u64::from_le_bytes(key[at..at + 8].try_into().expect("eight bytes")) as usize;
@@ -300,18 +274,18 @@ pub fn builtin_name(id: u32) -> &'static str {
 /// list, bookmarks, history, the reading mode and the extensions' own panels. Chrome's other
 /// entries belong to features that open them themselves.
 fn listed(id: u32) -> bool {
-    matches!(id, 0..=4 | EXTENSION_ENTRY)
+    matches!(id, 0..=4) || id == bv().extension_entry
 }
 
 /// The entries Chrome registered for the window's side panel, in its own order.
 pub unsafe fn listed_entries(window: HWND) -> Vec<EntryKey> {
     let base = chrome_base();
     let Some(found) = objects(window).filter(|found| found.coordinator != 0) else { return Vec::new() };
-    if !prologue_is(base + REGISTRY_FROM, &REGISTRY_FROM_PROLOGUE) {
+    if !prologue_is(base + bv().registry_from, &bv().registry_from_prologue) {
         return Vec::new();
     }
     let browser = *((found.coordinator + 8) as *const usize);
-    let from: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + REGISTRY_FROM);
+    let from: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + bv().registry_from);
     let registry = from(browser);
     if !readable(registry.wrapping_add(0x38), 0x10) {
         return Vec::new();
@@ -331,11 +305,11 @@ pub unsafe fn listed_entries(window: HWND) -> Vec<EntryKey> {
 pub unsafe fn entry_showing(window: HWND, key: &EntryKey) -> bool {
     let base = chrome_base();
     let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else { return false };
-    if !prologue_is(base + ENTRY_SHOWING, &ENTRY_SHOWING_PROLOGUE) {
+    if !prologue_is(base + bv().entry_showing, &bv().entry_showing_prologue) {
         return false;
     }
     let showing: unsafe extern "system" fn(*mut c_void, *const u8) -> bool =
-        std::mem::transmute(base + ENTRY_SHOWING);
+        std::mem::transmute(base + bv().entry_showing);
     showing(objects.coordinator as *mut c_void, key.as_ptr())
 }
 
@@ -343,11 +317,11 @@ pub unsafe fn entry_showing(window: HWND, key: &EntryKey) -> bool {
 pub unsafe fn toggle_entry(window: HWND, key: &EntryKey) -> bool {
     let base = chrome_base();
     let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else { return false };
-    if !prologue_is(base + TOGGLE, &TOGGLE_PROLOGUE) {
+    if !prologue_is(base + bv().toggle, &bv().toggle_prologue) {
         return false;
     }
     let toggle: unsafe extern "system" fn(*mut c_void, *const u8, u32) =
-        std::mem::transmute(base + TOGGLE);
+        std::mem::transmute(base + bv().toggle);
     toggle(objects.coordinator as *mut c_void, key.as_ptr(), 0);
     true
 }
@@ -355,7 +329,7 @@ pub unsafe fn toggle_entry(window: HWND, key: &EntryKey) -> bool {
 /// Opens one of Chrome's side panel entries by its id through the coordinator.
 pub unsafe fn open_entry(window: HWND, entry: u32) -> bool {
     let (Some(objects), base) = (objects(window), chrome_base()) else { return false };
-    if objects.coordinator == 0 || !prologue_is(base + SHOW, &SHOW_PROLOGUE) {
+    if objects.coordinator == 0 || !prologue_is(base + bv().show, &bv().show_prologue) {
         return false;
     }
     // Chrome checks that the window registered the entry and crashes the browser when it did not.
@@ -363,7 +337,7 @@ pub unsafe fn open_entry(window: HWND, entry: u32) -> bool {
         trace(&format!("entry {entry} is not registered in this window"));
         return false;
     }
-    let show: Show = std::mem::transmute(base + SHOW);
+    let show: Show = std::mem::transmute(base + bv().show);
     show(objects.coordinator as *mut c_void, entry, 0, 0);
     true
 }
@@ -371,11 +345,11 @@ pub unsafe fn open_entry(window: HWND, entry: u32) -> bool {
 /// Names of the entry ids, for the trace.
 unsafe fn entry_names() -> Vec<String> {
     let base = chrome_base();
-    if !prologue_is(base + ENTRY_ID_TO_STRING, &ENTRY_ID_TO_STRING_PROLOGUE) {
+    if !prologue_is(base + bv().entry_id_to_string, &bv().entry_id_to_string_prologue) {
         return Vec::new();
     }
-    let to_string: EntryIdToString = std::mem::transmute(base + ENTRY_ID_TO_STRING);
-    (0..ENTRY_COUNT)
+    let to_string: EntryIdToString = std::mem::transmute(base + bv().entry_id_to_string);
+    (0..bv().entry_count)
         .map(|id| {
             let mut text = [0u8; 24];
             to_string(&mut text, id);
@@ -390,18 +364,6 @@ unsafe fn entry_names() -> Vec<String> {
 // them as a style sheet that Chrome writes from the window's colour provider, outside any view's
 // paint. The sheet is written for a Rivet window with the Rivet side panel colours in place, so
 // those pages take the paper, hairline and accent of the window. Two functions are involved.
-/// `WebContentsImpl::GetColorProvider`, which hands back the provider of the window's widget.
-const GET_COLOR_PROVIDER: usize = 0x0366_DB00;
-const GET_COLOR_PROVIDER_PROLOGUE: [u8; 14] =
-    [0x48, 0x8b, 0x89, 0x98, 0x00, 0x00, 0x00, 0x48, 0x8b, 0x01, 0x48, 0x8b, 0x40, 0x08];
-/// Where the colour provider source lies in the widget.
-const SOURCE_IN_WIDGET: usize = 0x48;
-/// Where `WebContentsImpl` keeps the colour provider source it asks.
-const COLOR_SOURCE: usize = 0x98;
-/// `ThemeSource::GenerateColorsCss(out, provider, url, flag, flag)`, which writes the style sheet.
-const GENERATE_COLORS_CSS: usize = 0x058C_6090;
-const GENERATE_COLORS_CSS_PROLOGUE: [u8; 12] =
-    [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53];
 
 type GenerateCss = unsafe extern "system" fn(*mut c_void, *const c_void, *const c_void, u32, u32) -> usize;
 static ORIGINAL_CSS: AtomicUsize = AtomicUsize::new(0);
@@ -491,12 +453,12 @@ fn jump_to(to: usize, length: usize) -> Vec<u8> {
 fn rivet_source(source: usize) -> Option<usize> {
     crate::chrome_toolbar::rivet_widgets()
         .into_iter()
-        .find(|widget| source == *widget + SOURCE_IN_WIDGET)
+        .find(|widget| source == *widget + bv().source_in_widget)
 }
 
 /// Same as the browser's own: the provider of the web contents' window. It also notes whose it was.
 unsafe extern "system" fn get_color_provider(contents: *mut c_void) -> *const c_void {
-    let source = *(contents.cast::<u8>().add(COLOR_SOURCE) as *const *mut c_void);
+    let source = *(contents.cast::<u8>().add(bv().color_source) as *const *mut c_void);
     let table = *(source as *const *const usize);
     let provider: unsafe extern "system" fn(*mut c_void) -> *const c_void = std::mem::transmute(*table.add(1));
     let provider = provider(source);
@@ -531,17 +493,17 @@ pub unsafe fn install_page_colours() -> Result<(), String> {
         return Ok(());
     }
     let base = chrome_base();
-    let provider = (base + GET_COLOR_PROVIDER) as *mut u8;
-    let css = (base + GENERATE_COLORS_CSS) as *mut u8;
-    if std::slice::from_raw_parts(provider, 14) != GET_COLOR_PROVIDER_PROLOGUE
-        || std::slice::from_raw_parts(css, 12) != GENERATE_COLORS_CSS_PROLOGUE
+    let provider = (base + bv().get_color_provider) as *mut u8;
+    let css = (base + bv().generate_colors_css) as *mut u8;
+    if std::slice::from_raw_parts(provider, 14) != bv().get_color_provider_prologue
+        || std::slice::from_raw_parts(css, 12) != bv().generate_colors_css_prologue
     {
         return Err("this browser build has no recorded colour provider functions".into());
     }
     // The style sheet function continues after its first twelve bytes in a copy of them.
-    let mut trampoline = GENERATE_COLORS_CSS_PROLOGUE.to_vec();
+    let mut trampoline = bv().generate_colors_css_prologue.to_vec();
     trampoline.extend_from_slice(&[0xFF, 0x25, 0, 0, 0, 0]);
-    trampoline.extend_from_slice(&((base + GENERATE_COLORS_CSS + 12) as u64).to_le_bytes());
+    trampoline.extend_from_slice(&((base + bv().generate_colors_css + 12) as u64).to_le_bytes());
     let memory = VirtualAlloc(std::ptr::null(), trampoline.len(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) as *mut u8;
     if memory.is_null() {
         return Err("could not allocate executable memory".into());
@@ -614,29 +576,6 @@ fn rail_of(window: HWND) -> i32 {
     }
 }
 
-/// `BrowserViewTabbedLayoutImpl::CalculateProposedLayout`, slot 16 of its vtable. It fills a
-/// `std::map` of view to bounds that the layout then applies.
-const LAYOUT_VTABLE: usize = 0x0FDB_0278;
-const PROPOSED_SLOT: usize = 16;
-const PROPOSED: usize = 0x0104_8AB0;
-/// The layout object keeps the host view at +0x38, the contents container at +0xb8, the side
-/// panel at +0xc0 and the content shown while the side panel animates at +0xc8.
-const HOST_VIEW: usize = 0x38;
-/// The view behind the whole area below the top row, which the rail shares the height of.
-const PAGE_AREA: usize = 0x50;
-const CONTENTS_CONTAINER: usize = 0xb8;
-/// The browser's vertical tab list, which lies left of the page.
-const VERTICAL_TABS: usize = 0x80;
-/// The browser's top row: toolbar, address bar and the buttons around it.
-const TOOLBAR: usize = 0x60;
-/// The view that draws the outline around the contents, which has the contents' bounds.
-const CONTENTS_OUTLINE: usize = 0x58;
-const SIDE_PANEL: usize = 0xc0;
-const SIDE_PANEL_ANIMATION: usize = 0xc8;
-/// `views::View::DeprecatedLayoutImmediately`.
-const LAYOUT_IMMEDIATELY: usize = 0x04BE_C780;
-const LAYOUT_IMMEDIATELY_PROLOGUE: [u8; 12] =
-    [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53];
 
 type ProposedLayout =
     unsafe extern "system" fn(*mut c_void, *mut c_void, *const c_void) -> *mut c_void;
@@ -745,7 +684,7 @@ unsafe extern "system" fn proposed_layout(
 ) -> *mut c_void {
     let original = *PROPOSED_LAYOUT.get().expect("patched after it is stored");
     let result = original(this, out, params);
-    let host = *(this.cast::<u8>().add(HOST_VIEW) as *const usize);
+    let host = *(this.cast::<u8>().add(bv().host_view) as *const usize);
     let Some(window) = chrome_layout::hwnd_of_view(host as *const c_void) else {
         return result;
     };
@@ -755,20 +694,20 @@ unsafe extern "system" fn proposed_layout(
         dump_layout(this, *(out.cast::<u8>().add(0x20) as *const usize), 0);
     }
     let field = |offset: usize| *(this.cast::<u8>().add(offset) as *const usize);
-    if let Some(area) = bounds_of(out, field(PAGE_AREA)) {
+    if let Some(area) = bounds_of(out, field(bv().page_area)) {
         let area = *area;
         AREAS.with(|areas| areas.borrow_mut().insert(window as isize, (area[1], area[3])));
     }
     let rail = rail_of(window);
     if rail > 0 {
-        if let Some(contents) = bounds_of(out, field(CONTENTS_CONTAINER)) {
-            let side_panel = bounds_of(out, field(SIDE_PANEL));
-            let animation = bounds_of(out, field(SIDE_PANEL_ANIMATION));
-            let outline = bounds_of(out, field(CONTENTS_OUTLINE));
-            let panel_view = field(SIDE_PANEL);
-            let area = bounds_of(out, field(PAGE_AREA)).map(|bounds| *bounds).unwrap_or([0; 4]);
+        if let Some(contents) = bounds_of(out, field(bv().contents_container)) {
+            let side_panel = bounds_of(out, field(bv().side_panel));
+            let animation = bounds_of(out, field(bv().side_panel_animation));
+            let outline = bounds_of(out, field(bv().contents_outline));
+            let panel_view = field(bv().side_panel);
+            let area = bounds_of(out, field(bv().page_area)).map(|bounds| *bounds).unwrap_or([0; 4]);
             // The page starts where the browser's vertical tab list ends.
-            let left = bounds_of(out, field(VERTICAL_TABS)).map_or((*contents)[0] - 8, |tabs| (*tabs)[0] + (*tabs)[2]);
+            let left = bounds_of(out, field(bv().vertical_tabs)).map_or((*contents)[0] - 8, |tabs| (*tabs)[0] + (*tabs)[2]);
             make_room(
                 &mut *contents,
                 outline.map(|bounds| &mut *bounds),
@@ -786,7 +725,7 @@ unsafe extern "system" fn proposed_layout(
     }
     // In a split each page has its own top row, and the browser's is the active page's.
     if let (Some(toolbar), Some(contents)) =
-        (bounds_of(out, field(TOOLBAR)), bounds_of(out, field(CONTENTS_CONTAINER)))
+        (bounds_of(out, field(bv().toolbar)), bounds_of(out, field(bv().contents_container)))
     {
         crate::chrome_split::fit_toolbar(window, &mut *toolbar, &*contents);
     }
@@ -799,8 +738,8 @@ pub unsafe fn install_layout() -> Result<(), String> {
         return Ok(());
     }
     let base = chrome_base();
-    let slot = (base + LAYOUT_VTABLE + PROPOSED_SLOT * 8) as *mut usize;
-    if slot.read() != base + PROPOSED {
+    let slot = (base + bv().layout_vtable + bv().proposed_slot * 8) as *mut usize;
+    if slot.read() != base + bv().proposed {
         return Err("this browser build has no recorded layout for the Sidebar".into());
     }
     let _ = PROPOSED_LAYOUT.set(std::mem::transmute::<usize, ProposedLayout>(slot.read()));
@@ -820,10 +759,10 @@ pub unsafe fn relayout_page_area(window: HWND) {
         .with(|views| views.borrow().get(&(window as isize)).copied())
         .or_else(|| objects(window).map(|found| found.view).filter(|view| *view != 0));
     if let Some(host) =
-        host.filter(|_| prologue_is(base + LAYOUT_IMMEDIATELY, &LAYOUT_IMMEDIATELY_PROLOGUE))
+        host.filter(|_| prologue_is(base + bv().layout_immediately, &bv().layout_immediately_prologue))
     {
         let layout: unsafe extern "system" fn(*mut c_void) =
-            std::mem::transmute(base + LAYOUT_IMMEDIATELY);
+            std::mem::transmute(base + bv().layout_immediately);
         layout(host as *mut c_void);
     }
 }
@@ -849,7 +788,7 @@ unsafe fn dump_entry_memory(window: HWND) {
     let Some(found) = objects(window).filter(|found| found.coordinator != 0) else { return };
     let base = chrome_base();
     let browser = *((found.coordinator + 8) as *const usize);
-    let from: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + REGISTRY_FROM);
+    let from: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + bv().registry_from);
     let registry = from(browser);
     let data = *((registry + 0x38) as *const usize);
     let count = *((registry + 0x40) as *const usize);
@@ -947,7 +886,7 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
             if let Some(found) = objects(window) {
                 let base = chrome_base();
                 let target: unsafe extern "system" fn(usize, *const [i32; 2]) -> usize =
-                    std::mem::transmute(base + 0x007C_6530);
+                    std::mem::transmute(base + bv().event_handler_for_point);
                 let mut view = target(found.view, &[x, y]);
                 let mut chain = Vec::new();
                 for _ in 0..12 {
@@ -1051,7 +990,7 @@ mod tests {
         let id = b"abcdefghijklmnopabcdefghijklmnop".to_vec();
         let backing: Vec<u64> = id.chunks(8).map(|part| u64::from_le_bytes(part.try_into().unwrap())).collect();
         let mut key: EntryKey = [0; 0x28];
-        key[..4].copy_from_slice(&EXTENSION_ENTRY.to_le_bytes());
+        key[..4].copy_from_slice(&bv().extension_entry.to_le_bytes());
         key[8..16].copy_from_slice(&(backing.as_ptr() as u64).to_le_bytes());
         key[16..24].copy_from_slice(&(id.len() as u64).to_le_bytes());
         key[24..32].copy_from_slice(&(0x8000_0000_0000_0000u64 | 33).to_le_bytes());

@@ -204,6 +204,8 @@ mod appbar;
 #[cfg(windows)]
 mod browsers;
 #[cfg(windows)]
+mod builds;
+#[cfg(windows)]
 mod chrome_layout;
 #[cfg(windows)]
 mod chrome_navigation;

@@ -12,11 +12,11 @@ use windows_sys::Win32::System::Memory::{
 
 use crate::chrome_tabs::{base, function, tab_model};
 
-const ADD_TO_NEW_SPLIT: usize = 0x0A20_5410;
-const REMOVE_SPLIT: usize = 0x0A20_7580;
-const GET_SPLIT_FOR_TAB: usize = 0x0311_2370;
-/// PartitionAlloc's operator new, which frees the index vector the callee takes over.
-const ALLOCATE: usize = 0x05d3_d6a0;
+/// The values of the loaded browser build.
+fn bv() -> &'static crate::builds::Split {
+    &crate::builds::get().split
+}
+
 
 /// `AddToNewSplit(this, out id, indices, visual data, created source)`.
 type AddToNewSplit = unsafe extern "system" fn(
@@ -43,18 +43,7 @@ const CREATED_SOURCE: u32 = 0;
 fn checked_base() -> Option<usize> {
     static CHECK: OnceLock<bool> = OnceLock::new();
     let base = base()?;
-    let signatures: &[(usize, &[u8])] = &[
-        (
-            ADD_TO_NEW_SPLIT,
-            &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
-        ),
-        (REMOVE_SPLIT, &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x58]),
-        (
-            GET_SPLIT_FOR_TAB,
-            &[0x56, 0x48, 0x83, 0xec, 0x20, 0x45, 0x85, 0xc0, 0x78],
-        ),
-        (ALLOCATE, &[0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9]),
-    ];
+    let signatures = bv().signatures;
     let ok = *CHECK.get_or_init(|| {
         signatures.iter().all(|(rva, bytes)| unsafe {
             std::slice::from_raw_parts((base + rva) as *const u8, bytes.len()) == *bytes
@@ -69,7 +58,7 @@ fn checked_base() -> Option<usize> {
 /// The id of the split the tab at `index` belongs to.
 unsafe fn split_of(base: usize, model: *mut c_void, index: usize) -> Option<[u8; 16]> {
     let mut optional = [0u8; 24];
-    function::<GetSplitForTab>(base, GET_SPLIT_FOR_TAB)(model, &mut optional, index as i32);
+    function::<GetSplitForTab>(base, bv().get_split_for_tab)(model, &mut optional, index as i32);
     (optional[16] != 0).then(|| {
         let mut id = [0; 16];
         id.copy_from_slice(&optional[..16]);
@@ -171,7 +160,7 @@ unsafe fn split_pair(window: HWND, first: usize, second: usize, layout: u32) -> 
     if split_of(base, model, first).is_some() || split_of(base, model, second).is_some() {
         return false;
     }
-    let indices = function::<Allocate>(base, ALLOCATE)(8);
+    let indices = function::<Allocate>(base, bv().allocate)(8);
     if indices.is_null() {
         return false;
     }
@@ -183,7 +172,7 @@ unsafe fn split_pair(window: HWND, first: usize, second: usize, layout: u32) -> 
     visual[..4].copy_from_slice(&layout.to_le_bytes());
     visual[8..16].copy_from_slice(&EVEN_RATIO.to_le_bytes());
     let mut id = [0u8; 16];
-    function::<AddToNewSplit>(base, ADD_TO_NEW_SPLIT)(
+    function::<AddToNewSplit>(base, bv().add_to_new_split)(
         model,
         &mut id,
         &span,
@@ -203,7 +192,7 @@ pub unsafe fn unsplit_active(window: HWND) -> bool {
         return false;
     };
     let Some(id) = split_of(base, model, active) else { return false };
-    function::<RemoveSplit>(base, REMOVE_SPLIT)(model, &id);
+    function::<RemoveSplit>(base, bv().remove_split)(model, &id);
     true
 }
 
@@ -230,15 +219,6 @@ pub unsafe fn probe(window: HWND) {
 /// The corner radius of a page panel in a split, in device-independent pixels.
 const PANEL_RADIUS: f32 = 12.0;
 
-/// `ContentsContainerView::SetRoundedCorners(this, const RoundedCornersF*)`. It starts with
-/// `movss xmm0, [rdx]; ucomiss xmm0, [rcx + 0x484]; jne changed`, 13 bytes.
-const SET_ROUNDED_CORNERS: usize = 0x0369_EB40;
-const SET_ROUNDED_CORNERS_PROLOGUE: [u8; 13] = [
-    0xf3, 0x0f, 0x10, 0x02, 0x0f, 0x2e, 0x81, 0x84, 0x04, 0x00, 0x00, 0x75, 0x33,
-];
-/// Where the `jne` goes when the corners differ, and the `jp` after it.
-const SET_ROUNDED_CORNERS_CHANGED: usize = 0x0369_EB80;
-const SET_ROUNDED_CORNERS_PARITY: usize = 0x0369_EB4D;
 
 type SetRoundedCorners = unsafe extern "system" fn(*mut c_void, *const [f32; 4]);
 static ORIGINAL_CORNERS: AtomicUsize = AtomicUsize::new(0);
@@ -284,8 +264,8 @@ fn absolute_jump(code: &mut Vec<u8>, to: usize) {
 /// function still starts with the recorded bytes.
 pub unsafe fn install() -> Result<(), String> {
     let base = checked_base().ok_or("this browser build has no recorded split view")?;
-    let code = (base + SET_ROUNDED_CORNERS) as *mut u8;
-    if std::slice::from_raw_parts(code, 13) != SET_ROUNDED_CORNERS_PROLOGUE {
+    let code = (base + bv().set_rounded_corners) as *mut u8;
+    if std::slice::from_raw_parts(code, 13) != bv().set_rounded_corners_prologue {
         return Err("the rounded corners function is not the recorded one".into());
     }
     if ORIGINAL_CORNERS.load(Ordering::Acquire) != 0 {
@@ -293,10 +273,10 @@ pub unsafe fn install() -> Result<(), String> {
     }
     // The comparison runs in the trampoline. Its `jne` has a short offset, so it is rebuilt: taken
     // goes to the original's changed path, and not taken goes on to the original's `jp`.
-    let mut trampoline = SET_ROUNDED_CORNERS_PROLOGUE[..11].to_vec();
+    let mut trampoline = bv().set_rounded_corners_prologue[..11].to_vec();
     trampoline.extend_from_slice(&[0x75, 0x0E]);
-    absolute_jump(&mut trampoline, base + SET_ROUNDED_CORNERS_PARITY);
-    absolute_jump(&mut trampoline, base + SET_ROUNDED_CORNERS_CHANGED);
+    absolute_jump(&mut trampoline, base + bv().set_rounded_corners_parity);
+    absolute_jump(&mut trampoline, base + bv().set_rounded_corners_changed);
     let memory = VirtualAlloc(
         std::ptr::null(),
         trampoline.len(),
@@ -315,21 +295,9 @@ pub unsafe fn install() -> Result<(), String> {
     write_code(code, &patch)
 }
 
-/// `ContentsContainerView::UpdateBorderAndOverlay(this, show, a, b)`. Chrome rings the page it
-/// works in with a 1 DIP outline and keeps 4 DIPs of space inside the ring. A Rivet panel has no
-/// ring, so the page takes that space and the panel's depth marks it instead.
-const UPDATE_BORDER: usize = 0x01FD_C720;
-const UPDATE_BORDER_PROLOGUE: [u8; 12] = [
-    0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x48, 0x48, 0x89, 0xce,
-];
 type UpdateBorder = unsafe extern "system" fn(*mut c_void, u32, u32, u32);
 static ORIGINAL_BORDER: AtomicUsize = AtomicUsize::new(0);
 
-/// `views::View::SetBorder` and `SetVisible` in the view's vtable.
-const SET_BORDER_SLOT: usize = 0xf0 / 8;
-const SET_VISIBLE_SLOT: usize = 0x90 / 8;
-/// The member of the container that holds Chrome's outline view.
-const OUTLINE_MEMBER: usize = 0x448;
 
 unsafe fn virtual_slot<T: Copy>(view: *mut c_void, slot: usize) -> T {
     let table = *(view as *const *const usize);
@@ -345,13 +313,13 @@ unsafe extern "system" fn update_border(view: *mut c_void, show: u32, a: u32, b:
     }
     // Chrome has just laid its outline and the space inside it out. The mini toolbar stays.
     let no_border: usize = 0;
-    virtual_slot::<unsafe extern "system" fn(*mut c_void, *const usize)>(view, SET_BORDER_SLOT)(
+    virtual_slot::<unsafe extern "system" fn(*mut c_void, *const usize)>(view, bv().set_border_slot)(
         view,
         &no_border,
     );
-    let child = *((view as usize + OUTLINE_MEMBER) as *const *mut c_void);
+    let child = *((view as usize + bv().outline_member) as *const *mut c_void);
     if !child.is_null() {
-        virtual_slot::<unsafe extern "system" fn(*mut c_void, u32)>(child, SET_VISIBLE_SLOT)(
+        virtual_slot::<unsafe extern "system" fn(*mut c_void, u32)>(child, bv().set_visible_slot)(
             child, 0,
         );
     }
@@ -393,24 +361,12 @@ unsafe fn detour(
     write_code(code, &patch)
 }
 
-/// `MultiContentsView::CalculateProposedLayout`, a method of the layout delegate that sits
-/// `LAYOUT_DELEGATE_OFFSET` bytes into the view.
-const CALCULATE_LAYOUT: usize = 0x0232_E330;
-const CALCULATE_LAYOUT_PROLOGUE: [u8; 12] =
-    [0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53];
-const LAYOUT_DELEGATE_OFFSET: usize = 0x328;
-/// The insets Chrome keeps around the pages of a split, as top, left, bottom and right.
-const SPLIT_INSETS_MEMBER: usize = 0x404;
 /// The window's panel already leaves its gap on the right and the bottom, so only the left edge
 /// keeps room beside the Sidebar.
 const SPLIT_INSETS: [i32; 4] = [0, 8, 0, 0];
 /// The width of the resize area between two pages, and the gap the shell study wants.
 const CHROME_GAP: i32 = 10;
 const PANEL_GAP: i32 = 8;
-/// The container vector, its length and the active index of a `MultiContentsView`.
-const CONTAINERS_MEMBER: usize = 0x350;
-const CONTAINER_COUNT_MEMBER: usize = 0x358;
-const ACTIVE_MEMBER: usize = 0x3c8;
 type CalculateLayout = unsafe extern "system" fn(*mut c_void, *mut u8, *const c_void) -> *mut u8;
 static ORIGINAL_LAYOUT: AtomicUsize = AtomicUsize::new(0);
 
@@ -457,12 +413,12 @@ unsafe extern "system" fn calculate_layout(
     bounds: *const c_void,
 ) -> *mut u8 {
     let original: CalculateLayout = std::mem::transmute(ORIGINAL_LAYOUT.load(Ordering::Acquire));
-    let view = (delegate as usize - LAYOUT_DELEGATE_OFFSET) as *mut c_void;
+    let view = (delegate as usize - bv().layout_delegate_offset) as *mut c_void;
     let widget = crate::chrome_toolbar::widget_holding(view);
     if !crate::chrome_toolbar::is_rivet(widget) {
         return original(delegate, out, bounds);
     }
-    *((view as usize + SPLIT_INSETS_MEMBER) as *mut [i32; 4]) = SPLIT_INSETS;
+    *((view as usize + bv().split_insets_member) as *mut [i32; 4]) = SPLIT_INSETS;
     let result = original(delegate, out, bounds);
     let (data, count) = layout_children(out);
     let shown: Vec<*mut u8> = (0..count)
@@ -470,8 +426,8 @@ unsafe extern "system" fn calculate_layout(
         .filter(|child| *child.add(8) != 0)
         .collect();
     // The pages are the visible entries that are the view's contents containers.
-    let containers = *((view as usize + CONTAINERS_MEMBER) as *const *const usize);
-    let total = *((view as usize + CONTAINER_COUNT_MEMBER) as *const usize);
+    let containers = *((view as usize + bv().containers_member) as *const *const usize);
+    let total = *((view as usize + bv().container_count_member) as *const usize);
     let panes: Vec<*mut u8> = (0..total.min(4))
         .filter_map(|index| {
             let container = *containers.add(index);
@@ -532,13 +488,9 @@ unsafe extern "system" fn calculate_layout(
 
 /// `views::FlexLayout::CalculateProposedLayout`, which lays out the children of the browser's top
 /// row. It is a method of a layout manager that keeps its host view at +0x38.
-const FLEX_LAYOUT: usize = 0x054F_CC60;
-const FLEX_LAYOUT_HOST: usize = 0x38;
 static ORIGINAL_FLEX: AtomicUsize = AtomicUsize::new(0);
 /// The primary vtable of `LocationBarView`, which tells the top row's container among all hosts.
-const LOCATION_BAR_VTABLE: usize = 0x0FE8_6BE8;
 /// The size of a view is two ints at +0x1d0.
-const VIEW_SIZE: usize = 0x1d0;
 
 /// The windows whose top row currently only holds the address of the focused page.
 static ADDRESS_ONLY: Mutex<Vec<isize>> = Mutex::new(Vec::new());
@@ -556,17 +508,17 @@ unsafe extern "system" fn flex_layout(layout: *mut c_void, out: *mut u8, bounds:
     let (data, count) = layout_children(out);
     let location = (0..count).map(|index| data.add(index * 0x30)).find(|child| {
         let view = *(*child as *const usize);
-        view != 0 && *(view as *const usize) == base + LOCATION_BAR_VTABLE
+        view != 0 && *(view as *const usize) == base + bv().location_bar_vtable
     });
     let Some(location) = location else { return result };
-    let host = *((layout as usize + FLEX_LAYOUT_HOST) as *const usize);
+    let host = *((layout as usize + bv().flex_layout_host) as *const usize);
     let in_split = crate::chrome_layout::hwnd_of_view(host as *const c_void).is_some_and(|window| {
         ADDRESS_ONLY.lock().unwrap_or_else(|error| error.into_inner()).contains(&(window as isize))
     });
     if !in_split {
         return result;
     }
-    let width = *((host + VIEW_SIZE) as *const i32);
+    let width = *((host + bv().view_size) as *const i32);
     for index in 0..count {
         let child = data.add(index * 0x30);
         if child != location {
@@ -581,7 +533,6 @@ unsafe extern "system" fn flex_layout(layout: *mut c_void, out: *mut u8, bounds:
 
 /// `views::View::SchedulePaint(this)`. The background only paints again when it is told to, so a
 /// change of the pages or of the focused one must tell it.
-const SCHEDULE_PAINT: usize = 0x054A_B3B0;
 type SchedulePaint = unsafe extern "system" fn(*mut c_void);
 
 unsafe fn repaint(view: usize) {
@@ -589,16 +540,12 @@ unsafe fn repaint(view: usize) {
         return;
     }
     let Some(base) = base() else { return };
-    let code = std::slice::from_raw_parts((base + SCHEDULE_PAINT) as *const u8, 6);
+    let code = std::slice::from_raw_parts((base + bv().schedule_paint) as *const u8, 6);
     if code == [0x56, 0x48, 0x83, 0xec, 0x40, 0x48] {
-        function::<SchedulePaint>(base, SCHEDULE_PAINT)(view as *mut c_void);
+        function::<SchedulePaint>(base, bv().schedule_paint)(view as *mut c_void);
     }
 }
 
-/// `MultiContentsView::OnWebContentsFocused(this, web view)`, which changes the focused page.
-const WEB_CONTENTS_FOCUSED: usize = 0x0A4C_B140;
-const WEB_CONTENTS_FOCUSED_PROLOGUE: [u8; 13] =
-    [0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x81, 0x98, 0x03, 0x00, 0x00];
 type FocusedHook = unsafe extern "system" fn(*mut c_void, *mut c_void);
 static ORIGINAL_FOCUSED: AtomicUsize = AtomicUsize::new(0);
 
@@ -618,11 +565,8 @@ unsafe extern "system" fn web_contents_focused(view: *mut c_void, web_view: *mut
     }
 }
 
-const CONTAINER_LAYOUT: usize = 0x01FF_5270;
-const CONTAINER_DELEGATE_OFFSET: usize = 0x320;
 /// The member of a contents container that holds its mini toolbar, the chip with the page's address
 /// that Chrome floats over the lower corner of a page. Rivet's rows show the address, so it stays hidden.
-const MINI_TOOLBAR_MEMBER: usize = 0x440;
 static ORIGINAL_CONTAINER_LAYOUT: AtomicUsize = AtomicUsize::new(0);
 
 unsafe extern "system" fn container_layout(
@@ -632,9 +576,9 @@ unsafe extern "system" fn container_layout(
 ) -> *mut u8 {
     let original: CalculateLayout = std::mem::transmute(ORIGINAL_CONTAINER_LAYOUT.load(Ordering::Acquire));
     let result = original(delegate, out, bounds);
-    let view = (delegate as usize - CONTAINER_DELEGATE_OFFSET) as *mut c_void;
+    let view = (delegate as usize - bv().container_delegate_offset) as *mut c_void;
     if crate::chrome_toolbar::is_rivet(crate::chrome_toolbar::widget_holding(view)) {
-        let toolbar = *((view as usize + MINI_TOOLBAR_MEMBER) as *const usize);
+        let toolbar = *((view as usize + bv().mini_toolbar_member) as *const usize);
         let (data, count) = layout_children(out);
         for index in 0..count {
             let child = data.add(index * 0x30);
@@ -816,7 +760,7 @@ pub unsafe fn panes(window: HWND) -> Vec<Pane> {
     if !in_a_line(&split.rects) {
         return Vec::new();
     }
-    let active = *((split.view + ACTIVE_MEMBER) as *const i32);
+    let active = *((split.view + bv().active_member) as *const i32);
     let count = split.rects.len();
     let window_right = client_right(window);
     split
@@ -865,7 +809,7 @@ pub unsafe fn fit_toolbar(window: HWND, toolbar: &mut [i32; 4], contents: &[i32;
     if split.rects.len() < 2 || !in_a_line(&split.rects) || !active_is_split(window) {
         return leave();
     }
-    let active = (*((split.view + ACTIVE_MEMBER) as *const i32)).max(0) as usize;
+    let active = (*((split.view + bv().active_member) as *const i32)).max(0) as usize;
     let Some(pane) = split.rects.get(active) else { return leave() };
     let window_right = client_right(window);
     let on_top = pane.y == split.rects[0].y;
@@ -908,36 +852,36 @@ pub unsafe fn install_panels() -> Result<(), String> {
     let base = checked_base().ok_or("this browser build has no recorded split view")?;
     detour(
         base,
-        CALCULATE_LAYOUT,
-        &CALCULATE_LAYOUT_PROLOGUE,
+        bv().calculate_layout,
+        &bv().calculate_layout_prologue,
         calculate_layout as *const () as usize,
         &ORIGINAL_LAYOUT,
     )?;
     detour(
         base,
-        CONTAINER_LAYOUT,
-        &CALCULATE_LAYOUT_PROLOGUE,
+        bv().container_layout,
+        &bv().calculate_layout_prologue,
         container_layout as *const () as usize,
         &ORIGINAL_CONTAINER_LAYOUT,
     )?;
     detour(
         base,
-        WEB_CONTENTS_FOCUSED,
-        &WEB_CONTENTS_FOCUSED_PROLOGUE,
+        bv().web_contents_focused,
+        &bv().web_contents_focused_prologue,
         web_contents_focused as *const () as usize,
         &ORIGINAL_FOCUSED,
     )?;
     detour(
         base,
-        FLEX_LAYOUT,
-        &CALCULATE_LAYOUT_PROLOGUE,
+        bv().flex_layout,
+        &bv().calculate_layout_prologue,
         flex_layout as *const () as usize,
         &ORIGINAL_FLEX,
     )?;
     detour(
         base,
-        UPDATE_BORDER,
-        &UPDATE_BORDER_PROLOGUE,
+        bv().update_border,
+        &bv().update_border_prologue,
         update_border as *const () as usize,
         &ORIGINAL_BORDER,
     )
