@@ -197,7 +197,8 @@
     .rail-hot:hover .rail-open, .rail-open:focus-visible { opacity: .6; pointer-events: auto; }
     .rail-hot .rail-open:hover { opacity: 1; background: rgba(31,32,36,.06); color: var(--ink); }
     .rail-open .g { font-size: 14px; }
-    .ext-panel { flex: none; display: flex; flex-direction: column; width: 240px; border-left: 1px solid var(--hairline); background: var(--paper); animation: settle .2s ease; }
+    /* An open extension floats over the page instead of narrowing it. Only the rail keeps a column. */
+    .ext-panel { position: absolute; z-index: 4; top: 0; bottom: 0; right: 40px; display: flex; flex-direction: column; width: 240px; border-left: 1px solid var(--hairline); background: var(--paper); box-shadow: -12px 0 32px rgba(40, 28, 30, .10); animation: settle .2s ease; }
     .ext-panel header { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 6px 0 14px; border-bottom: 1px solid var(--hairline); font-size: 13px; font-weight: 600; }
     .ext-panel header .g { color: var(--accent); font-size: 15px; }
     .ext-panel header span { flex: 1; }
