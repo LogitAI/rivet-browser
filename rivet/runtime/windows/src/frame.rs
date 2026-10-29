@@ -220,6 +220,179 @@ fn dragging(window: HWND) -> bool {
     DRAGGING.with(|set| set.borrow().contains(&(window as isize)))
 }
 
+/// A press on a tab row that may become a drag of the tab onto the page.
+struct TabDrag {
+    index: usize,
+    title: String,
+    /// Where the press began, in client pixels.
+    press: POINT,
+    /// The pointer has moved far enough that the press is a drag.
+    live: bool,
+}
+
+thread_local! {
+    static TAB_DRAGS: RefCell<HashMap<isize, TabDrag>> = RefCell::new(HashMap::new());
+}
+
+fn tab_dragging(window: HWND) -> bool {
+    TAB_DRAGS.with(|drags| drags.borrow().get(&(window as isize)).is_some_and(|drag| drag.live))
+}
+
+/// How far the pointer travels before a press on a tab becomes a drag, in device-independent
+/// pixels.
+const DRAG_THRESHOLD: f32 = 6.0;
+/// The gap between the two halves of a page that a drop shows, as in the split itself.
+const DROP_GAP: f32 = 8.0;
+
+/// Where a dragged tab would land.
+struct Drop {
+    side: Option<crate::chrome_split::Side>,
+    view: crate::appbar::DropView,
+}
+
+/// The drop under a point in client pixels, or none when the point is off the page.
+unsafe fn drop_at(window: HWND, point: POINT) -> Option<Drop> {
+    use crate::chrome_split::Side;
+    let geometry = crate::chrome_side_panel::page_geometry(window)?;
+    let factor = layout_dpi(window) as f32 / 96.0;
+    let (left, top) = (geometry.x as f32 * factor, geometry.top as f32 * factor);
+    let (width, height) = (
+        (geometry.right - geometry.x) as f32 * factor,
+        (geometry.bottom - geometry.top) as f32 * factor,
+    );
+    let (x, y) = (point.x as f32, point.y as f32);
+    if x < left || x > left + width || y < top || y > top + height {
+        return None;
+    }
+    // Chrome keeps two pages in a split, so a window that has one only offers to open here.
+    let full = crate::chrome_split::active_is_split(window);
+    let (side, [zone_x, zone_y, w, h]) =
+        crate::chrome_split::drop_zone([left, top, width, height], x, y, full, DROP_GAP * factor);
+    let label = match side {
+        Some(Side::Left) => "Split left",
+        Some(Side::Right) => "Split right",
+        Some(Side::Top) => "Split top",
+        Some(Side::Bottom) => "Split bottom",
+        None => "Open here",
+    };
+    Some(Drop {
+        side,
+        view: crate::appbar::DropView {
+            x: zone_x,
+            y: zone_y,
+            width: w,
+            height: h,
+            label: label.to_owned(),
+        },
+    })
+}
+
+unsafe fn show_tab_drag(window: HWND, point: Option<POINT>) {
+    let dpi = layout_dpi(window);
+    let factor = dpi as f32 / 96.0;
+    let title = TAB_DRAGS.with(|drags| drags.borrow().get(&(window as isize)).map(|d| d.title.clone()));
+    let (zone, ghost) = match (point, title) {
+        (Some(point), Some(title)) => (
+            drop_at(window, point).map(|drop| drop.view),
+            Some(crate::appbar::GhostView {
+                x: point.x as f32 + 12.0 * factor,
+                y: point.y as f32 + 8.0 * factor,
+                title,
+                colour: 0x7c2d4f,
+                letter: "R".to_owned(),
+            }),
+        ),
+        _ => (None, None),
+    };
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.update_drag(zone.as_ref(), ghost.as_ref(), dpi) {
+                log(&format!("rivet: could not draw the tab drag: {error}"));
+            }
+        }
+    });
+}
+
+/// A left press on a tab row starts a press that may turn into a drag.
+unsafe fn tab_drag_press(window: HWND, hit: Option<AppbarHit>, lparam: LPARAM) {
+    let Some(AppbarHit::Tab(index)) = hit else {
+        TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize)));
+        return;
+    };
+    let title = crate::chrome_tabs::tabs(window)
+        .and_then(|tabs| tabs.into_iter().find(|tab| tab.index == index))
+        .map(|tab| tab.title)
+        .unwrap_or_default();
+    TAB_DRAGS.with(|drags| {
+        drags.borrow_mut().insert(
+            window as isize,
+            TabDrag { index, title, press: client_point(window, lparam), live: false },
+        )
+    });
+}
+
+/// The pointer moves over the appbar with a tab pressed: past the threshold it takes the tab.
+unsafe fn tab_drag_start(window: HWND, lparam: LPARAM) {
+    let point = client_point(window, lparam);
+    let threshold = DRAG_THRESHOLD * layout_dpi(window) as f32 / 96.0;
+    let start = TAB_DRAGS.with(|drags| {
+        let mut drags = drags.borrow_mut();
+        let Some(drag) = drags.get_mut(&(window as isize)).filter(|drag| !drag.live) else {
+            return false;
+        };
+        let moved = ((point.x - drag.press.x) as f32).hypot((point.y - drag.press.y) as f32);
+        drag.live = moved >= threshold;
+        drag.live
+    });
+    if start {
+        SetCapture(window);
+        // The press no longer clicks the tab.
+        press_up(window);
+        APPBAR_STATE.with(|states| {
+            if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+                entry.1 = None;
+            }
+        });
+        show_tab_drag(window, Some(point));
+    }
+}
+
+/// The pointer moves, with the window capturing it, while a tab is dragged.
+unsafe fn tab_drag_move(window: HWND, lparam: LPARAM) {
+    let point = POINT {
+        x: (lparam & 0xffff) as i16 as i32,
+        y: ((lparam >> 16) & 0xffff) as i16 as i32,
+    };
+    show_tab_drag(window, Some(point));
+}
+
+/// Ends a tab drag. A drop on the page splits it or opens the tab. `release` is the pointer of the
+/// button release, and none when the drag was cancelled.
+unsafe fn tab_drag_end(window: HWND, release: Option<LPARAM>) {
+    let Some(drag) = TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize))) else {
+        return;
+    };
+    ReleaseCapture();
+    show_tab_drag(window, None);
+    if let Some(lparam) = release.filter(|_| drag.live) {
+        let point = POINT {
+            x: (lparam & 0xffff) as i16 as i32,
+            y: ((lparam >> 16) & 0xffff) as i16 as i32,
+        };
+        if let Some(drop) = drop_at(window, point) {
+            let done = match drop.side {
+                Some(side) => crate::chrome_split::split_beside(window, drag.index, side),
+                None => crate::chrome_tabs::activate_tab(window, drag.index),
+            };
+            crate::vertical_tabs::trace(&format!(
+                "tab drag: dropped tab {} on {:?}: {done}",
+                drag.index, drop.side
+            ));
+        }
+    }
+    update_appbar(window);
+}
+
 fn slide_of(window: HWND) -> f32 {
     SLIDE
         .with(|slides| slides.borrow().get(&(window as isize)).copied())
@@ -1561,6 +1734,22 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         return 0;
     }
     match message {
+        WM_MOUSEMOVE if attached(window) && tab_dragging(window) => {
+            tab_drag_move(window, lparam);
+            0
+        }
+        WM_LBUTTONUP if attached(window) && tab_dragging(window) => {
+            tab_drag_end(window, Some(lparam));
+            0
+        }
+        WM_CAPTURECHANGED | WM_KEYDOWN
+            if attached(window)
+                && tab_dragging(window)
+                && (message == WM_CAPTURECHANGED || wparam == 0x1b) =>
+        {
+            tab_drag_end(window, None);
+            0
+        }
         WM_MOUSEMOVE if attached(window) && dragging(window) => {
             drag_to(window, (lparam & 0xffff) as i16 as i32);
             0
@@ -1667,6 +1856,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 dwHoverTime: 0,
             };
             TrackMouseEvent(&mut tracking);
+            tab_drag_start(window, lparam);
             let hit = appbar_point(window, lparam);
             let left_pressed = APPBAR_STATE.with(|states| {
                 let mut all = states.borrow_mut();
@@ -1718,6 +1908,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 entry.1 = hit;
                 entry.0 = hit;
             });
+            tab_drag_press(window, hit, lparam);
             if hit == Some(AppbarHit::Resizer) {
                 DRAGGING.with(|set| set.borrow_mut().insert(window as isize));
                 SetCapture(window);
@@ -1727,6 +1918,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         WM_NCLBUTTONUP if wparam as u32 == APPBAR_HIT && attached(window) => {
+            TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize)));
             let hit = appbar_point(window, lparam);
             let action = APPBAR_STATE.with(|states| {
                 let mut states = states.borrow_mut();
@@ -1809,6 +2001,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             LAYOUTS.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
             DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize)));
+            TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize)));
             KillTimer(window, PRESS_TIMER);
             SPACES.with(|all| all.borrow_mut().remove(&(window as isize)));
             PRESSES.with(|all| all.borrow_mut().remove(&(window as isize)));

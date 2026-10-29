@@ -15,7 +15,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1RenderTarget,
     ID2D1SolidColorBrush, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE,
     D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
-    D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES, D2D1_ROUNDED_RECT,
+    D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES, D2D1_ROUNDED_RECT, D2D1_CAP_STYLE_FLAT,
+    D2D1_DASH_STYLE_DASH, D2D1_LINE_JOIN_MITER, D2D1_STROKE_STYLE_PROPERTIES,
 };
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -30,7 +31,8 @@ use windows::Win32::Graphics::DirectWrite::{
     IDWriteTextLayout1, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE,
     DWRITE_FONT_AXIS_VALUE, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_RANGE,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS,
+    DWRITE_TEXT_RANGE,
     DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -181,6 +183,36 @@ pub struct Appbar {
     toggle_painted: Option<(i32, u32, bool, i32, i32)>,
     peek: IDCompositionVisual2,
     peek_painted: Option<Painted>,
+    /// The drop target and the dragged tab's ghost, which exist only while a tab is dragged.
+    drag: Option<DragVisuals>,
+}
+
+/// The visuals of a tab drag and what they were last painted for.
+struct DragVisuals {
+    zone: IDCompositionVisual2,
+    zone_key: Option<(i32, i32, u32, String)>,
+    ghost: IDCompositionVisual2,
+    ghost_key: Option<(i32, u32, String, u32)>,
+}
+
+/// Where a dragged tab would land: the rectangle in window pixels and its label.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DropView {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub label: String,
+}
+
+/// The dragged tab following the pointer, with its top left corner in window pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GhostView {
+    pub x: f32,
+    pub y: f32,
+    pub title: String,
+    pub colour: u32,
+    pub letter: String,
 }
 
 /// The scale and brightness amounts of one control's press at this moment.
@@ -302,6 +334,7 @@ impl Appbar {
             toggle_painted: None,
             peek,
             peek_painted: None,
+            drag: None,
         })
     }
 
@@ -633,6 +666,143 @@ impl Appbar {
         );
         surface.EndDraw()?;
         result
+    }
+}
+
+/// The width of one line of text in a style, in device-independent pixels.
+unsafe fn measure(
+    dwrite: &IDWriteFactory5,
+    fonts: &IDWriteFontCollection1,
+    style: Type,
+    value: &str,
+) -> Result<f32> {
+    let locale = HSTRING::from("en-us");
+    let format = dwrite.CreateTextFormat(
+        &HSTRING::from(style.family),
+        fonts,
+        DWRITE_FONT_WEIGHT(style.weight),
+        DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL,
+        style.size,
+        PCWSTR(locale.as_ptr()),
+    )?;
+    format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+    let text: Vec<u16> = value.encode_utf16().collect();
+    let layout = dwrite.CreateTextLayout(&text, &format, 4096.0, 40.0)?;
+    let mut metrics = DWRITE_TEXT_METRICS::default();
+    layout.GetMetrics(&mut metrics)?;
+    Ok(metrics.widthIncludingTrailingWhitespace.ceil())
+}
+
+/// Room around the ghost for its shadow, in device-independent pixels.
+const GHOST_PAD: f32 = 20.0;
+const GHOST_HEIGHT: f32 = 32.0;
+
+impl Appbar {
+    /// Shows or hides the drop target and the ghost of a dragged tab. Both are visuals of the
+    /// window, on top of everything else the appbar draws.
+    pub(crate) unsafe fn update_drag(
+        &mut self,
+        zone: Option<&DropView>,
+        ghost: Option<&GhostView>,
+        dpi: u32,
+    ) -> Result<()> {
+        if zone.is_none() && ghost.is_none() {
+            if let Some(drag) = self.drag.as_mut() {
+                drag.zone.SetContent(None)?;
+                drag.ghost.SetContent(None)?;
+                drag.zone_key = None;
+                drag.ghost_key = None;
+                self.device.Commit()?;
+            }
+            return Ok(());
+        }
+        if self.drag.is_none() {
+            let zone = self.device.CreateVisual()?;
+            self.root.AddVisual(&zone, true, None::<&IDCompositionVisual>)?;
+            let ghost = self.device.CreateVisual()?;
+            self.root.AddVisual(&ghost, true, None::<&IDCompositionVisual>)?;
+            self.drag = Some(DragVisuals { zone, zone_key: None, ghost, ghost_key: None });
+        }
+        let scale = dpi as f32 / 96.0;
+        let tint = self.scene().tint();
+        let (device, dwrite, fonts) = (self.device.clone(), self.dwrite.clone(), self.fonts.clone());
+        let drag = self.drag.as_mut().expect("created above");
+        match zone {
+            Some(zone) => {
+                let (width, height) = (zone.width.round() as i32, zone.height.round() as i32);
+                drag.zone.SetOffsetX2(zone.x.round())?;
+                drag.zone.SetOffsetY2(zone.y.round())?;
+                let key = (width, height, dpi, zone.label.clone());
+                if drag.zone_key.as_ref() != Some(&key) && width > 0 && height > 0 {
+                    let surface = device.CreateSurface(
+                        width as u32,
+                        height as u32,
+                        DXGI_FORMAT_B8G8R8A8_UNORM,
+                        DXGI_ALPHA_MODE_PREMULTIPLIED,
+                    )?;
+                    let mut offset = POINT::default();
+                    let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+                    context.SetDpi(dpi as f32, dpi as f32);
+                    context.SetTransform(&Matrix3x2::translation(
+                        offset.x as f32 / scale,
+                        offset.y as f32 / scale,
+                    ));
+                    context.Clear(Some(&rgba(WHITE, 0.0)));
+                    let canvas = Canvas { context: &context, dwrite: &dwrite, fonts: &fonts };
+                    let result =
+                        canvas.drop_target(width as f32 / scale, height as f32 / scale, &zone.label, tint);
+                    surface.EndDraw()?;
+                    result?;
+                    drag.zone.SetContent(&surface)?;
+                    drag.zone_key = Some(key);
+                }
+            }
+            None => {
+                drag.zone.SetContent(None)?;
+                drag.zone_key = None;
+            }
+        }
+        match ghost {
+            Some(ghost) => {
+                let text = measure(&dwrite, &fonts, ACTIVE, &ghost.title)?;
+                let width = (9.0 + 18.0 + 8.0 + text + 12.0).min(260.0);
+                let (pw, ph) = (
+                    ((width + 2.0 * GHOST_PAD) * scale).ceil() as i32,
+                    ((GHOST_HEIGHT + 2.0 * GHOST_PAD) * scale).ceil() as i32,
+                );
+                drag.ghost.SetOffsetX2((ghost.x - GHOST_PAD * scale).round())?;
+                drag.ghost.SetOffsetY2((ghost.y - GHOST_PAD * scale).round())?;
+                let key = (pw, dpi, ghost.title.clone(), ghost.colour);
+                if drag.ghost_key.as_ref() != Some(&key) {
+                    let surface = device.CreateSurface(
+                        pw as u32,
+                        ph as u32,
+                        DXGI_FORMAT_B8G8R8A8_UNORM,
+                        DXGI_ALPHA_MODE_PREMULTIPLIED,
+                    )?;
+                    let mut offset = POINT::default();
+                    let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+                    context.SetDpi(dpi as f32, dpi as f32);
+                    context.SetTransform(&Matrix3x2::translation(
+                        offset.x as f32 / scale,
+                        offset.y as f32 / scale,
+                    ));
+                    context.Clear(Some(&rgba(WHITE, 0.0)));
+                    let canvas = Canvas { context: &context, dwrite: &dwrite, fonts: &fonts };
+                    let result = canvas.ghost(width, ghost);
+                    surface.EndDraw()?;
+                    result?;
+                    drag.ghost.SetContent(&surface)?;
+                    drag.ghost_key = Some(key);
+                }
+            }
+            None => {
+                drag.ghost.SetContent(None)?;
+                drag.ghost_key = None;
+            }
+        }
+        self.device.Commit()
     }
 }
 
@@ -1324,6 +1494,64 @@ impl Canvas<'_> {
 
     /// The floating appbar's shape: a soft shadow, the fill and a hairline ring, like the study's
     /// `0 0 0 1px rgba(0,0,0,.07), 0 24px 60px rgba(40,28,30,.28)`.
+    /// The drop target of a dragged tab, as in the shell study: a dashed rounded outline, a wash
+    /// of the space tint and a label in a white pill.
+    unsafe fn drop_target(&self, w: f32, h: f32, label: &str, tint: u32) -> Result<()> {
+        let area = rect(0.75, 0.75, w - 1.5, h - 1.5);
+        self.fill_rounded(area, PANEL_RADIUS, rgba(WHITE, 0.35))?;
+        self.fill_rounded(area, PANEL_RADIUS, rgba(tint, 0.14))?;
+        let factory = self.context.GetFactory()?;
+        let dashes = factory.CreateStrokeStyle(
+            &D2D1_STROKE_STYLE_PROPERTIES {
+                startCap: D2D1_CAP_STYLE_FLAT,
+                endCap: D2D1_CAP_STYLE_FLAT,
+                dashCap: D2D1_CAP_STYLE_FLAT,
+                lineJoin: D2D1_LINE_JOIN_MITER,
+                miterLimit: 10.0,
+                dashStyle: D2D1_DASH_STYLE_DASH,
+                dashOffset: 0.0,
+            },
+            None,
+        )?;
+        let outline = D2D1_ROUNDED_RECT { rect: area, radiusX: PANEL_RADIUS, radiusY: PANEL_RADIUS };
+        self.context.DrawRoundedRectangle(
+            &outline,
+            &self.paint_brush(rgba(ACCENT, 0.7))?,
+            1.5,
+            &dashes,
+        );
+        let text = measure(self.dwrite, self.fonts, ACTIVE, label)?;
+        let (pill_w, pill_h) = (text + 24.0, 30.0);
+        let pill = rect((w - pill_w) / 2.0, (h - pill_h) / 2.0, pill_w, pill_h);
+        self.fill_rounded(
+            D2D_RECT_F { top: pill.top + 3.0, bottom: pill.bottom + 3.0, ..pill },
+            9.0,
+            rgba(0x28_1c_1e, 0.08),
+        )?;
+        self.fill_rounded(pill, 9.0, rgba(WHITE, 0.9))?;
+        self.text_centred(ACTIVE, pill, label, ACCENT)
+    }
+
+    /// The tab that follows the pointer while it is dragged.
+    unsafe fn ghost(&self, width: f32, ghost: &GhostView) -> Result<()> {
+        let body = rect(GHOST_PAD, GHOST_PAD, width, GHOST_HEIGHT);
+        for layer in (1..=6).rev() {
+            let grow = layer as f32 * 2.0;
+            let reach = D2D_RECT_F {
+                left: body.left - grow,
+                top: body.top - grow + 8.0,
+                right: body.right + grow,
+                bottom: body.bottom + grow + 8.0,
+            };
+            self.fill_rounded(reach, 9.0 + grow, rgba(0x28_1c_1e, 0.03))?;
+        }
+        self.fill_rounded(body, 9.0, color(WHITE))?;
+        self.ring(body, 9.0, rgba(0x000000, 0.06))?;
+        self.favicon(body.left + 9.0, body.top + 7.0, 18.0, ghost.colour, &ghost.letter)?;
+        let label = rect(body.left + 35.0, body.top, width - 47.0, GHOST_HEIGHT);
+        self.text(ACTIVE, label, &ghost.title, INK, false)
+    }
+
     unsafe fn floating(&self, area: D2D_RECT_F) -> Result<()> {
         const LAYERS: i32 = 10;
         for layer in (1..=LAYERS).rev() {

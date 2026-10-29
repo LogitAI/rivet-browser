@@ -35,6 +35,7 @@ type Allocate = unsafe extern "system" fn(usize) -> *mut i32;
 /// The side-by-side layout and an even split. Chrome's visual data is a layout value, then a
 /// double ratio at offset 8.
 const LAYOUT_SIDE_BY_SIDE: u32 = 0;
+const LAYOUT_STACKED: u32 = 1;
 const EVEN_RATIO: f64 = 0.5;
 /// Chrome only uses the creation source for metrics.
 const CREATED_SOURCE: u32 = 0;
@@ -89,8 +90,6 @@ pub unsafe fn active_is_split(window: HWND) -> bool {
 /// Splits the active tab with the tab after it, or before it when it is the last one. Returns false
 /// when the window has a single tab or the active tab is already split.
 pub unsafe fn split_active(window: HWND) -> bool {
-    let Some(base) = checked_base() else { return false };
-    let Some(model) = tab_model(base, window) else { return false };
     let Some(tabs) = crate::chrome_tabs::tabs(window) else { return false };
     let Some(active) = tabs.iter().find(|tab| tab.active).map(|tab| tab.index) else {
         return false;
@@ -102,19 +101,86 @@ pub unsafe fn split_active(window: HWND) -> bool {
     } else {
         return false;
     };
-    if split_of(base, model, active).is_some() || split_of(base, model, other).is_some() {
+    split_pair(window, active.min(other), active.max(other), LAYOUT_SIDE_BY_SIDE)
+}
+
+/// The side of a page a tab is dropped on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// Splits the active tab with `dragged`, which takes `side` of it. Returns false when the tab is
+/// the active one, does not exist, or either tab is already in a split.
+pub unsafe fn split_beside(window: HWND, dragged: usize, side: Side) -> bool {
+    let Some(tabs) = crate::chrome_tabs::tabs(window) else { return false };
+    let Some(active) = tabs.iter().find(|tab| tab.active).map(|tab| tab.index) else {
+        return false;
+    };
+    if dragged == active || dragged >= tabs.len() {
+        return false;
+    }
+    let (first, second) = match side {
+        Side::Left | Side::Top => (dragged, active),
+        Side::Right | Side::Bottom => (active, dragged),
+    };
+    let layout = match side {
+        Side::Left | Side::Right => LAYOUT_SIDE_BY_SIDE,
+        Side::Top | Side::Bottom => LAYOUT_STACKED,
+    };
+    split_pair(window, first, second, layout)
+}
+
+/// The part of a page near each edge where a drop splits it, as a share of its size.
+const EDGE_SHARE: f32 = 0.28;
+
+/// Where a tab dropped at (`x`, `y`) on a page of `page` (x, y, width, height) lands, and the
+/// rectangle that shows it. A drop near an edge splits the page there and shows that half. A drop
+/// elsewhere, or on a window that is already split, opens the tab in the page.
+pub fn drop_zone(page: [f32; 4], x: f32, y: f32, full: bool, gap: f32) -> (Option<Side>, [f32; 4]) {
+    let [left, top, width, height] = page;
+    let distances = [
+        (Side::Left, (x - left) / width),
+        (Side::Right, (left + width - x) / width),
+        (Side::Top, (y - top) / height),
+        (Side::Bottom, (top + height - y) / height),
+    ];
+    let (nearest, amount) = distances
+        .into_iter()
+        .min_by(|one, two| one.1.total_cmp(&two.1))
+        .expect("four distances");
+    let side = (amount < EDGE_SHARE && !full).then_some(nearest);
+    let (half_width, half_height) = ((width - gap) / 2.0, (height - gap) / 2.0);
+    let rect = match side {
+        Some(Side::Left) => [left, top, half_width, height],
+        Some(Side::Right) => [left + half_width + gap, top, half_width, height],
+        Some(Side::Top) => [left, top, width, half_height],
+        Some(Side::Bottom) => [left, top + half_height + gap, width, half_height],
+        None => page,
+    };
+    (side, rect)
+}
+
+/// Makes a split of two tabs. The first one is shown first, which is on the left or on top.
+unsafe fn split_pair(window: HWND, first: usize, second: usize, layout: u32) -> bool {
+    let Some(base) = checked_base() else { return false };
+    let Some(model) = tab_model(base, window) else { return false };
+    if split_of(base, model, first).is_some() || split_of(base, model, second).is_some() {
         return false;
     }
     let indices = function::<Allocate>(base, ALLOCATE)(8);
     if indices.is_null() {
         return false;
     }
-    indices.write(active.min(other) as i32);
-    indices.add(1).write(active.max(other) as i32);
+    indices.write(first as i32);
+    indices.add(1).write(second as i32);
     // Chrome takes over this vector of a pointer, an element count and a capacity.
     let span = [indices as usize, 2, 2];
     let mut visual = [0u8; 16];
-    visual[..4].copy_from_slice(&LAYOUT_SIDE_BY_SIDE.to_le_bytes());
+    visual[..4].copy_from_slice(&layout.to_le_bytes());
     visual[8..16].copy_from_slice(&EVEN_RATIO.to_le_bytes());
     let mut id = [0u8; 16];
     function::<AddToNewSplit>(base, ADD_TO_NEW_SPLIT)(
@@ -124,7 +190,7 @@ pub unsafe fn split_active(window: HWND) -> bool {
         &visual,
         CREATED_SOURCE,
     );
-    crate::vertical_tabs::trace(&format!("split: created {id:02x?}"));
+    crate::vertical_tabs::trace(&format!("split: created {id:02x?} of {first} and {second}"));
     true
 }
 
@@ -627,7 +693,7 @@ pub unsafe fn install_panels() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::narrow_gap;
+    use super::{drop_zone, narrow_gap, Side};
 
     #[test]
     fn fr9_split_gap_is_eight_dips() {
@@ -644,5 +710,23 @@ mod tests {
         let (mut left, mut middle, mut right) = ([8, 0, 399, 683], [407, 0, 6, 683], [413, 0, 399, 683]);
         assert!(!narrow_gap(&mut left, &mut middle, &mut right));
         assert_eq!(middle, [407, 0, 6, 683]);
+    }
+
+    #[test]
+    fn fr9_tab_dropped_on_an_edge_splits_that_side() {
+        let page = [100.0, 50.0, 800.0, 600.0];
+        let (side, rect) = drop_zone(page, 880.0, 300.0, false, 8.0);
+        assert_eq!(side, Some(Side::Right));
+        assert_eq!(rect, [100.0 + 396.0 + 8.0, 50.0, 396.0, 600.0]);
+        assert_eq!(drop_zone(page, 120.0, 300.0, false, 8.0).0, Some(Side::Left));
+        assert_eq!(drop_zone(page, 500.0, 60.0, false, 8.0).0, Some(Side::Top));
+        assert_eq!(drop_zone(page, 500.0, 640.0, false, 8.0).0, Some(Side::Bottom));
+    }
+
+    #[test]
+    fn fr9_tab_dropped_in_the_middle_or_on_a_full_split_opens_in_place() {
+        let page = [100.0, 50.0, 800.0, 600.0];
+        assert_eq!(drop_zone(page, 500.0, 350.0, false, 8.0), (None, page));
+        assert_eq!(drop_zone(page, 880.0, 300.0, true, 8.0), (None, page));
     }
 }
