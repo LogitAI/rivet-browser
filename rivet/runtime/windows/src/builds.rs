@@ -2333,8 +2333,48 @@ pub static BRAVE: Build = Build {
     },
 };
 
+/// Samsung Internet 143.0.4.29 (Chromium 143.0.7499.194). The browser code is in
+/// `samsunginternet.dll`, and `samsunginternet.exe` is the browser process itself, so there is no
+/// versioned launcher. The file version resource names the Samsung release, not Chromium's.
+/// Only the frame paint, the client-view bounds and the top inset are mapped; everything else stays off.
+pub static SAMSUNG: Build = Build {
+    browser: "Samsung Internet",
+    module: "samsunginternet.dll",
+    version: [30, 0, 4, 29],
+    toolbar: Toolbar {
+        skip: "toolbar",
+        ..UNCHECKED_TOOLBAR
+    },
+    vertical: UNCHECKED_VERTICALTABS,
+    navigation: UNCHECKED_NAVIGATION,
+    tabs: UNCHECKED_TABS,
+    split: UNCHECKED_SPLIT,
+    edge_vertical: None,
+    edge_page: None,
+    side_panel: UNCHECKED_SIDEPANEL,
+    layout: Layout {
+        on_paint_slot: 89,
+        on_paint: 0x1a6f760,
+        on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        // `View::GetColorProvider`, the function the frame paint calls twice before it draws.
+        get_color_provider: 0x4717be0,
+        get_color_provider_prologue: &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x01, 0x48, 0x8B, 0x40, 0x58, 0x48],
+        draw_color: 0x3497d50,
+        draw_color_prologue: &[0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B],
+        frame_ids: &[0x13C, 0x13D, 0x140, 321, 0x144],
+        // One virtual function fewer than Chrome 150 sits before the top inset.
+        top_inset_slot: 126,
+        top_inset: 0x742bb0,
+        frame_vtable: 0xe2dc828,
+        // The tree walk is checked on 143.0.4.29: the frame colours swap live. `toolbar.get_color` is
+        // not mapped, so no colour is created.
+        provider_verified: true,
+        ..UNCHECKED_LAYOUT
+    },
+};
+
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 5] = [&CHROME, &EDGE, &CHROME_150, &WHALE, &BRAVE];
+static TABLE: [&Build; 6] = [&CHROME, &EDGE, &CHROME_150, &WHALE, &BRAVE, &SAMSUNG];
 
 static CURRENT: OnceLock<Option<&'static Build>> = OnceLock::new();
 
@@ -2583,6 +2623,43 @@ mod tests {
             let word = file_bytes(&file, vtable + slot * 8, 8).expect("vtable inside the image");
             let target = u64::from_le_bytes(word.try_into().unwrap()) as usize;
             assert_eq!(target, 0x1_8000_0000 + function, "{name} slot");
+        }
+    }
+
+    #[test]
+    fn nfr3_samsung_maps_only_the_frame_hooks_and_matches_the_installed_build() {
+        assert_eq!(SAMSUNG.module, "samsunginternet.dll");
+        assert_eq!(SAMSUNG.version, [30, 0, 4, 29]);
+        assert_eq!(SAMSUNG.toolbar.skip, "toolbar");
+        assert!(!SAMSUNG.vertical.supported && !SAMSUNG.tabs.supported && !SAMSUNG.split.supported);
+        // The vtable has one function fewer than Chrome 150's before the top inset.
+        assert_eq!(SAMSUNG.layout.top_inset_slot, CHROME_150.layout.top_inset_slot - 1);
+        // Hooks without a verified address are absent, so their checks fail.
+        assert_eq!(SAMSUNG.layout.corner_paint, ABSENT);
+        assert_eq!(SAMSUNG.layout.caption_paint, ABSENT);
+        let path = r"C:\Program Files\Samsung\Internet\Application\143.0.4.29\samsunginternet.dll";
+        let Ok(file) = std::fs::read(path) else {
+            return;
+        };
+        let layout = &SAMSUNG.layout;
+        for (name, rva, prologue) in [
+            ("frame paint", layout.on_paint, layout.on_paint_prologue),
+            ("draw colour", layout.draw_color, layout.draw_color_prologue),
+            ("colour provider", layout.get_color_provider, layout.get_color_provider_prologue),
+        ] {
+            assert_eq!(
+                file_bytes(&file, rva, prologue.len()).as_deref(),
+                Some(prologue),
+                "{name} prologue does not match samsunginternet.dll"
+            );
+        }
+        for (slot_rva, target) in [
+            (layout.frame_vtable + layout.on_paint_slot * 8, layout.on_paint),
+            (layout.frame_vtable + layout.top_inset_slot * 8, layout.top_inset),
+        ] {
+            let word = file_bytes(&file, slot_rva, 8).unwrap();
+            let image_base = 0x1_8000_0000u64;
+            assert_eq!(u64::from_le_bytes(word.try_into().unwrap()), image_base + target as u64);
         }
     }
 

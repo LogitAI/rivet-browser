@@ -103,6 +103,28 @@ pub unsafe fn trace_crashes() {
                 rip.wrapping_sub(base),
                 record.information[1]
             ));
+            // A jump to a bad address leaves no frames to walk, so the words on the stack that look
+            // like return addresses into the browser module show who made the call.
+            if base != 0 {
+                let rsp = *((*info).context.cast::<u8>().add(0x98) as *const usize);
+                let returns: Vec<String> = (0..96usize)
+                    .filter_map(|index| {
+                        let word = *((rsp + index * 8) as *const usize);
+                        (word > base && word - base < 0x2000_0000).then(|| format!("{:#x}", word - base))
+                    })
+                    .collect();
+                trace(&format!("  stack returns into the browser: {}", returns.join(" ")));
+                let mut own = std::ptr::null_mut();
+                GetModuleHandleExW(0x4 | 0x2, handler as *const c_void, &mut own);
+                let own = own as usize;
+                let ours: Vec<String> = (0..160usize)
+                    .filter_map(|index| {
+                        let word = *((rsp + index * 8) as *const usize);
+                        (word > own && word - own < 0x400_0000).then(|| format!("{:#x}", word - own))
+                    })
+                    .collect();
+                trace(&format!("  stack returns into the runtime: {}", ours.join(" ")));
+            }
             let mut frames = [std::ptr::null_mut::<c_void>(); 24];
             let count = RtlCaptureStackBackTrace(0, 24, frames.as_mut_ptr(), std::ptr::null_mut());
             for frame in &frames[..count as usize] {

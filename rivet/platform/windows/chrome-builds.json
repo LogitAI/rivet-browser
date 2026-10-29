@@ -48,5 +48,15 @@
     "client_view_bounds": 237974640,
     "hwnd_for_view": 150289552,
     "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Samsung Internet",
+    "version": "30.0.4.29",
+    "module": "samsunginternet.dll",
+    "frame_view_vtable": 237881384,
+    "client_view_slot": 103,
+    "client_view_bounds": 58899088,
+    "hwnd_for_view": 54450352,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
   }
 ]

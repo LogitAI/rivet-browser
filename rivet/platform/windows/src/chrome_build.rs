@@ -241,6 +241,9 @@ mod tests {
         assert!(table.iter().any(|build| build.browser == "Brave" && build.version == "156.1.98.62"));
         assert!(table
             .iter()
+            .any(|build| build.module == "samsunginternet.dll" && build.version == "30.0.4.29"));
+        assert!(table
+            .iter()
             .any(|build| build.module == "msedge.dll" && build.version == "156.0.4314.50"));
         assert!(table
             .iter()
