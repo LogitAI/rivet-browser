@@ -648,8 +648,15 @@ unsafe fn bounds_of(map: *const c_void, view: usize) -> Option<*mut [i32; 4]> {
     None
 }
 
-/// Leaves `rail` DIPs at the right edge of the page area: the contents get narrower and the side
-/// panel moves left, so the page, the open panel and the rail sit side by side.
+/// The width of an open side panel, in DIPs. The mock-up's extension panel is 240 DIPs wide.
+pub const PANEL_WIDTH: i32 = 240;
+/// How far Chrome insets the contents from the left, top and bottom of the page area while a side
+/// panel is open, so they float. Rivet's page, panel and rail are one flat card, so the inset goes.
+const CONTENTS_INSET: i32 = 8;
+
+/// Leaves `rail` DIPs at the right edge of the page area, and sizes an open side panel to
+/// `PANEL_WIDTH` beside the rail: the page, the open panel and the rail sit side by side with
+/// nothing between them, and the contents take what is left.
 fn make_room(
     contents: &mut [i32; 4],
     outline: Option<&mut [i32; 4]>,
@@ -657,11 +664,31 @@ fn make_room(
     animation: Option<&mut [i32; 4]>,
     rail: i32,
 ) {
-    for bounds in [Some(&mut *contents), outline].into_iter().flatten() {
-        bounds[2] = (bounds[2] - rail).max(1);
-    }
+    // The panel's right edge ends at the rail. While Chrome animates the panel in, it is narrower.
+    let panel = side_panel
+        .as_ref()
+        .filter(|bounds| bounds[2] > 0)
+        .map(|bounds| (bounds[0] + bounds[2] - rail, bounds[2].min(PANEL_WIDTH), bounds[1], bounds[3]));
     for bounds in [side_panel, animation].into_iter().flatten() {
-        bounds[0] -= rail;
+        bounds[0] = match panel {
+            Some((edge, width, _, _)) => {
+                bounds[2] = width;
+                edge - width
+            }
+            None => bounds[0] - rail,
+        };
+    }
+    for bounds in [Some(&mut *contents), outline].into_iter().flatten() {
+        let right = match panel {
+            Some((edge, width, top, height)) => {
+                bounds[0] -= CONTENTS_INSET;
+                bounds[1] = top;
+                bounds[3] = height;
+                edge - width
+            }
+            None => bounds[0] + bounds[2] - rail,
+        };
+        bounds[2] = (right - bounds[0]).max(1);
     }
 }
 
@@ -877,13 +904,22 @@ mod tests {
 
     #[test]
     fn fr10_rail_takes_its_width_from_the_contents_and_moves_the_open_panel() {
-        let mut contents = [0, 46, 700, 600];
+        let mut contents = [8, 47, 692, 591];
         let mut panel = [700, 46, 378, 600];
         let mut animation = [700, 46, 378, 600];
         make_room(&mut contents, None, Some(&mut panel), Some(&mut animation), RAIL_WIDTH);
-        assert_eq!(contents, [0, 46, 660, 600]);
-        assert_eq!(panel[0], 660);
-        assert_eq!(animation[0], 660);
+        assert_eq!(panel, [798, 46, PANEL_WIDTH, 600], "240 wide, ending at the rail");
+        assert_eq!(contents, [0, 46, 798, 600], "the contents lose Chrome's inset and end where the panel begins");
+        assert_eq!(animation, panel);
+    }
+
+    #[test]
+    fn fr10_rail_leaves_a_closed_side_panel_without_width_and_the_page_whole() {
+        let mut contents = [0, 46, 1078, 600];
+        let mut panel = [1078, 46, 0, 600];
+        make_room(&mut contents, None, Some(&mut panel), None, RAIL_WIDTH);
+        assert_eq!(contents, [0, 46, 1038, 600]);
+        assert_eq!(panel[2], 0);
     }
 
     #[test]
