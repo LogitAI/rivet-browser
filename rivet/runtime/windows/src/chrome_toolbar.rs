@@ -181,6 +181,17 @@ const PAINTER_VTABLE: usize = 0x0FDC_F4F0;
 const PAINTER_RADII: usize = 0x10;
 const PAINTER_INSETS: usize = 0x20;
 const FIELD_FILL_MARGIN: i32 = 3;
+/// The omnibox state a `LocationBarView` reads while it refreshes its background: a pointer at
+/// `+0x4e8` to an object that keeps the state object at `+0x28`, whose `+0x18` is 1 while the
+/// field has focus.
+const FIELD_STATE: usize = 0x4E8;
+const FIELD_STATE_FOCUSED: usize = 0x18;
+/// The fill Chrome uses for a focused field is the colour of the suggestion list. The design
+/// keeps the hover fill instead, so the field stays the same rectangle while it is edited.
+const FOCUSED_FILL_ID: i32 = 1013;
+const FIELD_HOVER_FILL: u32 = 0xFFF0_EFEC;
+/// `views::FocusRing::Remove(View*)`, which does nothing when the view has no ring.
+const FOCUS_RING_REMOVE: usize = 0x024C_A860;
 /// The radius of the field's rectangle, in DIPs.
 const FIELD_RADIUS: f32 = 8.0;
 /// `views::View::SetTransform(this, &gfx::Transform)` and `ui::Layer::SetLayerBrightness(this,
@@ -305,7 +316,8 @@ const SOFT_INK: u32 = 0xFF4A_4850;
 /// The accent #9a5424 at 9 percent and at 25 percent over paper.
 const ACCENT_TINT: u32 = 0xFFF2_EBE4;
 const SELECTION: u32 = 0xFFE3_D0C2;
-/// Keyboard focus keeps a visible ring, in ink instead of the browser's blue.
+/// Keyboard focus keeps a visible ring on the toolbar's buttons, in ink instead of the browser's
+/// blue. The address field has none: its fill is its focus.
 const FOCUS_RING: u32 = 0x661F_2024;
 /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
 const COLOURS: [(i32, u32); 49] = [
@@ -344,7 +356,7 @@ const COLOURS: [(i32, u32); 49] = [
     (1054, INK),         // kColorOmniboxSelectionForeground
     (1046, 0xFFB3_261E), // kColorOmniboxSecurityChipDangerous: the "Not secure" label and its warning
     (1047, 0x14B3_261E), // kColorOmniboxSecurityChipDangerousBackground: the label's tint, 8 percent
-    (1055, 0xFF4A_4850), // kColorOmniboxText
+    (1055, INK),         // kColorOmniboxText: the address while it is edited
     (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
     (1590, PAPER),       // kColorToolbar
     (1644, 0xFF1A_1A1A), // Caption button glyph, active window
@@ -381,6 +393,7 @@ static FORCED: AtomicUsize = AtomicUsize::new(0);
 const FORCE_HOVER: usize = 1;
 const FORCE_PRESSED: usize = 2;
 const FORCE_CYCLE: usize = 3;
+const FORCE_FOCUS: usize = 4;
 
 static HOOKS: OnceLock<Result<Hooks, String>> = OnceLock::new();
 /// Trampolines to the original functions. Each is stored before its function is patched, so a
@@ -1052,15 +1065,64 @@ unsafe extern "system" fn refresh_background(view: *mut c_void) {
     let top = widget_holding((view as usize + LOCATION_BAR_VIEW_BASE) as *mut c_void);
     let run: WidgetCall = original(&ORIGINAL_REFRESH_BACKGROUND);
     scoped(top, || {
-        if active() && FORCED.load(Ordering::Relaxed) >= FORCE_HOVER {
+        if !active() {
+            run(view);
+            return;
+        }
+        if FORCED.load(Ordering::Relaxed) >= FORCE_HOVER {
             ((view as usize + HOVER_VALUE) as *mut f64).write(1.0);
         }
-        run(view);
-        if active() {
-            round_field(view);
-            watch_field(top, view as usize);
+        // Chrome draws a focus ring around the field. The design has none, so the view is taken
+        // out; the call does nothing once it is gone.
+        if let Some(hooks) = hooks() {
+            let remove: unsafe extern "system" fn(*mut c_void) = std::mem::transmute(hooks.base + FOCUS_RING_REMOVE);
+            let properties = (view as usize + LOCATION_BAR_VIEW_BASE + 0xE8) as *const usize;
+            let before = properties.read();
+            remove((view as usize + LOCATION_BAR_VIEW_BASE) as *mut c_void);
+            if first_swap(-1) {
+                crate::vertical_tabs::trace(&format!("focus ring: property map root {before:#x} -> {:#x}", properties.read()));
+            }
         }
+        // For captures: paint the field as it is while focused, without taking focus.
+        let state = {
+            let holder = *((view as usize + FIELD_STATE) as *const usize);
+            if holder == 0 { 0 } else { *((holder + 0x28) as *const usize) }
+        };
+        let forced = FORCED.load(Ordering::Relaxed) == FORCE_FOCUS && state != 0;
+        let before = if forced { Some(((state + FIELD_STATE_FOCUSED) as *const i32).read()) } else { None };
+        if forced {
+            ((state + FIELD_STATE_FOCUSED) as *mut i32).write(1);
+        }
+        let fill = (|| {
+            let provider = provider_of(top)?;
+            colour_slot(provider, FOCUSED_FILL_ID)
+        })();
+        let saved = fill.map(|slot| {
+            let value = slot.read();
+            slot.write(FIELD_HOVER_FILL);
+            value
+        });
+        run(view);
+        if let (Some(slot), Some(value)) = (fill, saved) {
+            slot.write(value);
+        }
+        if let Some(value) = before {
+            ((state + FIELD_STATE_FOCUSED) as *mut i32).write(value);
+        }
+        round_field(view);
+        watch_field(top, view as usize);
     });
+}
+
+/// The colour provider of the Rivet window `widget`, when its root view is live.
+unsafe fn provider_of(widget: usize) -> Option<*const u8> {
+    let hooks = hooks()?;
+    let root = *((widget + ROOT_VIEW_OFFSET) as *const *mut c_void);
+    if root.is_null() || !is_live_view(root as usize) {
+        return None;
+    }
+    let provider = (hooks.provider)(root);
+    (!provider.is_null()).then_some(provider)
 }
 
 /// Pressing the field, as in the design: it sinks quickly to 0.98 of its size and 0.96 of its
@@ -2004,6 +2066,7 @@ pub unsafe fn install(directory: Option<std::path::PathBuf>) -> Result<(), Strin
             "hover" => FORCE_HOVER,
             "pressed" => FORCE_PRESSED,
             "cycle" => FORCE_CYCLE,
+            "focus" => FORCE_FOCUS,
             _ => 0,
         },
         Ordering::Relaxed,
@@ -2401,7 +2464,10 @@ mod tests {
     #[test]
     fn fr12_toolbar_colours_use_distinct_stock_keys() {
         let colour = |id| COLOURS.iter().find(|(key, _)| *key == id).map(|(_, value)| *value);
-        assert_eq!(colour(1055), Some(0xFF4A_4850));
+        assert_eq!(colour(1055), Some(INK));
+        // The focused field keeps the hover fill instead of the list colour, and has no ring colour of its own.
+        assert_eq!(FIELD_HOVER_FILL, 0xFFF0_EFEC);
+        assert_eq!(colour(797), Some(FIELD_HOVER_FILL));
         assert_eq!(colour(1056), Some(0xFF8A_8690));
         assert_eq!(colour(1590), Some(PAPER));
         assert_eq!(colour(1595), Some(0xFF4A_4850));
