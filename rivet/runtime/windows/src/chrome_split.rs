@@ -367,9 +367,9 @@ unsafe fn detour(
     write_code(code, &patch)
 }
 
-/// The window's panel already leaves its gap on the right and the bottom, so only the left edge
-/// keeps room beside the Sidebar.
-const SPLIT_INSETS: [i32; 4] = [0, 8, 0, 0];
+/// The window's panel already leaves its gap on every side, so the pages of a split start exactly
+/// where a single page does.
+const SPLIT_INSETS: [i32; 4] = [0, 0, 0, 0];
 /// The width of the resize area between two pages, and the gap the shell study wants.
 const CHROME_GAP: i32 = 10;
 const PANEL_GAP: i32 = 8;
@@ -899,7 +899,12 @@ pub unsafe fn install_panels() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{caption_over, drop_zone, narrow_gap, row_buttons, RowButton, Side, CAPTION_ROOM, TOGGLE_ROOM};
+    use super::{caption_over, drop_zone, narrow_gap, row_buttons, RowButton, Side, CAPTION_ROOM, SPLIT_INSETS, TOGGLE_ROOM};
+
+    #[test]
+    fn fr9_split_outer_edges_match_the_single_page() {
+        assert_eq!(SPLIT_INSETS, [0, 0, 0, 0]);
+    }
 
     #[test]
     fn fr9_split_gap_is_eight_dips() {
