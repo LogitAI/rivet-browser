@@ -271,11 +271,15 @@ const ROOT_VIEW_OFFSET: usize = 0x1A0;
 
 /// `views::View` vtables of the buttons a Rivet window hides, with their `OnThemeChanged`.
 const THEME_SLOT: usize = 99;
-const HIDDEN: [(usize, usize); 4] = [
+const HIDDEN: [(usize, usize); 6] = [
     (0x0FEA_63C8, 0x01D1_3080), // BrowserAppMenuButton
     (0x0FEE_C268, 0x01AE_4DC0), // AvatarToolbarButton
     (0x0FED_B708, 0x003B_A0E0), // page_actions::PageActionView
     (0x0FF1_7AA8, 0x00A3_E970), // VerticalTabStripRegionView
+    // The side panel's own header: Rivet draws that row in the strip the layout leaves above the panel.
+    (0x0FE6_8688, 0x00A3_E970), // SidePanelHeader
+    // The toolbar button that shows the open side panel's entry: the Sidebar's rail shows it.
+    (0x0FEA_4988, 0x01D6_E1F0), // PinnedActionToolbarButton
 ];
 /// `views::View::GetWidget` is the twelfth entry of every view's vtable.
 const GET_WIDGET_SLOT: usize = 11;

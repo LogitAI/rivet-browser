@@ -653,6 +653,8 @@ pub const PANEL_WIDTH: i32 = 240;
 /// How far Chrome insets the contents from the left, top and bottom of the page area while a side
 /// panel is open, so they float. Rivet's page, panel and rail are one flat card, so the inset goes.
 const CONTENTS_INSET: i32 = 8;
+/// The height Rivet keeps free above an open side panel for its own header row.
+pub const HEADER_ROW: i32 = 40;
 
 /// Leaves `rail` DIPs at the right edge of the page area, and sizes an open side panel to
 /// `PANEL_WIDTH` beside the rail: the page, the open panel and the rail sit side by side with
@@ -672,8 +674,12 @@ fn make_room(
     for bounds in [side_panel, animation].into_iter().flatten() {
         bounds[0] = match panel {
             Some((edge, width, _, _)) => {
-                bounds[2] = width;
-                edge - width
+                // The header row above the panel is Rivet's, so the browser's panel starts below it.
+                bounds[1] += HEADER_ROW;
+                bounds[3] = (bounds[3] - HEADER_ROW).max(0);
+                // Rivet's hairline takes the panel's first column.
+                bounds[2] = width - 1;
+                edge - width + 1
             }
             None => bounds[0] - rail,
         };
@@ -908,7 +914,7 @@ mod tests {
         let mut panel = [700, 46, 378, 600];
         let mut animation = [700, 46, 378, 600];
         make_room(&mut contents, None, Some(&mut panel), Some(&mut animation), RAIL_WIDTH);
-        assert_eq!(panel, [798, 46, PANEL_WIDTH, 600], "240 wide, ending at the rail");
+        assert_eq!(panel, [799, 46 + HEADER_ROW, PANEL_WIDTH - 1, 600 - HEADER_ROW], "ends at the rail, below Rivet's header row, after its hairline");
         assert_eq!(contents, [0, 46, 798, 600], "the contents lose Chrome's inset and end where the panel begins");
         assert_eq!(animation, panel);
     }

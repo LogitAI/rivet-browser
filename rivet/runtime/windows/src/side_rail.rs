@@ -119,7 +119,7 @@ const TIP_PAD_X: f32 = 10.0;
 const TIP_GAP: f32 = 6.0;
 /// The open panel's header is 40 DIPs tall, pads its left by 14 and its right by 6, and puts the
 /// icon and the name 8 apart. Its close button is 28 DIPs square.
-const HEADER_HEIGHT: f32 = 40.0;
+const HEADER_HEIGHT: f32 = panel::HEADER_ROW as f32;
 const HEADER_PAD_LEFT: f32 = 14.0;
 const HEADER_PAD_RIGHT: f32 = 6.0;
 const HEADER_GAP: f32 = 8.0;
@@ -795,18 +795,14 @@ enum Target {
     Open,
     /// The close button of the open panel's header.
     PanelClose,
-    /// The rest of that header, which the browser's own header lies under.
-    PanelHeader,
 }
 
 fn target_at(rail: &Rail, unfolded: bool, x: f32, y: f32) -> Option<Target> {
     let geometry = rail.geometry?;
     if unfolded {
         if rail.shown.is_some() {
-            match on_header(geometry, x, y) {
-                (_, true) => return Some(Target::PanelClose),
-                (true, false) => return Some(Target::PanelHeader),
-                _ => {}
+            if on_header(geometry, x, y).1 {
+                return Some(Target::PanelClose);
             }
         }
         let (left, top, height) = rail_rect(geometry);
@@ -906,7 +902,6 @@ unsafe fn click(message: &MSG) -> bool {
             Some(Target::Rail(hit)) => Some((pressed == Some(hit)).then_some(Target::Rail(hit))),
             Some(Target::Open) => Some(Some(Target::Open)),
             Some(Target::PanelClose) => Some(Some(Target::PanelClose)),
-            Some(Target::PanelHeader) => Some(None),
             None => None,
         }
     });
@@ -927,7 +922,6 @@ fn entries_of(window: HWND) -> Vec<panel::EntryKey> {
 unsafe fn perform(window: HWND, target: Target) {
     match target {
         Target::Open => panel::set_unfolded(window, true),
-        Target::PanelHeader => {}
         Target::PanelClose => {
             for key in entries_of(window) {
                 if panel::entry_showing(window, &key) {
@@ -1096,7 +1090,7 @@ mod tests {
         let page = PageGeometry { x: 268, right: 1092, top: 44, bottom: 734 };
         assert_eq!(panel_left(page), 812.0, "the panel is 240 wide and ends at the 40 wide rail");
         assert_eq!(on_header(page, 900.0, 60.0), (true, false));
-        assert_eq!(on_header(page, 900.0, 85.0), (false, false), "below the header is the browser's own panel");
+        assert_eq!(on_header(page, 900.0, 85.0), (false, false), "below the header row is the browser's own panel");
         assert_eq!(on_header(page, 811.0, 60.0), (false, false));
         assert_eq!(close_button(page), (1018.0, 44.0 + 5.5));
         assert_eq!(on_header(page, 1030.0, 58.0), (true, true));
