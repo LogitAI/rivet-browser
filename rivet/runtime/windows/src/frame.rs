@@ -17,7 +17,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     TME_NONCLIENT, TRACKMOUSEEVENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CallWindowProcW, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos,
+    CallNextHookEx, CallWindowProcW, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos, PeekMessageW,
     GetPropW, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow,
     IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, PostMessageW, RegisterWindowMessageW,
     RemovePropW, SetCursor, SetPropW, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW,
@@ -1426,6 +1426,9 @@ unsafe fn peek_tick(window: HWND) {
 }
 
 unsafe fn end_drag(window: HWND) {
+    if dragging(window) {
+        apply_drag(window);
+    }
     if DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize))) {
         ReleaseCapture();
         APPBAR_STATE.with(|states| {
@@ -1451,10 +1454,16 @@ thread_local! {
 }
 
 /// Follows a drag of the resizer: the appbar's right edge goes to the pointer and the browser lays
-/// the page out beside it. Pointer moves arrive faster than the browser can lay out and paint, so
-/// only the latest one is kept and laid out once per displayed frame. The Rivet ground covers
-/// everything but the page, so a layout in progress never shows the browser's own frame.
+/// the page out beside it. Pointer moves can arrive faster than the browser lays out, so the moves
+/// already waiting are folded into the latest one, and a layout starts as soon as the last one
+/// is at least a short moment old. A timer only finishes a move that arrived too early, and the
+/// release of the button applies whatever is still waiting.
 unsafe fn drag_to(window: HWND, x: i32) {
+    let mut x = x;
+    let mut waiting: MSG = std::mem::zeroed();
+    while PeekMessageW(&mut waiting, window, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE) != 0 {
+        x = (waiting.lParam & 0xffff) as i16 as i32;
+    }
     let now = now_ms();
     let due = DRAG_PENDING.with(|pending| {
         let mut all = pending.borrow_mut();
@@ -1467,7 +1476,7 @@ unsafe fn drag_to(window: HWND, x: i32) {
             // Setting a running timer again would restart it and starve it under a flood of moves.
             if !entry.2 {
                 entry.2 = true;
-                SetTimer(window, DRAG_TIMER, wait.ceil() as u32, None);
+                SetTimer(window, DRAG_TIMER, wait.ceil().max(1.0) as u32, None);
             }
             false
         }
@@ -1865,7 +1874,7 @@ unsafe fn ground_holes(window: HWND) -> Vec<crate::ground::Hole> {
             let cut = (leading - rect.x).max(0).min(rect.width - 1);
             rect.x += cut;
             rect.width -= cut;
-            vec![Hole { rect, raise: Raise::Page, cover: None }]
+            vec![Hole { rect, raise: Raise::Page }]
         })
         .unwrap_or_default()
 }
@@ -1886,35 +1895,11 @@ unsafe fn ground_holes_at(window: HWND) -> Vec<crate::ground::Hole> {
     holes
 }
 
-thread_local! {
-    static EDGE_TRAILS: RefCell<HashMap<isize, crate::ground::EdgeTrail>> = RefCell::new(HashMap::new());
-}
-
-/// Ticks while a page's newly exposed strip is still covered, so the cover goes away on its own.
-const COVER_TIMER: usize = 0x5249_5653;
-
-/// A page that grows leftward has room the browser has not painted yet for a moment, and what
-/// shows there is the browser's own frame, which is blue. The ground covers that strip with paper
-/// until the browser has drawn the page into its new width.
-unsafe fn cover_exposed_strip(window: HWND, holes: &mut [crate::ground::Hole]) {
-    let [hole] = holes else { return };
-    let reach = EDGE_TRAILS.with(|trails| {
-        trails.borrow_mut().entry(window as isize).or_default().push(now_ms() as u64, hole.rect.x)
-    });
-    hole.cover = reach;
-    if reach.is_some() {
-        SetTimer(window, COVER_TIMER, 16, None);
-    } else {
-        KillTimer(window, COVER_TIMER);
-    }
-}
-
 /// Draws the window's ground for the pages the browser has laid out.
 unsafe fn sync_ground(window: HWND, appbar: &mut Appbar, visible: bool, dpi: u32) {
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
-    let mut holes = ground_holes_at(window);
-    cover_exposed_strip(window, &mut holes);
+    let holes = ground_holes_at(window);
     let r = appbar.update_ground(visible, client.right, client.bottom, dpi, &holes);
     if let Err(error) = r {
         log(&format!("rivet: could not draw the ground: {error}"));
@@ -2428,12 +2413,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             if wparam == PEEK_TIMER && attached(window) =>
         {
             peek_tick(window);
-            0
-        }
-        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
-            if wparam == COVER_TIMER && attached(window) =>
-        {
-            panel_moved(window);
             0
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
