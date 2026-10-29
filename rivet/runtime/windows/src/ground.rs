@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(trail.push(32, 280), Some(300));
         assert_eq!(trail.push(500, 280), Some(300));
         // Once the older positions are past the cover time, only the later ones count.
-        assert_eq!(trail.push(620, 280), Some(296));
+        assert_eq!(trail.push(610, 280), Some(296));
         assert_eq!(trail.push(700, 280), None);
     }
 

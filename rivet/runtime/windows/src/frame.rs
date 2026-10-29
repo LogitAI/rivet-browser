@@ -1485,7 +1485,6 @@ unsafe fn apply_drag(window: HWND) {
     let factor = layout_dpi(window) as f32 / 96.0;
     let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
     if edit_layout(window, |layout| layout.set_width(wanted)) {
-        let t0 = now_ms();
         sync_strip(window);
         // The appbar takes its new width before the browser lays the page out, so what the
         // browser exposes is only ever ground or appbar, never the appbar's old surface over a
@@ -1909,7 +1908,6 @@ unsafe fn sync_ground(window: HWND, appbar: &mut Appbar, visible: bool, dpi: u32
     GetClientRect(window, &mut client);
     let mut holes = ground_holes_at(window);
     cover_exposed_strip(window, &mut holes);
-    let t0 = now_ms();
     let r = appbar.update_ground(visible, client.right, client.bottom, dpi, &holes);
     if let Err(error) = r {
         log(&format!("rivet: could not draw the ground: {error}"));
