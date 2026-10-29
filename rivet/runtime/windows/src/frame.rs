@@ -1540,6 +1540,19 @@ fn nav_frame_color(window: HWND) -> Option<u32> {
 }
 
 const TAB_REFRESH_TIMER: usize = 0x5249_5645;
+const OPEN_LATER_TIMER: usize = 0x5249_5646;
+
+thread_local! {
+    /// Start pages waiting for the browser to finish its own work on a new tab: the window, the page
+    /// and the address.
+    static OPEN_LATER: RefCell<Vec<(isize, usize, String)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Opens `url` in the page `contents` of `window` after `delay` milliseconds, if it is still active.
+pub(crate) unsafe fn open_later(window: HWND, contents: usize, url: String, delay: u32) {
+    OPEN_LATER.with(|later| later.borrow_mut().push((window as isize, contents, url)));
+    windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(window, OPEN_LATER_TIMER, delay, None);
+}
 
 unsafe fn group_probe_message() -> u32 {
     RegisterWindowMessageW(wide("RivetGroupProbe").as_ptr())
@@ -2452,6 +2465,20 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             RemovePropW(window, key.as_ptr());
             let original: WNDPROC = std::mem::transmute(original);
             CallWindowProcW(original, window, message, wparam, lparam)
+        }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam == OPEN_LATER_TIMER => {
+            windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, OPEN_LATER_TIMER);
+            let due: Vec<_> = OPEN_LATER.with(|later| {
+                let mut later = later.borrow_mut();
+                let (mine, rest): (Vec<_>, Vec<_>) = later.drain(..).partition(|(owner, ..)| *owner == window as isize);
+                *later = rest;
+                mine
+            });
+            for (_, contents, url) in due {
+                let opened = crate::chrome_navigation::open_if_active(window, contents, &url);
+                crate::vertical_tabs::trace(&format!("new tab in a Rivet window opens the start page later: {opened}"));
+            }
+            0
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
             if wparam == PEEK_TIMER && attached(window) =>

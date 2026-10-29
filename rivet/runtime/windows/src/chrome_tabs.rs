@@ -340,10 +340,14 @@ pub(crate) unsafe extern "system" fn new_tab_hook(browser: *mut c_void, kind: i3
     let original: NewTab2 = std::mem::transmute_copy(&ORIGINAL_NEW_TAB.load(std::sync::atomic::Ordering::Acquire));
     let contents = original(browser, kind, url);
     // A build that passes an address opens that address, and only an empty one asks for the new tab page.
-    let wanted = bv().new_tab_address.is_none() || (!url.is_null() && gurl_is_empty(url));
+    let wanted = !bv().new_tab_takes_address || (!url.is_null() && gurl_is_empty(url));
     if !contents.is_null() && wanted && !OWN_NEW_TAB.with(std::cell::Cell::get) {
         if let Some(window) = crate::chrome_toolbar::current_window().or_else(|| rivet_window_of(browser)) {
             if let Some(url) = crate::frame::start_url_of(window) {
+                if bv().new_tab_delay_ms > 0 {
+                    crate::frame::open_later(window, contents as usize, url, bv().new_tab_delay_ms);
+                    return contents;
+                }
                 let opened = crate::chrome_navigation::open_page(contents, &url);
                 crate::vertical_tabs::trace(&format!("new tab in a Rivet window opens the start page: {opened}"));
             }

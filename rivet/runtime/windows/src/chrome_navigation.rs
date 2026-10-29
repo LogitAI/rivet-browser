@@ -100,9 +100,24 @@ pub unsafe fn open_page(contents: *mut c_void, url: &str) -> bool {
     open_in(base, contents, url)
 }
 
+/// Opens `url` in `contents` when it is still the active page of `window`. The page may have been
+/// closed since the pointer was taken, so only its address is compared and it is never read.
+pub unsafe fn open_if_active(window: HWND, contents: usize, url: &str) -> bool {
+    let Some(base) = base() else { return false };
+    match web_contents(base, window) {
+        Some(active) if active as usize == contents => open_in(base, active, url),
+        _ => false,
+    }
+}
+
 unsafe fn open_in(base: usize, contents: *mut c_void, url: &str) -> bool {
     let mut target = Raw::<GURL_SIZE>::zeroed();
-    let text = [url.as_ptr() as usize, url.len()];
+    let wide: Vec<u16> = url.encode_utf16().collect();
+    let text = if bv().gurl_wide {
+        [wide.as_ptr() as usize, wide.len()]
+    } else {
+        [url.as_ptr() as usize, url.len()]
+    };
     function::<GurlFromText>(base, bv().gurl_from_text)(target.at(), &text);
     let mut referrer = Raw::<{ GURL_SIZE + 8 }>::zeroed();
     function::<Construct>(base, bv().gurl_empty)(referrer.at());

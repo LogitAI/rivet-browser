@@ -528,6 +528,8 @@ pub struct Navigation {
     pub active_web_contents: usize,
     /// `GURL::GURL(std::string_view)`, `GURL::GURL()` and `GURL::~GURL`.
     pub gurl_from_text: usize,
+    /// Whether that constructor reads UTF-16 text, which is what the one Samsung's build has takes.
+    pub gurl_wide: bool,
     pub gurl_empty: usize,
     pub gurl_drop: usize,
     /// `content::OpenURLParams::OpenURLParams(url, referrer, disposition, transition, renderer)`.
@@ -570,6 +572,13 @@ pub struct Tabs {
     /// empty when the command asks for the browser's own new tab page. The value is how far past the
     /// browser object the first argument points, since that build passes its window interface.
     pub new_tab_address: Option<usize>,
+    /// Whether `chrome::NewTab` takes an address as its third argument, which only an empty one sends
+    /// to the new tab page. A build whose command has two arguments leaves the third unread.
+    pub new_tab_takes_address: bool,
+    /// How long after `chrome::NewTab` returns the start page is opened, for a build that loads its
+    /// own new tab page after the command and would replace an address opened at once. Zero opens it
+    /// in the command itself.
+    pub new_tab_delay_ms: u32,
     /// `WebContentsImpl::GetLastCommittedURL` and `GetVisibleURL`, which return a `const GURL&`.
     pub last_committed_url: usize,
     pub visible_url: usize,
@@ -997,6 +1006,7 @@ const UNCHECKED_NAVIGATION: Navigation = Navigation {
     browser_view_for_window: ABSENT,
     active_web_contents: ABSENT,
     gurl_from_text: ABSENT,
+    gurl_wide: false,
     gurl_empty: ABSENT,
     gurl_drop: ABSENT,
     open_url_params: ABSENT,
@@ -1022,6 +1032,8 @@ const UNCHECKED_TABS: Tabs = Tabs {
     new_tab: ABSENT,
     new_tab_prologue: &[],
     new_tab_address: None,
+    new_tab_takes_address: false,
+    new_tab_delay_ms: 0,
     last_committed_url: ABSENT,
     visible_url: ABSENT,
     get_group: ABSENT,
@@ -1496,6 +1508,7 @@ pub static CHROME: Build = Build {
         browser_view_for_window: 0x0BC8_1E10, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
         active_web_contents: 0x0BC8_2340, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
         gurl_from_text: 0x042B_C7A0, // ??0GURL@@QEAA@V?$basic_string_view@DU?$char_traits@D@__Cr@std@@@__Cr@std@@@Z
+        gurl_wide: false,
         gurl_empty: 0x0588_DF10, // ??0GURL@@QEAA@XZ
         gurl_drop: 0x03E0_01F0, // ??1GURL@@QEAA@XZ
         open_url_params: 0x072E_8660, // ??0OpenURLParams@content@@QEAA@AEBVGURL@@AEBUReferrer@1@W4WindowOpenDisposition@@W4PageTransition@ui
@@ -1540,6 +1553,8 @@ pub static CHROME: Build = Build {
         title: 0x00D7_8440, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator
         new_tab_prologue: &[],
         new_tab_address: None,
+        new_tab_takes_address: false,
+        new_tab_delay_ms: 0,
         new_tab: 0x0A0B_8F50, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
         last_committed_url: 0x058A_48A0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
         visible_url: 0x05CF_8BA0, // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
@@ -2019,6 +2034,7 @@ pub static EDGE: Build = Build {
         browser_view_for_window: 0x010CDAE8, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
         active_web_contents: 0x0CAE5550, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
         gurl_from_text: 0x01016852, // ??0GURL@@QEAA@V?$basic_string_view@DU?$char_traits@D@__Cr@std@@@__Cr@std@@@Z
+        gurl_wide: false,
         gurl_empty: 0x010FF97C, // ??0GURL@@QEAA@XZ
         gurl_drop: 0x00FDECAA, // ??1GURL@@QEAA@XZ
         open_url_params: 0x066E261C, // ??0OpenURLParams@content@@QEAA@AEBVGURL@@AEBUReferrer@1@W4WindowOpenDisposition@@W4PageTra
@@ -2054,6 +2070,8 @@ pub static EDGE: Build = Build {
         title: 0x01119470, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?
         new_tab_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0x18, 0x01, 0x00, 0x00, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x71, 0xD7, 0xF3, 0x09],
         new_tab_address: None,
+        new_tab_takes_address: false,
+        new_tab_delay_ms: 0,
         new_tab: 0x0A2B68B0, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
         last_committed_url: 0x0115B9E0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
         visible_url: 0x01056C50, // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
@@ -2366,6 +2384,7 @@ pub static WHALE: Build = Build {
         browser_view_for_window: 0x0E6CB8A0,
         active_web_contents: 0x0E6CC090,
         gurl_from_text: 0x03677F60,
+        gurl_wide: false,
         gurl_empty: 0x037537F0,
         gurl_drop: 0x02C212F0,
         open_url_params: 0x05357FB0,
@@ -2403,6 +2422,8 @@ pub static WHALE: Build = Build {
             0xD3, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x75, 0x03, 0x75, 0x11,
         ],
         new_tab_address: Some(0x68),
+        new_tab_takes_address: true,
+        new_tab_delay_ms: 0,
         new_tab: 0x02569CB0,
         last_committed_url: 0x06762170,
         visible_url: 0x06762120,
@@ -2773,6 +2794,7 @@ pub static BRAVE: Build = Build {
         browser_view_for_window: 0x0CF09280, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
         active_web_contents: 0x0CF09730, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
         gurl_from_text: 0x0609D7A0, // ??0GURL@@QEAA@V?$basic_string_view@DU?$char_traits@D@__Cr@std@@@__Cr@std@@@Z
+        gurl_wide: false,
         gurl_empty: 0x06A5E800, // ??0GURL@@QEAA@XZ
         gurl_drop: 0x0515D0D0, // ??1GURL@@QEAA@XZ
         open_url_params: 0x0857FB20, // ??0OpenURLParams@content@@QEAA@AEBVGURL@@AEBUReferrer@1@W4WindowOpenDisposition@@W4PageTransition@ui@@_N@Z
@@ -2909,9 +2931,36 @@ pub static SAMSUNG: Build = Build {
         detour_strip: true,
         ..UNCHECKED_VERTICALTABS
     },
-    navigation: UNCHECKED_NAVIGATION,
+    navigation: Navigation {
+        supported: true, // opening the start page in a new tab checked on Samsung Internet 30.0.4.29
+        content_window_for_hwnd: 0x00B5_A010,
+        browser_view_for_window: 0x0D9A_0A50,
+        active_web_contents: 0x0D9A_0C60,
+        // `GURL::GURL(std::u16string_view)`, a wrapper that sets the fields and calls `InitCanonical`; the
+        // default constructor; the destructor; the constructor of `OpenURLParams` whose arguments are
+        // the address, referrer, disposition, transition and renderer flag, and its destructor; and
+        // `WebContentsImpl::OpenURL`. The objects have the layout of Chrome 150's.
+        gurl_from_text: 0x0126_9890,
+        gurl_wide: true,
+        gurl_empty: 0x0519_4F80,
+        gurl_drop: 0x03BE_67D0,
+        open_url_params: 0x05C4_F410,
+        open_url_params_drop: 0x05C4_F9C0,
+        open_url: 0x076F_51A0,
+        signatures: &[
+            (0x00B5_A010, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0D9A_0A50, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0D9A_0C60, &[0x48, 0x8B, 0x81, 0x50, 0x05, 0x00, 0x00, 0x48, 0x8B, 0x88, 0xE0, 0x01, 0x00, 0x00, 0xE9]),
+            (0x0126_9890, &[0x56, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05]),
+            (0x0519_4F80, &[0x48, 0x89, 0xC8, 0x0F, 0x57, 0xC0, 0x0F, 0x11, 0x41, 0x09, 0x0F, 0x11, 0x01]),
+            (0x03BE_67D0, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x79, 0x70]),
+            (0x05C4_F410, &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x44, 0x89, 0xCF, 0x4C, 0x89, 0xC3, 0x48, 0x89, 0xCE]),
+            (0x05C4_F9C0, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05]),
+            (0x076F_51A0, &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x90, 0x04, 0x00, 0x00, 0x4C, 0x89, 0xC6, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCF]),
+        ],
+    },
     tabs: Tabs {
-        supported: true, // list, switch and close
+        supported: true, // list, switch, close and new tabs
         content_window_for_hwnd: 0x00B5_A010,
         browser_view_for_window: 0x0D9A_0A50,
         // `BrowserView::GetActiveWebContents` reads the browser at +0x550 and its tab strip model at
@@ -2931,8 +2980,18 @@ pub static SAMSUNG: Build = Build {
         activate_tab: 0x0877_7350,
         close_tab: 0x0877_A5C0,
         title: 0x007D_4FD0, // slot 57 of the web contents vtable at 0xe0fd4a8
-        // A new tab is the browser's own new-tab command.
-        new_tab: ABSENT,
+        // `chrome::NewTab(Browser*, NewTabTypes)`, found by the window feature 2 test it makes on its first
+        // argument and the check of its second against 5. The prologue ends with the stack cookie load
+        // the detour relocates.
+        new_tab_prologue: &[
+            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x08, 0x01, 0x00, 0x00, 0x89, 0xD7, 0x48, 0x89,
+            0xCE, 0x48, 0x8B, 0x05, 0xC8, 0x5B, 0x16, 0x02,
+        ],
+        // Its first argument is the browser itself, which the browser view holds.
+        new_tab_address: Some(0),
+        // Samsung starts loading its own page for the tab after the command returns.
+        new_tab_delay_ms: 600,
+        new_tab: 0x0D81_4460,
         last_committed_url: 0x0553_29B0, // slot 19 of the same vtable
         // `GetVisibleURL` is slot 18 of the vtable. The address list asks for it only when the
         // committed address is empty.
@@ -3425,6 +3484,26 @@ mod tests {
             let word = file_bytes(&file, slot_rva, 8).unwrap();
             let image_base = 0x1_8000_0000u64;
             assert_eq!(u64::from_le_bytes(word.try_into().unwrap()), image_base + target as u64);
+        }
+    }
+
+    #[test]
+    fn fr3_samsung_new_tab_hook_and_navigation_match_the_installed_build() {
+        let tabs = &SAMSUNG.tabs;
+        let n = tabs.new_tab_prologue.len();
+        // The prologue ends with the stack cookie load the detour relocates.
+        assert_eq!(tabs.new_tab_prologue[n - 7..n - 4], [0x48, 0x8B, 0x05]);
+        assert!(tabs.new_tab_address == Some(0) && !tabs.new_tab_takes_address && tabs.new_tab != ABSENT);
+        assert!(SAMSUNG.navigation.supported && tabs.new_tab_delay_ms > 0 && SAMSUNG.navigation.gurl_wide);
+        assert!(all().iter().all(|build| build.navigation.gurl_wide == (build.module == "samsunginternet.dll")));
+        assert!(WHALE.tabs.new_tab_delay_ms == 0 && EDGE.tabs.new_tab_delay_ms == 0);
+        let path = r"C:\Program Files\Samsung\Internet\Applicationc.0.4.29\samsunginternet.dll";
+        let Ok(file) = std::fs::read(path) else {
+            return;
+        };
+        assert_eq!(file_bytes(&file, tabs.new_tab, n).as_deref(), Some(tabs.new_tab_prologue));
+        for (rva, bytes) in SAMSUNG.navigation.signatures {
+            assert_eq!(file_bytes(&file, *rva, bytes.len()).as_deref(), Some(*bytes), "{rva:#x}");
         }
     }
 
