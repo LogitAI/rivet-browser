@@ -84,6 +84,7 @@ const fn style(family: &'static str, size: f32, weight: i32, tracking: f32) -> T
 const SPACE_NAME: Type = style("Newsreader", 14.0, 600, -0.01);
 const BADGE: Type = style("DM Mono", 10.0, 500, 0.0);
 const META: Type = style("DM Mono", 10.0, 400, 0.0);
+const META_ROW: Type = style("Manrope", 12.0, 400, 0.0);
 const TAB: Type = style("Manrope", 12.5, 400, 0.0);
 const ACTIVE: Type = style("Manrope", 12.5, 600, 0.0);
 const FAVICON: Type = style("Manrope", 9.0, 700, 0.0);
@@ -185,6 +186,28 @@ pub struct Appbar {
     peek_painted: Option<Painted>,
     /// The drop target and the dragged tab's ghost, which exist only while a tab is dragged.
     drag: Option<DragVisuals>,
+    /// The top rows of the pages of a split, which exist while the window shows one.
+    rows: Vec<(IDCompositionVisual2, Option<(PaneRow, u32)>)>,
+}
+
+/// What one page's top row shows. `x`, `y`, `width` and `height` are window pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PaneRow {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// How far the visual reaches into the gap beside the row, on each side, in pixels.
+    pub reach_left: f32,
+    pub reach_right: f32,
+    /// The width at the row's right end that the native caption buttons keep, in pixels.
+    pub caption: f32,
+    pub active: bool,
+    pub first: bool,
+    pub last: bool,
+    pub title: String,
+    pub url: String,
+    pub hover: Option<crate::chrome_split::RowButton>,
 }
 
 /// The visuals of a tab drag and what they were last painted for.
@@ -335,6 +358,7 @@ impl Appbar {
             peek,
             peek_painted: None,
             drag: None,
+            rows: Vec::new(),
         })
     }
 
@@ -666,6 +690,62 @@ impl Appbar {
         );
         surface.EndDraw()?;
         result
+    }
+}
+
+const PAPER: u32 = 0xfbfaf7;
+const HAIRLINE: u32 = 0xe9e9e6;
+
+impl Appbar {
+    /// Shows the top rows of the pages of a split. The active page's row is the browser's own, so
+    /// only the buttons Rivet adds are drawn on it. An empty list removes the rows.
+    pub(crate) unsafe fn update_rows(&mut self, rows: &[PaneRow], dpi: u32) -> Result<()> {
+        while self.rows.len() < rows.len() {
+            let visual = self.device.CreateVisual()?;
+            self.root.AddVisual(&visual, true, None::<&IDCompositionVisual>)?;
+            self.rows.push((visual, None));
+        }
+        let scale = dpi as f32 / 96.0;
+        let (device, dwrite, fonts) = (self.device.clone(), self.dwrite.clone(), self.fonts.clone());
+        for (index, (visual, painted)) in self.rows.iter_mut().enumerate() {
+            let Some(row) = rows.get(index) else {
+                if painted.take().is_some() {
+                    visual.SetContent(None)?;
+                }
+                continue;
+            };
+            // The visual starts at the window's top edge, so it also covers the frame above the row.
+            visual.SetOffsetX2((row.x - row.reach_left).round())?;
+            visual.SetOffsetY2(0.0)?;
+            let (width, height) = (
+                (row.reach_left + row.width - row.caption + row.reach_right).round() as i32,
+                (row.y + row.height).round() as i32,
+            );
+            if painted.as_ref() == Some(&(row.clone(), dpi)) || width <= 0 || height <= 0 {
+                continue;
+            }
+            let surface = device.CreateSurface(
+                width as u32,
+                height as u32,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                DXGI_ALPHA_MODE_PREMULTIPLIED,
+            )?;
+            let mut offset = POINT::default();
+            let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+            context.SetDpi(dpi as f32, dpi as f32);
+            context.SetTransform(&Matrix3x2::translation(
+                offset.x as f32 / scale,
+                offset.y as f32 / scale,
+            ));
+            context.Clear(Some(&rgba(WHITE, 0.0)));
+            let canvas = Canvas { context: &context, dwrite: &dwrite, fonts: &fonts };
+            let result = canvas.pane_row(row, width as f32 / scale, height as f32 / scale, scale);
+            surface.EndDraw()?;
+            result?;
+            visual.SetContent(&surface)?;
+            *painted = Some((row.clone(), dpi));
+        }
+        self.device.Commit()
     }
 }
 
@@ -1530,6 +1610,79 @@ impl Canvas<'_> {
         )?;
         self.fill_rounded(pill, 9.0, rgba(WHITE, 0.9))?;
         self.text_centred(ACTIVE, pill, label, ACCENT)
+    }
+
+    /// The top row of one page of a split, as the shell study's `.toolbar`: grip, back, forward,
+    /// reload, the address, then the buttons that move the page to a Mini Window or end the split.
+    /// The active page's row is the browser's, so only the grip and those buttons are drawn on it.
+    unsafe fn pane_row(&self, row: &PaneRow, vw: f32, vh: f32, scale: f32) -> Result<()> {
+        use crate::chrome_split::{row_buttons, RowButton};
+        // The visual holds the row at (ox, oy), with the frame above it and the gap beside it.
+        let (ox, oy) = (row.reach_left / scale, row.y / scale);
+        let w = row.width / scale;
+        let h = vh - oy;
+        let clip_w = vw - ox;
+        self.fill(rect(0.0, 0.0, vw, oy), FRAME)?;
+        self.fill(rect(0.0, oy, ox, h), PAPER)?;
+        self.fill(rect(vw - row.reach_right / scale, oy, row.reach_right / scale, h), PAPER)?;
+        let buttons = row_buttons(w, row.first, row.last);
+        if row.active {
+            // The browser's top row is under the middle of the row. Its sides are bare.
+            let popout = buttons.iter().find(|b| b.0 == RowButton::Popout).map_or(clip_w, |b| b.1 - 2.0);
+            if row.first {
+                self.fill(rect(ox, oy, crate::chrome_split::TOGGLE_ROOM, h), PAPER)?;
+            }
+            self.fill(rect(ox + popout, oy, vw - ox - popout, h), PAPER)?;
+            self.fill(rect(ox + popout, oy + h - 1.0, vw - ox - popout, 1.0), HAIRLINE)?;
+        } else {
+            self.fill(rect(ox, oy, clip_w, h), PAPER)?;
+            self.fill(rect(ox, oy + h - 1.0, clip_w, 1.0), HAIRLINE)?;
+        }
+        // The rounded top corners of the page's panel, against the frame behind it.
+        let corners = D2D1_ROUNDED_RECT {
+            rect: rect(ox - PANEL_GAP, oy - PANEL_GAP, w + 2.0 * PANEL_GAP, h * 4.0),
+            radiusX: PANEL_RADIUS + PANEL_GAP,
+            radiusY: PANEL_RADIUS + PANEL_GAP,
+        };
+        self.context.PushAxisAlignedClip(&rect(0.0, 0.0, vw, vh), D2D1_ANTIALIAS_MODE_ALIASED);
+        self.context.DrawRoundedRectangle(&corners, &self.brush(FRAME)?, PANEL_GAP * 2.0, None);
+        self.context.PopAxisAlignedClip();
+        for (button, x, width) in buttons {
+            let area = rect(ox + x, oy + (h - 28.0) / 2.0, width, 28.0);
+            let own = matches!(button, RowButton::Grip | RowButton::Popout | RowButton::Unsplit);
+            if row.active && !own {
+                continue;
+            }
+            let hot = row.hover == Some(button);
+            match button {
+                RowButton::Address => {
+                    if hot {
+                        self.fill_rounded(area, 8.0, rgba(INK, 0.05))?;
+                    }
+                    let shown = if row.url.is_empty() {
+                        row.title.clone()
+                    } else {
+                        format!("{} \u{b7} {}", row.title, row.url)
+                    };
+                    self.text(META_ROW, rect(area.left + 10.0, area.top, (width - 20.0).max(0.0), 28.0), &shown, MUTED, false)?;
+                }
+                _ => {
+                    if hot {
+                        self.fill_rounded(area, 8.0, rgba(INK, 0.06))?;
+                    }
+                    let (glyph, size, ink) = match button {
+                        RowButton::Grip => ('\u{E7C2}', 13.0, SOFT_INK),
+                        RowButton::Back => ('\u{E72B}', 16.0, SOFT_INK),
+                        RowButton::Forward => ('\u{E72A}', 16.0, MUTED),
+                        RowButton::Reload => ('\u{E72C}', 16.0, SOFT_INK),
+                        RowButton::Popout => ('\u{EE47}', 13.0, SOFT_INK),
+                        _ => ('\u{E711}', 12.0, SOFT_INK),
+                    };
+                    self.icon(glyph, area, size, ink)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The tab that follows the pointer while it is dragged.

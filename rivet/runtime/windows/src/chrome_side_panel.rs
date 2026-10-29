@@ -620,6 +620,8 @@ const HOST_VIEW: usize = 0x38;
 /// The view behind the whole area below the top row, which the rail shares the height of.
 const PAGE_AREA: usize = 0x50;
 const CONTENTS_CONTAINER: usize = 0xb8;
+/// The browser's top row: toolbar, address bar and the buttons around it.
+const TOOLBAR: usize = 0x60;
 /// The view that draws the outline around the contents, which has the contents' bounds.
 const CONTENTS_OUTLINE: usize = 0x58;
 const SIDE_PANEL: usize = 0xc0;
@@ -751,6 +753,12 @@ unsafe extern "system" fn proposed_layout(
                 rail,
             );
         }
+    }
+    // In a split each page has its own top row, and the browser's is the active page's.
+    if let (Some(toolbar), Some(contents)) =
+        (bounds_of(out, field(TOOLBAR)), bounds_of(out, field(CONTENTS_CONTAINER)))
+    {
+        crate::chrome_split::fit_toolbar(window, &mut *toolbar, &*contents);
     }
     result
 }

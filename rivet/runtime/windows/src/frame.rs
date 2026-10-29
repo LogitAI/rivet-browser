@@ -253,12 +253,12 @@ struct Drop {
 /// The drop under a point in client pixels, or none when the point is off the page.
 unsafe fn drop_at(window: HWND, point: POINT) -> Option<Drop> {
     use crate::chrome_split::Side;
-    let geometry = crate::chrome_side_panel::page_geometry(window)?;
+    let [area_left, area_top, area_right, area_bottom] = crate::chrome_split::page_area(window)?;
     let factor = layout_dpi(window) as f32 / 96.0;
-    let (left, top) = (geometry.x as f32 * factor, geometry.top as f32 * factor);
+    let (left, top) = (area_left as f32 * factor, area_top as f32 * factor);
     let (width, height) = (
-        (geometry.right - geometry.x) as f32 * factor,
-        (geometry.bottom - geometry.top) as f32 * factor,
+        (area_right - area_left) as f32 * factor,
+        (area_bottom - area_top) as f32 * factor,
     );
     let (x, y) = (point.x as f32, point.y as f32);
     if x < left || x > left + width || y < top || y > top + height {
@@ -388,6 +388,116 @@ unsafe fn tab_drag_end(window: HWND, release: Option<LPARAM>) {
                 "tab drag: dropped tab {} on {:?}: {done}",
                 drag.index, drop.side
             ));
+        }
+    }
+    update_appbar(window);
+}
+
+/// The button of a split page's top row the pointer is over, and the page's index.
+type RowHit = (usize, crate::chrome_split::RowButton);
+
+thread_local! {
+    static ROW_HOVER: RefCell<HashMap<isize, RowHit>> = RefCell::new(HashMap::new());
+    static ROW_PRESS: RefCell<HashMap<isize, RowHit>> = RefCell::new(HashMap::new());
+}
+
+/// The top row button under a point in client pixels. The active page's row is the browser's own
+/// apart from Rivet's buttons, and the other pages' rows answer anywhere.
+unsafe fn row_hit(window: HWND, point: POINT) -> Option<RowHit> {
+    use crate::chrome_split::{row_buttons, RowButton, ROW_HEIGHT};
+    let factor = layout_dpi(window) as f32 / 96.0;
+    let (x, y) = (point.x as f32 / factor, point.y as f32 / factor);
+    for (index, pane) in crate::chrome_split::panes(window).iter().enumerate() {
+        let top = (pane.y - ROW_HEIGHT) as f32;
+        if x < pane.x as f32 || x >= (pane.x + pane.width) as f32 || y < top || y >= pane.y as f32 {
+            continue;
+        }
+        let local = x - pane.x as f32;
+        let button = row_buttons(pane.width as f32, pane.first, pane.last)
+            .into_iter()
+            .find(|(button, left, width)| {
+                local >= *left
+                    && local < left + width
+                    && (!pane.active || matches!(button, RowButton::Grip | RowButton::Popout | RowButton::Unsplit))
+            })
+            .map(|(button, _, _)| button);
+        return match (button, pane.active) {
+            (Some(button), _) => Some((index, button)),
+            (None, false) => Some((index, RowButton::Address)),
+            (None, true) => None,
+        };
+    }
+    None
+}
+
+/// The rows of the pages of a split in window pixels, with the tab each shows.
+unsafe fn pane_rows(window: HWND) -> Vec<crate::appbar::PaneRow> {
+    use crate::chrome_split::ROW_HEIGHT;
+    let panes = crate::chrome_split::panes(window);
+    if panes.is_empty() {
+        return Vec::new();
+    }
+    let factor = layout_dpi(window) as f32 / 96.0;
+    let tabs = crate::chrome_tabs::open_tabs(window).unwrap_or_default();
+    let hover = ROW_HOVER.with(|all| all.borrow().get(&(window as isize)).copied());
+    panes
+        .iter()
+        .enumerate()
+        .map(|(index, pane)| {
+            let saved = tabs.get(pane.tab).map(|tab| &tab.saved);
+            crate::appbar::PaneRow {
+                x: pane.x as f32 * factor,
+                y: (pane.y - ROW_HEIGHT) as f32 * factor,
+                width: pane.width as f32 * factor,
+                height: ROW_HEIGHT as f32 * factor,
+                reach_left: if pane.first { 0.0 } else { 4.0 * factor },
+                reach_right: if pane.last { 0.0 } else { 4.0 * factor },
+                caption: if pane.last { crate::chrome_split::CAPTION_ROOM * factor } else { 0.0 },
+                active: pane.active,
+                first: pane.first,
+                last: pane.last,
+                title: saved.map(|tab| tab.title.clone()).unwrap_or_default(),
+                url: saved
+                    .map(|tab| tab.url.trim_start_matches("https://").trim_start_matches("http://").to_owned())
+                    .unwrap_or_default(),
+                hover: hover.filter(|(over, _)| *over == index).map(|(_, button)| button),
+            }
+        })
+        .collect()
+}
+
+/// Follows the pointer over the rows, and repaints them when it moves to another button.
+unsafe fn track_row_hover(window: HWND, point: Option<POINT>) {
+    let hit = point.and_then(|point| row_hit(window, point));
+    let changed = ROW_HOVER.with(|all| {
+        let mut all = all.borrow_mut();
+        let before = all.get(&(window as isize)).copied();
+        match hit {
+            Some(hit) => all.insert(window as isize, hit),
+            None => all.remove(&(window as isize)),
+        };
+        before != hit
+    });
+    if changed {
+        update_appbar(window);
+    }
+}
+
+/// A button of a page's top row is released.
+unsafe fn row_action(window: HWND, hit: RowHit) {
+    use crate::chrome_split::RowButton;
+    let panes = crate::chrome_split::panes(window);
+    let Some(pane) = panes.get(hit.0) else { return };
+    match hit.1 {
+        RowButton::Grip => {}
+        // The pages' own controls belong to the browser, which shows them on the active page.
+        RowButton::Back | RowButton::Forward | RowButton::Reload | RowButton::Address => {
+            crate::chrome_tabs::activate_tab(window, pane.tab);
+        }
+        RowButton::Popout | RowButton::Unsplit => {
+            crate::chrome_tabs::activate_tab(window, pane.tab);
+            let done = crate::chrome_split::unsplit_active(window);
+            crate::vertical_tabs::trace(&format!("split row: {:?} of page {}: {done}", hit.1, hit.0));
         }
     }
     update_appbar(window);
@@ -1555,6 +1665,10 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     .get(&(window as isize))
                     .and_then(|state| state.0)
             });
+            let rows = if visible { pane_rows(window) } else { Vec::new() };
+            if let Err(error) = appbar.update_rows(&rows, dpi) {
+                log(&format!("rivet: could not draw the page rows: {error}"));
+            }
             let (spaces, current) =
                 with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()));
             appbar.set_state(
@@ -1724,6 +1838,13 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         start_page(window);
         return 0;
     }
+    if message == RegisterWindowMessageW(wide(crate::chrome_split::RELAYOUT_MESSAGE).as_ptr())
+        && attached(window)
+    {
+        crate::chrome_side_panel::relayout_page_area(window);
+        update_appbar(window);
+        return 0;
+    }
     if message == RegisterWindowMessageW(wide("Rivet.ToggleSplit").as_ptr()) && attached(window) {
         crate::chrome_split::toggle_split(window);
         update_appbar(window);
@@ -1733,7 +1854,60 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         toggle_appbar(window);
         return 0;
     }
+    if attached(window) && message == WM_MOUSEMOVE && !tab_dragging(window) {
+        track_row_hover(
+            window,
+            Some(POINT {
+                x: (lparam & 0xffff) as i16 as i32,
+                y: ((lparam >> 16) & 0xffff) as i16 as i32,
+            }),
+        );
+    }
+    if attached(window) && message == WM_MOUSELEAVE {
+        track_row_hover(window, None);
+    }
     match message {
+        WM_LBUTTONDOWN
+            if attached(window)
+                && !menu_open(window)
+                && row_hit(
+                    window,
+                    POINT {
+                        x: (lparam & 0xffff) as i16 as i32,
+                        y: ((lparam >> 16) & 0xffff) as i16 as i32,
+                    },
+                )
+                .is_some() =>
+        {
+            let hit = row_hit(
+                window,
+                POINT {
+                    x: (lparam & 0xffff) as i16 as i32,
+                    y: ((lparam >> 16) & 0xffff) as i16 as i32,
+                },
+            );
+            if let Some(hit) = hit {
+                ROW_PRESS.with(|all| all.borrow_mut().insert(window as isize, hit));
+            }
+            0
+        }
+        WM_LBUTTONUP
+            if attached(window)
+                && ROW_PRESS.with(|all| all.borrow().contains_key(&(window as isize))) =>
+        {
+            let pressed = ROW_PRESS.with(|all| all.borrow_mut().remove(&(window as isize)));
+            let now = row_hit(
+                window,
+                POINT {
+                    x: (lparam & 0xffff) as i16 as i32,
+                    y: ((lparam >> 16) & 0xffff) as i16 as i32,
+                },
+            );
+            if let Some(hit) = pressed.filter(|pressed| Some(*pressed) == now) {
+                row_action(window, hit);
+            }
+            0
+        }
         WM_MOUSEMOVE if attached(window) && tab_dragging(window) => {
             tab_drag_move(window, lparam);
             0

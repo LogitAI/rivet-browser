@@ -248,7 +248,11 @@ unsafe extern "system" fn set_rounded_corners(view: *mut c_void, corners: *const
     let original: SetRoundedCorners = std::mem::transmute(ORIGINAL_CORNERS.load(Ordering::Acquire));
     let widget = crate::chrome_toolbar::widget_holding(view);
     if crate::chrome_toolbar::is_rivet(widget) {
-        let wanted = (*corners).map(|radius| if radius > 0.0 { PANEL_RADIUS } else { 0.0 });
+        // Each page sits under its own top row, so only the lower corners are rounded: upper
+        // left, upper right, lower right, lower left.
+        let mut wanted = (*corners).map(|radius| if radius > 0.0 { PANEL_RADIUS } else { 0.0 });
+        wanted[0] = 0.0;
+        wanted[1] = 0.0;
         original(view, &wanted);
     } else {
         original(view, corners);
@@ -480,6 +484,9 @@ unsafe extern "system" fn calculate_layout(
         .position(|(key, _)| *key == widget)
         .map(|at| splits.remove(at).1);
     if panes.len() < 2 {
+        if previous.is_some() {
+            request_relayout(view as usize);
+        }
         return result;
     }
     let mut gap = 0;
@@ -502,6 +509,9 @@ unsafe extern "system" fn calculate_layout(
         })
         .collect();
     let changed = previous.as_ref().is_none_or(|before| before.rects != rects);
+    if changed {
+        request_relayout(view as usize);
+    }
     splits.push((widget, SplitPanes { view: view as usize, gap, rects }));
     if gap != 0 && *(gap as *const usize) == base().unwrap_or(0) + RESIZE_AREA_VTABLE {
         paint_to_layer(gap);
@@ -547,6 +557,7 @@ unsafe extern "system" fn web_contents_focused(view: *mut c_void, web_view: *mut
         .map(|(_, split)| split.gap);
     if let Some(gap) = split {
         repaint(gap);
+        request_relayout(view as usize);
     }
 }
 
@@ -646,6 +657,176 @@ unsafe fn install_shadows(base: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Asks the window to lay the browser out again once the current layout is done, because the top
+/// row follows the pages of a split.
+pub const RELAYOUT_MESSAGE: &str = "Rivet.SplitLayout";
+
+unsafe fn request_relayout(view: usize) {
+    let Some(window) = crate::chrome_layout::hwnd_of_view(view as *const c_void) else { return };
+    let name: Vec<u16> = RELAYOUT_MESSAGE.encode_utf16().chain(Some(0)).collect();
+    let message = windows_sys::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW(name.as_ptr());
+    windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(window as _, message, 0, 0);
+}
+
+/// The bounds of the pages' area as the browser's last layout left them, by window. The area's
+/// vertical extent is `page_geometry`'s, and its horizontal one is here because the area starts
+/// after the appbar.
+static CONTENTS: Mutex<Vec<(isize, [i32; 4])>> = Mutex::new(Vec::new());
+
+/// The page area of a window as left, top, right and bottom in device-independent pixels.
+pub unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
+    let geometry = crate::chrome_side_panel::page_geometry(window)?;
+    let contents = CONTENTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(key, _)| *key == window as isize)
+        .map(|(_, bounds)| *bounds)?;
+    Some([contents[0], geometry.top, contents[0] + contents[2], geometry.bottom])
+}
+
+/// The height of the top row of a page, in device-independent pixels.
+pub const ROW_HEIGHT: i32 = 44;
+/// Room on the first page's row for the appbar toggle, and for the grip on every row.
+pub const TOGGLE_ROOM: f32 = 28.0;
+const BUTTON: f32 = 28.0;
+const BUTTON_GAP: f32 = 2.0;
+const ROW_PAD: f32 = 6.0;
+/// The native caption buttons, which sit over the last page's row.
+pub const CAPTION_ROOM: f32 = 138.0;
+
+/// What a button of a page's top row does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowButton {
+    Grip,
+    Back,
+    Forward,
+    Reload,
+    Address,
+    Popout,
+    Unsplit,
+}
+
+/// The buttons of a page's top row as (button, x, width) from the page's left edge, for a page
+/// `width` wide. The first page leaves room for the appbar toggle, and the last for the caption
+/// buttons.
+pub fn row_buttons(width: f32, first: bool, last: bool) -> Vec<(RowButton, f32, f32)> {
+    let start = if first { TOGGLE_ROOM } else { 0.0 } + 2.0;
+    let end = width - if last { CAPTION_ROOM } else { 0.0 } - ROW_PAD;
+    let unsplit = end - BUTTON;
+    let popout = unsplit - BUTTON_GAP - BUTTON;
+    let mut x = start;
+    let mut buttons = Vec::new();
+    for button in [RowButton::Grip, RowButton::Back, RowButton::Forward, RowButton::Reload] {
+        buttons.push((button, x, BUTTON));
+        x += BUTTON + BUTTON_GAP;
+    }
+    let address = x + 6.0;
+    buttons.push((RowButton::Address, address, (popout - 4.0 - address).max(0.0)));
+    buttons.push((RowButton::Popout, popout, BUTTON));
+    buttons.push((RowButton::Unsplit, unsplit, BUTTON));
+    buttons
+}
+
+/// One page of a split in the window's client area, in device-independent pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pane {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub active: bool,
+    pub first: bool,
+    pub last: bool,
+    /// The strip index of the tab this page shows.
+    pub tab: usize,
+}
+
+/// Whether the pages share one row, as opposed to being stacked.
+fn side_by_side(rects: &[Rect]) -> bool {
+    rects.windows(2).all(|pair| pair[0].y == pair[1].y)
+}
+
+/// The tabs of the split the active tab is in, in strip order, which is the order of its pages.
+unsafe fn split_tabs(window: HWND) -> Vec<usize> {
+    let Some(base) = checked_base() else { return Vec::new() };
+    let Some(model) = tab_model(base, window) else { return Vec::new() };
+    let Some(tabs) = crate::chrome_tabs::tabs(window) else { return Vec::new() };
+    let Some(active) = tabs.iter().find(|tab| tab.active) else { return Vec::new() };
+    let Some(id) = split_of(base, model, active.index) else { return Vec::new() };
+    tabs.iter()
+        .filter(|tab| split_of(base, model, tab.index) == Some(id))
+        .map(|tab| tab.index)
+        .collect()
+}
+
+/// The pages of the window's split, or none when the active tab is not in one.
+pub unsafe fn panes(window: HWND) -> Vec<Pane> {
+    let Some(area) = page_area(window) else { return Vec::new() };
+    let tabs = split_tabs(window);
+    if tabs.len() < 2 {
+        return Vec::new();
+    }
+    let splits = SPLITS.lock().unwrap_or_else(|error| error.into_inner());
+    let Some((_, split)) = splits.iter().find(|(_, split)| {
+        crate::chrome_layout::hwnd_of_view(split.view as *const c_void)
+            .is_some_and(|found| found as isize == window as isize)
+    }) else {
+        return Vec::new();
+    };
+    if !side_by_side(&split.rects) {
+        return Vec::new();
+    }
+    let active = *((split.view + ACTIVE_MEMBER) as *const i32);
+    let count = split.rects.len();
+    split
+        .rects
+        .iter()
+        .enumerate()
+        .map(|(index, rect)| Pane {
+            x: area[0] + rect.x,
+            y: area[1] + rect.y,
+            width: rect.width,
+            height: rect.height,
+            active: index as i32 == active,
+            first: index == 0,
+            last: index + 1 == count,
+            tab: tabs.get(index).copied().unwrap_or(0),
+        })
+        .collect()
+}
+
+/// Narrows the browser's top row to the active page's row of a split, leaving room for the
+/// buttons Rivet draws on it. `contents` are the bounds of the pages in the same coordinates.
+pub unsafe fn fit_toolbar(window: HWND, toolbar: &mut [i32; 4], contents: &[i32; 4]) {
+    {
+        let mut all = CONTENTS.lock().unwrap_or_else(|error| error.into_inner());
+        match all.iter_mut().find(|(key, _)| *key == window as isize) {
+            Some(entry) => entry.1 = *contents,
+            None => all.push((window as isize, *contents)),
+        }
+    }
+    let splits = SPLITS.lock().unwrap_or_else(|error| error.into_inner());
+    let Some((_, split)) = splits.iter().find(|(_, split)| {
+        crate::chrome_layout::hwnd_of_view(split.view as *const c_void)
+            .is_some_and(|found| found as isize == window as isize)
+    }) else {
+        return;
+    };
+    if split.rects.len() < 2 || !side_by_side(&split.rects) || !active_is_split(window) {
+        return;
+    }
+    let active = (*((split.view + ACTIVE_MEMBER) as *const i32)).max(0) as usize;
+    let Some(pane) = split.rects.get(active) else { return };
+    let first = active == 0;
+    let last = active + 1 == split.rects.len();
+    let buttons = row_buttons(pane.width as f32, first, last);
+    let left = if first { TOGGLE_ROOM as i32 } else { 0 };
+    let popout = buttons.iter().find(|button| button.0 == RowButton::Popout).map_or(0.0, |b| b.1);
+    toolbar[0] = contents[0] + pane.x + left;
+    toolbar[2] = (popout as i32 - 2 - left).max(1);
+}
+
 /// Splits the active tab, or ends the split it is in. The keyboard shortcut and the appbar share
 /// this, so both do the same thing.
 pub unsafe fn toggle_split(window: HWND) -> bool {
@@ -693,7 +874,7 @@ pub unsafe fn install_panels() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{drop_zone, narrow_gap, Side};
+    use super::{drop_zone, narrow_gap, row_buttons, RowButton, Side, CAPTION_ROOM, TOGGLE_ROOM};
 
     #[test]
     fn fr9_split_gap_is_eight_dips() {
@@ -728,5 +909,34 @@ mod tests {
         let page = [100.0, 50.0, 800.0, 600.0];
         assert_eq!(drop_zone(page, 500.0, 350.0, false, 8.0), (None, page));
         assert_eq!(drop_zone(page, 880.0, 300.0, true, 8.0), (None, page));
+    }
+
+    #[test]
+    fn fr9_each_page_row_has_grip_popout_and_unsplit() {
+        let buttons = row_buttons(400.0, false, false);
+        let names: Vec<RowButton> = buttons.iter().map(|button| button.0).collect();
+        assert_eq!(
+            names,
+            [
+                RowButton::Grip,
+                RowButton::Back,
+                RowButton::Forward,
+                RowButton::Reload,
+                RowButton::Address,
+                RowButton::Popout,
+                RowButton::Unsplit
+            ]
+        );
+        let unsplit = buttons.last().unwrap();
+        assert_eq!(unsplit.1 + unsplit.2, 400.0 - 6.0);
+    }
+
+    #[test]
+    fn fr9_first_row_leaves_room_for_the_toggle_and_last_for_the_caption_buttons() {
+        let first = row_buttons(400.0, true, false);
+        assert!(first[0].1 >= TOGGLE_ROOM);
+        let last = row_buttons(500.0, false, true);
+        let unsplit = last.last().unwrap();
+        assert!(unsplit.1 + unsplit.2 <= 500.0 - CAPTION_ROOM);
     }
 }
