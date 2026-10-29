@@ -10,7 +10,7 @@
 use crate::ground;
 use crate::spaces::{SpaceInfo, Spaces};
 use windows::core::{Interface, Result, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
+use windows::Win32::Foundation::{HMODULE, HWND, POINT};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1,
@@ -39,7 +39,6 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
-use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows_numerics::{Matrix3x2, Vector2};
 
 /// Fonts of the shell study, licensed under the SIL Open Font License 1.1.
@@ -90,7 +89,6 @@ const ACTIVE: Type = style("Manrope", 12.5, 600, 0.0);
 const FAVICON: Type = style("Manrope", 9.0, 700, 0.0);
 /// Interface icons come from the font Windows 11 draws its own caption buttons with.
 const ICONS: &str = "Segoe Fluent Icons";
-const PANEL_GAP: f32 = 8.0;
 const PANEL_RADIUS: f32 = 12.0;
 
 fn color(rgb: u32) -> D2D1_COLOR_F {
@@ -153,12 +151,10 @@ struct Painted {
     width: i32,
     height: i32,
     dpi: u32,
-    span: i32,
 }
 
 /// The composition objects of one browser window's appbar.
 pub struct Appbar {
-    window: HWND,
     device: IDCompositionDesktopDevice,
     dwrite: IDWriteFactory5,
     fonts: IDWriteFontCollection1,
@@ -170,8 +166,6 @@ pub struct Appbar {
     /// The ground of the whole window, with a hole for each page, and what it was last painted for.
     ground: IDCompositionVisual2,
     ground_painted: Option<(i32, i32, u32, u32, Vec<ground::Hole>)>,
-    panel: IDCompositionVisual2,
-    panel_painted: Option<Painted>,
     tabs: Vec<crate::tab_rows::Row>,
     spaces: Vec<SpaceInfo>,
     current: usize,
@@ -329,10 +323,8 @@ impl Appbar {
         // rows. Its holes leave the pages showing.
         let ground = device.CreateVisual()?;
         root.AddVisual(&ground, false, &visual)?;
-        let panel = device.CreateVisual()?;
-        root.AddVisual(&panel, true, &visual)?;
         let toggle = device.CreateVisual()?;
-        root.AddVisual(&toggle, true, &panel)?;
+        root.AddVisual(&toggle, true, &visual)?;
         // The floating appbar covers the toggle, as it covers the rest of the top row.
         let peek = device.CreateVisual()?;
         root.AddVisual(&peek, true, &toggle)?;
@@ -340,7 +332,6 @@ impl Appbar {
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
         Ok(Self {
-            window: hwnd,
             device,
             dwrite,
             fonts,
@@ -350,8 +341,6 @@ impl Appbar {
             painted: None,
             ground,
             ground_painted: None,
-            panel,
-            panel_painted: None,
             tabs: Vec::new(),
             spaces: Spaces::new().list().to_vec(),
             current: 0,
@@ -560,7 +549,6 @@ impl Appbar {
                 width: pw,
                 height: ph,
                 dpi,
-                span: pw,
             });
         }
         self.device.Commit()
@@ -601,7 +589,6 @@ impl Appbar {
                 width,
                 height,
                 dpi,
-                span: width,
             });
         }
         self.device.Commit()
@@ -646,61 +633,6 @@ impl Appbar {
         result?;
         self.ground.SetContent(&surface)?;
         self.ground_painted = Some(key);
-        self.device.Commit()
-    }
-
-    /// Experiment: paints the frame around the page panel. `caption` is the width of the native
-    /// caption buttons in DIPs, which the frame never covers.
-    pub unsafe fn update_panel(
-        &mut self,
-        visible: bool,
-        top: i32,
-        width: i32,
-        height: i32,
-        dpi: u32,
-        caption: f32,
-    ) -> Result<()> {
-        if !visible || width <= 0 || height <= 0 {
-            self.panel.SetContent(None)?;
-            self.panel_painted = None;
-            return self.device.Commit();
-        }
-        self.panel.SetOffsetY2(top as f32)?;
-        let stale = self
-            .panel_painted
-            .as_ref()
-            .is_none_or(|p| (p.width, p.height, p.dpi) != (width, height, dpi));
-        if stale {
-            let surface = self.device.CreateSurface(
-                width as u32,
-                height as u32,
-                DXGI_FORMAT_B8G8R8A8_UNORM,
-                DXGI_ALPHA_MODE_PREMULTIPLIED,
-            )?;
-            let mut offset = POINT::default();
-            let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
-            let scale = dpi as f32 / 96.0;
-            context.SetDpi(dpi as f32, dpi as f32);
-            context.SetTransform(&Matrix3x2::translation(
-                offset.x as f32 / scale,
-                offset.y as f32 / scale,
-            ));
-            let canvas = Canvas {
-                context: &context,
-                dwrite: &self.dwrite,
-                fonts: &self.fonts,
-            };
-            let result = canvas.draw_panel(width as f32 / scale, height as f32 / scale, caption);
-            surface.EndDraw()?;
-            result?;
-            self.panel.SetContent(&surface)?;
-            self.panel_painted = Some(Painted {
-                width,
-                height,
-                dpi,
-                span: width,
-            });
-        }
         self.device.Commit()
     }
 
@@ -764,7 +696,7 @@ impl Appbar {
             visual.SetOffsetX2((row.x - row.reach_left).round())?;
             visual.SetOffsetY2(0.0)?;
             let (width, height) = (
-                (row.reach_left + row.width - row.caption + row.reach_right).round() as i32,
+                (row.reach_left + row.width + row.reach_right).round() as i32,
                 (row.y + row.height).round() as i32,
             );
             if painted.as_ref() == Some(&(row.clone(), dpi)) || width <= 0 || height <= 0 {
@@ -1629,6 +1561,11 @@ impl Canvas<'_> {
     unsafe fn pane_row(&self, row: &PaneRow, vw: f32, vh: f32, scale: f32) -> Result<()> {
         use crate::chrome_split::{row_buttons, RowButton};
         // The visual holds the row at (ox, oy), with the frame above it and the gap beside it.
+        // The native caption buttons keep the right end. The browser's own header shows above and
+        // below them, so those bands are covered, and the middle stays bare.
+        let caption = row.caption / scale;
+        let full = vw;
+        let vw = vw - caption;
         let (ox, oy) = (row.reach_left / scale, row.y / scale);
         let w = row.width / scale;
         let h = vh - oy;
@@ -1647,6 +1584,12 @@ impl Canvas<'_> {
         } else {
             self.fill(rect(ox, oy, clip_w, h), PAPER)?;
             self.fill(rect(ox, oy + h - 1.0, clip_w, 1.0), HAIRLINE)?;
+        }
+        if caption > 0.0 {
+            let band = (h - 28.0) / 2.0;
+            self.fill(rect(vw, oy, full - vw, band), PAPER)?;
+            self.fill(rect(vw, oy + h - band, full - vw, band), PAPER)?;
+            self.fill(rect(vw, oy + h - 1.0, full - vw, 1.0), HAIRLINE)?;
         }
         for (button, x, width) in buttons {
             let area = rect(ox + x, oy + (h - 28.0) / 2.0, width, 28.0);
@@ -1721,53 +1664,6 @@ impl Canvas<'_> {
         }
         self.fill_rounded(area, 14.0, color(floating_fill()))?;
         self.ring(area, 14.0, rgba(0x000000, 0.07))
-    }
-
-    /// Experiment: the frame colour around a rounded page panel. A rounded stroke of twice the
-    /// gap, centred one gap outside the panel, covers the gaps and leaves exactly the panel's
-    /// rounded shape clear. It is clipped away from the appbar and the native caption buttons.
-    unsafe fn draw_panel(&self, w: f32, h: f32, caption: f32) -> Result<()> {
-        self.context.Clear(Some(&rgba(FRAME, 0.0)));
-        let left = crate::APPBAR_WIDTH as f32;
-        let panel = rect(left, 0.0, w - PANEL_GAP - left, h - PANEL_GAP);
-        let outer = D2D1_ROUNDED_RECT {
-            rect: D2D_RECT_F {
-                left: panel.left - PANEL_GAP,
-                top: panel.top - PANEL_GAP,
-                right: panel.right + PANEL_GAP,
-                bottom: panel.bottom + PANEL_GAP,
-            },
-            radiusX: PANEL_RADIUS + PANEL_GAP,
-            radiusY: PANEL_RADIUS + PANEL_GAP,
-        };
-        let ring = D2D1_ROUNDED_RECT {
-            rect: D2D_RECT_F {
-                left: panel.left + 0.5,
-                top: panel.top + 0.5,
-                right: panel.right - 0.5,
-                bottom: panel.bottom - 0.5,
-            },
-            radiusX: PANEL_RADIUS,
-            radiusY: PANEL_RADIUS,
-        };
-        let frame = self.brush(FRAME)?;
-        let hairline = self.paint_brush(rgba(INK, 0.08))?;
-        // The top row runs to the window edge under the caption buttons, so the frame starts
-        // below it on the right.
-        let band = (crate::CAPTION_HEIGHT + crate::chrome_layout::PANEL_TOP) as f32;
-        for clip in [
-            rect(left, band, w - left, h - band),
-            rect(left, 0.0, w - caption - left, band),
-        ] {
-            self.context
-                .PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
-            self.context
-                .DrawRoundedRectangle(&outer, &frame, PANEL_GAP * 2.0, None);
-            self.context
-                .DrawRoundedRectangle(&ring, &hairline, 1.0, None);
-            self.context.PopAxisAlignedClip();
-        }
-        Ok(())
     }
 
     unsafe fn tab_row(
