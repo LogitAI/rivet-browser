@@ -39,18 +39,14 @@ fn bv() -> &'static crate::builds::Toolbar {
     &crate::builds::get().toolbar
 }
 
-const LEADING_SPACE: i32 = 32;
 const TOOLBAR_TOP: i32 = 5;
 const TOOLBAR_BOTTOM: i32 = 4;
 const LOCATION_ICON_SHIFT: i32 = 2;
-/// The padding, in DIPs: a 26 DIP button around an 18 DIP icon, which Chrome pads to 28.
-const TOOLBAR_BUTTON_PADDING: i32 = 4;
 /// `gfx::Font::Weight` values.
 const WEIGHT_NORMAL: u32 = 400;
 /// The title and the rest of the address text, as `0xAARRGGBB`.
 const TITLE_COLOUR: u32 = 0xFF4A_4850;
 const ADDRESS_COLOUR: u32 = 0xFF8A_8690;
-const FIELD_FILL_MARGIN: i32 = 3;
 const FIELD_HOVER_FILL: u32 = 0xFFF0_EFEC;
 /// The radius of the field's rectangle, in DIPs.
 const FIELD_RADIUS: f32 = 8.0;
@@ -110,6 +106,7 @@ static ORIGINAL_FORMATTED_URL: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_CHIP_TEXT: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_TEXTFIELD_THEME: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ANCHOR_RECT: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_TOOLBAR_LAYOUT: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_UPDATE_TEXT_STYLE: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_TITLE_WAS_SET: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_OMNIBOX_UPDATE: AtomicUsize = AtomicUsize::new(0);
@@ -570,7 +567,7 @@ unsafe extern "system" fn layout_constant(constant: i32) -> i32 {
 
 unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut [i32; 4] {
     if active() && inset == bv().toolbar_button_inset {
-        out.write([TOOLBAR_BUTTON_PADDING; 4]);
+        out.write([bv().button_padding; 4]);
         return out;
     }
     let result = original::<unsafe extern "system" fn(*mut [i32; 4], i32) -> *mut [i32; 4]>(
@@ -597,7 +594,7 @@ unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut 
         // tall around the 34 DIP field, with the buttons centred 28 DIPs in it.
         (*out)[0] = TOOLBAR_TOP;
         (*out)[2] = TOOLBAR_BOTTOM;
-        (*out)[1] = (*out)[1].saturating_add(LEADING_SPACE);
+        (*out)[1] = (*out)[1].saturating_add(bv().leading_space);
     }
     if active() && inset == bv().location_icon_inset {
         (*out)[1] = (*out)[1].saturating_add(LOCATION_ICON_SHIFT);
@@ -1187,7 +1184,7 @@ unsafe fn round_field(view: *mut c_void) {
         ((painter + bv().painter_radii + corner * 4) as *mut f32).write(FIELD_RADIUS);
     }
     // Chrome's field is 34 DIPs tall. The fill is 28, centred, like a button of the row.
-    ((painter + bv().painter_insets) as *mut [i32; 4]).write([FIELD_FILL_MARGIN, 0, FIELD_FILL_MARGIN, 0]);
+    ((painter + bv().painter_insets) as *mut [i32; 4]).write([bv().field_fill_margin, 0, bv().field_fill_margin, 0]);
 }
 
 /// The label is built here, which can also happen outside any paint or layout of the window.
@@ -1467,6 +1464,13 @@ unsafe extern "system" fn anchor_rect(
     ret
 }
 
+/// The toolbar can be laid out by the browser view directly, outside the layout pass of the window
+/// that enters the Rivet scope, which would give the row the browser's own insets.
+unsafe extern "system" fn toolbar_layout(view: *mut c_void, key: usize) {
+    let run: unsafe extern "system" fn(*mut c_void, usize) = original(&ORIGINAL_TOOLBAR_LAYOUT);
+    scoped(widget_holding(view), || run(view, key));
+}
+
 /// Chooses the icon a button image is built from.
 unsafe extern "system" fn choose_icon(icon: usize) -> usize {
     if !active() {
@@ -1688,6 +1692,7 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
         || !prologue(bv().get_color, &bv().get_color_bytes)
         || !prologue(bv().layout_insets, &bv().layout_insets_prologue)
         || !prologue(bv().anchor_rect, &bv().anchor_rect_prologue)
+        || (bv().toolbar_layout != crate::builds::ABSENT && !prologue(bv().toolbar_layout, &bv().toolbar_layout_prologue))
         || !prologue(bv().anchor_rect + bv().anchor_view_access_at, &bv().anchor_view_access)
         || !prologue(bv().is_drawn, &bv().is_drawn_bytes)
         || !prologue(bv().bounds_in_screen, &bv().bounds_bytes)
@@ -1791,6 +1796,15 @@ unsafe fn wire(base: usize, skip: &str) -> Result<(), String> {
         build_icons(base);
     }
     crate::vertical_tabs::trace(&format!("toolbar skip: {skip:?}"));
+    if bv().toolbar_layout != crate::builds::ABSENT {
+        detour(
+            base,
+            bv().toolbar_layout,
+            &bv().toolbar_layout_prologue,
+            toolbar_layout as *const () as usize,
+            &ORIGINAL_TOOLBAR_LAYOUT,
+        )?;
+    }
     if !skip.contains("anchor") {
         detour(
             base,
@@ -2535,9 +2549,9 @@ mod tests {
 
     #[test]
     fn fr12_rivet_toolbar_leaves_thirty_two_dips_before_the_back_button() {
-        assert_eq!(LEADING_SPACE, 32);
+        assert_eq!(bv().leading_space, 32);
         assert_ne!(bv().toolbar_inset, bv().toolbar_button_inset);
-        assert_eq!(i32::MAX.saturating_add(LEADING_SPACE), i32::MAX);
+        assert_eq!(i32::MAX.saturating_add(bv().leading_space), i32::MAX);
     }
 
     #[test]
@@ -2550,7 +2564,7 @@ mod tests {
     fn fr12_address_field_is_one_eight_dip_rectangle_in_a_43_dip_row() {
         assert_eq!(FIELD_RADIUS, 8.0);
         // Chrome's 34 DIP field, the 28 DIP fill inside it and the row around it.
-        assert_eq!(28 + 2 * FIELD_FILL_MARGIN, 34);
+        assert_eq!(28 + 2 * bv().field_fill_margin, 34);
         assert_eq!(TOOLBAR_TOP + 34 + TOOLBAR_BOTTOM, 43);
         // The page info chip paints nothing of its own, so no circle shows inside the field.
         assert!(bv().colours.contains(&(1003, 0)));

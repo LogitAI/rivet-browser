@@ -274,6 +274,17 @@ pub struct Toolbar {
     pub skip: &'static str,
     /// Where a `BubbleDialogDelegate` keeps the tracker of its anchor view.
     pub anchor_tracker_offset: usize,
+    /// The toolbar view's own `Layout`, when the browser lays the toolbar out outside the window's layout pass
+    /// (Brave does, from its browser view), so the layout would miss the Rivet scope. `ABSENT` when not needed.
+    pub toolbar_layout: usize,
+    pub toolbar_layout_prologue: &'static [u8],
+    /// The padding of a toolbar button around its icon, and the margin the field's fill keeps from the top and
+    /// bottom of the field view, both in DIPs. A build whose buttons or field are laid out larger or smaller than
+    /// Chrome's needs other numbers to reach the 28 DIP button and the 28 DIP fill of the design.
+    /// The space before the first toolbar button, in DIPs, where the appbar's toggle sits.
+    pub leading_space: i32,
+    pub button_padding: i32,
+    pub field_fill_margin: i32,
 }
 
 /// Values for `whale_toolbar.rs`. Whale's toolbar holds buttons that a Rivet window does not want, and
@@ -914,6 +925,11 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     anchor_view_access_at: 0,
     skip: "",
     anchor_tracker_offset: 0,
+    toolbar_layout: ABSENT,
+    toolbar_layout_prologue: &[0],
+    leading_space: 32,
+    button_padding: 4,
+    field_fill_margin: 3,
     size_slots: (0, 0),
     paint_children_slot: 0,
     get_color: ABSENT,
@@ -1405,6 +1421,11 @@ pub static CHROME: Build = Build {
         anchor_view_access_at: 0x2a,
         skip: "",
         anchor_tracker_offset: 0x300,
+        toolbar_layout: ABSENT,
+        toolbar_layout_prologue: &[0],
+        leading_space: 32,
+        button_padding: 4,
+        field_fill_margin: 3,
     },
     vertical: VerticalTabs {
         supported: true,
@@ -1918,6 +1939,11 @@ pub static EDGE: Build = Build {
         anchor_view_access_at: 0x28,
         skip: "updateicon anchor visible", // the address field, icons and bubble anchors are not recorded for Edge yet
         anchor_tracker_offset: 0x378, // BubbleDialogDelegate anchor view tracker, read by GetAnchorRect
+        toolbar_layout: ABSENT,
+        toolbar_layout_prologue: &[0],
+        leading_space: 32,
+        button_padding: 4,
+        field_fill_margin: 3,
     },
     vertical: VerticalTabs {
         supported: false, // not checked on Edge yet
@@ -2583,7 +2609,7 @@ pub static BRAVE: Build = Build {
         (16, 28), // kLocationBarHeight
         (29, 12), // kMainBackgroundRegionCornerRadius
         (46, 28), // kToolbarButtonHeight
-        (47, 18), // kToolbarButtonIconSize
+        (47, 16), // kToolbarButtonIconSize
         (55, 8),  // kToolbarCornerRadius
         (60, 0),  // kVerticalTabMinWidth
     ],
@@ -2668,8 +2694,13 @@ pub static BRAVE: Build = Build {
         extra_lock_icons: &[],
         extra_warning_icons: &[],
         anchor_view_access_at: 0x2a,
-        skip: "anchor",
+        skip: "",
         anchor_tracker_offset: 0x300,
+        toolbar_layout: 0x036F_FFD0, // ?Layout@BraveToolbarView@@UEAAXVPassKey@@@Z
+        toolbar_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE],
+        leading_space: 27,
+        button_padding: 6,
+        field_fill_margin: 0, // the field view is 28 DIPs tall already
     },
     vertical: VerticalTabs {
         supported: true,
@@ -3180,7 +3211,12 @@ mod tests {
     fn fr12_brave_156_toolbar_and_vertical_tab_hooks_match_the_installed_build() {
         // Brave shifts Chromium's colour ids after the first Chrome one by its own 17.
         assert!(!BRAVE.toolbar.skip.contains("toolbar"));
-        assert!(!BRAVE.toolbar.skip.contains("address"));
+        assert_eq!(BRAVE.toolbar.skip, "");
+        assert_eq!((BRAVE.toolbar.is_drawn_slot, BRAVE.toolbar.get_widget_slot, BRAVE.toolbar.anchor_tracker_offset), (19, 11, 0x300));
+        // A 28 DIP button is its icon and the padding either side, and the fill of the field is as tall as the field.
+        let icon = BRAVE.toolbar.overrides.iter().find(|(id, _)| *id == 47).map(|(_, size)| *size);
+        assert_eq!(icon.map(|size| size + 2 * BRAVE.toolbar.button_padding), Some(28));
+        assert_eq!(BRAVE.toolbar.field_fill_margin, 0);
         assert_eq!(BRAVE.layout.caption_ink_ids, &[CHROME.layout.caption_ink_ids[0] + 17, CHROME.layout.caption_ink_ids[1] + 17, CHROME.layout.caption_ink_ids[2] + 17]);
         for (brave, chrome) in BRAVE.toolbar.colours.iter().zip(CHROME.toolbar.colours) {
             let shifted = if chrome.0 >= 574 { chrome.0 + 17 } else { chrome.0 };
@@ -3210,6 +3246,7 @@ mod tests {
             ("set brightness", toolbar.set_brightness, toolbar.set_brightness_prologue),
             ("update icon", toolbar.update_icon, toolbar.update_icon_prologue),
             ("update location icon", toolbar.update_location_icon, toolbar.update_location_icon_prologue),
+            ("toolbar layout", toolbar.toolbar_layout, toolbar.toolbar_layout_prologue),
             ("update location", toolbar.update_location, toolbar.update_location_prologue),
             ("textfield theme", toolbar.textfield_theme, toolbar.textfield_theme_prologue),
             ("refresh background", toolbar.refresh_background, toolbar.refresh_background_prologue),
