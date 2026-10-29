@@ -11,7 +11,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rivet_core::session::{SessionRecord, SessionRegistry};
 use rivet_core::{build_launch_plan, DisplayMode, LaunchRequest};
 use rivet_platform_windows::{
-    browser_windows, close_browser_window, inject_runtime, wait_for_new_browser_window,
+    browser_windows, close_browser_window, inject_runtime, resolve_browser_executable,
+    wait_for_new_browser_window,
     BrowserWindow,
 };
 
@@ -75,7 +76,8 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         user_data_dir: options.user_data_dir.clone(),
         display: options.display,
     };
-    let plan = build_launch_plan(&request).map_err(|error| error.to_string())?;
+    let mut plan = build_launch_plan(&request).map_err(|error| error.to_string())?;
+    plan.program = resolve_browser_executable(&plan.program);
     let runtime = resolve_runtime(options.runtime.as_deref());
     let existing_windows = if runtime.is_some() && plan.display == DisplayMode::Visible {
         browser_windows(&plan.program).map_err(|error| error.to_string())?
@@ -90,7 +92,7 @@ fn run_start(options: StartOptions) -> Result<(), String> {
 
     let window = if plan.display == DisplayMode::Visible {
         Some(
-            wait_for_new_browser_window(&plan.program, &existing_windows, Duration::from_secs(10))
+            wait_for_new_browser_window(&plan.program, &existing_windows, Duration::from_secs(30))
                 .map_err(|error| {
                     format!("could not identify the launched Rivet browser window: {error}")
                 })?,

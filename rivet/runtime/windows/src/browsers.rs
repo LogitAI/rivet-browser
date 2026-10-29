@@ -49,6 +49,7 @@ pub(crate) fn installed(browser: BrowserKind) -> Option<PathBuf> {
     [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER]
         .into_iter()
         .find_map(|root| registered(root, browser.executable()))
+        .map(|path| rivet_platform_windows::resolve_browser_executable(&path))
 }
 
 /// The browser this window belongs to.

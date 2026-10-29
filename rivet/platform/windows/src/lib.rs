@@ -68,6 +68,36 @@ impl std::fmt::Display for WindowDiscoveryError {
 
 impl std::error::Error for WindowDiscoveryError {}
 
+/// The executable that owns a browser's windows. Some browsers register a small launcher beside
+/// versioned folders, and the launcher starts the same-named executable of the newest version
+/// folder. Windows belong to that process, so window discovery and the runtime need its path.
+/// Browsers without such a stub, like Chrome and Edge, resolve to the path they were given.
+pub fn resolve_browser_executable(path: &Path) -> std::path::PathBuf {
+    let (Some(directory), Some(name)) = (path.parent(), path.file_name()) else {
+        return path.to_path_buf();
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return path.to_path_buf();
+    };
+    let version = |folder: &std::ffi::OsStr| -> Option<Vec<u32>> {
+        let parts: Vec<u32> = folder
+            .to_str()?
+            .split('.')
+            .map(|part| part.parse().ok())
+            .collect::<Option<_>>()?;
+        (parts.len() == 4).then_some(parts)
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let candidate = entry.path().join(name);
+            Some((version(&entry.file_name())?, candidate))
+        })
+        .filter(|(_, candidate)| candidate.is_file())
+        .max_by(|left, right| left.0.cmp(&right.0))
+        .map_or_else(|| path.to_path_buf(), |(_, candidate)| candidate)
+}
+
 /// The window class Chromium uses for browser top-level windows.
 const BROWSER_WINDOW_CLASS: &str = "Chrome_WidgetWin_1";
 const WS_CAPTION_BITS: u32 = 0x00C0_0000;
@@ -899,5 +929,37 @@ mod tests {
     fn fr2_non_windows_never_attempts_injection() {
         let error = inject_runtime(1, Some(1), Path::new("runtime.dll")).unwrap_err();
         assert_eq!(error, InjectError::UnsupportedPlatform);
+    }
+
+    #[test]
+    fn nfr3_launcher_stub_resolves_to_the_newest_version_folder() {
+        let root = std::env::temp_dir().join(format!("rivet-resolve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for version in ["5.38.1.2", "5.39.412.57", "5.9.1.1"] {
+            std::fs::create_dir_all(root.join(version)).unwrap();
+            std::fs::write(root.join(version).join("whale.exe"), b"x").unwrap();
+        }
+        std::fs::create_dir_all(root.join("5.40.0.0")).unwrap();
+        std::fs::write(root.join("whale.exe"), b"stub").unwrap();
+        assert_eq!(
+            resolve_browser_executable(&root.join("whale.exe")),
+            root.join("5.39.412.57").join("whale.exe")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn nfr3_browser_without_a_stub_keeps_its_path() {
+        let root = std::env::temp_dir().join(format!("rivet-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("156.0.8078.48")).unwrap();
+        std::fs::write(root.join("156.0.8078.48").join("chrome.dll"), b"x").unwrap();
+        std::fs::write(root.join("chrome.exe"), b"x").unwrap();
+        assert_eq!(resolve_browser_executable(&root.join("chrome.exe")), root.join("chrome.exe"));
+        assert_eq!(
+            resolve_browser_executable(&root.join("missing").join("a.exe")),
+            root.join("missing").join("a.exe")
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
