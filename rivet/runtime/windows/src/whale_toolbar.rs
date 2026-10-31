@@ -38,6 +38,8 @@ const FIELD_HEIGHT: i32 = 34;
 const ROW_EXTRA: i32 = 1;
 /// The field and the buttons sit one DIP below the middle of what the container leaves, as Chrome's do.
 const CONTENT_SHIFT: i32 = 1;
+/// The row's colour behind the address, which Whale paints white.
+const ROW_PAPER: u32 = 0xffff_ffff;
 
 fn views() -> Option<&'static HiddenViews> {
     crate::builds::get().hidden_views.as_ref()
@@ -248,6 +250,13 @@ unsafe fn invalidate(view: usize, base: usize, depth: usize, views: &HiddenViews
         layout(view, 0);
         count += 1;
     }
+    // A view keeps what it painted until it is asked again, so its old background would stay.
+    if let Some(row) = row() {
+        if row.bare.iter().chain([&row.address_fade]).any(|vtable| *(view as *const usize) == base + vtable) {
+            let schedule: unsafe extern "system" fn(usize) = std::mem::transmute(base + row.schedule_paint);
+            schedule(view);
+        }
+    }
     let begin = *((view + views.children_offset) as *const usize);
     let end = *((view + views.children_offset + 8) as *const usize);
     if begin >= 0x10000 && end >= begin && (end - begin) / 8 <= 512 {
@@ -456,6 +465,24 @@ unsafe fn install_paint(row: &WhaleRow, base: usize) -> Result<(), String> {
     })
 }
 
+/// A Rivet window's address has no box at rest.
+unsafe extern "system" fn bare_background(view: *mut c_void, canvas: *const c_void) {
+    let Some(row) = row() else { return };
+    painted(view, canvas, row.paint_background_slot)
+}
+
+/// The end of a long address fades into the row, which has no pill behind it here.
+unsafe extern "system" fn address_fade(view: *mut c_void, canvas: *const c_void) {
+    let (Some(row), Some(slots)) = (row(), views()) else { return };
+    let table = *(view as *const usize);
+    let Some(function) = held(table, slots.slots[3]) else { return };
+    if in_rivet_window(view) {
+        *((view as usize + row.address_fade_colour) as *mut u32) = ROW_PAPER;
+    }
+    let run: unsafe extern "system" fn(*mut c_void, *const c_void) = std::mem::transmute(function);
+    run(view, canvas)
+}
+
 /// Leaves out the curves Whale draws over the page's top corners. The panel has its own corners.
 unsafe fn install_page(row: &WhaleRow, base: usize) -> Result<(), String> {
     let image = image::recorded().ok_or("no recorded browser image")?;
@@ -463,9 +490,27 @@ unsafe fn install_page(row: &WhaleRow, base: usize) -> Result<(), String> {
     if !image.points_to(row.page_corner + slot * 8, row.page_corner_paint) {
         return Err(format!("{:#x} does not hold the recorded corner paint", row.page_corner));
     }
+    if !image.points_to(row.address_fade + slot * 8, row.address_fade_paint) {
+        return Err(format!("{:#x} does not hold the recorded fade paint", row.address_fade));
+    }
+    if !image.has(row.schedule_paint, row.schedule_paint_prologue) {
+        return Err("this browser build has no recorded schedule paint".into());
+    }
+    for vtable in row.bare {
+        if !image.points_to(vtable + row.paint_background_slot * 8, row.paint_background) {
+            return Err(format!("{vtable:#x} does not hold the recorded background paint"));
+        }
+    }
     crate::chrome_toolbar::transaction(|| {
         HELD.lock().unwrap_or_else(|error| error.into_inner()).push((base + row.page_corner, slot, base + row.page_corner_paint));
-        crate::chrome_toolbar::replace_slot((base + row.page_corner + slot * 8) as *mut usize, paint as *const () as usize)
+        crate::chrome_toolbar::replace_slot((base + row.page_corner + slot * 8) as *mut usize, paint as *const () as usize)?;
+        HELD.lock().unwrap_or_else(|error| error.into_inner()).push((base + row.address_fade, slot, base + row.address_fade_paint));
+        crate::chrome_toolbar::replace_slot((base + row.address_fade + slot * 8) as *mut usize, address_fade as *const () as usize)?;
+        for vtable in row.bare {
+            HELD.lock().unwrap_or_else(|error| error.into_inner()).push((base + vtable, row.paint_background_slot, base + row.paint_background));
+            crate::chrome_toolbar::replace_slot((base + vtable + row.paint_background_slot * 8) as *mut usize, bare_background as *const () as usize)?;
+        }
+        Ok(())
     })
 }
 

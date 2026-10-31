@@ -377,6 +377,19 @@ pub struct WhaleRow {
     /// sidebar, and what `views::View::OnPaint`'s slot holds for them.
     pub page_corner: usize,
     pub page_corner_paint: usize,
+    /// The address field, its lock chip, its text view and the view holding the address and title Whale
+    /// shows at rest paint the pill, the white circle and boxes of the pill's colour through
+    /// `views::View::OnPaintBackground`, which this slot holds.
+    pub bare: [usize; 4],
+    pub paint_background_slot: usize,
+    pub paint_background: usize,
+    /// `views::View::SchedulePaint`. A view keeps its recorded paint until it is asked again.
+    pub schedule_paint: usize,
+    pub schedule_paint_prologue: &'static [u8],
+    /// The view fading the end of the address into the pill, its paint and where it keeps the colour.
+    pub address_fade: usize,
+    pub address_fade_paint: usize,
+    pub address_fade_colour: usize,
 }
 
 /// Values for `edge_page.rs`: Edge insets its page and paints a border around it, which would
@@ -3305,6 +3318,14 @@ pub static WHALE: Build = Build {
         reload_mode_offset: 0x8DC,
         page_corner: 0xfb81360,
         page_corner_paint: 0x0E68_CCE0,
+        bare: [0xfabf960, 0xfabfca0, 0xfb78080, 0xfb23de0],
+        paint_background_slot: 90,
+        paint_background: 0x08F8_4930,
+        schedule_paint: 0x08F7_E530,
+        schedule_paint_prologue: &[0x48, 0x83, 0xEC, 0x38],
+        address_fade: 0xfb244e0,
+        address_fade_paint: 0x0E3C_0420,
+        address_fade_colour: 0x318,
     }),
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
@@ -5004,6 +5025,10 @@ mod tests {
         // The page's corner views are drawn by their own paint, not by a shared one.
         assert_eq!((row.page_corner, row.page_corner_paint), (0xfb81360, 0x0E68_CCE0));
         assert!(hidden.classes.iter().all(|(vtable, _)| *vtable != row.page_corner));
+        // The field itself is one of the views that lose their background.
+        assert_eq!(row.bare[0], row.field);
+        assert_eq!(row.paint_background_slot, 90);
+        assert!(!row.bare.contains(&row.address_fade));
         // Only Whale moves its row.
         for build in all() {
             assert_eq!(build.whale_row.is_some(), build.module == "whale.dll", "{}", build.module);
