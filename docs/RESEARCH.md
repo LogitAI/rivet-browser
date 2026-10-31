@@ -527,3 +527,25 @@
 - hover 채움은 Chromium이 캡션 전경색에 알파 `0x1A`를 적용한 값이다. 글리프는 페인트 훅이 따로 칠하므로 표의 값을 `#9F9F9D`로 두면 `#F1F1EE`가 되어 목업의 약 `#F2F1EE`와 맞는다. Edge는 글리프 색도 이 표에서 읽으므로 같은 방법을 쓸 수 없다.
 - 브라우저의 `WM_NCHITTEST`는 44 DIP로 늘린 캡션 버튼의 위쪽 일부에서만 `HTCLOSE` 등을 돌려주었다. Rivet이 줄 전체에 직접 답한다.
 - 게시한 `WM_NCLBUTTONDOWN`과 `WM_NCLBUTTONUP`으로는 최소화와 닫기가 실행되지 않았다. 실제 입력의 클릭과 Snap Layouts 플라이아웃은 확인하지 못했다.
+
+## 2026-10-31: 행 생성기와 서명된 표
+
+- 환경: Windows `10.0.26300`, Google Chrome `156.0.8078.74`, Microsoft Edge `156.0.4314.50`, Brave `156.1.98.63`, 120 DPI, 1800x1067.
+- `chrome-builds port`는 이전 행의 주소를 이전 PDB의 공개 이름(ICF로 접힌 별칭 포함)으로 읽고, 새 PDB에서 같은 이름을 찾고, 앞부분 바이트를 새 DLL에서 다시 읽는다. 사람이 검증한 행과 비교한 결과는 다음과 같다(`scripts/tests/row-port.ps1`).
+  - Brave `.62`에서 `.63`: 주소 139개 전부 일치, 바이트는 다르거나 잘린 것 없음, 검토 항목 0개.
+  - Chrome `.48`에서 `.74`: 주소 151개 전부 일치, 검토 항목 0개. 다른 값은 `.48` 행에 없다가 `.74` 행에 사람이 더한 기능(`toolbar_layout`, 개발자 글꼴, `location_bar`)과 손으로 맞춘 디자인 값(`overrides`, 색 3개, `button_padding`)뿐이다.
+  - Edge `.50`에서 `.50`: 이전 빌드의 PDB가 없어 같은 빌드로만 돌렸다. 주소 175개가 그대로이고 검토 항목 0개다. 실제 Edge 두 빌드 사이의 포팅은 아직 확인하지 못했다.
+- 시간: PDB 둘을 읽고 행을 만드는 데 Chrome 44초, Edge 57초가 걸렸다(디버그 빌드, 같은 PDB 2회 포함).
+- 공개 이름의 거리로 옮기면 틀린다. 공개 심볼이 없는 함수 3개(`update_location_icon`, `update_collapse_action`, `web_contents_focused`)는 가까운 공개 이름에서 거리를 재면 Chrome에서는 우연히 맞고 Brave `.63`에서 `update_location_icon`이 `0x200` 어긋났다. 비공개 심볼 이름(`LocationIconView::UpdateIcon` 등)으로 찾으면 맞는다.
+- 공개 이름이 둘 이상의 주소로 갈라지는 경우가 있다(`0xa3e970`, `GetTabStripModel`). 앞부분 바이트, vtable 슬롯, 끝까지 같은 짧은 코드 순서로 정한다. 정하지 못하면 사람에게 넘긴다.
+- 생성기가 만들 수 없는 값: 멤버 오프셋, 색 ID, `LayoutConstant`와 `LayoutInset` 값, 디자인 수치, `skip`과 `supported` 표시, 새 기능의 주소. 같은 마일스톤에서는 그대로 쓴다. 마일스톤이 바뀌면 자동 게시하지 않는다. vtable 슬롯은 새 vtable에서 다시 찾고 바뀌면 사람에게 넘긴다.
+- 표에 없는 기능까지 행이 나르도록 `location_bar`를 행의 필드로 옮겼다. 런타임 코드에 빌드별 분기가 남아 있으면 데이터 행이 그 값을 받지 못한다.
+- 서명: 설치기(`rivet/installer/windows`)와 FR-8에는 재사용할 서명 코드가 없다. Windows CNG의 ECDSA P-256과 SHA-256을 쓴다. 새 크레이트는 없고 `windows-sys` 기능 두 개와 런타임의 `serde_json` 직접 의존만 늘었다.
+- 실제 창 확인(Chrome `.74`, 120 DPI): 시험 키로 서명한 표에 `leading_space`를 40 DIP 늘린 행을 넣고 `rivet builds apply`로 적용하자 새로 고침 아이콘이 465에서 515 픽셀로 50 픽셀(40 DIP) 옮겨졌다. 같은 파일의 바이트 하나를 바꾸면 컴파일된 행으로 돌아가 465에 그려졌다.
+- 측정(`scripts/tests/windows-row.ps1`): Chrome, Edge, Brave 모두 줄 44 DIP이다. 아이콘 중심은 패널 왼쪽에서 22, 51, 81, 111 DIP이고(허용 2.5 DIP), 위의 40 DIP 표시 행은 이 검사에 걸렸다.
+- 공개 버전 기록(2026-10-31 조회):
+  - Google `versionhistory`의 stable `filter=endtime=none`은 롤아웃 비율과 함께 버전을 보여 준다. `156.0.8078.74` 0.495, `.76` 0.2475, `.79` 0.2475, `.80` 1, `.75` 0.005, `157.0.8103.26` 0.005, `157.0.8103.27` 0이다. 비율 0인 버전은 배포 전에 보인다.
+  - Google 업데이트 서비스(`tools.google.com/service/update2`)는 `targetversionprefix`로 모두에게 주는 버전만 준다(`.74`, `.80`). 롤아웃 그룹의 빌드는 이전 버전을 보고한 일반 확인을 반복하면 받는다(`.76`, `.79`는 40번 안에 받았고, 0.5%인 `157.0.8103.26`은 40번 안에 받지 못했다).
+  - Microsoft `edgeupdates.microsoft.com/api/products?view=enterprise`는 채널별 MSI를 준다. Stable `156.0.4314.58`, Beta `157.0.4341.30`이다.
+  - Brave GitHub 릴리스는 롤아웃 전에 prerelease로 올라온다. `Release v1.98.64`는 파일 없이 prerelease였다.
+- 확인하지 못한 것: 예약 작업 자체, Chrome과 Brave 설치 파일의 7z 풀기, Edge MSI의 `msiexec /a` 풀기, GitHub 러너에서의 창 캡처. 파일 내려받기가 필요해 이 컴퓨터에서 돌리지 않았다.

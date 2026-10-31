@@ -11,6 +11,7 @@ tests=(
     scripts/tests/readme-links.test.sh
     scripts/tests/no-em-dash.test.sh
     scripts/tests/sync-release.test.sh
+    scripts/tests/browser-rows.test.sh
 )
 for test in "${tests[@]}"; do
     echo "== $test"

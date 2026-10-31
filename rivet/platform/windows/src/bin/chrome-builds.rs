@@ -13,6 +13,9 @@
 //! `chrome-builds table-key` prints a new signing key pair.
 //! `chrome-builds table-add <table.json> <row.json> <module>` puts a row into a table, with the
 //! symbol key the next build's row will need.
+//! `chrome-builds table-read <signed-file> <out.json>` writes out a table that verifies under
+//! `RIVET_TABLE_PUBLIC_KEY`.
+//! `chrome-builds table-merge <table.json> <part.json>...` adds the rows of other tables to a table.
 //! `chrome-builds table-sign <table.json> <signed-file> [published-file]` signs a table with the
 //! key in `RIVET_TABLE_SIGNING_KEY`, on top of the published rows, which must verify under
 //! `RIVET_TABLE_PUBLIC_KEY`.
@@ -68,11 +71,13 @@ fn main() -> ExitCode {
             println!("public {public}");
         }),
         ["table-add", table, row, module] => table_add(Path::new(table), Path::new(row), Path::new(module)),
+        ["table-read", signed, out] => table_read(Path::new(signed), Path::new(out)),
+        ["table-merge", table, parts @ ..] => table_merge(Path::new(table), parts),
         ["table-sign", table, signed] => table_sign(Path::new(table), Path::new(signed), None),
         ["table-sign", table, signed, published] => {
             table_sign(Path::new(table), Path::new(signed), Some(Path::new(published)))
         }
-        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | table-key | table-add <table.json> <row.json> <module> | table-sign <table.json> <signed-file> [published-file]".into()),
+        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | table-key | table-add <table.json> <row.json> <module> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file]".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -186,6 +191,25 @@ fn table_add(table_path: &Path, row: &Path, module: &Path) -> Result<(), String>
     );
     table["symbols"][name] = key.into();
     signed_table::upsert_row(&mut table, row)?;
+    let text = serde_json::to_string_pretty(&table).map_err(|error| error.to_string())? + "\n";
+    std::fs::write(table_path, text).map_err(|error| error.to_string())
+}
+
+fn table_read(signed: &Path, out: &Path) -> Result<(), String> {
+    let public = std::env::var("RIVET_TABLE_PUBLIC_KEY").map_err(|_| "RIVET_TABLE_PUBLIC_KEY is not set")?;
+    let file = read(signed)?;
+    let table = signed_table::parse(signed_table::open(&public, &file)?)?;
+    let text = serde_json::to_string(&table).map_err(|error| error.to_string())?;
+    std::fs::write(out, text).map_err(|error| error.to_string())
+}
+
+fn table_merge(table_path: &Path, parts: &[&str]) -> Result<(), String> {
+    let mut table = json_file(table_path)?;
+    for part in parts {
+        // A sequence of zero: only signing sets the real one.
+        table = signed_table::merge_for_signing(&json_file(Path::new(part))?, Some(&table), 0)?;
+        table["sequence"] = 0.into();
+    }
     let text = serde_json::to_string_pretty(&table).map_err(|error| error.to_string())? + "\n";
     std::fs::write(table_path, text).map_err(|error| error.to_string())
 }

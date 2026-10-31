@@ -1,0 +1,281 @@
+# Keeps Rivet's supported-build table ahead of Chrome, Edge and Brave.
+#
+# A browser updates itself whenever its maker says, and Rivet does not hold it back. So this job
+# watches what the makers publish, builds a whole row for each new build from public symbols,
+# proves the row on the real browser, and publishes a signed table that reaches people without
+# reinstalling Rivet. A row the generator cannot vouch for, such as the first of a new milestone,
+# becomes a pull request for a person and is not published.
+#
+# Needs on the default branch: this file. Needs in the repository's secrets:
+#   RIVET_TABLE_SIGNING_KEY   the private key from `chrome-builds table-key`
+# and in its variables:
+#   RIVET_TABLE_PUBLIC_KEY    the matching public key, which release builds are built with
+name: Browser rows
+
+on:
+  schedule:
+    # Every two hours: a rollout starts within hours of a version appearing in the feeds.
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: browser-rows
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: builds-table
+  # Symbols are several gigabytes, and a run does no more than this many builds.
+  MOST_PER_RUN: "3"
+
+jobs:
+  watch:
+    name: Find builds with no row
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      builds: ${{ steps.pending.outputs.builds }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Build the row tools
+        working-directory: rivet
+        run: cargo build --release -p rivet-platform-windows -p rivet-runtime-windows --bins
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: row-tools
+          path: |
+            rivet/target/release/chrome-builds.exe
+            rivet/target/release/rivet-rows.exe
+          retention-days: 1
+
+      - name: Read what the makers publish
+        id: pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RIVET_TABLE_PUBLIC_KEY: ${{ vars.RIVET_TABLE_PUBLIC_KEY }}
+        run: |
+          $feeds = Join-Path $env:RUNNER_TEMP "feeds"
+          New-Item -ItemType Directory -Force $feeds | Out-Null
+          $history = "https://versionhistory.googleapis.com/v1/chrome/platforms/win64/channels"
+          curl.exe -fsSL -o "$feeds/chrome-stable.json" "$history/stable/versions/all/releases?filter=endtime=none"
+          curl.exe -fsSL -o "$feeds/chrome-beta.json" "$history/beta/versions?pageSize=5"
+          curl.exe -fsSL -o "$feeds/edge.json" "https://edgeupdates.microsoft.com/api/products?view=enterprise"
+          gh api "repos/brave/brave-browser/releases?per_page=40" > "$feeds/brave.json"
+          $tools = "rivet/target/release"
+          $tables = @("--table", "rivet/runtime/windows/rows/table.json")
+          # What has been published counts, even before its pull request is merged.
+          gh release download $env:RELEASE_TAG --pattern table.bin --dir $feeds 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            & "$tools/chrome-builds.exe" table-read "$feeds/table.bin" "$feeds/published.json"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $tables += @("--table", "$feeds/published.json")
+          }
+          & "$tools/rivet-rows.exe" known @tables | Set-Content "$feeds/known.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$tools/chrome-builds.exe" pending "$feeds/chrome-stable.json" "$feeds/chrome-beta.json" "$feeds/edge.json" "$feeds/brave.json" "$feeds/known.json" | Set-Content "$feeds/pending.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Content "$feeds/pending.json"
+          $builds = foreach ($build in @(Get-Content -Raw "$feeds/pending.json" | ConvertFrom-Json)) {
+            # A proposal waits for its person, and a run must not spend its turn on it again.
+            $branch = "feat/row-$($build.browser -replace ' ','-')-$($build.version)".ToLower()
+            git ls-remote --exit-code --heads origin $branch | Out-Null
+            if ($LASTEXITCODE -eq 0) { "$($build.browser) $($build.version) waits for review."; continue }
+            # A build nobody can fetch yet must not take the turn of one that can be made now.
+            try {
+              ./.github/scripts/rows/fetch-browser.ps1 -Browser $build.browser -Version $build.version -Channel $build.channel -Download "$($build.download)" -ResolveOnly | Out-Null
+              $build
+            } catch {
+              "::warning::$($build.browser) $($build.version) has no row and cannot be fetched yet: $_"
+            }
+          }
+          $global:LASTEXITCODE = 0
+          $builds = @($builds | Where-Object { $_ -isnot [string] } | Select-Object -First ([int]$env:MOST_PER_RUN))
+          "builds=$(ConvertTo-Json -Compress -AsArray -InputObject $builds)" >> $env:GITHUB_OUTPUT
+          exit 0
+
+  row:
+    name: Row for ${{ matrix.build.browser }} ${{ matrix.build.version }}
+    needs: watch
+    if: needs.watch.outputs.builds != '[]'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        build: ${{ fromJson(needs.watch.outputs.builds) }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: row-tools
+          path: tools
+
+      - name: Get the build and its symbols
+        id: build
+        run: |
+          ./.github/scripts/rows/fetch-browser.ps1 `
+            -Browser "${{ matrix.build.browser }}" -Version "${{ matrix.build.version }}" `
+            -Channel "${{ matrix.build.channel }}" -Download "${{ matrix.build.download }}" `
+            -Out (Join-Path $env:RUNNER_TEMP "browser") -Output $env:GITHUB_OUTPUT
+
+      - name: Download the symbols of this build and of the row before it
+        run: |
+          $browser = "${{ matrix.build.browser }}"
+          $version = "${{ matrix.build.version }}"
+          $prior = Join-Path $env:RUNNER_TEMP "prior.json"
+          $tables = @("--table", "rivet/runtime/windows/rows/table.json")
+          ./tools/rivet-rows.exe prior $browser $version @tables | Set-Content $prior
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $priorVersion = (Get-Content -Raw $prior | ConvertFrom-Json).frame.version
+          $symbols = (Get-Content -Raw rivet/runtime/windows/rows/table.json | ConvertFrom-Json).symbols
+          $priorKey = $symbols."$browser $priorVersion"
+          if (-not $priorKey) { throw "The table holds no symbol key for $browser $priorVersion" }
+          $newKey = ./tools/chrome-builds.exe pdb-key "${{ steps.build.outputs.module }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./.github/scripts/rows/fetch-symbols.ps1 -Browser $browser -Key $priorKey -Out (Join-Path $env:RUNNER_TEMP "prior.pdb")
+          ./.github/scripts/rows/fetch-symbols.ps1 -Browser $browser -Key ($newKey -split '/')[1] -Out (Join-Path $env:RUNNER_TEMP "new.pdb")
+
+      - name: Make the row
+        id: made
+        run: |
+          $temp = $env:RUNNER_TEMP
+          ./tools/chrome-builds.exe port "$temp/prior.json" "$temp/prior.pdb" "$temp/new.pdb" "${{ steps.build.outputs.module }}" "${{ matrix.build.version }}" "$temp/row.json" "$temp/report.json"
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -and $code -ne 3) { exit $code }
+          "for_review=$($code -eq 3)".ToLower() >> $env:GITHUB_OUTPUT
+          Get-Content "$temp/report.json"
+          exit 0
+
+      - name: Prove the row on the real browser
+        if: steps.made.outputs.for_review == 'false'
+        run: |
+          $temp = $env:RUNNER_TEMP
+          # A throwaway key: this proves the same path a user's table takes, and nothing it signs leaves this job.
+          $pair = ./tools/chrome-builds.exe table-key
+          $env:RIVET_TABLE_SIGNING_KEY = ($pair[0] -split ' ')[1]
+          $env:RIVET_TABLE_PUBLIC_KEY = ($pair[1] -split ' ')[1]
+          $env:LOCALAPPDATA = Join-Path $temp "local"
+          New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
+          Set-Content "$temp/part.json" '{"schema":1,"sequence":0,"symbols":{},"rows":[]}'
+          ./tools/chrome-builds.exe table-add "$temp/part.json" "$temp/row.json" "${{ steps.build.outputs.module }}"
+          ./tools/chrome-builds.exe table-sign "$temp/part.json" "$temp/test.bin"
+          Push-Location rivet
+          cargo build -p rivet -p rivet-runtime-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          target/debug/rivet.exe builds apply "$temp/test.bin"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          ./scripts/tests/windows-row-proof.ps1 `
+            -Rivet rivet/target/debug/rivet.exe -Runtime rivet/target/debug/rivet_runtime_windows.dll `
+            -Browser "${{ steps.build.outputs.executable }}" -Work (Join-Path $temp "session")
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: row-${{ matrix.build.browser }}-${{ matrix.build.version }}
+          path: |
+            ${{ runner.temp }}/row.json
+            ${{ runner.temp }}/report.json
+            ${{ runner.temp }}/part.json
+            ${{ runner.temp }}/session/row.png
+          retention-days: 30
+
+      - name: Ask a person about a row the generator cannot vouch for
+        if: steps.made.outputs.for_review == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $temp = $env:RUNNER_TEMP
+          $branch = "feat/row-$("${{ matrix.build.browser }}" -replace ' ','-')-${{ matrix.build.version }}".ToLower()
+          git ls-remote --exit-code --heads origin $branch | Out-Null
+          if ($LASTEXITCODE -eq 0) { "A pull request for this row is open."; exit 0 }
+          git config user.name "rivet-browser-rows"
+          git config user.email "rivet-browser-rows@users.noreply.github.com"
+          git switch -c $branch
+          ./tools/chrome-builds.exe table-add rivet/runtime/windows/rows/table.json "$temp/row.json" "${{ steps.build.outputs.module }}"
+          git add rivet/runtime/windows/rows/table.json
+          git commit -m "Feat: Propose a row for ${{ matrix.build.browser }} ${{ matrix.build.version }}"
+          git push -u origin $branch
+          $report = Get-Content -Raw "$temp/report.json" | ConvertFrom-Json
+          $body = "The generator could not vouch for this row, so it was not published.`n`n" + (($report.review | ForEach-Object { "- $_" }) -join "`n")
+          gh pr create --draft --base develop --head $branch --title "Feat: Propose a row for ${{ matrix.build.browser }} ${{ matrix.build.version }}" --body $body
+
+  publish:
+    name: Publish the signed table
+    needs: row
+    # A row that failed its proof holds up nothing else: the others have passed theirs.
+    if: ${{ !cancelled() && needs.row.result != 'skipped' }}
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Sign and publish what passed
+        id: publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RIVET_TABLE_SIGNING_KEY: ${{ secrets.RIVET_TABLE_SIGNING_KEY }}
+          RIVET_TABLE_PUBLIC_KEY: ${{ vars.RIVET_TABLE_PUBLIC_KEY }}
+        run: |
+          if (-not $env:RIVET_TABLE_SIGNING_KEY -or -not $env:RIVET_TABLE_PUBLIC_KEY) {
+            throw "Set the RIVET_TABLE_SIGNING_KEY secret and the RIVET_TABLE_PUBLIC_KEY variable."
+          }
+          $tool = (Get-ChildItem artifacts/row-tools/chrome-builds.exe).FullName
+          # A part exists only for a row whose report had nothing for review, and only a row
+          # whose proof passed has its image.
+          $parts = @(Get-ChildItem artifacts/row-* -Directory | Where-Object {
+            (Test-Path "$_/part.json") -and (Test-Path "$_/session/row.png")
+          } | ForEach-Object { "$_/part.json" })
+          if ($parts.Count -eq 0) { "No row passed."; "published=false" >> $env:GITHUB_OUTPUT; exit 0 }
+          & $tool table-merge rivet/runtime/windows/rows/table.json @parts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $signing = @("rivet/runtime/windows/rows/table.json", "table.bin")
+          gh release view $env:RELEASE_TAG 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG --title "Supported-build table" --notes "The signed table Rivet downloads." --latest=false
+          } else {
+            gh release download $env:RELEASE_TAG --pattern table.bin --output published.bin
+            if ($LASTEXITCODE -eq 0) { $signing += "published.bin" }
+          }
+          & $tool table-sign @signing
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release upload $env:RELEASE_TAG table.bin --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "published=true" >> $env:GITHUB_OUTPUT
+
+      - name: Record the rows in the repository
+        if: steps.publish.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $branch = "feat/rows-$env:GITHUB_RUN_ID"
+          git config user.name "rivet-browser-rows"
+          git config user.email "rivet-browser-rows@users.noreply.github.com"
+          git switch -c $branch
+          git add rivet/runtime/windows/rows/table.json
+          git commit -m "Feat: Record rows published by the table job"
+          git push -u origin $branch
+          gh pr create --base develop --head $branch --title "Feat: Record rows published by the table job" --body "These rows are already published in the signed table and passed the row proof in run $env:GITHUB_RUN_ID. Merging adds them to the table compiled into the next Rivet."

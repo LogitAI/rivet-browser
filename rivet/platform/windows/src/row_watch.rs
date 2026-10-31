@@ -23,7 +23,10 @@ pub struct Candidate {
 
 /// A version as numbers, which compare in the right order.
 pub fn parts(version: &str) -> Vec<u32> {
-    version.split('.').filter_map(|part| part.parse().ok()).collect()
+    version
+        .split('.')
+        .filter_map(|part| part.parse().ok())
+        .collect()
 }
 
 /// The versions from Google's `versions/all/releases?filter=endtime=none` of the stable channel
@@ -31,7 +34,9 @@ pub fn parts(version: &str) -> Vec<u32> {
 pub fn chrome_candidates(stable: &Value, beta: &Value) -> Vec<Candidate> {
     let mut found = Vec::new();
     for release in stable["releases"].as_array().map_or(&[][..], Vec::as_slice) {
-        let Some(version) = release["version"].as_str() else { continue };
+        let Some(version) = release["version"].as_str() else {
+            continue;
+        };
         found.push(Candidate {
             browser: "Google Chrome".into(),
             version: version.into(),
@@ -41,7 +46,11 @@ pub fn chrome_candidates(stable: &Value, beta: &Value) -> Vec<Candidate> {
         });
     }
     let beta = beta["versions"].as_array().map_or(&[][..], Vec::as_slice);
-    if let Some(version) = beta.iter().filter_map(|entry| entry["version"].as_str()).max_by_key(|version| parts(version)) {
+    if let Some(version) = beta
+        .iter()
+        .filter_map(|entry| entry["version"].as_str())
+        .max_by_key(|version| parts(version))
+    {
         found.push(Candidate {
             browser: "Google Chrome".into(),
             version: version.into(),
@@ -58,7 +67,10 @@ pub fn chrome_candidates(stable: &Value, beta: &Value) -> Vec<Candidate> {
 pub fn edge_candidates(products: &Value) -> Vec<Candidate> {
     let mut found = Vec::new();
     for (product, channel, serving) in [("Stable", "stable", true), ("Beta", "beta", false)] {
-        let Some(entry) = products.as_array().and_then(|list| list.iter().find(|item| item["Product"] == product)) else {
+        let Some(entry) = products
+            .as_array()
+            .and_then(|list| list.iter().find(|item| item["Product"] == product))
+        else {
             continue;
         };
         let newest = entry["Releases"]
@@ -68,7 +80,9 @@ pub fn edge_candidates(products: &Value) -> Vec<Candidate> {
             .filter(|release| release["Platform"] == "Windows" && release["Architecture"] == "x64")
             .max_by_key(|release| parts(release["ProductVersion"].as_str().unwrap_or_default()));
         let Some(release) = newest else { continue };
-        let Some(version) = release["ProductVersion"].as_str() else { continue };
+        let Some(version) = release["ProductVersion"].as_str() else {
+            continue;
+        };
         let download = release["Artifacts"].as_array().and_then(|artifacts| {
             artifacts
                 .iter()
@@ -94,14 +108,27 @@ pub fn edge_candidates(products: &Value) -> Vec<Candidate> {
 pub fn brave_candidates(releases: &Value) -> Vec<Candidate> {
     let mut newest: BTreeMap<&str, Candidate> = BTreeMap::new();
     for release in releases.as_array().map_or(&[][..], Vec::as_slice) {
-        let Some(name) = release["name"].as_str().map(str::trim) else { continue };
+        let Some(name) = release["name"].as_str().map(str::trim) else {
+            continue;
+        };
         let channel = match name.split(' ').next() {
             Some("Release") => "stable",
             Some("Beta") => "beta",
             _ => continue,
         };
-        let Some(tag) = release["tag_name"].as_str().and_then(|tag| tag.strip_prefix('v')) else { continue };
-        let Some(major) = name.split("(Chromium ").nth(1).and_then(|rest| rest.split('.').next()) else { continue };
+        let Some(tag) = release["tag_name"]
+            .as_str()
+            .and_then(|tag| tag.strip_prefix('v'))
+        else {
+            continue;
+        };
+        let Some(major) = name
+            .split("(Chromium ")
+            .nth(1)
+            .and_then(|rest| rest.split('.').next())
+        else {
+            continue;
+        };
         let version = format!("{major}.{tag}");
         let installer = if channel == "stable" {
             "BraveBrowserStandaloneSilentSetup.exe"
@@ -122,7 +149,9 @@ pub fn brave_candidates(releases: &Value) -> Vec<Candidate> {
             serving: channel == "stable" && release["prerelease"] == false,
             download,
         };
-        let replaces = newest.get(channel).is_none_or(|held| parts(&held.version) < parts(&candidate.version));
+        let replaces = newest
+            .get(channel)
+            .is_none_or(|held| parts(&held.version) < parts(&candidate.version));
         if replaces {
             newest.insert(channel, candidate);
         }
@@ -143,10 +172,14 @@ pub fn pending(candidates: Vec<Candidate>, known: &BTreeSet<(String, String)>) -
     }
     let mut left: Vec<Candidate> = candidates
         .into_iter()
-        .filter(|candidate| !known.contains(&(candidate.browser.clone(), candidate.version.clone())))
+        .filter(|candidate| {
+            !known.contains(&(candidate.browser.clone(), candidate.version.clone()))
+        })
         .filter(|candidate| {
             candidate.serving
-                || newest_known.get(candidate.browser.as_str()).is_none_or(|newest| parts(&candidate.version) > *newest)
+                || newest_known
+                    .get(candidate.browser.as_str())
+                    .is_none_or(|newest| parts(&candidate.version) > *newest)
         })
         .collect();
     left.sort_by_key(|candidate| {
@@ -166,12 +199,15 @@ mod tests {
     use serde_json::json;
 
     fn known(rows: &[(&str, &str)]) -> BTreeSet<(String, String)> {
-        rows.iter().map(|(browser, version)| ((*browser).to_owned(), (*version).to_owned())).collect()
+        rows.iter()
+            .map(|(browser, version)| ((*browser).to_owned(), (*version).to_owned()))
+            .collect()
     }
 
     /// As Google answered on 2026-10-31.
     fn google() -> (Value, Value) {
-        let release = |version: &str, fraction: f64| json!({"version": version, "fraction": fraction});
+        let release =
+            |version: &str, fraction: f64| json!({"version": version, "fraction": fraction});
         (
             json!({"releases": [
                 release("156.0.8078.74", 0.495), release("156.0.8078.76", 0.2475),
@@ -186,8 +222,14 @@ mod tests {
     #[test]
     fn nfr3_chrome_builds_are_found_before_they_reach_anyone() {
         let (stable, beta) = google();
-        let left = pending(chrome_candidates(&stable, &beta), &known(&[("Google Chrome", "156.0.8078.74")]));
-        let versions: Vec<_> = left.iter().map(|candidate| (candidate.version.as_str(), candidate.serving)).collect();
+        let left = pending(
+            chrome_candidates(&stable, &beta),
+            &known(&[("Google Chrome", "156.0.8078.74")]),
+        );
+        let versions: Vec<_> = left
+            .iter()
+            .map(|candidate| (candidate.version.as_str(), candidate.serving))
+            .collect();
         assert_eq!(
             versions,
             [
@@ -202,7 +244,9 @@ mod tests {
             ]
         );
         // .49 is old and at fraction zero: nobody will get it.
-        assert!(left.iter().all(|candidate| candidate.version != "156.0.8078.49"));
+        assert!(left
+            .iter()
+            .all(|candidate| candidate.version != "156.0.8078.49"));
     }
 
     #[test]
@@ -216,32 +260,74 @@ mod tests {
             {"Product": "Beta", "Releases": [release("157.0.4341.30", "x64"), release("157.0.4341.24", "x64")]},
             {"Product": "Stable", "Releases": [release("156.0.4314.58", "x86"), release("156.0.4314.58", "x64"), release("156.0.4314.56", "x64")]},
         ]);
-        let left = pending(edge_candidates(&feed), &known(&[("Microsoft Edge", "156.0.4314.50")]));
+        let left = pending(
+            edge_candidates(&feed),
+            &known(&[("Microsoft Edge", "156.0.4314.50")]),
+        );
         assert_eq!(left.len(), 2);
-        assert_eq!((left[0].version.as_str(), left[0].serving), ("156.0.4314.58", true));
-        assert_eq!(left[0].download.as_deref(), Some("https://example.invalid/156.0.4314.58-x64.msi"));
-        assert_eq!((left[1].version.as_str(), left[1].channel.as_str()), ("157.0.4341.30", "beta"));
+        assert_eq!(
+            (left[0].version.as_str(), left[0].serving),
+            ("156.0.4314.58", true)
+        );
+        assert_eq!(
+            left[0].download.as_deref(),
+            Some("https://example.invalid/156.0.4314.58-x64.msi")
+        );
+        assert_eq!(
+            (left[1].version.as_str(), left[1].channel.as_str()),
+            ("157.0.4341.30", "beta")
+        );
     }
 
     #[test]
     fn nfr3_brave_versions_are_made_from_the_title_and_tag() {
-        let release = |name: &str, tag: &str, prerelease: bool, assets: Value| {
-            json!({"name": name, "tag_name": tag, "prerelease": prerelease, "assets": assets})
-        };
+        let release = |name: &str, tag: &str, prerelease: bool, assets: Value| json!({"name": name, "tag_name": tag, "prerelease": prerelease, "assets": assets});
         let installer = json!([{"name": "BraveBrowserStandaloneSilentSetup.exe", "browser_download_url": "https://example.invalid/b.exe"}]);
         let feed = json!([
-            release("Nightly v1.101.10 (Chromium 157.0.8103.30)", "v1.101.10", true, json!([])),
-            release("Release v1.98.64 (Chromium 156.0.8078.80) \n", "v1.98.64", true, json!([])),
-            release("Release v1.98.63 (Chromium 156.0.8078.80)", "v1.98.63", false, installer),
-            release("Beta v1.100.45 (Chromium 156.0.8078.74)", "v1.100.45", true, json!([])),
+            release(
+                "Nightly v1.101.10 (Chromium 157.0.8103.30)",
+                "v1.101.10",
+                true,
+                json!([])
+            ),
+            release(
+                "Release v1.98.64 (Chromium 156.0.8078.80) \n",
+                "v1.98.64",
+                true,
+                json!([])
+            ),
+            release(
+                "Release v1.98.63 (Chromium 156.0.8078.80)",
+                "v1.98.63",
+                false,
+                installer
+            ),
+            release(
+                "Beta v1.100.45 (Chromium 156.0.8078.74)",
+                "v1.100.45",
+                true,
+                json!([])
+            ),
         ]);
         let found = brave_candidates(&feed);
-        let stable = found.iter().find(|candidate| candidate.channel == "stable").unwrap();
+        let stable = found
+            .iter()
+            .find(|candidate| candidate.channel == "stable")
+            .unwrap();
         assert_eq!(stable.version, "156.1.98.64");
         assert!(!stable.serving, "a prerelease has not reached anyone");
         assert_eq!(stable.download, None);
-        assert_eq!(found.iter().find(|candidate| candidate.channel == "beta").unwrap().version, "156.1.100.45");
-        assert!(found.iter().all(|candidate| !candidate.version.contains(".101.")));
+        assert_eq!(
+            found
+                .iter()
+                .find(|candidate| candidate.channel == "beta")
+                .unwrap()
+                .version,
+            "156.1.100.45"
+        );
+        assert!(found
+            .iter()
+            .all(|candidate| !candidate.version.contains(".101.")));
     }
 
     #[test]
@@ -253,6 +339,10 @@ mod tests {
             serving: true,
             download: None,
         };
-        assert!(pending(vec![candidate("156.1.98.63")], &known(&[("Brave", "156.1.98.63")])).is_empty());
+        assert!(pending(
+            vec![candidate("156.1.98.63")],
+            &known(&[("Brave", "156.1.98.63")])
+        )
+        .is_empty());
     }
 }
