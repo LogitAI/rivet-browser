@@ -40,6 +40,8 @@ const ROW_EXTRA: i32 = 1;
 const CONTENT_SHIFT: i32 = 1;
 /// The row's colour behind the address, which Whale paints white.
 const ROW_PAPER: u32 = 0xffff_ffff;
+/// The row's hairline in the design: rgba(31, 32, 36, .08).
+const HAIRLINE: u32 = 0x141f_2024;
 
 fn views() -> Option<&'static HiddenViews> {
     crate::builds::get().hidden_views.as_ref()
@@ -252,6 +254,9 @@ unsafe fn invalidate(view: usize, base: usize, depth: usize, views: &HiddenViews
     }
     // A view keeps what it painted until it is asked again, so its old background would stay.
     if let Some(row) = row() {
+        if *(view as *const usize) == base + row.separator {
+            colour_separator(row, view);
+        }
         if row.bare.iter().chain([&row.address_fade]).any(|vtable| *(view as *const usize) == base + vtable) {
             let schedule: unsafe extern "system" fn(usize) = std::mem::transmute(base + row.schedule_paint);
             schedule(view);
@@ -471,6 +476,19 @@ unsafe extern "system" fn bare_background(view: *mut c_void, canvas: *const c_vo
     painted(view, canvas, row.paint_background_slot)
 }
 
+/// The separator's line in the design's colour.
+unsafe fn colour_separator(row: &WhaleRow, view: usize) {
+    let Some(image) = image::recorded() else { return };
+    if !image.has(row.layer_set_color, row.layer_set_color_prologue) {
+        return;
+    }
+    let layer = *((view + row.layer_offset) as *const usize);
+    if layer >= 0x10000 {
+        let set: unsafe extern "system" fn(usize, u32) = std::mem::transmute(image.base + row.layer_set_color);
+        set(layer, HAIRLINE);
+    }
+}
+
 /// The end of a long address fades into the row, which has no pill behind it here.
 unsafe extern "system" fn address_fade(view: *mut c_void, canvas: *const c_void) {
     let (Some(row), Some(slots)) = (row(), views()) else { return };
@@ -524,6 +542,10 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
             if (*(view as *const usize)).wrapping_sub(base) == row.container {
                 place_buttons(row, view, moved[3], original);
             }
+            // The browser sets the layer's colour again when the theme changes.
+            if (*(view as *const usize)).wrapping_sub(base) == row.separator {
+                colour_separator(row, view as usize);
+            }
         }
         None => original(view, rect),
     }
@@ -572,6 +594,12 @@ mod tests {
         // lower than centred, and the row Chrome has is one DIP taller than Whale's.
         assert!(FIELD_HEIGHT + CONTENT_SHIFT <= 42 && BUTTON <= FIELD_HEIGHT);
         assert_eq!((ROW_EXTRA, CONTENT_SHIFT), (1, 1));
+    }
+
+    #[test]
+    fn fr12_whale_hairline_is_the_designs() {
+        assert_eq!(HAIRLINE >> 24, (0.08f32 * 255.0).round() as u32);
+        assert_eq!(HAIRLINE & 0xff_ffff, 0x1f_2024);
     }
 
     #[test]

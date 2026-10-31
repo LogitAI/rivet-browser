@@ -390,6 +390,11 @@ pub struct WhaleRow {
     pub address_fade: usize,
     pub address_fade_paint: usize,
     pub address_fade_colour: usize,
+    /// `ui::Layer::SetColor(this, colour)`. The separator paints nothing: the line is its solid colour
+    /// layer, which a view keeps here.
+    pub layer_set_color: usize,
+    pub layer_set_color_prologue: &'static [u8],
+    pub layer_offset: usize,
 }
 
 /// Values for `edge_page.rs`: Edge insets its page and paints a border around it, which would
@@ -3326,6 +3331,9 @@ pub static WHALE: Build = Build {
         address_fade: 0xfb244e0,
         address_fade_paint: 0x0E3C_0420,
         address_fade_colour: 0x318,
+        layer_set_color: 0x0907_5850,
+        layer_set_color_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x89, 0xD6],
+        layer_offset: 0x20,
     }),
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
@@ -5029,6 +5037,7 @@ mod tests {
         assert_eq!(row.bare[0], row.field);
         assert_eq!(row.paint_background_slot, 90);
         assert!(!row.bare.contains(&row.address_fade));
+        assert_eq!(row.layer_offset, 0x20);
         // Only Whale moves its row.
         for build in all() {
             assert_eq!(build.whale_row.is_some(), build.module == "whale.dll", "{}", build.module);
