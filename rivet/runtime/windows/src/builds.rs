@@ -2209,13 +2209,14 @@ pub static CHROME_156_74: Build = Build {
         // The toolbar button that shows the open side panel's entry: the Sidebar's rail shows it.
         (0x0FD1_6C90, 0x00C9_16B0), // PinnedActionToolbarButton
             (0x0FD1_AC10, 0x00C9_16B0), // SplitTabsToolbarButton
+            // The chevron Chrome adds when the row looks too narrow. The design has no such button.
+            (0x0FD1_9CB0, 0x00C9_16B0), // OverflowButton
     ],
         get_widget_slot: 11,
         size_slots: (0, 0),
         paint_children_slot: 0,
         overrides: &[
         (12, 8),  // kLocationBarChildCornerRadius
-        (16, 28), // kLocationBarHeight
         (29, 12), // kMainBackgroundRegionCornerRadius
         (46, 28), // kToolbarButtonHeight
         (47, 18), // kToolbarButtonIconSize
@@ -2262,9 +2263,9 @@ pub static CHROME_156_74: Build = Build {
         (1055, INK),         // kColorOmniboxText: the address while it is edited
         (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
         (1590, PAPER),       // kColorToolbar
-        (1644, 0xFF1A_1A1A), // Caption button glyph, active window
-        (1645, 0xFF1A_1A1A), // Caption button glyph, inactive window
-        (1646, 0xFF1A_1A1A), // Caption button glyph without a theme colour
+        (1644, 0xFF9F_9F9D), // Base of the caption hover fill: at Chrome's 10 percent it matches the native 3.7 percent black
+        (1645, 0xFF9F_9F9D), // The same, inactive window
+        (1646, 0xFF9F_9F9D), // The same, without a theme colour
         (1647, 0xFFC4_2B1C), // Close button hover fill
         (1650, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
         (1595, 0xFF4A_4850), // kColorToolbarButtonIcon
@@ -2306,15 +2307,15 @@ pub static CHROME_156_74: Build = Build {
         anchor_view_access_at: 0x2a,
         skip: "",
         anchor_tracker_offset: 0x300,
-        toolbar_layout: ABSENT,
-        toolbar_layout_prologue: &[0],
+        toolbar_layout: 0x011C_98D0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
+        toolbar_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x8B, 0x05, 0x5E, 0xB7, 0x81, 0x10],
         infobar_vtable: ABSENT,
         infobar_layout: ABSENT,
         infobar_layout_slot: 0,
         leading_space: 32,
         toolbar_top: 5,
         toolbar_bottom: 4,
-        button_padding: 4,
+        button_padding: 5,
         field_fill_margin: 3,
     },
     vertical: VerticalTabs {
@@ -4437,6 +4438,8 @@ pub struct LocationBarMinimum {
 pub fn location_bar_minimum(build: &Build) -> Option<LocationBarMinimum> {
     match (build.browser, build.version) {
         // ??_7BraveLocationBarView@@6BLayerDelegate@ui@@@, ?GetMinimumSize@BraveLocationBarView@@UEBA?AVSize@gfx@@XZ
+        // ??_7LocationBarView@@6BLayerDelegate@ui@@@, ?GetMinimumSize@LocationBarView@@UEBA?AVSize@gfx@@XZ, ?CalculatePreferredSize@LocationBarView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        ("Google Chrome", [156, 0, 8078, 74]) => Some(LocationBarMinimum { vtable: 0x0FCF_8EF0, slot: 15, function: 0x046A_A890, preferred_slot: 74, preferred: 0x046A_A630, width: 120, toolbar_past_caption: 1 }),
         ("Brave", [156, 1, 98, 62]) => Some(LocationBarMinimum { vtable: 0x111625C0, slot: 15, function: 0x038C54F0, preferred_slot: 74, preferred: 0x03973090, width: 120, toolbar_past_caption: 1 }),
         ("Brave", [156, 1, 98, 63]) => Some(LocationBarMinimum { vtable: 0x11120500, slot: 15, function: 0x038E1210, preferred_slot: 74, preferred: 0x0398C100, width: 120, toolbar_past_caption: 1 }),
         _ => None,
@@ -4567,6 +4570,7 @@ mod tests {
             ("update text style", toolbar.update_text_style, toolbar.update_text_style_prologue),
             ("frame paint", layout.on_paint, layout.on_paint_prologue),
             ("caption paint", layout.caption_paint, layout.caption_paint_prologue),
+            ("toolbar layout", toolbar.toolbar_layout, toolbar.toolbar_layout_prologue),
             ("colour provider", layout.get_color_provider, layout.get_color_provider_prologue),
             ("destructor", vertical.destructor, vertical.destructor_prologue),
             ("rounded corners", split.set_rounded_corners, split.set_rounded_corners_prologue),
@@ -4582,6 +4586,21 @@ mod tests {
         assert_ne!(CHROME_156_74.layout.frame_vtable, CHROME.layout.frame_vtable);
         // The relocated hook copies this prologue whole, so it stops on an instruction boundary.
         assert_eq!(CHROME_156_74.toolbar.chip_text_prologue.len(), 13);
+    }
+
+    #[test]
+    fn fr12_chrome_156_74_row_is_44_dips_with_no_chevron_and_a_field_that_can_shrink() {
+        let toolbar = &CHROME_156_74.toolbar;
+        // Chrome's own 34 DIP field makes the row, with the separator: only its fill is 28.
+        assert!(!toolbar.overrides.iter().any(|(key, _)| *key == 16));
+        assert_eq!(toolbar.toolbar_top + 34 + toolbar.toolbar_bottom + 1, 44);
+        assert_eq!(28 + 2 * toolbar.field_fill_margin, 34);
+        // A 28 DIP button around its 18 DIP icon, which with the row's 2 DIP space gives the 30 DIP pitch.
+        assert_eq!(18 + 2 * toolbar.button_padding, 28);
+        // Without this hook the browser view stops the toolbar short of the caption buttons.
+        assert_eq!(&toolbar.toolbar_layout_prologue[11..14], &[0x48, 0x8B, 0x05]);
+        assert!(toolbar.hidden.contains(&(0x0FD1_9CB0, 0x00C9_16B0)), "OverflowButton");
+        assert!(location_bar_minimum(&CHROME_156_74).is_some_and(|bar| bar.width <= 120));
     }
 
     #[test]
