@@ -563,6 +563,8 @@ pub struct TopRow {
     pub reload_mode_offset: usize,
     /// The address field's location bar, its location icon and its text field.
     pub location_bar: usize,
+    /// Where the location bar's view keeps the hover animation's value, from 0 to 1.
+    pub location_hover: usize,
     pub location_icon: usize,
     pub omnibox: usize,
     /// The text field's `OnPaint`, `OnFocus` and `OnBlur`, each with its slot.
@@ -4250,6 +4252,8 @@ pub static SAMSUNG: Build = Build {
             button_state_offset: 0x3B4,
             reload_mode_offset: 0x89C,
             location_bar: 0xe270568,
+            // Seen rising from 0 to 1 in the live view when the pointer enters the field.
+            location_hover: 0x4E8,
             location_icon: 0xe2708a8,
             omnibox: 0xe2826e8,
             omnibox_paint: (89, 0x171fb60),

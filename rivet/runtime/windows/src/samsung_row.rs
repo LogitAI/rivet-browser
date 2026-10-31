@@ -45,6 +45,10 @@ const TEXT_Y: i32 = 2;
 const TEXT_HEIGHT: i32 = 24;
 /// The width the browser gives the location icon when it shows no text.
 const BROWSER_ICON_WIDTH: i32 = 24;
+/// The design's field shows 5% of its ink under the pointer, with 8 DIP corners.
+const FIELD_RADIUS: f32 = 8.0;
+const FIELD_HOVER_ALPHA: f64 = 0.05;
+const INK_RGB: u32 = 0x001F_2024;
 const LOCK_INK: u32 = 0xFF4A_4850;
 const WARNING_INK: u32 = 0xFFB3_261E;
 /// The field's text: the design's muted address at rest, ink while a person edits it.
@@ -255,6 +259,12 @@ pub fn page_mark(address: &str, warns: bool) -> PageMark {
     }
 }
 
+/// The field's fill at a point of its hover animation.
+pub fn field_fill(hover: f64) -> u32 {
+    let alpha = (hover.clamp(0.0, 1.0) * FIELD_HOVER_ALPHA * 255.0).round() as u32;
+    (alpha << 24) | INK_RGB
+}
+
 /// Which colour a colour id holds in the row of a Rivet window, or `None` to keep its own.
 pub fn colour(colours: &[(i32, u32)], id: i32) -> Option<u32> {
     colours.iter().find(|(known, _)| *known == id).map(|(_, colour)| *colour)
@@ -317,6 +327,20 @@ unsafe fn bare(view: *mut c_void, canvas: *const c_void, slot: usize) {
     }
     // The row's line is the design's hairline. Any other view of that class has no room to draw in.
     let Some(image) = image::recorded() else { return };
+    if class_of(view as usize, image.base) == row.location_bar {
+        let editing = {
+            let known = EDITING.lock().unwrap_or_else(|error| error.into_inner());
+            children(view as usize, row).into_iter().any(|child| known.contains(&child))
+        };
+        let hover = if editing { 1.0 } else { *((view as usize + row.location_hover) as *const f64) };
+        if hover > 0.0 {
+            let width = bounds_of(view as usize, row)[2];
+            let fill = rounded_fill(width, CONTENT, FIELD_RADIUS, row);
+            let draw: PaintIcon = std::mem::transmute(image.base + row.paint_vector_icon);
+            draw(canvas, fill as *const c_void, width, field_fill(hover));
+        }
+        return;
+    }
     if class_of(view as usize, image.base) == row.separator {
         let draw: unsafe extern "system" fn(*const c_void, u32) =
             std::mem::transmute(image.base + crate::builds::get().layout.draw_color);
@@ -392,15 +416,15 @@ unsafe fn active_address(view: *mut c_void) -> Option<String> {
     tabs.into_iter().find(|tab| tab.saved.active).map(|tab| tab.saved.url)
 }
 
-/// The rounded fill behind a chip with words, made once for each width.
-unsafe fn chip_fill(width: i32, row: &TopRow) -> usize {
-    static FILLS: Mutex<Vec<(i32, usize)>> = Mutex::new(Vec::new());
+/// A rounded fill, made once for each size. A window's field has few widths in a session.
+unsafe fn rounded_fill(width: i32, height: i32, radius: f32, row: &TopRow) -> usize {
+    static FILLS: Mutex<Vec<(i32, i32, usize)>> = Mutex::new(Vec::new());
     let mut fills = FILLS.lock().unwrap_or_else(|error| error.into_inner());
-    if let Some((_, icon)) = fills.iter().find(|(known, _)| *known == width) {
+    if let Some((_, _, icon)) = fills.iter().find(|(w, h, _)| *w == width && *h == height) {
         return *icon;
     }
-    let icon = crate::chrome_toolbar::fill_icon(width as f32, CHIP_HEIGHT as f32, CHIP_RADIUS, row.canvas_command) as usize;
-    fills.push((width, icon));
+    let icon = crate::chrome_toolbar::fill_icon(width as f32, height as f32, radius, row.canvas_command) as usize;
+    fills.push((width, height, icon));
     icon
 }
 
@@ -429,7 +453,7 @@ unsafe extern "system" fn button_paint(view: *mut c_void, canvas: *const c_void)
         if mark != PageMark::Warning {
             return draw(canvas, icons.marks[mark_index(mark)] as *const c_void, CHIP_GLYPH_ONLY, LOCK_INK);
         }
-        let fill = chip_fill(width, row);
+        let fill = rounded_fill(width, CHIP_HEIGHT, CHIP_RADIUS, row);
         draw(canvas, fill as *const c_void, width, WARNING_FILL);
         draw(canvas, icons.marks[mark_index(mark)] as *const c_void, CHIP_GLYPH_ONLY, WARNING_INK);
         let (list, words) = warning_label();
@@ -711,6 +735,13 @@ mod tests {
         assert_eq!(page_mark("rivet://start", false), PageMark::Info);
         assert_eq!(page_mark("file:///C:/a.html", false), PageMark::Info);
         assert_eq!(page_mark("https://expired.example/", true), PageMark::Warning);
+    }
+
+    #[test]
+    fn fr12_samsung_field_fill_follows_the_hover_animation() {
+        assert_eq!(field_fill(0.0), 0x001F_2024);
+        assert_eq!(field_fill(1.0), 0x0D1F_2024);
+        assert_eq!(field_fill(4.0), 0x0D1F_2024);
     }
 
     #[test]
