@@ -166,6 +166,10 @@ enum StripHit {
     Resizer,
     /// Belongs to the appbar's own content.
     Appbar,
+    /// The caption buttons, which Windows needs by name for Snap Layouts.
+    Minimize,
+    Maximize,
+    Close,
 }
 
 /// Classifies a point against a docked appbar `side` DIPs wide, which is zero while the appbar is
@@ -180,6 +184,44 @@ fn strip_hit(x: i32, y: i32, dpi: u32, resize_border: i32, side: i32) -> StripHi
         _ if x >= scale(side - RESIZER_WIDTH, dpi) => StripHit::Resizer,
         _ if y < scale(CAPTION_HEIGHT, dpi) => StripHit::Caption,
         _ => StripHit::Appbar,
+    }
+}
+
+/// What a point right of the appbar does, in DIPs of the client area with `y` from the top of the
+/// visible frame. The row runs from the panel's gap down 44 DIPs. Its caption buttons fill that whole
+/// height, its controls fill the 28 DIPs in the middle, and the rest of it moves the window.
+#[cfg(windows)]
+fn title_row_hit(x: f32, y: f32, width: f32, resizing: bool, leading: f32, zoomed: bool) -> StripHit {
+    const BUTTON: f32 = 46.0;
+    /// The design's space between the field and the caption buttons.
+    const FIELD_GAP: f32 = 10.0;
+    let gap = chrome_layout::PANEL_GAP as f32;
+    let row = (CAPTION_HEIGHT + chrome_layout::PANEL_TOP) as f32;
+    let right = width - gap;
+    if x < leading {
+        return StripHit::Browser;
+    }
+    if resizing {
+        return if x >= right { StripHit::Browser } else { StripHit::Top };
+    }
+    if y >= gap + row || (x >= right && !zoomed) {
+        return StripHit::Browser;
+    }
+    // A maximized window's corner stays its close button, and nothing is above its row to drag.
+    if y >= gap || zoomed {
+        match ((right - x) / BUTTON).ceil() as i32 {
+            i32::MIN..=1 => return StripHit::Close,
+            2 => return StripHit::Maximize,
+            3 => return StripHit::Minimize,
+            _ => {}
+        }
+    }
+    let control = y >= gap + 8.0 && y < gap + 36.0;
+    let beside = x < leading + 8.0 || x >= right - 3.0 * BUTTON - FIELD_GAP;
+    if control && !beside {
+        StripHit::Browser
+    } else {
+        StripHit::Caption
     }
 }
 
@@ -370,6 +412,48 @@ mod tests {
         assert_eq!(reserved_for_strip(FLOAT_INSET, 0), FLOAT_INSET);
         // A strip wider than the wanted edge never pushes the view off the window.
         assert_eq!(reserved_for_strip(200, 240), 0);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn fr12_caption_buttons_answer_over_the_whole_row_height() {
+        let hit = |x, y| title_row_hit(x, y, 800.0, false, 268.0, false);
+        for y in [8.0, 30.0, 51.5] {
+            assert_eq!(hit(780.0, y), StripHit::Close);
+            assert_eq!(hit(720.0, y), StripHit::Maximize);
+            assert_eq!(hit(680.0, y), StripHit::Minimize);
+        }
+        // Below the row is the page, and the gap beside the panel is the browser's.
+        assert_eq!(hit(780.0, 52.0), StripHit::Browser);
+        assert_eq!(hit(795.0, 30.0), StripHit::Browser);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn fr12_title_row_moves_the_window_outside_its_controls() {
+        let hit = |x, y| title_row_hit(x, y, 800.0, false, 268.0, false);
+        // Above and below the controls, the gap above the row, and beside the controls.
+        for (x, y) in [(400.0, 2.0), (400.0, 12.0), (400.0, 48.0), (272.0, 30.0), (650.0, 30.0)] {
+            assert_eq!(hit(x, y), StripHit::Caption, "{x},{y}");
+        }
+        // A button or the field, and anything over the appbar.
+        assert_eq!(hit(400.0, 30.0), StripHit::Browser);
+        assert_eq!(hit(100.0, 12.0), StripHit::Browser);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn fr12_top_edge_resizes_over_the_caption_buttons_too() {
+        assert_eq!(title_row_hit(780.0, 3.0, 800.0, true, 268.0, false), StripHit::Top);
+        // The window's corner stays with the browser.
+        assert_eq!(title_row_hit(797.0, 3.0, 800.0, true, 268.0, false), StripHit::Browser);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn fr12_maximized_corner_stays_the_close_button() {
+        assert_eq!(title_row_hit(799.0, 0.0, 800.0, false, 268.0, true), StripHit::Close);
+        assert_eq!(title_row_hit(720.0, 0.0, 800.0, false, 268.0, true), StripHit::Maximize);
     }
 
     #[test]

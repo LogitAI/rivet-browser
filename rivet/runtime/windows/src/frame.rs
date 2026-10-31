@@ -21,7 +21,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetPropW, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow,
     IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, PostMessageW, RegisterWindowMessageW,
     RemovePropW, SetCursor, SetPropW, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW,
-    WindowFromPoint, GA_ROOT, GWLP_WNDPROC, GWL_STYLE, HTBORDER, HTCAPTION, HTTOP, HTTOPLEFT,
+    WindowFromPoint, GA_ROOT, GWLP_WNDPROC, GWL_STYLE, HTBORDER, HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HTTOP, HTTOPLEFT,
     ICON_BIG, ICON_SMALL, IDC_SIZEWE, MSG, PM_REMOVE, SM_CXICON, SM_CXPADDEDBORDER, SM_CXSMICON,
     SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, WH_GETMESSAGE, WM_CAPTURECHANGED, WM_CLOSE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
@@ -2096,6 +2096,19 @@ unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
     };
     let strip = strip_hit(point.x, point.y, dpi, border, layout.strip());
     let factor = dpi as f32 / 96.0;
+    // The split's own rows take their input from the client area.
+    if strip == StripHit::Browser && row_hit(window, point).is_none() {
+        let mut client: RECT = std::mem::zeroed();
+        GetClientRect(window, &mut client);
+        return crate::title_row_hit(
+            point.x as f32 / factor,
+            (point.y - top_border(window)) as f32 / factor,
+            client.right as f32 / factor,
+            point.y < border,
+            layout.leading() as f32,
+            IsZoomed(window) != 0,
+        );
+    }
     let x = point.x as f32 / factor;
     let y = (point.y - top_border(window)) as f32 / factor;
     let side = layout.side as f32;
@@ -2451,6 +2464,9 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             StripHit::Top => HTTOP as LRESULT,
             StripHit::TopLeft => HTTOPLEFT as LRESULT,
             StripHit::Appbar | StripHit::Resizer => APPBAR_HIT as LRESULT,
+            StripHit::Minimize => HTMINBUTTON as LRESULT,
+            StripHit::Maximize => HTMAXBUTTON as LRESULT,
+            StripHit::Close => HTCLOSE as LRESULT,
         },
         // Clicks on the appbar's content never reach the browser, which would otherwise see
         // non-client input it did not lay out.
