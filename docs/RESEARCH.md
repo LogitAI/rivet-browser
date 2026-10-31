@@ -400,6 +400,8 @@
 - 쉬는 동안 보이는 주소와 제목은 글자 뷰 `0xfb78080`이 아니라 `0xfb23de0`(`[28, 8, 194, 18]`) 아래의 레이블이다. 그래서 글자 뷰만 고쳐서는 `#f4f6f9` 상자가 남았다. 상자는 `0xfb23de0`의 `OnPaintBackground`(슬롯 90, `0x08F84930`)이고, 필드, 잠금 칩, 글자 뷰도 같은 슬롯으로 배경을 그린다.
 - 주소 끝의 흐림은 `0xfb244e0`(`OnPaint` `0x0E3C0420`)이 `+0x318`의 색으로 그린다.
 - 기록된 페인트가 남으므로 훅을 건 뒤 `views::View::SchedulePaint`(`0x08F7E530`)를 불러야 한다.
+- 줄의 흰색은 툴바 `0xfb84760`과 컨테이너 `0xfaac4e0`의 배경이다. 주소의 hover 상태는 쉬는 동안의 버튼 `0xfb23660`(`Button::SetState` `0x0901EED0`, 상태 `+0x3C4`)이 갖고, 필드는 레이어 뿌리라서 버튼과 함께 다시 그려진다.
+- 화면 밖 창에서는 게시한 `WM_LBUTTONDOWN`, `WM_KEYDOWN`이 뷰에 닿지 않고, 게시한 `WM_MOUSEMOVE`로는 주소 버튼이 hover 상태가 되지 않는다. 임시 코드로 `Button::SetState`, `Widget::GetFocusManager`(`0x08F67140`), `FocusManager::SetFocusedView`(`0x08FA81D0`)를 부르면 hover와 편집 상태를 볼 수 있고, 그 뒤 게시한 `WM_CHAR`은 입력되며 자동완성 목록도 열린다.
 - `WM_NCMOUSEMOVE`(HTCLOSE)를 보내면 캡션 버튼 hover가 동작한다.
 
 ## 2026-10-29: Brave 156.1.98.62 지원 가능성
