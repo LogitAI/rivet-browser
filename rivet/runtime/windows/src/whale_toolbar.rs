@@ -456,6 +456,19 @@ unsafe fn install_paint(row: &WhaleRow, base: usize) -> Result<(), String> {
     })
 }
 
+/// Leaves out the curves Whale draws over the page's top corners. The panel has its own corners.
+unsafe fn install_page(row: &WhaleRow, base: usize) -> Result<(), String> {
+    let image = image::recorded().ok_or("no recorded browser image")?;
+    let slot = views().ok_or("this browser build has no recorded views to hide")?.slots[3];
+    if !image.points_to(row.page_corner + slot * 8, row.page_corner_paint) {
+        return Err(format!("{:#x} does not hold the recorded corner paint", row.page_corner));
+    }
+    crate::chrome_toolbar::transaction(|| {
+        HELD.lock().unwrap_or_else(|error| error.into_inner()).push((base + row.page_corner, slot, base + row.page_corner_paint));
+        crate::chrome_toolbar::replace_slot((base + row.page_corner + slot * 8) as *mut usize, paint as *const () as usize)
+    })
+}
+
 unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 4]) {
     let original: SetBounds = std::mem::transmute(ROW_ORIGINAL.load(Ordering::Acquire));
     let Some(row) = row() else { return original(view, rect) };
@@ -485,6 +498,7 @@ unsafe fn install_row() -> Result<(), String> {
                 }
             }
             install_paint(row, image.base)?;
+            install_page(row, image.base)?;
             crate::chrome_toolbar::transaction(|| {
                 crate::chrome_toolbar::detour(
                     image.base,

@@ -373,6 +373,10 @@ pub struct WhaleRow {
     pub button_image: usize,
     pub button_state_offset: usize,
     pub reload_mode_offset: usize,
+    /// The vtable of the views Whale lays over the page's top corners, each a filled curve beside its
+    /// sidebar, and what `views::View::OnPaint`'s slot holds for them.
+    pub page_corner: usize,
+    pub page_corner_paint: usize,
 }
 
 /// Values for `edge_page.rs`: Edge insets its page and paints a border around it, which would
@@ -3299,6 +3303,8 @@ pub static WHALE: Build = Build {
         button_image: 0xfaf7480,
         button_state_offset: 0x3C4,
         reload_mode_offset: 0x8DC,
+        page_corner: 0xfb81360,
+        page_corner_paint: 0x0E68_CCE0,
     }),
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
@@ -4995,6 +5001,9 @@ mod tests {
         for vtable in [row.container, row.field].into_iter().chain(row.buttons) {
             assert!(hidden.classes.iter().all(|(hidden, _)| *hidden != vtable), "{vtable:#x} is hidden");
         }
+        // The page's corner views are drawn by their own paint, not by a shared one.
+        assert_eq!((row.page_corner, row.page_corner_paint), (0xfb81360, 0x0E68_CCE0));
+        assert!(hidden.classes.iter().all(|(vtable, _)| *vtable != row.page_corner));
         // Only Whale moves its row.
         for build in all() {
             assert_eq!(build.whale_row.is_some(), build.module == "whale.dll", "{}", build.module);
