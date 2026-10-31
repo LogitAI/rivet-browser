@@ -41,28 +41,36 @@ mod windows {
     struct Browser {
         label: &'static str,
         executable: &'static str,
+        /// Rivet's own profile folder of this browser, below `%LOCALAPPDATA%\Rivet\profiles`. The
+        /// browser's own profile stays out of it, and the names match the sample spaces.
+        profile: &'static str,
     }
 
     const BROWSERS: [Browser; 5] = [
         Browser {
             label: "Google Chrome",
             executable: "chrome.exe",
+            profile: "chrome\\Work",
         },
         Browser {
             label: "Microsoft Edge",
             executable: "msedge.exe",
+            profile: "edge\\Lab",
         },
         Browser {
             label: "Brave",
             executable: "brave.exe",
+            profile: "brave\\Default",
         },
         Browser {
             label: "Naver Whale",
             executable: "whale.exe",
+            profile: "whale\\Personal",
         },
         Browser {
             label: "Samsung Internet",
             executable: "samsunginternet.exe",
+            profile: "samsung\\Default",
         },
     ];
 
@@ -200,7 +208,25 @@ mod windows {
             .find_map(|root| registered_executable(root, name))
     }
 
+    fn session_arguments(browser: &std::path::Path, profile: &str, root: &std::path::Path) -> Vec<String> {
+        // No URL: a session without one opens the Rivet start page.
+        vec![
+            "session".to_owned(),
+            "start".to_owned(),
+            "--browser".to_owned(),
+            browser.to_string_lossy().into_owned(),
+            "--user-data-dir".to_owned(),
+            root.join("Rivet").join("profiles").join(profile).to_string_lossy().into_owned(),
+            "--display".to_owned(),
+            "visible".to_owned(),
+        ]
+    }
+
     fn launch(browser: &Browser) -> Result<(), String> {
+        let profile = browser.profile;
+        let root = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .ok_or_else(|| "could not find the local application data folder.".to_owned())?;
         let browser = installed_browser(browser.executable).ok_or_else(|| {
             format!("{} is not installed. Choose another browser or use the rivet CLI with an explicit executable path.", browser.label)
         })?;
@@ -208,16 +234,7 @@ mod windows {
             .map_err(|error| format!("could not resolve the Rivet launcher location: {error}"))?
             .with_file_name("rivet.exe");
         Command::new(executable)
-            .args([
-                "session",
-                "start",
-                "--browser",
-                browser.to_string_lossy().as_ref(),
-                "--url",
-                "https://example.com/",
-                "--display",
-                "visible",
-            ])
+            .args(session_arguments(&browser, &profile, &root))
             .spawn()
             .map_err(|error| format!("could not start Rivet: {error}"))?;
         Ok(())
@@ -375,7 +392,19 @@ mod windows {
 
     #[cfg(test)]
     mod tests {
-        use super::{button_bounds, scale, BROWSERS};
+        use super::{button_bounds, scale, session_arguments, BROWSERS};
+
+        #[test]
+        fn fr3_picker_opens_the_start_page_in_a_rivet_profile() {
+            let arguments = session_arguments(
+                std::path::Path::new("C:\\B\\chrome.exe"),
+                BROWSERS[0].profile,
+                std::path::Path::new("C:\\Data"),
+            );
+            assert!(!arguments.iter().any(|argument| argument == "--url"));
+            let at = arguments.iter().position(|argument| argument == "--user-data-dir").unwrap();
+            assert_eq!(arguments[at + 1], "C:\\Data\\Rivet\\profiles\\chrome\\Work");
+        }
 
         #[test]
         fn fr1_picker_offers_every_supported_chromium_browser() {

@@ -155,9 +155,8 @@ pub fn build_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchEr
     }
     match display {
         DisplayMode::Visible => {
-            // An app window has no tab strip or address bar. The runtime adds the Rivet sidebar
-            // to this window, so it stays a normal resizable window rather than fullscreen.
-            arguments.push(format!("--app={}", request.url));
+            // A normal window: Rivet overwrites its toolbar and address bar, which an app window lacks.
+            arguments.push(request.url.clone());
         }
         DisplayMode::Hidden => {
             arguments.push("--headless=new".to_owned());
@@ -209,11 +208,10 @@ mod tests {
     }
 
     #[test]
-    fn fr5_visible_uses_an_app_window_without_a_debugging_port() {
+    fn fr12_visible_opens_a_normal_window_without_a_debugging_port() {
         let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
-        assert!(plan
-            .arguments
-            .contains(&"--app=https://example.test/".into()));
+        assert!(plan.arguments.contains(&"https://example.test/".into()));
+        assert!(!plan.arguments.iter().any(|argument| argument.starts_with("--app")));
         assert!(!plan
             .arguments
             .iter()
