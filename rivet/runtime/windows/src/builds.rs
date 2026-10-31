@@ -3709,6 +3709,386 @@ pub static BRAVE: Build = Build {
     },
 };
 
+/// Brave 156.1.98.63 (Chromium 156.0.8078.80), the same layout of objects and colour ids as Brave
+/// 156.1.98.62 at new addresses from its own symbols. `WindowsCaptionButton::PaintButtonContents` is a
+/// jump to the next function here, and the vtable slot holds that jump.
+pub static BRAVE_63: Build = Build {
+    browser: "Brave",
+    module: "chrome.dll",
+    version: [156, 1, 98, 63],
+    toolbar: Toolbar {
+        layout_constant: 0x0039C9D0, // ?GetLayoutConstant@@YAHW4LayoutConstant@@@Z
+        layout_constant_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x89, 0xCF, 0x48, 0x8B, 0x05, 0x60, 0x26, 0xDC, 0x12],
+        theme_changed: 0x0103E8B0, // ?ThemeChanged@Widget@views@@QEAAXXZ
+        theme_changed_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x78, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x80, 0x07, 0x12, 0x12],
+        paint_layer: 0x00883550, // ?PaintFromPaintRoot@View@views@@AEAAXAEBVPaintContext@ui@@@Z
+        paint_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x78, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0xE0, 0xBA, 0x8D, 0x12],
+        set_visible: 0x066514D0, // ?SetVisible@View@views@@UEAAX_N@Z
+        set_visible_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x89, 0xD3],
+        from_vector_icon: 0x00E7C880, // ?FromVectorIcon@ImageModel@ui@@SA?AV12@AEBUVectorIcon@gfx@@VColorVariant@2@HPEBU34@@Z
+        from_vector_icon_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20],
+        update_location: 0x01628320, // ?Update@LocationIconView@@QEAAX_N0@Z
+        update_location_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00],
+        update_location_icon: 0x01628BE0, // ?UpdateIcon@LocationIconView@@QEAAXXZ
+        update_location_icon_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x98, 0x00, 0x00, 0x00, 0x48, 0x89, 0xCE],
+        layout_insets: 0x00740870, // ?GetLayoutInsets@@YA?AVInsets@gfx@@W4LayoutInset@@@Z
+        layout_insets_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x89, 0xD7, 0x48, 0x89, 0xCE],
+        toolbar_button_inset: 6,
+        toolbar_inset: 11,
+        location_icon_inset: 3,
+        update_icon: 0x012524A0, // ?UpdateIcon@ToolbarButton@@UEAAXXZ
+        update_icon_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xCE, 0x80, 0xB9, 0xD8, 0x06, 0x00, 0x00, 0x01],
+        formatted_url: 0x011B2530, // ?GetFormattedURL@LocationBarModelImpl@@AEBA?AV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$alloca
+        formatted_url_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x60, 0x01, 0x00, 0x00],
+        model_url: 0x0637E8D0, // ?GetURL@LocationBarModelImpl@@UEBA?AVGURL@@XZ
+        model_url_prologue: &[0x56, 0x57, 0x48, 0x81, 0xEC, 0xB8, 0x00, 0x00, 0x00, 0x48, 0x89, 0xD6],
+        omnibox_update: 0x01626A50, // ?Update@OmniboxViewViews@@UEAAXXZ
+        omnibox_update_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0xE1, 0x85, 0xB3, 0x11],
+        omnibox_revert_all: 0x01627070, // ?RevertAll@OmniboxViewViews@@UEAAXXZ
+        omnibox_revert_all_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0xC1, 0x7F, 0xB3, 0x11],
+        omnibox_tab_changed: 0x01629BD0, // ?OnTabChanged@OmniboxViewViews@@QEAAXPEAVWebContents@content@@@Z
+        omnibox_tab_changed_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD7, 0x48, 0x89, 0xCE],
+        omnibox_textfield: 0x10,
+        update_text_style: 0x01C87A50, // ?UpdateTextStyle@OmniboxView@@IEAAXAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator@_S@
+        update_text_style_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        apply_color: 0x02F5E750, // ?ApplyColor@RenderText@gfx@@QEAAXIAEBVRange@2@@Z
+        apply_color_bytes: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0xA0, 0x00, 0x00, 0x00],
+        title_weight: 600,
+        apply_weight: 0x0C163F30, // ?ApplyWeight@RenderText@gfx@@QEAAXW4Weight@Font@2@AEBVRange@2@@Z
+        apply_weight_bytes: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0x00, 0x01, 0x00, 0x00],
+        title_was_set: 0x02F05A30, // ?TitleWasSet@OmniboxViewViews@@EEAAXPEAVNavigationEntry@content@@@Z
+        title_was_set_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x81, 0x80, 0x00, 0x00, 0x00],
+        observer_offset: 0x720,
+        operator_new: 0x06F4DE00, // ??2@YAPEAX_K@Z
+        operator_new_bytes: &[0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B],
+        operator_delete: 0x05147E60, // ??3@YAXPEAX_K@Z
+        operator_delete_bytes: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xD6],
+        model_delegate: 0x40,
+        browser_delegate_vtable: 0x1102ADA8, // .weak.??_7BrowserLocationBarModelDelegate@@6B@.default.?RejectPromiseOnDestruction@?$CdmPromiseTempl
+        active_web_contents: 0x06A5D6A0, // ?GetActiveWebContents@BrowserLocationBarModelDelegate@@UEBAPEAVWebContents@content@@XZ
+        active_web_contents_slot: 19,
+        web_contents_vtable: 0x110D8DF0, // .weak.??_7WebContentsImpl@content@@6BPageNavigator@1@@.default.?RejectPromiseOnDestruction@?$CdmProm
+        web_contents_title: 0x00AE2AE0, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator
+        web_contents_title_slot: 53,
+        location_bar_view_base: 0x100,
+        hover_value: 0x5F8,
+        field_background: 0x328,
+        background_vtable: 0x10E9A7D0, // ??_7BackgroundPainter@views@@6B@
+        painter_vtable: 0x11043C90, // ??_7SolidRoundRectPainter@?A0xF7BC1CD1@views@@6B@.b545234ba40531a795a52b0b8121bc9c
+        painter_radii: 0x10,
+        painter_insets: 0x20,
+        field_state: 0x4E8,
+        field_state_focused: 0x18,
+        focused_fill_id: 1030,
+        focus_ring_remove: 0x03C0DAE0, // ?Remove@FocusRing@views@@SAXPEAVView@2@@Z
+        set_transform: 0x0BE53A80, // ?SetTransform@View@views@@QEAAXAEBVTransform@gfx@@@Z
+        set_transform_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x48, 0x89, 0xD6],
+        set_brightness: 0x0BEF9E60, // ?SetLayerBrightness@Layer@ui@@QEAAXM@Z
+        set_brightness_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x48, 0x0F, 0x29, 0x74, 0x24, 0x30, 0x0F, 0x28, 0xF1],
+        view_layer: 0x20,
+        view_size: 0x1D0,
+        refresh_background: 0x0398D790, // ?RefreshBackground@LocationBarView@@AEAAXXZ
+        refresh_background_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xC4, 0x80],
+        chip_text: 0x005AD770, // ?GetSecurityChipText@location_bar@@YA?AV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator@_S
+        chip_text_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00],
+        textfield_theme: 0x020671C0, // ?OnThemeChanged@Textfield@views@@UEAAXXZ
+        textfield_theme_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x68],
+        textfield_set_font: 0x02F3BC60, // ?SetFontList@Textfield@views@@QEAAXAEBVFontList@gfx@@@Z
+        textfield_set_font_bytes: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x81, 0x78, 0x03, 0x00, 0x00],
+        font_size: 0x03C36860, // ?GetFontSize@FontList@gfx@@QEBAHXZ
+        font_size_bytes: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x31, 0x8B, 0x46, 0x44, 0x83, 0xF8, 0xFF],
+        derive_size: 0x02F5FBE0, // ?DeriveWithSizeDelta@FontList@gfx@@QEBA?AV12@H@Z
+        derive_size_bytes: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x44, 0x89, 0xC7],
+        textfield_render_text: 0x378,
+        render_text_font_list: 0x48,
+        gurl_destructor: 0x0513AB00, // ??1GURL@@QEAA@XZ
+        gurl_destructor_bytes: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE],
+        gurl_scheme_begin: 0x20,
+        gurl_scheme_length: 0x24,
+        anchor_rect: 0x0BEDC9D0, // ?GetAnchorRect@BubbleDialogDelegate@views@@UEBA?AVRect@gfx@@XZ
+        anchor_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xD0, 0x00, 0x00, 0x00],
+        anchor_view_access: &[
+        0x48, 0x8B, 0x81, 0, 3, 0, 0, 0x48, 0x85, 0xC0, 0x74, 0x56, 0x48, 0x8B, 0x58, 0x18,
+        0x48, 0x85, 0xDB, 0x74, 0x4D,
+    ],
+        is_drawn: 0x000E3710, // ?IsDrawn@AppMenuButton@@UEBA_NXZ
+        is_drawn_bytes: &[
+        0x80, 0xB9, 0xD8, 1, 0, 0, 1, 0x75, 0x1D, 0x48, 0x8B, 0x89, 0x98, 1, 0, 0,
+        0x48, 0x85, 0xC9, 0x74, 0x11, 0x48, 0x8B, 1, 0x48, 0x8B, 0x80, 0x98, 0, 0, 0, 0x48,
+    ],
+        bounds_in_screen: 0x009A5990, // ?GetBoundsInScreen@View@views@@QEBA?AVRect@gfx@@XZ
+        bounds_bytes: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF],
+        parent_offset: 0x198,
+        is_drawn_slot: 19,
+        browser_widget_vtable: 0x11056318, // ??_7BrowserWidget@@6BNativeWidgetDelegate@internal@views@@@
+        plain_widget_vtable: 0x10E8F630, // ??_7Widget@views@@6BNativeWidgetDelegate@internal@1@@
+        paint_slot: 30,
+        paint: 0x02F386F0, // ?OnNativeWidgetPaint@Widget@views@@UEAAXAEBVPaintContext@ui@@@Z
+        layout_slot: 44,
+        layout: 0x016B29E0, // ?LayoutRootViewIfNecessary@Widget@views@@UEAAXXZ
+        color_provider: 0x06735E30, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
+        root_view_offset: 0x1A0,
+        theme_slot: 99,
+        hidden: &[
+        (0x110F8FE0, 0x070E0200), // BraveBrowserAppMenuButton
+        (0x11103000, 0x037187E0), // BraveAvatarToolbarButton
+        (0x1117DC80, 0x00915270), // page_actions::PageActionView
+        (0x1117D940, 0x00038540), // page_actions::PageActionContainerView
+        (0x11102640, 0x00038540), // BraveActionsContainer, which holds the Shields and Rewards buttons
+        (0x110EEE20, 0x00038540), // VerticalTabStripRegionView
+        (0x110F8420, 0x01252260), // BraveBookmarkButton
+        (0x110F9920, 0x0AAD4CA0), // SidePanelButton, the Sidebar toggle
+        (0x110E82C0, 0x0AAC5720), // WalletButton
+        (0x110FC860, 0x0AAD85E0), // AIChatButton, Leo
+        (0x11104480, 0x0AADCE30), // BraveVPNButton
+        (0x1114AF60, 0x01252260), // PinnedActionToolbarButton
+        (0x1114EF80, 0x01252260), // SplitTabsToolbarButton
+    ],
+        get_widget_slot: 11,
+        size_slots: (0, 0),
+        paint_children_slot: 0,
+        overrides: &[
+        (12, 8),  // kLocationBarChildCornerRadius
+        (16, 28), // kLocationBarHeight
+        (29, 12), // kMainBackgroundRegionCornerRadius
+        (46, 28), // kToolbarButtonHeight
+        (55, 8),  // kToolbarCornerRadius
+        (60, 0),  // kVerticalTabMinWidth
+    ],
+        dev: DEV_BRAVE_156,
+        colours: &[
+        (0x13C, PAPER),      // kColorFrameActive
+        (813, PAPER),        // kColorLocationBarBackground
+        (814, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
+        (1020, 0),           // Page info chip background: clear, so the field is one surface
+        (159, FOCUS_RING),   // kColorSysStateFocusRing
+        (314, FOCUS_RING),   // kColorFocusableBorderFocused
+        (465, SELECTION),    // kColorTextfieldSelectionBackground
+        (466, INK),          // kColorTextfieldSelectionForeground
+        (1021, 0),           // kColorOmniboxIconBackgroundTonal
+        (1022, SOFT_INK),    // kColorOmniboxIconForeground: the icon of the field while editing
+        (1023, SOFT_INK),    // kColorOmniboxIconForegroundTonal
+        (1024, INK),         // kColorOmniboxIconHover
+        (1030, PAPER),       // kColorOmniboxResultsBackground, the suggestion list and the field with it
+        (1031, 0xFFF0_EFEC), // kColorOmniboxResultsBackgroundHovered
+        (1032, 0x0F1F_2024), // kColorOmniboxResultsBackgroundHoverOverlay
+        (1033, ACCENT_TINT), // kColorOmniboxResultsBackgroundSelected: the accent at 9 percent over paper
+        (1036, SOFT_INK),    // kColorOmniboxResultsButtonIcon
+        (1037, INK),         // kColorOmniboxResultsButtonIconSelected
+        (1045, 0),           // kColorOmniboxResultsFocusIndicator: the design marks a row by its tint alone
+        (1046, SOFT_INK),    // kColorOmniboxResultsIcon
+        (1047, 0x0F1F_2024), // kColorOmniboxResultsIconGM3Background
+        (1048, INK),         // kColorOmniboxResultsIconSelected
+        (1049, INK),         // kColorOmniboxResultsIconHovered
+        (1052, 0xFF8A_8690), // kColorOmniboxResultsTextDimmed
+        (1053, 0xFF4A_4850), // kColorOmniboxResultsTextDimmedSelected
+        (1058, 0xFF8A_8690), // kColorOmniboxResultsTextSecondary
+        (1059, 0xFF4A_4850), // kColorOmniboxResultsTextSecondarySelected
+        (1060, INK),         // kColorOmniboxResultsTextSelected
+        (1061, 0xFF4A_4850), // kColorOmniboxResultsUrl
+        (1062, INK),         // kColorOmniboxResultsUrlSelected
+        (1069, SOFT_INK),    // kColorOmniboxSecurityChipText: the icon of the field while editing
+        (1070, SELECTION),   // kColorOmniboxSelectionBackground: the accent at 25 percent over paper
+        (1071, INK),         // kColorOmniboxSelectionForeground
+        (1063, 0xFFB3_261E), // kColorOmniboxSecurityChipDangerous: the "Not secure" label and its warning
+        (1064, 0x14B3_261E), // kColorOmniboxSecurityChipDangerousBackground: the label's tint, 8 percent
+        (1072, INK),         // kColorOmniboxText: the address while it is edited
+        (1073, 0xFF8A_8690), // kColorOmniboxTextDimmed
+        (1607, PAPER),       // kColorToolbar
+        (1661, 0xFF1A_1A1A), // Caption button glyph, active window
+        (1662, 0xFF1A_1A1A), // Caption button glyph, inactive window
+        (1663, 0xFF1A_1A1A), // Caption button glyph without a theme colour
+        (1664, 0xFFC4_2B1C), // Close button hover fill
+        (1667, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
+        (1612, 0xFF4A_4850), // kColorToolbarButtonIcon
+        (1615, 0xFF1F_2024), // kColorToolbarButtonIconHovered
+        (1616, 0xFFBD_BCBC), // kColorToolbarButtonIconInactive: the icon colour at 35 percent over paper
+        (1620, HAIRLINE),    // kColorToolbarContentAreaSeparator
+        (1628, 0x0F1F_2024), // kColorToolbarInkDropHover
+        (1629, 0x1F1F_2024), // kColorToolbarInkDropRipple
+    ],
+        get_color: 0x06A5CB00, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
+        get_color_bytes: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x89, 0xD7],
+        hwnd_for_widget: 0x0BE3E480, // ?HWNDForWidget@views@@YAPEAUHWND__@@PEBVWidget@1@@Z
+        hwnd_for_widget_head: &[0x48, 0x83, 0xEC, 0x28],
+        hwnd_for_widget_tail: &[0x48, 0x89, 0xC1, 0x48, 0x83, 0xC4, 0x28, 0xE9],
+        source_in_widget: 0x48,
+        content_window_for_hwnd: 0x02F353F0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        widget_for_window: 0x02F37C00, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
+        back_icon: 0x1214D920, // ?kBackArrowChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
+        forward_icon: 0x1214FF78, // ?kForwardArrowChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
+        reload_icon: 0x12152728, // ?kReloadChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
+        nav_icon_names: &[b"kBackArrowChromeRefreshOldIcon", b"kForwardArrowChromeRefreshOldIcon", b"kReloadChromeRefreshOldIcon"],
+        page_info_icon: 0x1229C4D8, // ?kSecurePageInfoChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
+        google_g_icon: ABSENT, // Brave builds without the Google logos // ?kGoogleGLogoIcon@vector_icons@@3UVectorIcon@gfx@@B
+        google_g_monochrome_icon: ABSENT, // ?kGoogleGLogoMonochromeIcon@vector_icons@@3UVectorIcon@gfx@@B
+        edit_icons: &[0x12150028, 0x12150060, 0x12152B98, 0x12152BE0, 0x12152C18], // kGlobeIcon, kGlobeOldIcon, kSearchIcon, kSearchChromeRefreshOldIcon, kSearchOldIcon
+        http_icon: 0x1229BEF8, // ?kHttpChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
+        http_icon_name: b"kHttpChromeRefreshOldIcon",
+        page_info_bytes: &[
+        0x1C, 0, 0, 0, 0, 0, 0x80, 0x41, 1, 0, 0, 0, 7, 0, 0, 0,
+        0x5C, 0x8F, 0x3A, 0x41, 0xEC, 0x51, 0x5C, 0x41, 0x12, 0, 0, 0, 0xD7, 0xA3, 0x30, 0xBF,
+    ],
+        page_info_reps: 0x1229C4A0, // ?kSecurePageInfoChromeRefreshOldRepList@omnibox@@3QBUVectorIconRep@gfx@@B.llvm.2910200201067176236
+        page_info_id: 0x1229C4B0, // ?kSecurePageInfoChromeRefreshOldIconId@omnibox@@3QBDB.llvm.2910200201067176236
+        page_info_path: 0x122A6110, // ?kSecurePageInfoChromeRefreshOldPath@omnibox@@3QBUPathElement@gfx@@B.llvm.2910200201067176236
+        page_info_size: 282,
+        http_size: 81,
+        extra_lock_icons: &[],
+        extra_warning_icons: &[],
+        anchor_view_access_at: 0x2a,
+        skip: "",
+        anchor_tracker_offset: 0x300,
+        toolbar_layout: 0x03720270, // ?Layout@BraveToolbarView@@UEAAXVPassKey@@@Z
+        toolbar_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE],
+        infobar_vtable: 0x110FDD20, // ??_7BraveInfoBarContainerView@@6B@
+        infobar_layout: 0x02F2D5F0, // ?Layout@InfoBarContainerView@@UEAAXVPassKey@@@Z
+        infobar_layout_slot: 23,
+        leading_space: 27,
+        toolbar_top: 6, // the content is 28 DIPs tall, not Chrome's 34, and Brave adds 4 of its own: 6 and 5 reach the 43 DIP row
+        toolbar_bottom: 5,
+        button_padding: 4,
+        field_fill_margin: 0, // the field view is 28 DIPs tall already
+    },
+    vertical: VerticalTabs {
+        supported: true,
+        slot: 0x11024BD8, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
+        should_display: 0x039C3900, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
+        browser_view_for_browser: 0x00227A40, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
+        hwnd_for_view: 0x03C06C50, // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
+        notify_mode_changed: 0x0B4738F0, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
+        update_collapse_action: 0x029F0BE0, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
+        destructor: 0x02B00B60, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
+        destructor_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48],
+        browser_offset: 0x1B8,
+        mode_offset: 0x1E8,
+        width_offset: 0x1CC,
+        browser_view_view_vtable: 0x110EA540, // ??_7BraveBrowserView@@6BLayerDelegate@ui@@@
+        region_preferred_size: 0x0CEC7C70, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        region_preferred_size_slot: 0x110EF070, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
+        invalidate_layout: 0x05A276E0, // ?InvalidateLayout@View@views@@QEAAX_N@Z
+        invalidate_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        region_minimum_size: 0x0CEC7BE0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
+        region_minimum_prologue: &[
+            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7, 0x02, 0x00, 0x00, 0x00, 0x00,
+        ],
+        should_draw_tab_strip: 0x065EAD20, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
+        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
+        detour_strip: false,
+        ..UNCHECKED_VERTICALTABS
+    },
+    navigation: Navigation {
+        supported: true,
+        content_window_for_hwnd: 0x02F353F0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        browser_view_for_window: 0x0CECB9F0, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
+        active_web_contents: 0x0CECBEA0, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        gurl_from_text: 0x05C641F0, // ??0GURL@@QEAA@V?$basic_string_view@DU?$char_traits@D@__Cr@std@@@__Cr@std@@@Z
+        gurl_wide: false,
+        gurl_empty: 0x06A10280, // ??0GURL@@QEAA@XZ
+        gurl_drop: 0x0513AB00, // ??1GURL@@QEAA@XZ
+        open_url_params: 0x08537500, // ??0OpenURLParams@content@@QEAA@AEBVGURL@@AEBUReferrer@1@W4WindowOpenDisposition@@W4PageTransition@ui@@_N@Z
+        open_url_params_drop: 0x020CAE20, // ??1OpenURLParams@content@@QEAA@XZ
+        open_url: 0x096EA220, // ?OpenURL@WebContentsImpl@content@@UEAAPEAVWebContents@2@AEBUOpenURLParams@2@V?$OnceCallback@...@Z
+        signatures: &[
+            (0x02F353F0, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x0CECB9F0, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x05C641F0, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54]),
+            (0x06A10280, &[0x48, 0x89, 0xC8, 0x0F, 0x57, 0xC0]),
+            (0x0513AB00, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28]),
+            (0x08537500, &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53]),
+            (0x020CAE20, &[0x41, 0x56, 0x56, 0x57, 0x53]),
+            (0x096EA220, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57]),
+            (0x0CECBEA0, &[0x48, 0x8B, 0x81, 0x60, 0x05, 0x00, 0x00]),
+        ],
+    },
+    tabs: Tabs {
+        supported: true, // list, switch, close and new tab; groups are not read
+        content_window_for_hwnd: 0x02F353F0,
+        browser_view_for_window: 0x0CECB9F0,
+        active_web_contents: 0x0CECBEA0,
+        browser_in_view: 0x560, // the field `GetActiveWebContents` reads first
+        groups: false,
+        get_tab_model: 0x0616A870, // ?GetTabStripModel@Browser@@UEAAPEAVTabStripModel@@XZ, `mov rax, [rcx + 0x30]; ret`
+        tab_count: 0x039C4B40, // ?count@TabStripModel@@QEBAHXZ
+        tab_at: 0x00526C00, // ?GetWebContentsAt@TabStripModel@@QEBAPEAVWebContents@content@@H@Z
+        activate_tab: 0x0B496FB0, // ?ActivateTabAt@TabStripModel@@QEAAXHUTabStripUserGestureDetails@@@Z
+        close_tab: 0x0B499C40, // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
+        title: 0x00AE2AE0, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator@_S@23@@__Cr@std@@XZ
+        new_tab: 0x0B3962E0, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
+        last_committed_url: 0x06AC7B50, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
+        visible_url: 0x00A77600, // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
+        get_group: 0x02EED4A0, // ?GetTabGroupForTab@TabStripModel@@QEBA?AV?$optional@VTabGroupId@tab_groups@@@__Cr@std@@H@Z
+        signatures: &[
+            (0x02F353F0, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x0CECB9F0, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0CECBEA0, &[0x48, 0x8B, 0x81, 0x60, 0x05, 0x00, 0x00]),
+            (0x0616A870, &[0x48, 0x8B, 0x41, 0x30, 0xC3]),
+            (0x039C4B40, &[0x48, 0x8B, 0x41, 0x08, 0x8B, 0x40, 0x20]),
+            (0x00526C00, &[0x48, 0x83, 0xEC, 0x28, 0x85, 0xD2]),
+            (0x0B496FB0, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38]),
+            (0x0B499C40, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28]),
+            (0x00AE2AE0, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x48]),
+            (0x0B3962E0, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57]),
+            (0x06AC7B50, &[0x48, 0x63, 0x81, 0xD4, 0x02, 0x00, 0x00]),
+            (0x00A77600, &[0x48, 0x8B, 0x81, 0xB0, 0x02, 0x00, 0x00]),
+        ],
+        ..UNCHECKED_TABS
+    },
+    split: UNCHECKED_SPLIT,
+    edge_vertical: None,
+    edge_page: None,
+    hidden_views: None,
+    whale_row: None,
+    side_panel: UNCHECKED_SIDEPANEL,
+    layout: Layout {
+        on_paint_slot: 89,
+        on_paint: 0x036F06C0, // ?OnPaint@BraveBrowserFrameViewWin@@EEAAXPEAVCanvas@gfx@@@Z
+        on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x90, 0x00, 0x00, 0x00],
+        get_color_provider: 0x06735E30, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
+        get_color_provider_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x78, 0x48],
+        draw_color: 0x03C35B00, // ?DrawColor@Canvas@gfx@@QEAAXI@Z
+        draw_color_prologue: &[0x48, 0x83, 0xEC, 0x38],
+        frame_ids: &[0x13C, 0x13D, 0x140, 321, 0x144],
+        corner_vtable: 0x1116E800, // ??_7CustomFloatingCorner@@6BLayerDelegate@ui@@@
+        corner_paint: 0x0B71E3A0, // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
+        corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        caption_vtable: 0x111A54C0, // ??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@
+        caption_size_slot: 74,
+        caption_size: 0x03A60970, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        caption_paint_slot: 114,
+        caption_paint: 0x020F21D0, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
+        caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
+        top_inset_slot: 127,
+        top_inset: 0x036F0890, // ?GetTopInset@BraveBrowserFrameViewWin@@EEBAH_N@Z
+        layout_slot: 23,
+        layout: 0x03A0BCD0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
+        layout_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40],
+        set_bounds_rect: 0x05EE66C0, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
+        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        caption_container_offset: 0x3C8,
+        view_bounds_offset: 0x1C8,
+        browser_view_view_vtable: 0x110EA540, // ??_7BraveBrowserView@@6BLayerDelegate@ui@@@
+        frame_vtable: 0x110ED3A0, // ??_7BraveBrowserFrameViewWin@@6BLayerDelegate@ui@@@
+        layout_immediately: 0x05EE76D0, // ?LayoutImmediately@View@views@@AEAAXXZ
+        layout_immediately_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55],
+        set_layer: 0x00852850, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
+        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
+        set_radius: 0x01B70D50, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
+        set_masks: 0x02F42E30, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
+        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
+        stack_at_top: 0x0BEFA460, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
+        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
+        set_opaque: 0x0244FE30, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
+        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
+        frame_browser_window_offset: 0x340,
+        browser_window_in_view: 0x1F0,
+        caption_ink_ids: &[0x67D, 0x67E, 0x67F],
+        top_inset_adjust: -12,
+        provider_verified: true,
+    },
+};
+
 /// Samsung Internet 143.0.4.29 (Chromium 143.0.7499.194). The browser code is in
 /// `samsunginternet.dll`, and `samsunginternet.exe` is the browser process itself, so there is no
 /// versioned launcher. The file version resource names the Samsung release, not Chromium's.
@@ -3923,7 +4303,7 @@ pub static SAMSUNG: Build = Build {
 };
 
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 7] = [&CHROME_156_74, &CHROME, &EDGE, &CHROME_150, &WHALE, &BRAVE, &SAMSUNG];
+static TABLE: [&Build; 8] = [&CHROME_156_74, &CHROME, &EDGE, &CHROME_150, &WHALE, &BRAVE, &BRAVE_63, &SAMSUNG];
 
 static CURRENT: OnceLock<Option<&'static Build>> = OnceLock::new();
 
@@ -4173,18 +4553,29 @@ mod tests {
         assert_eq!((WHALE.layout.frame_browser_window_offset, WHALE.layout.browser_window_in_view), (0x338, 0x210));
     }
 
+    /// The chrome.dll of a Brave row, when that version is the one installed.
+    fn brave_dll(build: &Build) -> Option<Vec<u8>> {
+        let [a, b, c, d] = build.version;
+        std::fs::read(format!(r"C:\Program Files\BraveSoftware\Brave-Browser\Application\{a}.{b}.{c}.{d}\chrome.dll")).ok()
+    }
+
     #[test]
     fn nfr3_brave_156_frame_hooks_match_the_installed_build() {
         assert_eq!(BRAVE.version, [156, 1, 98, 62]);
-        assert!(BRAVE.vertical.supported && BRAVE.tabs.supported && !BRAVE.tabs.groups && BRAVE.navigation.supported);
-        assert!(!BRAVE.split.supported && !BRAVE.side_panel.supported && !BRAVE.vertical.detour_strip);
+        assert_eq!(BRAVE_63.version, [156, 1, 98, 63]);
+        check_brave_frame_hooks(&BRAVE);
+        check_brave_frame_hooks(&BRAVE_63);
+    }
+
+    fn check_brave_frame_hooks(brave: &Build) {
+        assert!(brave.vertical.supported && brave.tabs.supported && !brave.tabs.groups && brave.navigation.supported);
+        assert!(!brave.split.supported && !brave.side_panel.supported && !brave.vertical.detour_strip);
         // Brave's frame is its own subclass, so the vtable is not Chrome's.
-        assert_ne!(BRAVE.layout.frame_vtable, CHROME.layout.frame_vtable);
-        let path = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\156.1.98.62\chrome.dll";
-        let Ok(file) = std::fs::read(path) else {
+        assert_ne!(brave.layout.frame_vtable, CHROME.layout.frame_vtable);
+        let Some(file) = brave_dll(brave) else {
             return;
         };
-        let layout = &BRAVE.layout;
+        let layout = &brave.layout;
         for (name, rva, prologue) in [
             ("frame paint", layout.on_paint, layout.on_paint_prologue),
             ("colour provider", layout.get_color_provider, layout.get_color_provider_prologue),
@@ -4206,7 +4597,7 @@ mod tests {
                 "{name} prologue does not match Brave's chrome.dll"
             );
         }
-        for (rva, bytes) in BRAVE.tabs.signatures.iter().chain(BRAVE.navigation.signatures) {
+        for (rva, bytes) in brave.tabs.signatures.iter().chain(brave.navigation.signatures) {
             assert_eq!(file_bytes(&file, *rva, bytes.len()).as_deref(), Some(*bytes), "signature at {rva:#x}");
         }
         // Each replaced slot holds the function the row names, at the vtable the objects carry.
@@ -4226,27 +4617,31 @@ mod tests {
 
     #[test]
     fn fr12_brave_156_toolbar_and_vertical_tab_hooks_match_the_installed_build() {
+        check_brave_toolbar_hooks(&BRAVE);
+        check_brave_toolbar_hooks(&BRAVE_63);
+    }
+
+    fn check_brave_toolbar_hooks(brave: &Build) {
         // Brave shifts Chromium's colour ids after the first Chrome one by its own 17.
-        assert!(!BRAVE.toolbar.skip.contains("toolbar"));
-        assert_eq!(BRAVE.toolbar.skip, "");
-        assert_eq!((BRAVE.toolbar.is_drawn_slot, BRAVE.toolbar.get_widget_slot, BRAVE.toolbar.anchor_tracker_offset), (19, 11, 0x300));
+        assert!(!brave.toolbar.skip.contains("toolbar"));
+        assert_eq!(brave.toolbar.skip, "");
+        assert_eq!((brave.toolbar.is_drawn_slot, brave.toolbar.get_widget_slot, brave.toolbar.anchor_tracker_offset), (19, 11, 0x300));
         // A 28 DIP button is its icon and the padding either side, and the fill of the field is as tall as the field.
         // Brave draws its toolbar icons at 20 DIPs and the row leaves that size alone, so 4 either side make 28.
-        assert!(!BRAVE.toolbar.overrides.iter().any(|(id, _)| *id == 47));
+        assert!(!brave.toolbar.overrides.iter().any(|(id, _)| *id == 47));
         let icon = Some(20);
-        assert_eq!(icon.map(|size| size + 2 * BRAVE.toolbar.button_padding), Some(28));
-        assert_eq!(BRAVE.toolbar.field_fill_margin, 0);
-        assert_eq!(BRAVE.layout.caption_ink_ids, &[CHROME.layout.caption_ink_ids[0] + 17, CHROME.layout.caption_ink_ids[1] + 17, CHROME.layout.caption_ink_ids[2] + 17]);
-        for (brave, chrome) in BRAVE.toolbar.colours.iter().zip(CHROME.toolbar.colours) {
+        assert_eq!(icon.map(|size| size + 2 * brave.toolbar.button_padding), Some(28));
+        assert_eq!(brave.toolbar.field_fill_margin, 0);
+        assert_eq!(brave.layout.caption_ink_ids, &[CHROME.layout.caption_ink_ids[0] + 17, CHROME.layout.caption_ink_ids[1] + 17, CHROME.layout.caption_ink_ids[2] + 17]);
+        for (brave, chrome) in brave.toolbar.colours.iter().zip(CHROME.toolbar.colours) {
             let shifted = if chrome.0 >= 574 { chrome.0 + 17 } else { chrome.0 };
             assert_eq!(brave.0, shifted, "colour {} of Chrome", chrome.0);
             assert_eq!(brave.1, chrome.1);
         }
-        let path = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\156.1.98.62\chrome.dll";
-        let Ok(file) = std::fs::read(path) else {
+        let Some(file) = brave_dll(brave) else {
             return;
         };
-        let toolbar = &BRAVE.toolbar;
+        let toolbar = &brave.toolbar;
         for (name, rva, prologue) in [
             ("layout constant", toolbar.layout_constant, toolbar.layout_constant_prologue),
             ("theme changed", toolbar.theme_changed, toolbar.theme_changed_prologue),
@@ -4258,8 +4653,8 @@ mod tests {
             ("is drawn", toolbar.is_drawn, toolbar.is_drawn_bytes),
             ("bounds in screen", toolbar.bounds_in_screen, toolbar.bounds_bytes),
             ("colour", toolbar.get_color, toolbar.get_color_bytes),
-            ("view invalidation", BRAVE.vertical.invalidate_layout, BRAVE.vertical.invalidate_layout_prologue),
-            ("region minimum size", BRAVE.vertical.region_minimum_size, BRAVE.vertical.region_minimum_prologue),
+            ("view invalidation", brave.vertical.invalidate_layout, brave.vertical.invalidate_layout_prologue),
+            ("region minimum size", brave.vertical.region_minimum_size, brave.vertical.region_minimum_prologue),
             ("from vector icon", toolbar.from_vector_icon, toolbar.from_vector_icon_prologue),
             ("set transform", toolbar.set_transform, toolbar.set_transform_prologue),
             ("set brightness", toolbar.set_brightness, toolbar.set_brightness_prologue),
@@ -4276,7 +4671,7 @@ mod tests {
             ("omnibox revert all", toolbar.omnibox_revert_all, toolbar.omnibox_revert_all_prologue),
             ("omnibox tab changed", toolbar.omnibox_tab_changed, toolbar.omnibox_tab_changed_prologue),
             ("chip text", toolbar.chip_text, toolbar.chip_text_prologue),
-            ("controller destructor", BRAVE.vertical.destructor, BRAVE.vertical.destructor_prologue),
+            ("controller destructor", brave.vertical.destructor, brave.vertical.destructor_prologue),
         ] {
             assert_eq!(
                 file_bytes(&file, rva, prologue.len()).as_deref(),
@@ -4288,7 +4683,7 @@ mod tests {
         let pointer = |rva: usize| {
             file_bytes(&file, rva, 8).map(|bytes| u64::from_le_bytes(bytes.try_into().unwrap()) as usize - image_base)
         };
-        let vertical = &BRAVE.vertical;
+        let vertical = &brave.vertical;
         assert_eq!(pointer(vertical.slot), Some(vertical.should_display));
         assert_eq!(pointer(vertical.slot - 16), Some(vertical.destructor));
         assert_eq!(pointer(vertical.region_preferred_size_slot), Some(vertical.region_preferred_size));
@@ -4303,7 +4698,7 @@ mod tests {
             assert_eq!(pointer(vtable + toolbar.theme_slot * 8), Some(*theme), "hidden view at {vtable:#x}");
         }
         assert_eq!(pointer(toolbar.infobar_vtable + toolbar.infobar_layout_slot * 8), Some(toolbar.infobar_layout));
-        assert!(BRAVE.layout.set_bounds_rect != ABSENT && BRAVE.layout.view_bounds_offset == 0x1C8);
+        assert!(brave.layout.set_bounds_rect != ABSENT && brave.layout.view_bounds_offset == 0x1C8);
         // Each navigation icon carries the name recorded for it.
         for (rva, name) in [toolbar.back_icon, toolbar.forward_icon, toolbar.reload_icon].into_iter().zip(toolbar.nav_icon_names) {
             let name_pointer = pointer(rva + 16).expect("icon is mapped");
@@ -4624,7 +5019,7 @@ mod tests {
 
     #[test]
     fn fr11_developer_colours_name_the_row_colours_of_their_build() {
-        for build in [&CHROME, &EDGE, &BRAVE] {
+        for build in [&CHROME, &EDGE, &BRAVE, &BRAVE_63] {
             let dev = &build.toolbar.dev;
             assert!(!dev.colours.is_empty(), "{}", build.browser);
             for (key, role) in [("frame", 0), ("toolbar", 1)] {
@@ -4647,7 +5042,7 @@ mod tests {
 
     #[test]
     fn fr11_developer_commands_are_those_of_the_devtools_keys() {
-        for build in [&CHROME, &EDGE, &BRAVE] {
+        for build in [&CHROME, &EDGE, &BRAVE, &BRAVE_63] {
             let dev = &build.toolbar.dev;
             assert_eq!((dev.console, dev.inspect), (40005, 40023));
         }
