@@ -3595,9 +3595,9 @@ pub static BRAVE: Build = Build {
         (1072, INK),         // kColorOmniboxText: the address while it is edited
         (1073, 0xFF8A_8690), // kColorOmniboxTextDimmed
         (1607, PAPER),       // kColorToolbar
-        (1661, 0xFF1A_1A1A), // Caption button glyph, active window
-        (1662, 0xFF1A_1A1A), // Caption button glyph, inactive window
-        (1663, 0xFF1A_1A1A), // Caption button glyph without a theme colour
+        (1661, 0xFF9F_9F9D), // Base of the caption hover fill: at Chrome's 10 percent it matches the native 3.7 percent black
+        (1662, 0xFF9F_9F9D), // The same, inactive window
+        (1663, 0xFF9F_9F9D), // The same, without a theme colour
         (1664, 0xFFC4_2B1C), // Close button hover fill
         (1667, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
         (1612, 0xFF4A_4850), // kColorToolbarButtonIcon
@@ -3976,9 +3976,9 @@ pub static BRAVE_63: Build = Build {
         (1072, INK),         // kColorOmniboxText: the address while it is edited
         (1073, 0xFF8A_8690), // kColorOmniboxTextDimmed
         (1607, PAPER),       // kColorToolbar
-        (1661, 0xFF1A_1A1A), // Caption button glyph, active window
-        (1662, 0xFF1A_1A1A), // Caption button glyph, inactive window
-        (1663, 0xFF1A_1A1A), // Caption button glyph without a theme colour
+        (1661, 0xFF9F_9F9D), // Base of the caption hover fill: at Chrome's 10 percent it matches the native 3.7 percent black
+        (1662, 0xFF9F_9F9D), // The same, inactive window
+        (1663, 0xFF9F_9F9D), // The same, without a theme colour
         (1664, 0xFFC4_2B1C), // Close button hover fill
         (1667, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
         (1612, 0xFF4A_4850), // kColorToolbarButtonIcon
@@ -4589,6 +4589,18 @@ mod tests {
     }
 
     #[test]
+    fn fr12_caption_hover_fill_base_matches_the_native_tint() {
+        // Chromium fills a hovered button with this colour at 0x1A over the paper. The glyph has its
+        // own colour from the paint hook, so only the fill sees this value.
+        let fill = |base: u32, paper: u32| (base * 0x1A + paper * (255 - 0x1A) + 127) / 255;
+        assert_eq!((fill(0x9F, 0xFB), fill(0x9F, 0xFA), fill(0x9D, 0xF7)), (0xF2, 0xF1, 0xEE));
+        for build in [&CHROME_156_74, &BRAVE, &BRAVE_63] {
+            let ink = build.layout.caption_ink_ids[0] as i32;
+            let base = build.toolbar.colours.iter().find(|(id, _)| *id as i32 == ink);
+            assert_eq!(base.map(|(_, colour)| *colour), Some(0xFF9F_9F9D), "{}", build.browser);
+        }
+    }
+    #[test]
     fn fr12_chrome_156_74_row_is_44_dips_with_no_chevron_and_a_field_that_can_shrink() {
         let toolbar = &CHROME_156_74.toolbar;
         // Chrome's own 34 DIP field makes the row, with the separator: only its fill is 28.
@@ -4811,7 +4823,7 @@ mod tests {
         assert_eq!(icon.map(|size| size + 2 * brave.toolbar.button_padding), Some(28));
         assert_eq!(brave.toolbar.field_fill_margin, 0);
         assert_eq!(brave.layout.caption_ink_ids, &[CHROME.layout.caption_ink_ids[0] + 17, CHROME.layout.caption_ink_ids[1] + 17, CHROME.layout.caption_ink_ids[2] + 17]);
-        for (brave, chrome) in brave.toolbar.colours.iter().zip(CHROME.toolbar.colours) {
+        for (brave, chrome) in brave.toolbar.colours.iter().zip(CHROME_156_74.toolbar.colours) {
             let shifted = if chrome.0 >= 574 { chrome.0 + 17 } else { chrome.0 };
             assert_eq!(brave.0, shifted, "colour {} of Chrome", chrome.0);
             assert_eq!(brave.1, chrome.1);
