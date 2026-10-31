@@ -2096,8 +2096,8 @@ unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
     };
     let strip = strip_hit(point.x, point.y, dpi, border, layout.strip());
     let factor = dpi as f32 / 96.0;
-    // The split's own rows take their input from the client area.
-    if strip == StripHit::Browser && row_hit(window, point).is_none() {
+    // The split's own rows and the developer bar take their input from the client area.
+    if strip == StripHit::Browser && row_hit(window, point).is_none() && crate::dev_bar::hit(window, point).is_none() {
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(window, &mut client);
         return crate::title_row_hit(
