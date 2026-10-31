@@ -737,6 +737,7 @@ unsafe extern "system" fn proposed_layout(
         (bounds_of(out, field(bv().toolbar)), bounds_of(out, field(bv().contents_container)))
     {
         crate::chrome_split::fit_toolbar(window, &mut *toolbar, &*contents);
+        crate::dev_bar::fit_toolbar(window, &mut *toolbar);
     }
     result
 }

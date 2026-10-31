@@ -178,13 +178,18 @@ pub struct Appbar {
     /// Whether the resizer is being dragged, which keeps its grip showing.
     dragging: bool,
     toggle: IDCompositionVisual2,
-    toggle_painted: Option<(i32, u32, bool, i32, i32)>,
+    toggle_painted: Option<(i32, u32, bool, i32, i32, bool)>,
+    /// Whether the browser's top row under the toggle is dark, as in developer mode.
+    dark_row: bool,
     peek: IDCompositionVisual2,
     peek_painted: Option<Painted>,
     /// The drop target and the dragged tab's ghost, which exist only while a tab is dragged.
     drag: Option<DragVisuals>,
     /// The top rows of the pages of a split, which exist while the window shows one.
     rows: Vec<(IDCompositionVisual2, Option<(PaneRow, u32)>)>,
+    /// The developer bar beside the caption buttons, and what it was last painted for.
+    dev: IDCompositionVisual2,
+    dev_painted: Option<(crate::dev_bar::View, u32)>,
 }
 
 /// What one page's top row shows. `x`, `y`, `width` and `height` are window pixels.
@@ -331,6 +336,8 @@ impl Appbar {
         // The floating appbar covers the toggle, as it covers the rest of the top row.
         let peek = device.CreateVisual()?;
         root.AddVisual(&peek, true, &toggle)?;
+        let dev = device.CreateVisual()?;
+        root.AddVisual(&dev, true, &peek)?;
         target.SetRoot(&root)?;
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
@@ -354,10 +361,13 @@ impl Appbar {
             dragging: false,
             toggle,
             toggle_painted: None,
+            dark_row: false,
             peek,
             peek_painted: None,
             drag: None,
             rows: Vec::new(),
+            dev,
+            dev_painted: None,
         })
     }
 
@@ -443,6 +453,7 @@ impl Appbar {
             hot,
             (effect.map_or(0.0, |e| e.0) * 1000.0) as i32,
             (effect.map_or(0.0, |e| e.1) * 1000.0) as i32,
+            self.dark_row,
         );
         if self.toggle_painted != Some(key) {
             let surface = self.device.CreateSurface(
@@ -466,15 +477,21 @@ impl Appbar {
                 fonts: &self.fonts,
             };
             let area = rect(0.0, 0.0, size as f32 / scale, size as f32 / scale);
+            let dark = self.dark_row;
             let result = canvas.pressed(area, 8.0, 0.96, effect, || {
                 if hot || effect.is_some() {
-                    canvas.fill_rounded(area, 8.0, rgba(INK, 0.06))?;
+                    canvas.fill_rounded(area, 8.0, if dark { rgba(WHITE, 0.09) } else { rgba(INK, 0.06) })?;
                 }
                 // The design's glyph sits above where DirectWrite centres it, and darkens to the
                 // ink colour on hover like the other icons of the row.
                 let (w, h) = (area.right - area.left, area.bottom - area.top);
                 let glyph = rect(area.left, area.top - 0.6, w, h);
-                let colour = if hot || effect.is_some() { INK } else { SOFT_INK };
+                let colour = match (dark, hot || effect.is_some()) {
+                    (true, true) => WHITE,
+                    (true, false) => 0xc4c7ce,
+                    (false, true) => INK,
+                    (false, false) => SOFT_INK,
+                };
                 canvas.icon('\u{E90C}', glyph, crate::TOGGLE_GLYPH, colour)
             });
             surface.EndDraw()?;
@@ -676,6 +693,67 @@ const PAPER: u32 = 0xfbfaf7;
 const HAIRLINE: u32 = 0xe9e9e6;
 
 impl Appbar {
+    /// Tells the toggle whether the row under it is dark.
+    pub(crate) fn set_dark_row(&mut self, dark: bool) {
+        self.dark_row = dark;
+    }
+
+    /// Shows the developer bar, or removes it when `bar` is none. It is transparent: the buttons lie
+    /// on the browser's own dark top row.
+    pub(crate) unsafe fn update_dev(&mut self, bar: Option<&crate::dev_bar::View>, dpi: u32) -> Result<()> {
+        let Some(bar) = bar else {
+            if self.dev_painted.take().is_some() {
+                self.dev.SetContent(None)?;
+                return self.device.Commit();
+            }
+            return Ok(());
+        };
+        self.dev.SetOffsetX2(bar.x.round())?;
+        self.dev.SetOffsetY2(bar.y.round())?;
+        if self.dev_painted.as_ref() == Some(&(bar.clone(), dpi)) {
+            return self.device.Commit();
+        }
+        let (width, height) = (bar.width.round() as i32, bar.height.round() as i32);
+        if width <= 0 || height <= 0 {
+            return Ok(());
+        }
+        let scale = dpi as f32 / 96.0;
+        let surface = self.device.CreateSurface(
+            width as u32,
+            height as u32,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_ALPHA_MODE_PREMULTIPLIED,
+        )?;
+        let mut offset = POINT::default();
+        let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
+        context.SetDpi(dpi as f32, dpi as f32);
+        context.SetTransform(&Matrix3x2::translation(offset.x as f32 / scale, offset.y as f32 / scale));
+        context.Clear(Some(&rgba(WHITE, 0.0)));
+        let canvas = Canvas { context: &context, dwrite: &self.dwrite, fonts: &self.fonts };
+        let h = height as f32 / scale;
+        let mut result = Ok(());
+        for (index, glyph) in bar.glyphs.iter().enumerate() {
+            let area = rect(
+                crate::dev_mode::LEAD + index as f32 * crate::dev_mode::BUTTON,
+                (h - 28.0) / 2.0,
+                crate::dev_mode::BUTTON,
+                28.0,
+            );
+            let hot = bar.hover == Some(index);
+            result = result.and_then(|_| {
+                if hot {
+                    canvas.fill_rounded(area, 8.0, rgba(WHITE, 0.09))?;
+                }
+                canvas.icon(*glyph, area, 14.0, if hot { WHITE } else { 0xc4c7ce })
+            });
+        }
+        surface.EndDraw()?;
+        result?;
+        self.dev.SetContent(&surface)?;
+        self.dev_painted = Some((bar.clone(), dpi));
+        self.device.Commit()
+    }
+
     /// Shows the top rows of the pages of a split. The active page's row is the browser's own, so
     /// only the buttons Rivet adds are drawn on it. An empty list removes the rows.
     pub(crate) unsafe fn update_rows(&mut self, rows: &[PaneRow], dpi: u32) -> Result<()> {

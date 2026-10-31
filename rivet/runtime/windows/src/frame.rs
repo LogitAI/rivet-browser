@@ -913,6 +913,24 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
                 message.message = WM_NULL;
             }
         }
+        // Ctrl+Shift+F12 switches developer mode of the page.
+        if message.message == WM_KEYDOWN
+            && message.wParam == 0x7B
+            && GetKeyState(0x11) < 0
+            && GetKeyState(0x10) < 0
+            && GetKeyState(0x12) >= 0
+        {
+            let window = GetAncestor(message.hwnd, GA_ROOT);
+            if attached(window) {
+                PostMessageW(
+                    window,
+                    RegisterWindowMessageW(wide("Rivet.ToggleDevMode").as_ptr()),
+                    0,
+                    0,
+                );
+                message.message = WM_NULL;
+            }
+        }
         if message.message == WM_KEYDOWN
             && message.wParam == b'T' as usize
             && GetKeyState(0x11) < 0
@@ -1860,6 +1878,10 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             if let Err(error) = appbar.update_rows(&rows, dpi) {
                 log(&format!("rivet: could not draw the page rows: {error}"));
             }
+            let bar = if visible { crate::dev_bar::view(window) } else { None };
+            if let Err(error) = appbar.update_dev(bar.as_ref(), dpi) {
+                log(&format!("rivet: could not draw the developer bar: {error}"));
+            }
             let (spaces, current) =
                 with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()));
             appbar.set_state(
@@ -1875,6 +1897,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             if let Err(error) = appbar.update(visible, 0, top, width, height, dpi) {
                 log(&format!("rivet: could not draw the appbar: {error}"));
             }
+            appbar.set_dark_row(crate::chrome_toolbar::window_in_dev_mode(window));
             let (x, y, size) = {
                 let (x, y, w, _) = toggle_rect(page_x(window));
                 (scale(x, dpi), scale(y, dpi), scale(w, dpi))
@@ -2136,8 +2159,47 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
     }
     if attached(window) && message == WM_MOUSELEAVE {
         track_row_hover(window, None);
+        if crate::dev_bar::track(window, None) {
+            update_appbar(window);
+        }
+    }
+    if attached(window) && message == WM_MOUSEMOVE && !tab_dragging(window) {
+        let point = POINT {
+            x: (lparam & 0xffff) as i16 as i32,
+            y: ((lparam >> 16) & 0xffff) as i16 as i32,
+        };
+        if crate::dev_bar::track(window, Some(point)) {
+            update_appbar(window);
+        }
+    }
+    if message == RegisterWindowMessageW(wide("Rivet.ToggleDevMode").as_ptr()) && attached(window) {
+        crate::chrome_toolbar::toggle_dev_mode(window);
+        return 0;
     }
     match message {
+        WM_LBUTTONDOWN
+            if attached(window)
+                && !menu_open(window)
+                && crate::dev_bar::press(
+                    window,
+                    POINT {
+                        x: (lparam & 0xffff) as i16 as i32,
+                        y: ((lparam >> 16) & 0xffff) as i16 as i32,
+                    },
+                ) =>
+        {
+            0
+        }
+        WM_LBUTTONUP if attached(window) && crate::dev_bar::pressed(window) => {
+            crate::dev_bar::release(
+                window,
+                POINT {
+                    x: (lparam & 0xffff) as i16 as i32,
+                    y: ((lparam >> 16) & 0xffff) as i16 as i32,
+                },
+            );
+            0
+        }
         WM_LBUTTONDOWN
             if attached(window)
                 && !menu_open(window)

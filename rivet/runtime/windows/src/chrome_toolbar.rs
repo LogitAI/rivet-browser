@@ -46,6 +46,8 @@ const WEIGHT_NORMAL: u32 = 400;
 const TITLE_COLOUR: u32 = 0xFF4A_4850;
 const ADDRESS_COLOUR: u32 = 0xFF8A_8690;
 const FIELD_HOVER_FILL: u32 = 0xFFF0_EFEC;
+/// The same fill on a developer row, which is dark.
+const DEV_FIELD_FILL: u32 = 0x1AFF_FFFF;
 /// The radius of the field's rectangle, in DIPs.
 const FIELD_RADIUS: f32 = 8.0;
 const TRANSFORM_BYTES: usize = 256;
@@ -117,6 +119,19 @@ static COLOURS_SEEN: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 static WIDGETS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 /// The text each Rivet window's address field was last given at rest.
 static DISPLAYS: Mutex<Vec<(usize, address_display::Display)>> = Mutex::new(Vec::new());
+/// The developer mode of every tab, and which windows' active tab is in it.
+static MODES: Mutex<crate::dev_mode::Modes> = Mutex::new(crate::dev_mode::Modes::new());
+static DEV_WIDGETS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// The page each Rivet window's address field last showed: the tab's identity and its address.
+static PAGES: Mutex<Vec<(usize, usize, String)>> = Mutex::new(Vec::new());
+/// The windows whose developer mode changed and whose look has not been refreshed yet.
+static DEV_PENDING: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// The title and the address of a page in developer mode, as `0xAARRGGBB`.
+const DEV_TITLE_COLOUR: u32 = 0xFFEE_F0F3;
+const DEV_ADDRESS_COLOUR: u32 = 0xFFAE_B2BA;
+/// The monospace face of the address in developer mode, and what it was before, per field.
+const DEV_FONT: &[u8] = b"Consolas";
+static SAVED_FONTS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
 
 thread_local! {
     /// The Rivet widget the UI thread works for, or zero.
@@ -139,6 +154,116 @@ pub(crate) fn is_rivet(widget: usize) -> bool {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .contains(&widget)
+}
+
+/// Whether the page of the Rivet window `widget` is in developer mode.
+pub(crate) fn dev_on(widget: usize) -> bool {
+    widget != 0 && DEV_WIDGETS.lock().unwrap_or_else(|error| error.into_inner()).contains(&widget)
+}
+
+/// Whether the page of `window` is in developer mode.
+pub(crate) fn window_in_dev_mode(window: HWND) -> bool {
+    WINDOWS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(_, known)| *known == window as usize)
+        .is_some_and(|(widget, _)| dev_on(*widget))
+}
+
+/// The buttons the developer bar of this build offers, with the command each runs.
+pub(crate) fn dev_actions() -> Vec<(crate::dev_mode::Action, u32)> {
+    use crate::dev_mode::Action;
+    let dev = &bv().dev;
+    let known = [(Action::Inspect, dev.inspect), (Action::Console, dev.console)];
+    crate::dev_mode::buttons(&known)
+}
+
+/// Records the page a Rivet window shows, and switches its developer mode when that page's mode
+/// differs from the one the window is in.
+fn note_page(widget: usize, tab: usize, address: &str) {
+    let on = if tab == 0 {
+        false
+    } else {
+        MODES.lock().unwrap_or_else(|error| error.into_inner()).is_on(tab, address)
+    };
+    {
+        let mut pages = PAGES.lock().unwrap_or_else(|error| error.into_inner());
+        pages.retain(|(known, _, _)| *known != widget);
+        pages.push((widget, tab, address.to_owned()));
+    }
+    set_dev(widget, on);
+}
+
+fn set_dev(widget: usize, on: bool) {
+    {
+        let mut widgets = DEV_WIDGETS.lock().unwrap_or_else(|error| error.into_inner());
+        let was = widgets.contains(&widget);
+        if was == on {
+            return;
+        }
+        if on {
+            widgets.push(widget);
+        } else {
+            widgets.retain(|known| *known != widget);
+        }
+    }
+    crate::vertical_tabs::trace(&format!("developer mode of window {widget:#x} is {on}"));
+    DEV_PENDING.lock().unwrap_or_else(|error| error.into_inner()).push(widget);
+    // The browser is in the middle of refreshing the address when it asks for the text, so the
+    // colours, the font and the room for the bar change right after.
+    unsafe { SetTimer(std::ptr::null_mut(), 0, 1, Some(dev_refresh)) };
+}
+
+unsafe extern "system" fn dev_refresh(_window: HWND, _message: u32, id: usize, _time: u32) {
+    KillTimer(std::ptr::null_mut(), id);
+    let pending: Vec<usize> = DEV_PENDING.lock().unwrap_or_else(|error| error.into_inner()).drain(..).collect();
+    for widget in pending {
+        let window = WINDOWS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .find(|(known, _)| *known == widget)
+            .map(|(_, window)| *window as HWND);
+        if !is_rivet(widget) {
+            continue;
+        }
+        theme_changed(widget as *mut c_void);
+        // The field bakes its fill when it refreshes its background, which a theme change does not
+        // always do.
+        let field = FIELDS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .find(|field| field.widget == widget)
+            .map_or(0, |field| field.view);
+        if field != 0 {
+            refresh_background(field as *mut c_void);
+        }
+        if let Some(window) = window {
+            crate::chrome_side_panel::relayout_page_area(window);
+            crate::edge_vertical::relayout(window);
+            crate::frame::update_appbar(window);
+        }
+    }
+}
+
+/// Switches developer mode of the page `window` shows, as the person's choice.
+pub(crate) unsafe fn toggle_dev_mode(window: HWND) -> bool {
+    let widget = widget_of(window);
+    if !is_rivet(widget) {
+        return false;
+    }
+    let page = PAGES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(known, tab, _)| *known == widget && *tab != 0)
+        .map(|(_, tab, address)| (*tab, address.clone()));
+    let Some((tab, address)) = page else { return false };
+    let on = MODES.lock().unwrap_or_else(|error| error.into_inner()).toggle(tab, &address);
+    set_dev(widget, on);
+    true
 }
 
 pub(crate) fn active() -> bool {
@@ -337,7 +462,19 @@ unsafe fn switch_to(hooks: &Hooks, widget: usize, source: usize) {
         let mut swapped = swapped.borrow_mut();
         scan_colours(hooks, provider);
         let scanned = SCANNED.lock().unwrap_or_else(|error| error.into_inner()).clone();
-        for (id, colour) in bv().colours.iter().copied().chain(trace_colours()).chain(scanned) {
+        let dev = dev_on(widget);
+        // The colours a developer row takes that the Rivet look leaves alone.
+        let extra = bv()
+            .dev
+            .colours
+            .iter()
+            .copied()
+            .filter(|(id, _)| dev && !bv().colours.iter().any(|(known, _)| known == id));
+        for (id, colour) in bv().colours.iter().copied().chain(extra).chain(trace_colours()).chain(scanned) {
+            let colour = match bv().dev.colours.iter().find(|(known, _)| *known == id) {
+                Some((_, replacement)) if dev => *replacement,
+                _ => colour,
+            };
             let mut found = colour_slot(provider, id);
             if found.is_none() {
                 // Asking makes the provider produce the colour and keep it.
@@ -673,7 +810,9 @@ unsafe fn formatted(model: *mut c_void, out: *mut [u64; 3], flags: u32) -> *mut 
 }
 
 unsafe fn rivet_display(model: *mut c_void) -> Option<address_display::Display> {
-    if model_shows_start_page(model) {
+    let spec = String::from_utf8_lossy(&model_spec(model)).into_owned();
+    if is_start_page(spec.as_bytes()) {
+        note_page(CURRENT.with(Cell::get), 0, "");
         return Some(address_display::compose(&[], &[], true));
     }
     let hooks = hooks()?;
@@ -696,6 +835,7 @@ unsafe fn rivet_display(model: *mut c_void) -> Option<address_display::Display> 
     formatted(model, &mut address, address_display::FULL_URL_FLAGS);
     let full = read_string(&address);
     free_string(&mut address);
+    note_page(CURRENT.with(Cell::get), contents, &spec);
     Some(address_display::compose(&title, &full, false))
 }
 
@@ -757,8 +897,9 @@ fn is_start_page(spec: &[u8]) -> bool {
         && path[path.len() - 11..].eq_ignore_ascii_case(b"/start.html")
 }
 
-unsafe fn model_shows_start_page(model: *mut c_void) -> bool {
-    let Some(hooks) = hooks() else { return false };
+/// The address of the page the location bar model shows, as the `GURL` spells it.
+unsafe fn model_spec(model: *mut c_void) -> Vec<u8> {
+    let Some(hooks) = hooks() else { return Vec::new() };
     let get_url: unsafe extern "system" fn(*mut c_void, *mut u8) -> *mut u8 =
         std::mem::transmute(hooks.base + bv().model_url);
     let mut gurl = [0u64; 24];
@@ -770,10 +911,10 @@ unsafe fn model_shows_start_page(model: *mut c_void) -> bool {
     } else {
         (gurl as *const u8, *gurl.add(0x17) as usize)
     };
-    let shows = is_start_page(std::slice::from_raw_parts(data, size));
+    let spec = std::slice::from_raw_parts(data, size).to_vec();
     let destroy: unsafe extern "system" fn(*mut u8) = std::mem::transmute(hooks.base + bv().gurl_destructor);
     destroy(gurl);
-    shows
+    spec
 }
 
 /// The omnibox refreshes its text outside any paint or layout, so the Rivet scope is found from
@@ -853,11 +994,12 @@ unsafe extern "system" fn update_text_style(
         return;
     };
     let all = [0, display.text.len() as u32];
-    apply_colour(render_text, ADDRESS_COLOUR, &all);
+    let dev = dev_on(widget);
+    apply_colour(render_text, if dev { DEV_ADDRESS_COLOUR } else { ADDRESS_COLOUR }, &all);
     apply_weight(render_text, WEIGHT_NORMAL, &all);
     if display.title_len > 0 {
         let title = [0, display.title_len];
-        apply_colour(render_text, TITLE_COLOUR, &title);
+        apply_colour(render_text, if dev { DEV_TITLE_COLOUR } else { TITLE_COLOUR }, &title);
         apply_weight(render_text, bv().title_weight, &title);
     }
 }
@@ -901,7 +1043,7 @@ unsafe extern "system" fn refresh_background(view: *mut c_void) {
         })();
         let saved = fill.map(|slot| {
             let value = slot.read();
-            slot.write(FIELD_HOVER_FILL);
+            slot.write(if dev_on(top) { DEV_FIELD_FILL } else { FIELD_HOVER_FILL });
             value
         });
         run(view);
@@ -1213,15 +1355,67 @@ unsafe extern "system" fn textfield_theme(view: *mut c_void) {
     }
     let size: unsafe extern "system" fn(*mut c_void) -> i32 = std::mem::transmute(hooks.base + bv().font_size);
     let current = size(font_list);
-    if current == ADDRESS_FONT_SIZE {
-        return;
-    }
     let derive: unsafe extern "system" fn(*mut c_void, *mut usize, i32) -> *mut usize =
         std::mem::transmute(hooks.base + bv().derive_size);
+    let set: unsafe extern "system" fn(*mut c_void, *const usize) = std::mem::transmute(hooks.base + bv().textfield_set_font);
+    let known = SAVED_FONTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .position(|(held, _)| *held == view as usize);
+    let dev = dev_on(CURRENT.with(Cell::get)) && dev_font_known();
+    if let (false, Some(at)) = (dev, known) {
+        // Back to the field's own font, which was kept when the monospace one replaced it.
+        let (_, saved) = SAVED_FONTS.lock().unwrap_or_else(|error| error.into_inner()).remove(at);
+        set(view, &saved);
+        return;
+    }
+    if dev && known.is_none() {
+        let mut ours: usize = 0;
+        derive(font_list, &mut ours, ADDRESS_FONT_SIZE - current);
+        SAVED_FONTS.lock().unwrap_or_else(|error| error.into_inner()).push((view as usize, ours));
+        if let Some(mono) = monospace(hooks.base) {
+            set(view, &mono);
+        } else {
+            set(view, &ours);
+        }
+        return;
+    }
+    if dev || current == ADDRESS_FONT_SIZE {
+        return;
+    }
     let mut smaller: usize = 0;
     derive(font_list, &mut smaller, ADDRESS_FONT_SIZE - current);
-    let set: unsafe extern "system" fn(*mut c_void, *const usize) = std::mem::transmute(hooks.base + bv().textfield_set_font);
     set(view, &smaller);
+}
+
+/// Whether this build can build the monospace font.
+fn dev_font_known() -> bool {
+    let dev = &bv().dev;
+    dev.font_new != crate::builds::ABSENT && dev.font_list_new != crate::builds::ABSENT
+}
+
+/// A `gfx::FontList` of the monospace face at the address's size, as the pointer it holds. Nothing
+/// built here is released: the field keeps the font for as long as it lives.
+unsafe fn monospace(base: usize) -> Option<usize> {
+    let image = image::recorded()?;
+    let dev = &bv().dev;
+    if !image.has(dev.font_new, dev.font_new_prologue) || !image.has(dev.font_list_new, dev.font_list_new_prologue) {
+        return None;
+    }
+    // A `std::string` of up to 22 bytes lives inside its three words, with the length in the last byte.
+    let mut name = [0u64; 3];
+    std::ptr::copy_nonoverlapping(DEV_FONT.as_ptr(), name.as_mut_ptr().cast::<u8>(), DEV_FONT.len());
+    name[2] = (DEV_FONT.len() as u64) << 56;
+    let new_font: unsafe extern "system" fn(*mut usize, *const [u64; 3], i32) -> *mut usize =
+        std::mem::transmute(base + dev.font_new);
+    let new_list: unsafe extern "system" fn(*mut usize, *const usize) -> *mut usize =
+        std::mem::transmute(base + dev.font_list_new);
+    let mut font = [0usize; 2];
+    new_font(font.as_mut_ptr(), &name, ADDRESS_FONT_SIZE);
+    let mut list: usize = 0;
+    new_list(&mut list, font.as_ptr());
+    (list != 0).then_some(list)
 }
 
 /// The topmost ancestor of `view` that is a Rivet widget, or the topmost ancestor.
@@ -2174,6 +2368,8 @@ pub unsafe fn forget(window: HWND) {
         .unwrap_or_else(|error| error.into_inner())
         .retain(|known| *known != widget);
     FIELDS.lock().unwrap_or_else(|error| error.into_inner()).retain(|field| field.widget != widget);
+    DEV_WIDGETS.lock().unwrap_or_else(|error| error.into_inner()).retain(|known| *known != widget);
+    PAGES.lock().unwrap_or_else(|error| error.into_inner()).retain(|(known, _, _)| *known != widget);
     WINDOWS.lock().unwrap_or_else(|error| error.into_inner()).retain(|(known, _)| *known != widget);
 }
 

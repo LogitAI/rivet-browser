@@ -442,3 +442,25 @@
 - `TopContainerView`의 `ContentsSeparator`(vtable `0x118B7B38`)는 Edge가 숨겨 두는 뷰이며 툴바 아래 구분선으로 다시 쓸 수 있다.
 - `PrintWindow`로 잡은 Rivet 창의 페이지 영역은 페이지 색과 상관없이 흰색으로 나온다. 일반 Chrome 창의 캡처에는 페이지가 나온다.
   게시된 `WM_MOUSEMOVE`로는 캡션 버튼 hover가 그려지지 않는다.
+
+## 개발자 모드 단추 (FR-11)
+
+### 확인한 환경
+
+- Windows `10.0.26300.0`. 설치된 Google Chrome은 `156.0.8078.74`로 올라가서 표의 `156.0.8078.48` 행과 맞지 않는다.
+  이 빌드에서 Rivet은 아무것도 덮어쓰지 않는다. Brave도 `156.1.98.63`으로 올라가 `156.1.98.62` 행과 맞지 않는다.
+  `156.0.4314.50`인 Edge만 표와 맞아서 Edge에서 확인했다.
+
+### 확인한 내용
+
+- 브라우저 명령 번호는 `chrome.dll`, `msedge.dll`, Brave의 `chrome.dll`에서 같은 가속키 표(`{키, 수식키, 명령}` 세 개씩)로
+  읽었다. Ctrl+Shift+C는 `40023`, Ctrl+Shift+J는 `40005`, Ctrl+Shift+I는 `40004`, F12는 `40237`이다. 세 빌드가 같다.
+- 창에 `WM_COMMAND`로 이 번호를 보내면 브라우저가 키보드 단축키와 같은 일을 한다. Edge 창에서 콘솔 단추는 DevTools를 열어
+  콘솔 패널을 보였고, 요소 검사 단추는 DevTools의 검사 모드를 켰다(캡처로 확인).
+- 네트워크와 성능 패널을 여는 브라우저 명령은 없다. 공개 심볼의 `DevToolsToggleAction`은 `ShowElementsPanel`,
+  `ShowConsolePanel`, `Show`, `Inspect`, `Toggle`, `Reveal`, `PauseInDebugger`뿐이다. 두 단추는 넣지 않았다.
+- 스크린샷에 해당하는 명령 번호는 가속키 표에 없어 찾지 못했다. 단추는 넣지 않았다.
+- 주소 글꼴은 `gfx::Font::Font(name, size)`와 `gfx::FontList::FontList(const Font&)`로 만들어 `Textfield::SetFontList`에 넘긴다.
+  두 함수의 주소와 앞 바이트는 Edge 행에만 기록했다. 다른 행은 비워 두어 주소를 원래 글꼴로 둔다.
+- Edge에서 `LayoutInset::TOOLBAR`의 오른쪽 값을 늘려도 상단 줄의 주소창이 줄지 않았다. 폭을 줄이는 길은 Chrome 행의
+  `ProposedLayout` 후크가 주는 툴바 경계뿐이다. Chrome `156.0.8078.48`의 이 경로는 이 컴퓨터에서 실행해 볼 수 없었다.

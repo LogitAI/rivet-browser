@@ -226,6 +226,8 @@ pub struct Toolbar {
     pub overrides: &'static [(i32, i32)],
     /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
     pub colours: &'static [(i32, u32)],
+    /// What this build needs to show a page in developer mode.
+    pub dev: DevMode,
     /// `ui::ColorProvider::GetColor(this, id)`. A provider makes a colour the first time it is asked
     /// for it, so one that was never asked for is asked for before its value is replaced.
     pub get_color: usize,
@@ -834,6 +836,145 @@ pub struct Layout {
     pub top_inset_adjust: i32,
 }
 
+/// What a build needs to show a page in developer mode.
+pub struct DevMode {
+    /// The browser's own commands the developer bar runs, as `WM_COMMAND` ids, or zero when the build
+    /// has none. They are the commands of the Ctrl+Shift+C and Ctrl+Shift+J keys, read from the
+    /// browser's accelerator table.
+    pub inspect: u32,
+    pub console: u32,
+    /// Colour ids of this build and the colours the row takes in developer mode, as `0xAARRGGBB`.
+    /// An id that `colours` does not hold is asked of the provider first, like the ones that it does.
+    pub colours: &'static [(i32, u32)],
+    /// `gfx::Font::Font(this, &name, size)` and `gfx::FontList::FontList(this, &font)`, which build
+    /// the monospace font of the address. A build without them keeps the address in its own font.
+    pub font_new: usize,
+    pub font_new_prologue: &'static [u8],
+    pub font_list_new: usize,
+    pub font_list_new_prologue: &'static [u8],
+}
+
+const UNCHECKED_DEV: DevMode = DevMode {
+    inspect: 0,
+    console: 0,
+    colours: &[],
+    font_new: ABSENT,
+    font_new_prologue: &[0],
+    font_list_new: ABSENT,
+    font_list_new_prologue: &[0],
+};
+
+const DEV_GROUND: u32 = 0xFF2A_2C31;
+const DEV_RULE: u32 = 0xFF17_181B;
+const DEV_ICON: u32 = 0xFFC4_C7CE;
+const DEV_ICON_HOT: u32 = 0xFFFF_FFFF;
+const DEV_ICON_OFF: u32 = 0xFF70_737B;
+const DEV_HOVER: u32 = 0x17FF_FFFF;
+const DEV_RIPPLE: u32 = 0x24FF_FFFF;
+
+const DEV_CHROME_156: DevMode = DevMode {
+    inspect: 40023,
+    console: 40005,
+    colours: &[
+        (0x13C, DEV_GROUND),
+        (1590, DEV_GROUND),
+        (796, 0),
+        (797, DEV_HOVER),
+        (1595, DEV_ICON),
+        (1596, DEV_ICON),
+        (1597, DEV_ICON_OFF),
+        (1600, DEV_ICON_HOT),
+        (1598, DEV_ICON_HOT),
+        (1599, DEV_ICON_OFF),
+        (1603, DEV_RULE),
+        (1611, DEV_HOVER),
+        (1612, DEV_RIPPLE),
+        (1644, DEV_ICON_HOT),
+        (1645, DEV_ICON_HOT),
+        (1646, DEV_ICON_HOT),
+        (1005, DEV_ICON),
+        (1006, DEV_ICON),
+        (1007, DEV_ICON_HOT),
+        (1048, DEV_ICON),
+        (1049, DEV_ICON),
+        (1052, DEV_ICON),
+        (1055, DEV_ICON_HOT),
+        (1056, DEV_ICON),
+    ],
+    ..UNCHECKED_DEV
+};
+
+/// Brave's colour ids sit 17 above Chrome's from 574 on.
+const DEV_BRAVE_156: DevMode = DevMode {
+    colours: &[
+        (0x13C, DEV_GROUND),
+        (1607, DEV_GROUND),
+        (813, 0),
+        (814, DEV_HOVER),
+        (1612, DEV_ICON),
+        (1613, DEV_ICON),
+        (1614, DEV_ICON_OFF),
+        (1617, DEV_ICON_HOT),
+        (1615, DEV_ICON_HOT),
+        (1616, DEV_ICON_OFF),
+        (1620, DEV_RULE),
+        (1628, DEV_HOVER),
+        (1629, DEV_RIPPLE),
+        (1661, DEV_ICON_HOT),
+        (1662, DEV_ICON_HOT),
+        (1663, DEV_ICON_HOT),
+        (1022, DEV_ICON),
+        (1023, DEV_ICON),
+        (1024, DEV_ICON_HOT),
+        (1065, DEV_ICON),
+        (1066, DEV_ICON),
+        (1069, DEV_ICON),
+        (1072, DEV_ICON_HOT),
+        (1073, DEV_ICON),
+    ],
+    ..DEV_CHROME_156
+};
+
+/// Edge 156.0.4314.50. Its colour ids sit 88 to 101 above Chrome's. The font functions are read from
+/// its public symbols and checked against the module file.
+const DEV_EDGE_156: DevMode = DevMode {
+    colours: &[
+        (316, DEV_GROUND),
+        (2893, DEV_GROUND),
+        (2082, 0),
+        (2083, DEV_HOVER),
+        (2898, DEV_ICON),
+        (2899, DEV_ICON),
+        (2900, DEV_ICON_OFF),
+        (2903, DEV_ICON_HOT),
+        (2901, DEV_ICON_HOT),
+        (2902, DEV_ICON_OFF),
+        (2906, DEV_RULE),
+        (2914, DEV_HOVER),
+        (2915, DEV_RIPPLE),
+        (2947, DEV_ICON_HOT),
+        (2948, DEV_ICON_HOT),
+        (2949, DEV_ICON_HOT),
+        (2951, DEV_ICON_HOT),
+        (3409, DEV_ICON_HOT),
+        (3410, DEV_ICON_HOT),
+        (2300, DEV_ICON),
+        (2301, DEV_ICON),
+        (2302, DEV_ICON_HOT),
+        (2343, DEV_ICON),
+        (2344, DEV_ICON),
+        (2347, DEV_ICON),
+        (2350, DEV_ICON_HOT),
+        (2351, DEV_ICON),
+        (3009, 0),
+    ],
+    font_new: 0x0267_058C, // ??0Font@gfx@@QEAA@AEBV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@H@Z
+    font_new_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2],
+    font_list_new: 0x02B0_FDCE, // ??0FontList@gfx@@QEAA@AEBVFont@1@@Z
+    font_list_new_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE],
+    ..DEV_CHROME_156
+};
+
 const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     layout_constant: ABSENT,
     layout_constant_prologue: &[0],
@@ -945,6 +1086,7 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     get_widget_slot: 0,
     overrides: &[],
     colours: &[],
+    dev: UNCHECKED_DEV,
     hwnd_for_widget: ABSENT,
     hwnd_for_widget_head: &[0],
     hwnd_for_widget_tail: &[0],
@@ -1394,6 +1536,7 @@ pub static CHROME: Build = Build {
         (55, 8),  // kToolbarCornerRadius
         (60, 0),  // kVerticalTabMinWidth
     ],
+        dev: DEV_CHROME_156,
         colours: &[
         (0x13C, PAPER),      // kColorFrameActive
         (796, PAPER),        // kColorLocationBarBackground
@@ -1918,6 +2061,7 @@ pub static EDGE: Build = Build {
         (153, 2),  // kToolbarElementPadding
         (146, 0),  // kTabstripToolbarOverlap
     ], // Edge's ids sit 88 to 101 above Chrome's: matched by the constants the same functions ask for in both builds. Only ids that a Rivet window asks for are listed; kMainBackgroundRegionCornerRadius, kToolbarCornerRadius and kVerticalTabMinWidth were never asked for, so their Edge ids are not recorded
+        dev: DEV_EDGE_156,
         colours: &[
         (316, PAPER),      // kColorFrameActive
         (1936, 0),         // kColorCaptionButtonBackground: clear, so the row shows through like Chrome's
@@ -2710,6 +2854,7 @@ pub static BRAVE: Build = Build {
         (55, 8),  // kToolbarCornerRadius
         (60, 0),  // kVerticalTabMinWidth
     ],
+        dev: DEV_BRAVE_156,
         colours: &[
         (0x13C, PAPER),      // kColorFrameActive
         (813, PAPER),        // kColorLocationBarBackground
@@ -3761,5 +3906,57 @@ mod tests {
         // Edge keeps its Browser at another place in the browser view, and its groups are not read.
         assert_ne!(CHROME.tabs.browser_in_view, EDGE.tabs.browser_in_view);
         assert!(CHROME.tabs.groups && !EDGE.tabs.groups);
+    }
+
+    #[test]
+    fn fr11_developer_colours_name_the_row_colours_of_their_build() {
+        for build in [&CHROME, &EDGE, &BRAVE] {
+            let dev = &build.toolbar.dev;
+            assert!(!dev.colours.is_empty(), "{}", build.browser);
+            for (key, role) in [("frame", 0), ("toolbar", 1)] {
+                // The ground of the row is a colour the row already replaces, and the developer one
+                // replaces that value.
+                let (id, _) = dev.colours[role];
+                assert!(
+                    build.toolbar.colours.iter().any(|(known, _)| *known == id),
+                    "{} {key} colour {id}",
+                    build.browser
+                );
+            }
+            // No id is listed twice, or the later one would never be read.
+            let mut ids: Vec<i32> = dev.colours.iter().map(|(id, _)| *id).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(ids.len(), dev.colours.len(), "{}", build.browser);
+        }
+    }
+
+    #[test]
+    fn fr11_developer_commands_are_those_of_the_devtools_keys() {
+        for build in [&CHROME, &EDGE, &BRAVE] {
+            let dev = &build.toolbar.dev;
+            assert_eq!((dev.console, dev.inspect), (40005, 40023));
+        }
+        // A build that was never checked offers no command and no bar.
+        assert_eq!(UNCHECKED_TOOLBAR.dev.inspect, 0);
+    }
+
+    #[test]
+    fn fr11_edge_156_developer_font_functions_match_the_installed_build() {
+        let path = r"C:\Program Files (x86)\Microsoft\Edge\Application\156.0.4314.50\msedge.dll";
+        let Ok(file) = std::fs::read(path) else {
+            return;
+        };
+        let dev = &EDGE.toolbar.dev;
+        for (name, rva, prologue) in [
+            ("font", dev.font_new, dev.font_new_prologue),
+            ("font list", dev.font_list_new, dev.font_list_new_prologue),
+        ] {
+            assert_eq!(
+                file_bytes(&file, rva, prologue.len()).as_deref(),
+                Some(prologue),
+                "{name} prologue does not match msedge.dll"
+            );
+        }
     }
 }

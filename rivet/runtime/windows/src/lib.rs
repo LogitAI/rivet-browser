@@ -204,6 +204,10 @@ mod appbar;
 #[cfg(windows)]
 mod browsers;
 #[cfg(windows)]
+mod dev_bar;
+#[cfg(windows)]
+mod dev_mode;
+#[cfg(windows)]
 mod builds;
 #[cfg(windows)]
 mod chrome_layout;
