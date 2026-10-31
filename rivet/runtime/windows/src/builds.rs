@@ -955,6 +955,16 @@ const DEV_CHROME_156: DevMode = DevMode {
     ..UNCHECKED_DEV
 };
 
+/// Chrome 156.0.8078.74, whose font functions are read from its public symbols and checked against
+/// the module file.
+const DEV_CHROME_156_74: DevMode = DevMode {
+    font_new: 0x02F7_2AE0, // ??0Font@gfx@@QEAA@AEBV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@H@Z
+    font_new_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2],
+    font_list_new: 0x02F7_27D0, // ??0FontList@gfx@@QEAA@AEBVFont@1@@Z
+    font_list_new_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE],
+    ..DEV_CHROME_156
+};
+
 /// Brave's colour ids sit 17 above Chrome's from 574 on.
 const DEV_BRAVE_156: DevMode = DevMode {
     colours: &[
@@ -2147,7 +2157,7 @@ pub static CHROME_156_74: Build = Build {
         (55, 8),  // kToolbarCornerRadius
         (60, 0),  // kVerticalTabMinWidth
     ],
-        dev: DEV_CHROME_156,
+        dev: DEV_CHROME_156_74,
         colours: &[
         (0x13C, PAPER),      // kColorFrameActive
         (796, PAPER),        // kColorLocationBarBackground
@@ -4661,6 +4671,21 @@ mod tests {
                 Some(prologue),
                 "{name} prologue does not match msedge.dll"
             );
+        }
+    }
+
+    #[test]
+    fn fr11_chrome_156_74_developer_font_functions_match_the_installed_build() {
+        let path = r"C:\Program Files\Google\Chrome\Application\156.0.8078.74\chrome.dll";
+        let Ok(file) = std::fs::read(path) else {
+            return;
+        };
+        let dev = &CHROME_156_74.toolbar.dev;
+        for (name, rva, prologue) in [
+            ("font", dev.font_new, dev.font_new_prologue),
+            ("font list", dev.font_list_new, dev.font_list_new_prologue),
+        ] {
+            assert_eq!(file_bytes(&file, rva, prologue.len()).as_deref(), Some(prologue), "{name}");
         }
     }
 }

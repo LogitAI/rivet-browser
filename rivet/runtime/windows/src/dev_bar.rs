@@ -17,6 +17,8 @@ use crate::dev_mode::{self, Action};
 /// What the appbar draws of the bar, in window pixels.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct View {
+    /// Where the bar's first button starts inside the row, in pixels.
+    pub bar_x: f32,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -32,8 +34,9 @@ thread_local! {
 
 /// The bar of `window` as left, top, width and height in DIPs with its buttons, or none while the
 /// page is not in developer mode, the build has no button to show, or the window shows a split,
-/// whose rows are Rivet's own.
-unsafe fn place(window: HWND) -> Option<([f32; 4], Vec<(Action, u32)>)> {
+/// whose rows are Rivet's own. The second rectangle is the whole top row, which the visual covers
+/// to lay the stripes of developer mode over it.
+unsafe fn place(window: HWND) -> Option<([f32; 4], [f32; 4], Vec<(Action, u32)>)> {
     if !crate::chrome_toolbar::window_in_dev_mode(window) || !crate::chrome_split::panes(window).is_empty() {
         return None;
     }
@@ -46,7 +49,8 @@ unsafe fn place(window: HWND) -> Option<([f32; 4], Vec<(Action, u32)>)> {
     let row = crate::chrome_split::ROW_HEIGHT as f32;
     let width = dev_mode::bar_width(actions.len());
     let right = client_width(window) - crate::chrome_split::CAPTION_ROOM;
-    Some(([right - width, panel.y as f32, width, row], actions))
+    let whole = [panel.x as f32, panel.y as f32, panel.width as f32, row];
+    Some(([right - width, panel.y as f32, width, row], whole, actions))
 }
 
 /// The width of the window's client area in DIPs.
@@ -62,14 +66,15 @@ fn scale(window: HWND) -> f32 {
 
 /// What to draw of the bar of `window`.
 pub(crate) unsafe fn view(window: HWND) -> Option<View> {
-    let (area, actions) = place(window)?;
+    let (area, whole, actions) = place(window)?;
     let factor = scale(window);
     let hover = HOVER.with(|all| all.borrow().get(&(window as isize)).copied());
     Some(View {
-        x: area[0] * factor,
-        y: area[1] * factor,
-        width: area[2] * factor,
-        height: area[3] * factor,
+        bar_x: (area[0] - whole[0]) * factor,
+        x: whole[0] * factor,
+        y: whole[1] * factor,
+        width: whole[2] * factor,
+        height: whole[3] * factor,
         glyphs: actions.iter().map(|(action, _)| action.look().0).collect(),
         hover,
     })
@@ -77,7 +82,7 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
 
 /// The button under a point in client pixels.
 pub(crate) unsafe fn hit(window: HWND, point: POINT) -> Option<usize> {
-    let (area, actions) = place(window)?;
+    let (area, _, actions) = place(window)?;
     let factor = scale(window);
     let (x, y) = (point.x as f32 / factor, point.y as f32 / factor);
     if y < area[1] || y >= area[1] + area[3] {
@@ -123,18 +128,9 @@ pub(crate) unsafe fn release(window: HWND, point: POINT) {
     if hit(window, point) != Some(down) {
         return;
     }
-    let Some((_, actions)) = place(window) else { return };
+    let Some((_, _, actions)) = place(window) else { return };
     if let Some((_, command)) = actions.get(down) {
         // The browser's own command, as its keyboard shortcut sends it.
         PostMessageW(window, WM_COMMAND, *command as usize, 0);
-    }
-}
-
-/// Cuts the browser's top row short of the bar. `toolbar` is left, top, width and height in DIPs.
-pub(crate) unsafe fn fit_toolbar(window: HWND, toolbar: &mut [i32; 4]) {
-    let Some((area, _)) = place(window) else { return };
-    let end = area[0].floor() as i32;
-    if toolbar[0] + toolbar[2] > end {
-        toolbar[2] = (end - toolbar[0]).max(1);
     }
 }

@@ -777,8 +777,13 @@ unsafe extern "system" fn caption_paint(button: *const c_void, canvas: *const c_
         .filter_map(|id| colour_slot(provider, id))
         .map(|slot| (slot, slot.read()))
         .collect();
+    // The glyphs are white on the dark row of a page in developer mode.
+    let ink = match HOOK.get() {
+        Some(Ok(hook)) if crate::chrome_toolbar::window_in_dev_mode((hook.hwnd_for_view)(button)) => 0xffff_ffff,
+        _ => caption_ink(),
+    };
     for (slot, _) in &saved {
-        slot.write(caption_ink());
+        slot.write(ink);
     }
     original(button, canvas);
     for (slot, colour) in saved {

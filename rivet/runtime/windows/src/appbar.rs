@@ -731,10 +731,30 @@ impl Appbar {
         context.Clear(Some(&rgba(WHITE, 0.0)));
         let canvas = Canvas { context: &context, dwrite: &self.dwrite, fonts: &self.fonts };
         let h = height as f32 / scale;
+        let w = width as f32 / scale;
         let mut result = Ok(());
+        // The stripes of the study's `.toolbar.dev`: 9 DIP bands of a slightly lighter ground every
+        // 18 DIPs, running up to the right. They are faint white over the browser's own dark row.
+        result = result.and_then(|_| {
+            let brush = canvas.paint_brush(rgba(WHITE, 0.035))?;
+            let step = 18.0 * std::f32::consts::SQRT_2;
+            let mut x = 13.5 * std::f32::consts::SQRT_2 - step;
+            while x < w + h {
+                context.DrawLine(
+                    windows_numerics::Vector2 { X: x, Y: h },
+                    windows_numerics::Vector2 { X: x + h, Y: 0.0 },
+                    &brush,
+                    9.0,
+                    None,
+                );
+                x += step;
+            }
+            Ok(())
+        });
+        let origin = bar.bar_x / scale;
         for (index, glyph) in bar.glyphs.iter().enumerate() {
             let area = rect(
-                crate::dev_mode::LEAD + index as f32 * crate::dev_mode::BUTTON,
+                origin + crate::dev_mode::LEAD + index as f32 * crate::dev_mode::BUTTON,
                 (h - 28.0) / 2.0,
                 crate::dev_mode::BUTTON,
                 28.0,

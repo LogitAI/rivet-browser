@@ -266,6 +266,10 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
                     let caption_x = *((container + 0x1C8) as *const i32);
                     width = caption_x - edge.caption_gap - window_x(parent) - edge.field_x;
                 }
+                // A page in developer mode leaves the room before the caption buttons to its bar.
+                if crate::chrome_toolbar::dev_on(crate::chrome_toolbar::widget_holding(view)) {
+                    width -= crate::dev_mode::bar_width(crate::chrome_toolbar::dev_actions().len()).ceil() as i32;
+                }
                 moved = [edge.field_x, edge.field_y, width, edge.field_height];
             }
         }

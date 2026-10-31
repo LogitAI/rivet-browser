@@ -243,6 +243,7 @@ unsafe extern "system" fn dev_refresh(_window: HWND, _message: u32, id: usize, _
         if let Some(window) = window {
             crate::chrome_side_panel::relayout_page_area(window);
             crate::edge_vertical::relayout(window);
+            windows_sys::Win32::Graphics::Gdi::InvalidateRect(window, std::ptr::null(), 0);
             crate::frame::update_appbar(window);
         }
     }
@@ -730,6 +731,10 @@ unsafe extern "system" fn layout_insets(out: *mut [i32; 4], inset: i32) -> *mut 
         (*out)[0] = bv().toolbar_top;
         (*out)[2] = bv().toolbar_bottom;
         (*out)[1] = (*out)[1].saturating_add(bv().leading_space);
+        // The developer bar takes the room before the caption buttons.
+        if dev_on(CURRENT.with(Cell::get)) {
+            (*out)[3] = (*out)[3].saturating_add(crate::dev_mode::bar_width(dev_actions().len()).ceil() as i32);
+        }
     }
     if active() && inset == bv().location_icon_inset {
         (*out)[1] = (*out)[1].saturating_add(LOCATION_ICON_SHIFT);
