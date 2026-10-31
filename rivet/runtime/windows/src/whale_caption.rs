@@ -93,7 +93,7 @@ fn glyph_at(width: i32, x: i32, zoomed: bool) -> Option<CaptionGlyph> {
 }
 
 /// Windows' glyph ink. Close turns white on its red hover.
-fn glyph_colour(glyph: CaptionGlyph, state: i32) -> u32 {
+pub(crate) fn glyph_colour(glyph: CaptionGlyph, state: i32) -> u32 {
     if glyph == CaptionGlyph::Close && (state == 1 || state == 2) {
         0xffff_ffff
     } else {
@@ -102,7 +102,7 @@ fn glyph_colour(glyph: CaptionGlyph, state: i32) -> u32 {
 }
 
 /// The fill behind a glyph: Windows' faint grey on hover and red on close, none at rest.
-fn hover_colour(glyph: CaptionGlyph, state: i32) -> Option<u32> {
+pub(crate) fn hover_colour(glyph: CaptionGlyph, state: i32) -> Option<u32> {
     match (glyph, state) {
         (CaptionGlyph::Close, 1 | 2) => Some(0xffc4_2b1c),
         (_, 1 | 2) => Some(0x0a00_0000),

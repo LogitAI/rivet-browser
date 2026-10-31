@@ -12,7 +12,7 @@ use windows_sys::Win32::Foundation::HWND;
 
 use crate::builds::TopRow;
 use crate::chrome_layout::{image, PANEL_GAP};
-use crate::chrome_toolbar::{NavMark, PageMark};
+use crate::chrome_toolbar::{CaptionGlyph, NavMark, PageMark};
 
 /// The row of the design, in DIPs: 44 tall with its hairline as the last line, and 28 DIP buttons
 /// two apart. The address field keeps 4 DIPs from what follows it.
@@ -358,11 +358,16 @@ unsafe extern "system" fn bare_background(view: *mut c_void, canvas: *const c_vo
 
 type PaintIcon = unsafe extern "system" fn(*const c_void, *const c_void, i32, u32);
 
-/// Back, forward, reload and stop, and the three marks of the field.
+/// Back, forward, reload and stop, the three marks of the field, and the caption glyphs.
 struct Icons {
     navigation: [usize; 4],
     marks: [usize; 3],
+    caption: [usize; 4],
 }
+
+/// The size of a caption button's glyph canvas.
+const CAPTION_CANVAS: i32 = 46;
+const CAPTION_GLYPHS: [CaptionGlyph; 4] = [CaptionGlyph::Minimize, CaptionGlyph::Maximize, CaptionGlyph::Restore, CaptionGlyph::Close];
 static ICONS: OnceLock<Icons> = OnceLock::new();
 
 fn mark_index(mark: PageMark) -> usize {
@@ -439,6 +444,21 @@ unsafe extern "system" fn button_paint(view: *mut c_void, canvas: *const c_void)
     }
     let (Some(image), Some(icons)) = (image::recorded(), ICONS.get()) else { return };
     let draw: PaintIcon = std::mem::transmute(image.base + row.paint_vector_icon);
+    if class_of(view as usize, image.base) == row.caption_button {
+        // The caption holds minimize, maximize, restore and close, in that order. Its own paint
+        // draws baked images in Samsung's ink, so this draws Windows' glyphs. The browser's ink drop
+        // lies over the other buttons' hover, so only close needs a fill.
+        let parent = parent_of(view as usize, row);
+        let Some(position) = children(parent, row).into_iter().position(|child| child == view as usize) else { return };
+        let Some(glyph) = CAPTION_GLYPHS.get(position).copied() else { return };
+        let state = *((view as usize + row.button_state_offset) as *const i32);
+        if let Some(colour) = crate::whale_caption::hover_colour(glyph, state).filter(|_| glyph == CaptionGlyph::Close) {
+            let fill: unsafe extern "system" fn(*const c_void, u32) =
+                std::mem::transmute(image.base + crate::builds::get().layout.draw_color);
+            fill(canvas, colour);
+        }
+        return draw(canvas, icons.caption[position] as *const c_void, CAPTION_CANVAS, crate::whale_caption::glyph_colour(glyph, state));
+    }
     if class_of(view as usize, image.base) == row.location_icon {
         let width = bounds_of(view as usize, row)[2];
         // The layout chose the chip for the page, and the paint follows it.
@@ -637,6 +657,7 @@ unsafe fn patch(row: &'static TopRow) -> Result<(), String> {
         marks: [PageMark::Lock, PageMark::Warning, PageMark::Info].map(|mark| {
             crate::chrome_toolbar::page_mark_icon(mark, CHIP_GLYPH_ONLY as f32, CHIP_GLYPH_CENTRE, row.canvas_command) as usize
         }),
+        caption: CAPTION_GLYPHS.map(|glyph| crate::chrome_toolbar::caption_icon(glyph, row.canvas_command) as usize),
     });
     {
         let mut known = HELD.lock().unwrap_or_else(|error| error.into_inner());
@@ -742,6 +763,14 @@ mod tests {
         assert_eq!(field_fill(0.0), 0x001F_2024);
         assert_eq!(field_fill(1.0), 0x0D1F_2024);
         assert_eq!(field_fill(4.0), 0x0D1F_2024);
+    }
+
+    #[test]
+    fn fr12_samsung_caption_hover_and_glyphs_are_windows() {
+        use crate::whale_caption::{glyph_colour, hover_colour};
+        assert_eq!(glyph_colour(CAPTION_GLYPHS[0], 0), 0xFF1A_1A1A);
+        assert_eq!(hover_colour(CAPTION_GLYPHS[3], 1), Some(0xFFC4_2B1C));
+        assert_eq!(glyph_colour(CAPTION_GLYPHS[3], 1), 0xFFFF_FFFF);
     }
 
     #[test]

@@ -546,7 +546,7 @@ pub struct TopRow {
     pub paint_vector_icon_prologue: &'static [u8],
     pub canvas_command: u32,
     /// The slot of `views::Button::PaintButtonContents`, with what it holds for back and forward, for
-    /// reload and for the location icon.
+    /// reload, for the location icon and for the caption buttons.
     pub button_paint_slot: usize,
     pub button_paints: &'static [(usize, usize)],
     /// The image view a button keeps its icon in, `views::Button::state_`, and where reload keeps
@@ -4240,7 +4240,7 @@ pub static SAMSUNG: Build = Build {
             paint_vector_icon_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x38],
             canvas_command: 28,
             button_paint_slot: 114,
-            button_paints: &[(0xe266528, 0x5f9e0), (0xe268e88, 0x1bbb2b0), (0xe2708a8, 0x5f9e0)],
+            button_paints: &[(0xe266528, 0x5f9e0), (0xe268e88, 0x1bbb2b0), (0xe2708a8, 0x5f9e0), (0xe30fea8, 0x1cd8580)],
             button_image: 0xe252008,
             chip_children: &[0xe252008, 0xe258a68, 0xe24eaa8],
             // Both match Chrome 150's functions instruction for instruction.
