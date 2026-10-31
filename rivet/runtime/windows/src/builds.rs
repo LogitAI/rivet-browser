@@ -1967,6 +1967,564 @@ pub static CHROME: Build = Build {
     whale_row: None,
 };
 
+/// Google Chrome 156.0.8078.74, filled from that build's own public symbols and instruction bytes.
+pub static CHROME_156_74: Build = Build {
+    browser: "Google Chrome",
+    module: "chrome.dll",
+    version: [156, 0, 8078, 74],
+    toolbar: Toolbar {
+        layout_constant: 0x046A_AAA0, // ?GetLayoutConstant@@YAHW4LayoutConstant@@@Z
+        layout_constant_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x90, 0xA5, 0x33, 0x0D],
+        theme_changed: 0x0195_EC20, // ?ThemeChanged@Widget@views@@QEAAXXZ
+        theme_changed_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x78, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x10, 0x64, 0x08, 0x10],
+        paint_layer: 0x0089_8CB0, // ?PaintFromPaintRoot@View@views@@AEAAXAEBVPaintContext@ui@@@Z
+        paint_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x78, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x80, 0xC3, 0x14, 0x11],
+        set_visible: 0x054C_1240, // ?SetVisible@View@views@@UEAAX_N@Z
+        set_visible_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x89, 0xD3, 0x48, 0x89, 0xCE],
+        from_vector_icon: 0x00C9_1B00, // ?FromVectorIcon@ImageModel@ui@@SA?AV12@AEBUVectorIcon@gfx@@VColorVariant@2@HPEBU34@@Z
+        from_vector_icon_prologue: &[
+        0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
+    ],
+        update_location: 0x00F0_9BD0, // ?Update@LocationIconView@@QEAAX_N0@Z
+        update_location_prologue: &[
+        0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xA8, 0, 0, 0,
+    ],
+        update_location_icon: 0x00F0_AB70, // ?GetSecurityChipAccessibilityState@location_bar@@YA?AUSecurityChipAccessibilityState@1@PEBVLocationB
+        update_location_icon_prologue: &[
+        0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0, 0, 0, 0x48, 0x89, 0xCE,
+    ],
+        layout_insets: 0x04BE_FF60, // ?GetLayoutInsets@@YA?AVInsets@gfx@@W4LayoutInset@@@Z
+        layout_insets_prologue: &[
+        0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x89, 0xD7, 0x48, 0x89, 0xCE,
+    ],
+        toolbar_button_inset: 6,
+        toolbar_inset: 11,
+        location_icon_inset: 3,
+        update_icon: 0x00C9_16F0, // ?UpdateIcon@ToolbarButton@@UEAAXXZ
+        update_icon_prologue: &[
+        0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x80, 0xB9, 0xD8, 0x06, 0, 0, 0x01,
+    ],
+        formatted_url: 0x0196_81A0, // ?GetFormattedURL@LocationBarModelImpl@@AEBA?AV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$alloca
+        formatted_url_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x70, 0x01, 0x00, 0x00],
+        model_url: 0x056D_6520, // ?GetURL@LocationBarModelImpl@@UEBA?AVGURL@@XZ
+        model_url_prologue: &[0x56, 0x57, 0x48, 0x81, 0xEC, 0xB8, 0x00, 0x00, 0x00, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48],
+        omnibox_update: 0x00F0_9460, // ?Update@OmniboxViewViews@@UEAAXXZ
+        omnibox_update_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0xD1, 0xBB, 0xAD, 0x10],
+        omnibox_revert_all: 0x00F0_EA20, // ?RevertAll@OmniboxViewViews@@UEAAXXZ
+        omnibox_revert_all_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x70, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x11, 0x66, 0xAD, 0x10],
+        omnibox_tab_changed: 0x00F1_1770, // ?OnTabChanged@OmniboxViewViews@@QEAAXPEAVWebContents@content@@@Z
+        omnibox_tab_changed_prologue: &[
+        0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD7, 0x48, 0x89, 0xCE,
+    ],
+        omnibox_textfield: 0x10,
+        update_text_style: 0x00F0_E120, // ?UpdateTextStyle@OmniboxView@@IEAAXAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator@_S@
+        update_text_style_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x78, 0x48, 0x89, 0xCE],
+        apply_color: 0x02F7_1730, // ?ApplyColor@RenderText@gfx@@QEAAXIAEBVRange@2@@Z
+        apply_color_bytes: &[
+        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0xA0, 0, 0, 0,
+    ],
+        title_weight: 600,
+        apply_weight: 0x0ACF_A820, // ?ApplyWeight@RenderText@gfx@@QEAAXW4Weight@Font@2@AEBVRange@2@@Z
+        apply_weight_bytes: &[
+        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0, 0x01, 0, 0,
+    ],
+        title_was_set: 0x02F1_5200, // ?TitleWasSet@OmniboxViewViews@@EEAAXPEAVNavigationEntry@content@@@Z
+        title_was_set_prologue: &[
+        0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x81, 0x80, 0, 0, 0,
+    ],
+        observer_offset: 0x720,
+        operator_new: 0x05A1_E310, // ??2@YAPEAX_K@Z
+        operator_new_bytes: &[0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B],
+        operator_delete: 0x03BB_3150, // ??3@YAXPEAX_K@Z
+        operator_delete_bytes: &[
+        0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD6,
+    ],
+        model_delegate: 0x40,
+        browser_delegate_vtable: 0x0FC2_9790, // .weak.??_7BrowserLocationBarModelDelegate@@6B@.default.?RejectPromiseOnDestruction@?$CdmPromiseTempl
+        active_web_contents: 0x0558_3E90, // ?GetActiveWebContents@BrowserLocationBarModelDelegate@@UEBAPEAVWebContents@content@@XZ
+        active_web_contents_slot: 19,
+        web_contents_vtable: 0x0FCC_9F18, // .weak.??_7WebContentsImpl@content@@6BPageNavigator@1@@.default.?RejectPromiseOnDestruction@?$CdmProm
+        web_contents_title: 0x0106_B960, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator
+        web_contents_title_slot: 53,
+        location_bar_view_base: 0x100,
+        hover_value: 0x5F8,
+        field_background: 0x328,
+        background_vtable: 0x0FAA_E920, // ??_7BackgroundPainter@views@@6B@
+        painter_vtable: 0x0FC4_1E08, // ??_7SolidRoundRectPainter@?A0xF7BC1CD1@views@@6B@.b545234ba40531a795a52b0b8121bc9c
+        painter_radii: 0x10,
+        painter_insets: 0x20,
+        field_state: 0x4E8,
+        field_state_focused: 0x18,
+        focused_fill_id: 1013,
+        focus_ring_remove: 0x0245_2770, // ?Remove@FocusRing@views@@SAXPEAVView@2@@Z
+        set_transform: 0x0A9F_2220, // ?SetTransform@View@views@@QEAAXAEBVTransform@gfx@@@Z
+        set_transform_prologue: &[
+        0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x48, 0x89, 0xD6,
+    ],
+        set_brightness: 0x0AA9_AAA0, // ?SetLayerBrightness@Layer@ui@@QEAAXM@Z
+        set_brightness_prologue: &[
+        0x56, 0x57, 0x48, 0x83, 0xEC, 0x48, 0x0F, 0x29, 0x74, 0x24, 0x30,
+    ],
+        view_layer: 0x20,
+        view_size: 0x1D0,
+        refresh_background: 0x0178_CDB0, // ?RefreshBackground@LocationBarView@@AEAAXXZ
+        refresh_background_prologue: &[
+        0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x60,
+    ],
+        chip_text: 0x00C8_8D30, // ?GetSecurityChipText@location_bar@@YA?AV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator@_S
+        chip_text_prologue: &[
+        0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00,
+    ],
+        textfield_theme: 0x021D_BC90, // ?OnThemeChanged@Textfield@views@@UEAAXXZ
+        textfield_theme_prologue: &[
+        0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x68,
+    ],
+        textfield_set_font: 0x02F4_D2C0, // ?SetFontList@Textfield@views@@QEAAXAEBVFontList@gfx@@@Z
+        textfield_set_font_bytes: &[
+        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x81, 0x78, 0x03, 0, 0, 0x48,
+    ],
+        font_size: 0x0347_2A50, // ?GetFontSize@FontList@gfx@@QEBAHXZ
+        font_size_bytes: &[
+        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x31, 0x8B, 0x46, 0x44, 0x83, 0xF8, 0xFF, 0x74, 0x06,
+    ],
+        derive_size: 0x02F7_2900, // ?DeriveWithSizeDelta@FontList@gfx@@QEBA?AV12@H@Z
+        derive_size_bytes: &[
+        0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x44, 0x89, 0xC7, 0x48, 0x89, 0xD6,
+    ],
+        textfield_render_text: 0x378,
+        render_text_font_list: 0x48,
+        gurl_destructor: 0x03BA_A460, // ??1GURL@@QEAA@XZ
+        gurl_destructor_bytes: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE],
+        gurl_scheme_begin: 0x20,
+        gurl_scheme_length: 0x24,
+        anchor_rect: 0x0AA7_D550, // ?GetAnchorRect@BubbleDialogDelegate@views@@UEBA?AVRect@gfx@@XZ
+        anchor_rect_prologue: &[
+        0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC,
+        0xD0, 0, 0, 0,
+    ],
+        anchor_view_access: &[
+        0x48, 0x8B, 0x81, 0, 3, 0, 0, 0x48, 0x85, 0xC0, 0x74, 0x56, 0x48, 0x8B, 0x58, 0x18,
+        0x48, 0x85, 0xDB, 0x74, 0x4D,
+    ],
+        is_drawn: 0x001F_4E40, // ?IsDrawn@AppMenuButton@@UEBA_NXZ
+        is_drawn_bytes: &[
+        0x80, 0xB9, 0xD8, 1, 0, 0, 1, 0x75, 0x1D, 0x48, 0x8B, 0x89, 0x98, 1, 0, 0,
+        0x48, 0x85, 0xC9, 0x74, 0x11, 0x48, 0x8B, 1, 0x48, 0x8B, 0x80, 0x98, 0, 0, 0, 0x48,
+    ],
+        bounds_in_screen: 0x009D_6640, // ?GetBoundsInScreen@View@views@@QEBA?AVRect@gfx@@XZ
+        bounds_bytes: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF],
+        parent_offset: 0x198,
+        is_drawn_slot: 19,
+        browser_widget_vtable: 0x0FA3_CE70, // ??_7BrowserWidget@@6BNativeWidgetDelegate@internal@views@@@
+        plain_widget_vtable: 0x0FAA_3790, // ??_7Widget@views@@6BNativeWidgetDelegate@internal@1@@
+        paint_slot: 30,
+        paint: 0x02F4_94A0, // ?OnNativeWidgetPaint@Widget@views@@UEAAXAEBVPaintContext@ui@@@Z
+        layout_slot: 44,
+        layout: 0x0166_5300, // ?LayoutRootViewIfNecessary@Widget@views@@UEAAXXZ
+        color_provider: 0x042A_1D90, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
+        root_view_offset: 0x1A0,
+        theme_slot: 99,
+        hidden: &[
+        (0x0FD1_86D0, 0x01D2_4BC0), // BrowserAppMenuButton
+        (0x0FD5_E570, 0x0198_E7C0), // AvatarToolbarButton
+        (0x0FD4_DA10, 0x0031_AFA0), // page_actions::PageActionView
+        (0x0FD8_9DB0, 0x001F_6590), // VerticalTabStripRegionView
+        // The side panel's own header: Rivet draws that row in the strip the layout leaves above the panel.
+        (0x0FCD_A990, 0x001F_6590), // SidePanelHeader
+        // The toolbar button that shows the open side panel's entry: the Sidebar's rail shows it.
+        (0x0FD1_6C90, 0x00C9_16B0), // PinnedActionToolbarButton
+            (0x0FD1_AC10, 0x00C9_16B0), // SplitTabsToolbarButton
+    ],
+        get_widget_slot: 11,
+        size_slots: (0, 0),
+        paint_children_slot: 0,
+        overrides: &[
+        (12, 8),  // kLocationBarChildCornerRadius
+        (16, 28), // kLocationBarHeight
+        (29, 12), // kMainBackgroundRegionCornerRadius
+        (46, 28), // kToolbarButtonHeight
+        (47, 18), // kToolbarButtonIconSize
+        (55, 8),  // kToolbarCornerRadius
+        (60, 0),  // kVerticalTabMinWidth
+    ],
+        colours: &[
+        (0x13C, PAPER),      // kColorFrameActive
+        (796, PAPER),        // kColorLocationBarBackground
+        (797, 0xFFF0_EFEC),  // kColorLocationBarBackgroundHovered
+        (1003, 0),           // Page info chip background: clear, so the field is one surface
+        (159, FOCUS_RING),   // kColorSysStateFocusRing
+        (314, FOCUS_RING),   // kColorFocusableBorderFocused
+        (465, SELECTION),    // kColorTextfieldSelectionBackground
+        (466, INK),          // kColorTextfieldSelectionForeground
+        (1004, 0),           // kColorOmniboxIconBackgroundTonal
+        (1005, SOFT_INK),    // kColorOmniboxIconForeground: the icon of the field while editing
+        (1006, SOFT_INK),    // kColorOmniboxIconForegroundTonal
+        (1007, INK),         // kColorOmniboxIconHover
+        (1013, PAPER),       // kColorOmniboxResultsBackground, the suggestion list and the field with it
+        (1014, 0xFFF0_EFEC), // kColorOmniboxResultsBackgroundHovered
+        (1015, 0x0F1F_2024), // kColorOmniboxResultsBackgroundHoverOverlay
+        (1016, ACCENT_TINT), // kColorOmniboxResultsBackgroundSelected: the accent at 9 percent over paper
+        (1019, SOFT_INK),    // kColorOmniboxResultsButtonIcon
+        (1020, INK),         // kColorOmniboxResultsButtonIconSelected
+        (1028, 0),           // kColorOmniboxResultsFocusIndicator: the design marks a row by its tint alone
+        (1029, SOFT_INK),    // kColorOmniboxResultsIcon
+        (1030, 0x0F1F_2024), // kColorOmniboxResultsIconGM3Background
+        (1031, INK),         // kColorOmniboxResultsIconSelected
+        (1032, INK),         // kColorOmniboxResultsIconHovered
+        (1035, 0xFF8A_8690), // kColorOmniboxResultsTextDimmed
+        (1036, 0xFF4A_4850), // kColorOmniboxResultsTextDimmedSelected
+        (1041, 0xFF8A_8690), // kColorOmniboxResultsTextSecondary
+        (1042, 0xFF4A_4850), // kColorOmniboxResultsTextSecondarySelected
+        (1043, INK),         // kColorOmniboxResultsTextSelected
+        (1044, 0xFF4A_4850), // kColorOmniboxResultsUrl
+        (1045, INK),         // kColorOmniboxResultsUrlSelected
+        (1052, SOFT_INK),    // kColorOmniboxSecurityChipText: the icon of the field while editing
+        (1053, SELECTION),   // kColorOmniboxSelectionBackground: the accent at 25 percent over paper
+        (1054, INK),         // kColorOmniboxSelectionForeground
+        (1046, 0xFFB3_261E), // kColorOmniboxSecurityChipDangerous: the "Not secure" label and its warning
+        (1047, 0x14B3_261E), // kColorOmniboxSecurityChipDangerousBackground: the label's tint, 8 percent
+        (1055, INK),         // kColorOmniboxText: the address while it is edited
+        (1056, 0xFF8A_8690), // kColorOmniboxTextDimmed
+        (1590, PAPER),       // kColorToolbar
+        (1644, 0xFF1A_1A1A), // Caption button glyph, active window
+        (1645, 0xFF1A_1A1A), // Caption button glyph, inactive window
+        (1646, 0xFF1A_1A1A), // Caption button glyph without a theme colour
+        (1647, 0xFFC4_2B1C), // Close button hover fill
+        (1650, 0xFF1A_1A1A), // Caption button glyph alpha when the window is inactive
+        (1595, 0xFF4A_4850), // kColorToolbarButtonIcon
+        (1598, 0xFF1F_2024), // kColorToolbarButtonIconHovered
+        (1599, 0xFFBD_BCBC), // kColorToolbarButtonIconInactive: the icon colour at 35 percent over paper
+        (1603, HAIRLINE),    // kColorToolbarContentAreaSeparator
+        (1611, 0x0F1F_2024), // kColorToolbarInkDropHover
+        (1612, 0x1F1F_2024), // kColorToolbarInkDropRipple
+    ],
+        get_color: 0x0535_9A80,
+        get_color_bytes: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x89, 0xD7],
+        hwnd_for_widget: 0x0A9D_BEA0, // ?HWNDForWidget@views@@YAPEAUHWND__@@PEBVWidget@1@@Z
+        hwnd_for_widget_head: &[0x48, 0x83, 0xEC, 0x28],
+        hwnd_for_widget_tail: &[0x48, 0x89, 0xC1, 0x48, 0x83, 0xC4, 0x28, 0xE9],
+        source_in_widget: 0x48,
+        content_window_for_hwnd: 0x02F4_6B00, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        widget_for_window: 0x02F4_8CE0, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
+        back_icon: 0x10C7_7378, // ?kBackArrowChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
+        forward_icon: 0x10C7_9A90, // ?kForwardArrowChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
+        reload_icon: 0x10C7_C2A0, // ?kReloadChromeRefreshOldIcon@vector_icons@@3UVectorIcon@gfx@@B
+        nav_icon_names: &[b"kBackArrowChromeRefreshOldIcon", b"kForwardArrowChromeRefreshOldIcon", b"kReloadChromeRefreshOldIcon"],
+        page_info_icon: 0x10DD_0F58, // ?kSecurePageInfoChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
+        google_g_icon: 0x10C7_E8C0, // ?kGoogleGLogoIcon@vector_icons@@3UVectorIcon@gfx@@B
+        google_g_monochrome_icon: 0x10C7_E908, // ?kGoogleGLogoMonochromeIcon@vector_icons@@3UVectorIcon@gfx@@B
+        edit_icons: &[0x10C7_9B50, 0x10C7_9B88, 0x10C7_C748, 0x10C7_C790, 0x10C7_C7C8],
+        http_icon: 0x10DD_0948, // ?kHttpChromeRefreshOldIcon@omnibox@@3UVectorIcon@gfx@@B
+        http_icon_name: b"kHttpChromeRefreshOldIcon",
+        page_info_bytes: &[
+        0x1C, 0, 0, 0, 0, 0, 0x80, 0x41, 1, 0, 0, 0, 7, 0, 0, 0,
+        0x5C, 0x8F, 0x3A, 0x41, 0xEC, 0x51, 0x5C, 0x41, 0x12, 0, 0, 0, 0xD7, 0xA3, 0x30, 0xBF,
+    ],
+        page_info_reps: 0x10DD_0F20, // ?kSecurePageInfoChromeRefreshOldRepList@omnibox@@3QBUVectorIconRep@gfx@@B
+        page_info_id: 0x10DD_0F30, // ?kSecurePageInfoChromeRefreshOldIconId@omnibox@@3QBDB
+        page_info_path: 0x10DD_A930, // ?kSecurePageInfoChromeRefreshOldPath@omnibox@@3QBUPathElement@gfx@@B
+        page_info_size: 282,
+        http_size: 263,
+        extra_lock_icons: &[],
+        extra_warning_icons: &[],
+        anchor_view_access_at: 0x2a,
+        skip: "",
+        anchor_tracker_offset: 0x300,
+        toolbar_layout: ABSENT,
+        toolbar_layout_prologue: &[0],
+        infobar_vtable: ABSENT,
+        infobar_layout: ABSENT,
+        infobar_layout_slot: 0,
+        leading_space: 32,
+        toolbar_top: 5,
+        toolbar_bottom: 4,
+        button_padding: 4,
+        field_fill_margin: 3,
+    },
+    vertical: VerticalTabs {
+        supported: true,
+        slot: 0x0FC2_23A8, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
+        should_display: 0x0345_2850, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
+        browser_view_for_browser: 0x002E_75B0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
+        hwnd_for_view: 0x0346_0F20, // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
+        notify_mode_changed: 0x09F9_9710, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
+        update_collapse_action: 0x01DB_9180, // ??0VerticalTabStripStateController@tabs@@IEAA@AEAVBrowserWindowInterface@@@Z
+        destructor: 0x02AD_3050, // ??_EVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
+        destructor_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48],
+        browser_offset: 0x1B8,
+        mode_offset: 0x1E8,
+        width_offset: 0x1CC,
+        browser_view_view_vtable: 0x0FCE_E270, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
+        region_preferred_size: 0x0BAA_5650, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        region_preferred_size_slot: 0x0FD8_A000, // .weak.??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$Cd
+        invalidate_layout: 0x046F_2F30, // ?InvalidateLayout@View@views@@QEAAX_N@Z
+        invalidate_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        region_minimum_size: 0x0BAA_55C0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
+        region_minimum_prologue: &[
+        0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7, 0x02, 0, 0,
+        0, 0,
+    ],
+        should_draw_tab_strip: 0x0504_F960, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
+        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
+        window_feature: ABSENT,
+        window_feature_prologue: &[0],
+        window_feature_tab_strip: 0,
+        window_feature_callers: (0, 0),
+        set_bounds_rect: ABSENT,
+        set_bounds_rect_prologue: &[0],
+        toolbar_in_view: 0,
+        detour_strip: false,
+        ..UNCHECKED_VERTICALTABS
+    },
+    navigation: Navigation {
+        supported: true,
+        content_window_for_hwnd: 0x02F4_6B00, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        browser_view_for_window: 0x0BAA_79F0, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
+        active_web_contents: 0x0BAA_7F20, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        gurl_from_text: 0x04AA_5180, // ??0GURL@@QEAA@V?$basic_string_view@DU?$char_traits@D@__Cr@std@@@__Cr@std@@@Z
+        gurl_wide: false,
+        gurl_empty: 0x054D_1240, // ??0GURL@@QEAA@XZ
+        gurl_drop: 0x03BA_A460, // ??1GURL@@QEAA@XZ
+        open_url_params: 0x0700_9CC0, // ??0OpenURLParams@content@@QEAA@AEBVGURL@@AEBUReferrer@1@W4WindowOpenDisposition@@W4PageTransition@ui
+        open_url_params_drop: 0x020C_7F60, // ??1OpenURLParams@content@@QEAA@XZ
+        open_url: 0x081D_4FC0, // ?OpenURL@WebContentsImpl@content@@UEAAPEAVWebContents@2@AEBUOpenURLParams@2@V?$OnceCallback@$$A6AXAE
+        signatures: &[
+        (
+            0x02F4_6B00,
+            &[0x56, 0x48, 0x83, 0xec, 0x20, 0xe8],
+        ),
+        (0x0BAA_79F0, &[0x48, 0x83, 0xec, 0x28, 0xe8]),
+        (
+            0x04AA_5180,
+            &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        ),
+        (0x054D_1240, &[0x48, 0x89, 0xc8, 0x0f, 0x57, 0xc0]),
+        (0x03BA_A460, &[0x56, 0x57, 0x48, 0x83, 0xec, 0x28]),
+        (0x0700_9CC0, &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53]),
+        (0x020C_7F60, &[0x41, 0x56, 0x56, 0x57, 0x53]),
+        (0x081D_4FC0, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57]),
+        (
+            0x0BAA_7F20,
+            &[0x48, 0x8B, 0x81, 0x60, 0x05, 0x00, 0x00],
+        ),
+    ],
+    },
+    tabs: Tabs {
+        supported: true,
+        content_window_for_hwnd: 0x02F4_6B00, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        browser_view_for_window: 0x0BAA_79F0, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
+        active_web_contents: 0x0BAA_7F20, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        browser_in_view: 0x560,
+        groups: true,
+        get_tab_model: 0x04E2_60C0, // ?Client@WebLocalFrameImpl@blink@@UEBAPEAVWebLocalFrameClient@2@XZ
+        tab_count: 0x0345_2D40, // ?count@TabStripModel@@QEBAHXZ
+        tab_at: 0x009C_51D0, // ?GetWebContentsAt@TabStripModel@@QEBAPEAVWebContents@content@@H@Z
+        tab_object: ABSENT,
+        tab_collection: 0,
+        tab_contents: 0,
+        activate_tab: 0x09FB_C5F0, // ?ActivateTabAt@TabStripModel@@QEAAXHUTabStripUserGestureDetails@@@Z
+        close_tab: 0x09FB_F9D0, // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
+        title: 0x0106_B960, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator
+        new_tab_prologue: &[],
+        new_tab_address: None,
+        new_tab_takes_address: false,
+        new_tab_delay_ms: 0,
+        new_tab: 0x09E7_61A0, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
+        last_committed_url: 0x0559_38B0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
+        visible_url: 0x00B6_3BC0, // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
+        get_group: 0x02EF_9D70, // ?GetTabGroupForTab@TabStripModel@@QEBA?AV?$optional@VTabGroupId@tab_groups@@@__Cr@std@@H@Z
+        has_group: 0x09FA_F550, // ?ContainsTabGroup@TabGroupModel@@QEBA_NAEBVTabGroupId@tab_groups@@@Z
+        lookup_group: 0x09FA_F5B0, // ?GetTabGroup@TabGroupModel@@QEBAPEAVTabGroup@@AEBVTabGroupId@tab_groups@@@Z
+        change_group: 0x09FC_6D90, // ?ChangeTabGroupVisuals@TabStripModel@@QEAAXAEBVTabGroupId@tab_groups@@VTabGroupVisualData@3@_N@Z
+        allocate: 0x05A1_E310, // ??2@YAPEAX_K@Z
+        add_to_new_group: 0x09FC_48F0, // ?AddToNewGroup@TabStripModel@@QEAA?AVTabGroupId@tab_groups@@V?$vector@HV?$allocator@H@__Cr@std@@@__C
+        allocate_prologue: &[0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9],
+        add_to_new_group_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81],
+        signatures: &[
+                (
+                    0x02EF_9D70,
+                    &[
+                        0x56, 0x48, 0x83, 0xec, 0x20, 0x48, 0x89, 0xd6, 0x45, 0x85, 0xc0, 0x78,
+                    ],
+                ),
+                (
+                    0x09FA_F550,
+                    &[
+                        0x56, 0x57, 0x48, 0x83, 0xec, 0x38, 0x49, 0x89, 0xd0, 0x48, 0x8b, 0x05,
+                    ],
+                ),
+                (
+                    0x09FA_F5B0,
+                    &[
+                        0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x38, 0x48, 0x89, 0xd6,
+                    ],
+                ),
+                (
+                    0x09FC_6D90,
+                    &[
+                        0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+                    ],
+                ),
+                (
+                    0x02F4_6B00,
+                    &[0x56, 0x48, 0x83, 0xec, 0x20, 0xe8],
+                ),
+                (0x0BAA_79F0, &[0x48, 0x83, 0xec, 0x28, 0xe8]),
+                (0x0BAA_7F20, &[0x48, 0x8b, 0x81, 0x60, 0x05, 0, 0]),
+                (0x04E2_60C0, &[0x48, 0x8b, 0x41, 0x30, 0xc3]),
+                (0x0345_2D40, &[0x48, 0x8b, 0x01, 0x8b, 0x40, 0x20, 0xc3]),
+                (0x009C_51D0, &[0x48, 0x83, 0xec, 0x28, 0x85, 0xd2]),
+                (0x09FB_C5F0, &[0x56, 0x57, 0x48, 0x83, 0xec, 0x38]),
+                (0x09FB_F9D0, &[0x56, 0x57, 0x48, 0x83, 0xec, 0x28]),
+                (0x0106_B960, &[0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x81]),
+                (0x09E7_61A0, &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57]),
+                (0x0559_38B0, &[0x48, 0x63, 0x81, 0xd4, 0x02, 0, 0]),
+                (0x00B6_3BC0, &[0x48, 0x8b, 0x81, 0xb0, 0x02, 0, 0]),
+            ],
+    },
+    split: Split {
+        supported: true,
+        add_to_new_split: 0x09FC_3C40, // ?AddToNewSplit@TabStripModel@@QEAA?AVSplitTabId@split_tabs@@V?$vector@HV?$allocator@H@__Cr@std@@@__C
+        remove_split: 0x09FC_5DC0, // ?RemoveSplit@TabStripModel@@QEAAXVSplitTabId@split_tabs@@@Z
+        get_split_for_tab: 0x02EF_9DC0, // ?GetSplitForTab@TabStripModel@@QEBA?AV?$optional@VSplitTabId@split_tabs@@@__Cr@std@@H@Z
+        allocate: 0x05A1_E310, // ??2@YAPEAX_K@Z
+        set_rounded_corners: 0x0345_5310, // ?SetRoundedCorners@ContentsContainerView@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_rounded_corners_prologue: &[
+        0xf3, 0x0f, 0x10, 0x02, 0x0f, 0x2e, 0x81, 0x84, 0x04, 0x00, 0x00, 0x75, 0x33,
+    ],
+        set_rounded_corners_changed: 0x0345_5350, // ?SetRoundedCorners@ContentsContainerView@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_rounded_corners_parity: 0x0345_531D, // ?SetRoundedCorners@ContentsContainerView@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        update_border: 0x0207_2060, // ?UpdateBorderAndOverlay@ContentsContainerView@@QEAAX_N00@Z
+        update_border_prologue: &[
+        0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x48, 0x48, 0x89, 0xce,
+    ],
+        set_border_slot: 0xf0 / 8,
+        set_visible_slot: 0x90 / 8,
+        outline_member: 0x448,
+        calculate_layout: 0x022F_8700, // ?CalculateProposedLayout@MultiContentsView@@EEBA?AUProposedLayout@views@@AEBVSizeBounds@3@@Z
+        calculate_layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        layout_delegate_offset: 0x328,
+        split_insets_member: 0x404,
+        containers_member: 0x350,
+        container_count_member: 0x358,
+        active_member: 0x3c8,
+        schedule_paint: 0x0480_FBC0, // ?SchedulePaint@View@views@@QEAAXXZ
+        web_contents_focused: 0x0A28_A190, // ??_EMultiContentsViewDropTargetController@@UEAAPEAXI@Z
+        web_contents_focused_prologue: &[0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x81, 0x98, 0x03, 0x00, 0x00],
+        container_layout: 0x0209_3800, // ?CalculateProposedLayout@ContentsContainerView@@EEBA?AUProposedLayout@views@@AEBVSizeBounds@3@@Z
+        container_delegate_offset: 0x320,
+        mini_toolbar_member: 0x440,
+        flex_layout: 0x0522_E1B0, // views::FlexLayout::CalculateProposedLayout
+        flex_layout_host: 0x38,
+        location_bar_vtable: 0x0FCF_8EF0, // LocationBarView primary vtable
+        view_size: 0x1D0,
+        signatures: &[
+            (
+                0x09FC_3C40,
+                &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+            ),
+            (0x09FC_5DC0, &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x58]),
+            (
+                0x02EF_9DC0,
+                &[0x56, 0x48, 0x83, 0xec, 0x20, 0x45, 0x85, 0xc0, 0x78],
+            ),
+            (0x05A1_E310, &[0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9]),
+        ],
+    },
+    side_panel: SidePanel {
+        supported: true,
+        side_panel_vtable: 0x0FCD_9FB0, // .weak.??_7SidePanel@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplate@
+        browser_offset: 0x560,
+        features_offset: 0xd0,
+        features_coordinator: 0x330,
+        browser_view_view_vtable: 0x0FCE_E270, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
+        coordinator_vtable: 0x0FCC_B748, // .weak.??_7SidePanelCoordinator@@6BSidePanelUIBase@@@.default.?RejectPromiseOnDestruction@?$CdmPromis
+        show: 0x0971_4C30, // ?Show@SidePanelUIBase@@UEAAXW4SidePanelEntryId@@V?$optional@W4SidePanelOpenTrigger@@@__Cr@std@@_N@Z
+        show_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x58],
+        entry_id_to_string: 0x01F0_F6F0, // ?SidePanelEntryIdToString@@YA?AV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@s
+        entry_id_to_string_prologue: &[0x56, 0x48, 0x83, 0xec, 0x30, 0x48, 0x89, 0xce],
+        extension_entry: 0x17,
+        entry_count: 0x18,
+        toggle: 0x0971_D2C0, // ?Toggle@SidePanelCoordinator@@UEAAXVSidePanelEntryKey@@W4SidePanelOpenTrigger@@@Z
+        toggle_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x60],
+        entry_showing: 0x0344_74A0, // ?IsSidePanelEntryShowing@SidePanelUIBase@@UEBA_NAEBVSidePanelEntryKey@@@Z
+        entry_showing_prologue: &[0x48, 0x8b, 0x49, 0x10, 0x80, 0x79, 0x30, 0x01],
+        registry_from: 0x02E9_FDA0, // ?From@SidePanelRegistry@@SAPEAV1@PEAVBrowserWindowInterface@@@Z
+        registry_from_prologue: &[0x48, 0x81, 0xc1, 0xa8, 0x00, 0x00, 0x00],
+        get_color_provider: 0x0342_7870, // ?GetColorProvider@WebContentsImpl@content@@EEBAAEBVColorProvider@ui@@XZ
+        get_color_provider_prologue: &[0x48, 0x8b, 0x89, 0x98, 0x00, 0x00, 0x00, 0x48, 0x8b, 0x01, 0x48, 0x8b, 0x40, 0x08],
+        source_in_widget: 0x48,
+        color_source: 0x98,
+        generate_colors_css: 0x055D_5D40, // ?GenerateColorsCss@ThemeSource@@SA?AV?$optional@V?$basic_string@DU?$char_traits@D@__Cr@std@@V?$alloc
+        generate_colors_css_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53],
+        layout_vtable: 0x0FC2_2820, // .weak.??_7BrowserViewTabbedLayoutImpl@@6B@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplate@
+        proposed_slot: 16,
+        proposed: 0x012B_2170, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl@@MEBA?AUProposedLayout@BrowserViewLayoutImpl@@A
+        host_view: 0x38,
+        page_area: 0x50,
+        contents_container: 0xb8,
+        vertical_tabs: 0x80,
+        toolbar: 0x60,
+        contents_outline: 0x58,
+        side_panel: 0xc0,
+        side_panel_animation: 0xc8,
+        layout_immediately: 0x003E_BA00, // ?LayoutImmediately@View@views@@AEAAXXZ
+        layout_immediately_prologue: &[0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE, 0x48],
+        event_handler_for_point: 0x00BA_AC10, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
+    },
+    layout: Layout {
+        on_paint_slot: 89,
+        provider_verified: true,
+        on_paint: 0x0139_5BD0, // ?OnPaint@BrowserFrameViewWin@@MEAAXPEAVCanvas@gfx@@@Z
+        get_color_provider: 0x042A_1D90, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
+        draw_color: 0x0347_1E40, // ?DrawColor@Canvas@gfx@@QEAAXI@Z
+        frame_ids: &[0x13C, 0x13D, 0x140, 321, 0x144],
+        corner_vtable: 0x0FD3_D2D0, // .weak.??_7CustomFloatingCorner@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
+        corner_paint: 0x0A28_63E0, // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
+        caption_vtable: 0x0FD7_48D0, // .weak.??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
+        caption_size_slot: 74,
+        caption_size: 0x02F1_FA20, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        caption_paint_slot: 114,
+        caption_paint: 0x02F2_0040, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
+        top_inset_slot: 127,
+        top_inset: 0x0184_E3A0, // ?GetTopInset@BrowserFrameViewWin@@UEBAH_N@Z
+        layout_slot: 23,
+        layout: 0x0184_DD70, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
+        set_bounds_rect: 0x04A5_2AF0, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
+        caption_container_offset: 0x3C8,
+        view_bounds_offset: 0x1C8,
+        browser_view_view_vtable: 0x0FCE_E270, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
+        frame_vtable: 0x0FCE_6130, // .weak.??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromis
+        layout_immediately: 0x003E_BA00, // ?LayoutImmediately@View@views@@AEAAXXZ
+        layout_immediately_prologue: &[0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE, 0x48],
+        set_layer: 0x00F2_86B0, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
+        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xec, 0x28],
+        set_radius: 0x01C0_25E0, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x30],
+        set_masks: 0x02F5_4C40, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
+        set_masks_prologue: &[0x48, 0x8b, 0x89, 0x70, 0x01, 0x00, 0x00],
+        stack_at_top: 0x0AA9_B0A0, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
+        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
+        set_opaque: 0x01D7_6D40, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
+        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xec, 0x20],
+        on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        draw_color_prologue: &[0x48, 0x83, 0xec, 0x38, 0x48, 0x8b],
+        get_color_provider_prologue: &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B],
+        corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        layout_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53],
+        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        frame_browser_window_offset: 0x340,
+        browser_window_in_view: 0x1f0,
+        caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        caption_ink_ids: &[0x66C, 0x66D, 0x66E],
+        top_inset_adjust: 0,
+    },
+    edge_vertical: None,
+    edge_page: None,
+    hidden_views: None,
+    whale_row: None,
+};
+
 pub static EDGE: Build = Build {
     browser: "Microsoft Edge",
     module: "msedge.dll",
@@ -3354,7 +3912,7 @@ pub static SAMSUNG: Build = Build {
 };
 
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 6] = [&CHROME, &EDGE, &CHROME_150, &WHALE, &BRAVE, &SAMSUNG];
+static TABLE: [&Build; 7] = [&CHROME_156_74, &CHROME, &EDGE, &CHROME_150, &WHALE, &BRAVE, &SAMSUNG];
 
 static CURRENT: OnceLock<Option<&'static Build>> = OnceLock::new();
 
@@ -3457,6 +4015,41 @@ mod tests {
                 "{name} prologue does not match chrome.dll"
             );
         }
+    }
+
+    #[test]
+    fn nfr3_chrome_156_74_hooks_match_the_installed_build() {
+        let path = r"C:\Program Files\Google\Chrome\Application\156.0.8078.74\chrome.dll";
+        let Ok(file) = std::fs::read(path) else {
+            return;
+        };
+        let (toolbar, layout, vertical, split) =
+            (&CHROME_156_74.toolbar, &CHROME_156_74.layout, &CHROME_156_74.vertical, &CHROME_156_74.split);
+        for (name, rva, prologue) in [
+            ("layout constant", toolbar.layout_constant, toolbar.layout_constant_prologue),
+            ("theme changed", toolbar.theme_changed, toolbar.theme_changed_prologue),
+            ("paint layer", toolbar.paint_layer, toolbar.paint_layer_prologue),
+            ("set visible", toolbar.set_visible, toolbar.set_visible_prologue),
+            ("chip text", toolbar.chip_text, toolbar.chip_text_prologue),
+            ("formatted url", toolbar.formatted_url, toolbar.formatted_url_prologue),
+            ("update text style", toolbar.update_text_style, toolbar.update_text_style_prologue),
+            ("frame paint", layout.on_paint, layout.on_paint_prologue),
+            ("caption paint", layout.caption_paint, layout.caption_paint_prologue),
+            ("colour provider", layout.get_color_provider, layout.get_color_provider_prologue),
+            ("destructor", vertical.destructor, vertical.destructor_prologue),
+            ("rounded corners", split.set_rounded_corners, split.set_rounded_corners_prologue),
+        ] {
+            assert_eq!(file_bytes(&file, rva, prologue.len()).as_deref(), Some(prologue), "{name}");
+        }
+    }
+
+    #[test]
+    fn nfr3_chrome_rows_of_one_milestone_are_separate() {
+        assert_eq!(CHROME_156_74.version, [156, 0, 8078, 74]);
+        assert_eq!(CHROME.version, [156, 0, 8078, 48]);
+        assert_ne!(CHROME_156_74.layout.frame_vtable, CHROME.layout.frame_vtable);
+        // The relocated hook copies this prologue whole, so it stops on an instruction boundary.
+        assert_eq!(CHROME_156_74.toolbar.chip_text_prologue.len(), 13);
     }
 
     #[test]
