@@ -426,6 +426,11 @@
   모이지 않는 항목은 vtable 슬롯과 설치된 DLL 바이트로 확인했다. 데망글 이름과 데코레이션 이름의 결과는 서로 일치했다.
 - 프롤로그가 RIP 변위 말고 달라진 함수가 셋 있다. `WindowsCaptionButton::PaintButtonContents`는 바로 다음 함수로 뛰는 `jmp`이고 vtable은
   그 `jmp`를 가리킨다. `View::GetColorProvider`와 `View::LayoutImmediately`는 컴파일 결과가 달라졌다. 둘 다 호출만 하므로 동작에는 영향이 없다.
+- 800 DIP 창의 패널에서 툴바는 `BraveLocationBarView`의 선호 폭을 먼저 내주고 앞으로 버튼을 뺀 뒤 넘침 버튼(`OverflowButton`, `>>`)을 띄운다.
+  Rivet 창에서는 최소/선호 폭을 120 DIP로 제한하고 넘침 버튼을 숨겨 앞으로 버튼이 돌아온다. 브라우저 뷰는 툴바를 캡션 버튼보다 23 DIP 앞에서
+  끝내므로 툴바 레이아웃 직전에 폭을 캡션까지 늘린다.
+- Brave의 보안 페이지 표시는 자물쇠가 아니라 `kLeoTuneSmallIcon`/`kTuneIcon`이다. Rivet 자물쇠를 그 위에 그린다.
+- 줄 높이는 툴바 43 DIP와 헤어라인 1 DIP를 합쳐 44 DIP이다(y 16..102 종이색, 102..103 `#E9E9E6`, 2배율).
 
 ## 2026-10-29: Samsung Internet 30.0.4.29 지원 가능성
 

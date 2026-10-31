@@ -1665,7 +1665,73 @@ unsafe extern "system" fn anchor_rect(
 /// that enters the Rivet scope, which would give the row the browser's own insets.
 unsafe extern "system" fn toolbar_layout(view: *mut c_void, key: usize) {
     let run: unsafe extern "system" fn(*mut c_void, usize) = original(&ORIGINAL_TOOLBAR_LAYOUT);
+    fit_toolbar_to_caption(view);
     scoped(widget_holding(view), || run(view, key));
+}
+
+/// The width that makes a view starting at `x` end `past` DIPs beyond `caption_x`.
+fn width_to_caption(x: i32, caption_x: i32, past: i32) -> i32 {
+    caption_x + past - x
+}
+
+/// A build's browser view can stop the toolbar short of the caption buttons, which leaves a gap in the
+/// row. The toolbar is taken to them before it lays out its children.
+unsafe fn fit_toolbar_to_caption(view: *mut c_void) {
+    let Some(bar) = crate::builds::location_bar_minimum(crate::builds::get()) else { return };
+    let layout = &crate::builds::get().layout;
+    if !is_rivet(widget_holding(view)) || FITTING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let base = hooks().map_or(0, |hooks| hooks.base);
+    let bounds = |view: usize| *((view + layout.view_bounds_offset) as *const [i32; 4]);
+    let [x, y, width, height] = bounds(view as usize);
+    // The toolbar's x in the frame view, whose children include the caption buttons.
+    let mut origin = x;
+    let mut at = *((view as usize + bv().parent_offset) as *const usize);
+    for _ in 0..8 {
+        if at < 0x10000 {
+            break;
+        }
+        if *(at as *const usize) == base + layout.frame_vtable {
+            let container = *((at + layout.caption_container_offset) as *const usize);
+            if container > 0x10000 {
+                let wanted = width_to_caption(origin, bounds(container)[0], bar.toolbar_past_caption);
+                if wanted > 0 && wanted != width {
+                    let set: unsafe extern "system" fn(*mut c_void, *const [i32; 4]) =
+                        std::mem::transmute(base + layout.set_bounds_rect);
+                    set(view, &[x, y, wanted, height]);
+                }
+            }
+            break;
+        }
+        origin += bounds(at)[0];
+        at = *((at + bv().parent_offset) as *const usize);
+    }
+    FITTING.store(false, Ordering::Relaxed);
+}
+
+/// The minimum size of a location bar that asks for more than a Rivet window's row can give.
+unsafe extern "system" fn location_bar_minimum(view: *mut c_void, out: *mut [i32; 2]) -> *mut [i32; 2] {
+    let bar = crate::builds::location_bar_minimum(crate::builds::get()).expect("hooked for a recorded bar");
+    let run: unsafe extern "system" fn(*mut c_void, *mut [i32; 2]) -> *mut [i32; 2] =
+        std::mem::transmute(hooks().map_or(0, |hooks| hooks.base) + bar.function);
+    let result = run(view, out);
+    if is_rivet(widget_holding(view)) {
+        (*out)[0] = (*out)[0].min(bar.width);
+    }
+    result
+}
+
+/// The preferred size of the same location bar.
+unsafe extern "system" fn location_bar_preferred(view: *mut c_void, out: *mut [i32; 2], bounds: usize) -> *mut [i32; 2] {
+    let bar = crate::builds::location_bar_minimum(crate::builds::get()).expect("hooked for a recorded bar");
+    let run: unsafe extern "system" fn(*mut c_void, *mut [i32; 2], usize) -> *mut [i32; 2] =
+        std::mem::transmute(hooks().map_or(0, |hooks| hooks.base) + bar.preferred);
+    let result = run(view, out, bounds);
+    if is_rivet(widget_holding(view)) {
+        (*out)[0] = (*out)[0].min(bar.width);
+    }
+    result
 }
 
 /// Set while a container is being cut to fit, so the bounds change does not fit it again.
@@ -1920,6 +1986,11 @@ unsafe fn patch(skip: &str) -> Result<Hooks, String> {
             return Err(format!(
                 "this browser build has no recorded view at {vtable:#x}"
             ));
+        }
+    }
+    if let Some(bar) = crate::builds::location_bar_minimum(crate::builds::get()) {
+        if !holds(bar.vtable, bar.slot, bar.function) || !holds(bar.vtable, bar.preferred_slot, bar.preferred) {
+            return Err("this browser build has no recorded location bar".into());
         }
     }
     let prologue = |rva: usize, bytes: &[u8]| image.has(rva, bytes);
@@ -2233,6 +2304,10 @@ unsafe fn slots(base: usize, skip: &str) -> Result<(), String> {
             ((base + bv().infobar_vtable) as *mut usize).add(bv().infobar_layout_slot),
             infobar_layout as *const () as usize,
         )?;
+    }
+    if let Some(bar) = crate::builds::location_bar_minimum(crate::builds::get()) {
+        replace_slot(((base + bar.vtable) as *mut usize).add(bar.slot), location_bar_minimum as *const () as usize)?;
+        replace_slot(((base + bar.vtable) as *mut usize).add(bar.preferred_slot), location_bar_preferred as *const () as usize)?;
     }
     for (index, (vtable, _)) in bv().hidden.iter().enumerate() {
         if skip.contains("whidden") || skip.contains(&format!("h{index}h")) {
@@ -2897,6 +2972,13 @@ mod tests {
         assert_eq!(bv().leading_space, 32);
         assert_ne!(bv().toolbar_inset, bv().toolbar_button_inset);
         assert_eq!(i32::MAX.saturating_add(bv().leading_space), i32::MAX);
+    }
+
+    #[test]
+    fn fr12_toolbar_reaches_the_caption_buttons() {
+        // Toolbar at 275, caption buttons at 654: the bar, 9 inside, ends 8 before them.
+        assert_eq!(width_to_caption(275, 654, 1), 380);
+        assert_eq!(275 + 380 - 9, 654 - 8);
     }
 
     #[test]

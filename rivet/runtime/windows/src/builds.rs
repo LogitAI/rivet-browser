@@ -3462,6 +3462,7 @@ pub static BRAVE: Build = Build {
         (0x1113E920, 0x0AB1F800), // AIChatButton, Leo
         (0x11146540, 0x0AB240B0), // BraveVPNButton
         (0x1118D020, 0x012AE1A0), // PinnedActionToolbarButton
+        (0x1118FC20, 0x012AE1A0), // OverflowButton, the toolbar's chevron for buttons it has no room for
         (0x11191040, 0x012AE1A0), // SplitTabsToolbarButton
     ],
         get_widget_slot: 11,
@@ -3554,7 +3555,7 @@ pub static BRAVE: Build = Build {
         page_info_path: 0x122E53F0, // ?kSecurePageInfoChromeRefreshOldPath@omnibox@@3QBUPathElement@gfx@@B.llvm.2910200201067176236
         page_info_size: 282,
         http_size: 81,
-        extra_lock_icons: &[],
+        extra_lock_icons: &[0x122F0540, 0x12193220], // kLeoTuneSmallIcon, kTuneIcon: Brave's mark for a secure page
         extra_warning_icons: &[],
         anchor_view_access_at: 0x2a,
         skip: "",
@@ -3842,6 +3843,7 @@ pub static BRAVE_63: Build = Build {
         (0x110FC860, 0x0AAD85E0), // AIChatButton, Leo
         (0x11104480, 0x0AADCE30), // BraveVPNButton
         (0x1114AF60, 0x01252260), // PinnedActionToolbarButton
+        (0x1114DB60, 0x01252260), // OverflowButton, the toolbar's chevron for buttons it has no room for
         (0x1114EF80, 0x01252260), // SplitTabsToolbarButton
     ],
         get_widget_slot: 11,
@@ -3934,7 +3936,7 @@ pub static BRAVE_63: Build = Build {
         page_info_path: 0x122A6110, // ?kSecurePageInfoChromeRefreshOldPath@omnibox@@3QBUPathElement@gfx@@B.llvm.2910200201067176236
         page_info_size: 282,
         http_size: 81,
-        extra_lock_icons: &[],
+        extra_lock_icons: &[0x122B1260, 0x12153EF0], // kLeoTuneSmallIcon, kTuneIcon: Brave's mark for a secure page
         extra_warning_icons: &[],
         anchor_view_access_at: 0x2a,
         skip: "",
@@ -4302,6 +4304,32 @@ pub static SAMSUNG: Build = Build {
     },
 };
 
+/// Brave's location bar asks for a width that leaves too little of the row beside the appbar: its
+/// toolbar then drops the forward button and shows its overflow chevron. In Rivet windows it asks for
+/// `width` DIPs at most, as its minimum and preferred size, and still takes the room that is left.
+#[derive(Clone, Copy)]
+pub struct LocationBarMinimum {
+    pub vtable: usize,
+    pub slot: usize,
+    pub function: usize,
+    pub preferred_slot: usize,
+    pub preferred: usize,
+    pub width: i32,
+    /// Where the toolbar ends against the caption buttons, which lie above it. The bar stops 9 DIPs
+    /// inside the toolbar, so a toolbar 1 DIP under them leaves the 8 DIP gap of the design.
+    pub toolbar_past_caption: i32,
+}
+
+/// The location bar change of a build, for the builds that need one.
+pub fn location_bar_minimum(build: &Build) -> Option<LocationBarMinimum> {
+    match (build.browser, build.version) {
+        // ??_7BraveLocationBarView@@6BLayerDelegate@ui@@@, ?GetMinimumSize@BraveLocationBarView@@UEBA?AVSize@gfx@@XZ
+        ("Brave", [156, 1, 98, 62]) => Some(LocationBarMinimum { vtable: 0x111625C0, slot: 15, function: 0x038C54F0, preferred_slot: 74, preferred: 0x03973090, width: 120, toolbar_past_caption: 1 }),
+        ("Brave", [156, 1, 98, 63]) => Some(LocationBarMinimum { vtable: 0x11120500, slot: 15, function: 0x038E1210, preferred_slot: 74, preferred: 0x0398C100, width: 120, toolbar_past_caption: 1 }),
+        _ => None,
+    }
+}
+
 /// The builds Rivet supports, in the order they are tried.
 static TABLE: [&Build; 8] = [&CHROME_156_74, &CHROME, &EDGE, &CHROME_150, &WHALE, &BRAVE, &BRAVE_63, &SAMSUNG];
 
@@ -4621,6 +4649,24 @@ mod tests {
         check_brave_toolbar_hooks(&BRAVE_63);
     }
 
+    #[test]
+    fn fr12_brave_row_is_44_dips_with_its_hairline() {
+        for brave in [&BRAVE, &BRAVE_63] {
+            // Its 28 DIP content, the 4 DIPs Brave adds itself, the row's insets and the hairline.
+            assert_eq!(brave.toolbar.toolbar_top + 28 + 4 + brave.toolbar.toolbar_bottom + 1, 44);
+        }
+    }
+
+    #[test]
+    fn fr12_brave_hides_the_overflow_chevron_and_draws_its_lock_over_the_tune_mark() {
+        for (brave, overflow, leo, tune) in [(&BRAVE, 0x1118FC20, 0x122F0540, 0x12193220), (&BRAVE_63, 0x1114DB60, 0x122B1260, 0x12153EF0)] {
+            assert!(brave.toolbar.hidden.iter().any(|(vtable, _)| *vtable == overflow));
+            assert!(brave.toolbar.extra_lock_icons.contains(&leo) && brave.toolbar.extra_lock_icons.contains(&tune));
+            assert!(location_bar_minimum(brave).is_some_and(|bar| bar.width <= 120));
+        }
+        assert!(location_bar_minimum(&CHROME).is_none());
+    }
+
     fn check_brave_toolbar_hooks(brave: &Build) {
         // Brave shifts Chromium's colour ids after the first Chrome one by its own 17.
         assert!(!brave.toolbar.skip.contains("toolbar"));
@@ -4698,6 +4744,9 @@ mod tests {
             assert_eq!(pointer(vtable + toolbar.theme_slot * 8), Some(*theme), "hidden view at {vtable:#x}");
         }
         assert_eq!(pointer(toolbar.infobar_vtable + toolbar.infobar_layout_slot * 8), Some(toolbar.infobar_layout));
+        let bar = location_bar_minimum(brave).expect("Brave's location bar is recorded");
+        assert_eq!(pointer(bar.vtable + bar.slot * 8), Some(bar.function));
+        assert_eq!(pointer(bar.vtable + bar.preferred_slot * 8), Some(bar.preferred));
         assert!(brave.layout.set_bounds_rect != ABSENT && brave.layout.view_bounds_offset == 0x1C8);
         // Each navigation icon carries the name recorded for it.
         for (rva, name) in [toolbar.back_icon, toolbar.forward_icon, toolbar.reload_icon].into_iter().zip(toolbar.nav_icon_names) {
