@@ -9,6 +9,8 @@ use std::sync::OnceLock;
 
 use crate::builds::WhaleRow;
 use crate::chrome_layout::{image, CaptionHeight, PANEL_GAP};
+use crate::chrome_toolbar::{caption_icon, CaptionGlyph};
+use windows_sys::Win32::UI::WindowsAndMessaging::IsZoomed;
 
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static HEIGHT: OnceLock<CaptionHeight> = OnceLock::new();
@@ -77,6 +79,81 @@ unsafe extern "system" fn frame_layout(view: *mut c_void) {
     }
 }
 
+/// Which glyph a caption button at `x` draws in a frame `width` wide, or `None` when it is not at one
+/// of the three places the layout above gives the buttons.
+fn glyph_at(width: i32, x: i32, zoomed: bool) -> Option<CaptionGlyph> {
+    match (width - PANEL_GAP - x) / 46 {
+        _ if (width - PANEL_GAP - x) % 46 != 0 => None,
+        1 => Some(CaptionGlyph::Close),
+        2 if zoomed => Some(CaptionGlyph::Restore),
+        2 => Some(CaptionGlyph::Maximize),
+        3 => Some(CaptionGlyph::Minimize),
+        _ => None,
+    }
+}
+
+/// Windows' glyph ink. Close turns white on its red hover.
+fn glyph_colour(glyph: CaptionGlyph, state: i32) -> u32 {
+    if glyph == CaptionGlyph::Close && (state == 1 || state == 2) {
+        0xffff_ffff
+    } else {
+        0xff1a_1a1a
+    }
+}
+
+/// The fill behind a glyph: Windows' faint grey on hover and red on close, none at rest.
+fn hover_colour(glyph: CaptionGlyph, state: i32) -> Option<u32> {
+    match (glyph, state) {
+        (CaptionGlyph::Close, 1 | 2) => Some(0xffc4_2b1c),
+        (_, 1 | 2) => Some(0x0a00_0000),
+        _ => None,
+    }
+}
+
+static ICONS: OnceLock<[usize; 4]> = OnceLock::new();
+static PAINT_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+
+/// Whale's glyphs are resource images, so the button draws Rivet's Windows glyphs instead.
+unsafe extern "system" fn button_paint(button: *mut c_void, canvas: *mut c_void) {
+    let original: unsafe extern "system" fn(*mut c_void, *mut c_void) =
+        std::mem::transmute(PAINT_ORIGINAL.load(Ordering::Acquire));
+    let (Some(row), Some(image), Some(height), Some(icons)) = (row(), image::recorded(), HEIGHT.get(), ICONS.get()) else {
+        return original(button, canvas);
+    };
+    let Some(window) = crate::chrome_layout::hwnd_of_view(button).filter(|window| height(*window).is_some()) else {
+        return original(button, canvas);
+    };
+    let parent = *((button as usize + row.parent_offset) as *const usize);
+    if parent < 0x10000 {
+        return original(button, canvas);
+    }
+    let width = (*((parent + row.bounds_offset) as *const [i32; 4]))[2];
+    let x = (*((button as usize + row.bounds_offset) as *const [i32; 4]))[0];
+    let Some(glyph) = glyph_at(width, x, IsZoomed(window) != 0) else {
+        return original(button, canvas);
+    };
+    let state = *((button as usize + row.button_state_offset) as *const i32);
+    // The image paint this replaces may hold the hover, so it is drawn here with the glyph.
+    if let Some(colour) = hover_colour(glyph, state) {
+        let fill: unsafe extern "system" fn(*mut c_void, u32) =
+            std::mem::transmute(image.base + crate::builds::get().layout.draw_color);
+        fill(canvas, colour);
+    }
+    let paint: unsafe extern "system" fn(*mut c_void, *const c_void, i32, u32) =
+        std::mem::transmute(image.base + row.paint_vector_icon);
+    paint(canvas, icons[glyph as usize] as *const c_void, 46, glyph_colour(glyph, state));
+}
+
+unsafe fn install_paint(row: &WhaleRow, image: &image::Image) -> Result<(), String> {
+    let slot = row.caption + row.button_paint_slot * 8;
+    if !image.points_to(slot, row.caption_button_paint) || !image.has(row.paint_vector_icon, row.paint_vector_icon_prologue) {
+        return Err("this browser build has no recorded caption paint".into());
+    }
+    let _ = ICONS.set([CaptionGlyph::Minimize, CaptionGlyph::Maximize, CaptionGlyph::Restore, CaptionGlyph::Close].map(|glyph| caption_icon(glyph, row.canvas_command) as usize));
+    PAINT_ORIGINAL.store(image.base + row.caption_button_paint, Ordering::Release);
+    crate::chrome_toolbar::transaction(|| crate::chrome_toolbar::replace_slot((image.base + slot) as *mut usize, button_paint as *const () as usize))
+}
+
 /// Replaces the frame's layout once for the process. `height` answers for the windows that are Rivet
 /// windows, in DIPs from the top of the frame, and `None` for every other window, which is left alone.
 pub unsafe fn install(height: CaptionHeight) -> Result<(), String> {
@@ -99,6 +176,10 @@ pub unsafe fn install(height: CaptionHeight) -> Result<(), String> {
         crate::chrome_toolbar::replace_slot((image.base + layout) as *mut usize, frame_layout as *const () as usize)
     })?;
     ACTIVE.store(true, Ordering::Release);
+    // Glyphs are cosmetic: a build whose paint differs keeps Whale's own.
+    if let Err(error) = install_paint(row, &image) {
+        crate::vertical_tabs::trace(&format!("whale caption glyphs: {error}"));
+    }
     Ok(())
 }
 
@@ -116,5 +197,18 @@ mod tests {
         assert_eq!(caption_rect([1179, 8, 46, 44], 44), None);
         // The toolbar stops 8 DIPs short of the first of three 46 DIP buttons.
         assert_eq!(RESERVE, 146);
+    }
+
+    #[test]
+    fn fr12_whale_caption_glyphs_follow_the_buttons_place_and_state() {
+        assert_eq!(glyph_at(800, 746, false), Some(CaptionGlyph::Close));
+        assert_eq!(glyph_at(800, 700, false), Some(CaptionGlyph::Maximize));
+        assert_eq!(glyph_at(800, 700, true), Some(CaptionGlyph::Restore));
+        assert_eq!(glyph_at(800, 654, false), Some(CaptionGlyph::Minimize));
+        assert_eq!(glyph_at(800, 655, false), None);
+        assert_eq!(glyph_colour(CaptionGlyph::Close, 1), 0xffff_ffff);
+        assert_eq!(glyph_colour(CaptionGlyph::Minimize, 1), 0xff1a_1a1a);
+        assert_eq!(hover_colour(CaptionGlyph::Close, 1), Some(0xffc4_2b1c));
+        assert_eq!(hover_colour(CaptionGlyph::Minimize, 0), None);
     }
 }

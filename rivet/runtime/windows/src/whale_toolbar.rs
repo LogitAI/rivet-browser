@@ -315,6 +315,13 @@ unsafe fn placed(row: &WhaleRow, view: *mut c_void, rect: &[i32; 4]) -> Option<[
     if rect[1] == row.toolbar_height && rect[3] > ROW_EXTRA {
         return is_root(row, parent).then_some([rect[0], rect[1] + ROW_EXTRA, rect[2], rect[3] - ROW_EXTRA]);
     }
+    if class == row.button_image && parent >= 0x10000 {
+        let holder = (*(parent as *const usize)).wrapping_sub(base);
+        if row.buttons.contains(&holder) && in_rivet_window(view) {
+            // Rivet paints the icon in the button: the image view would draw Whale's over it.
+            return Some([0, 0, 0, 0]);
+        }
+    }
     if class != row.container && class != row.field {
         return None;
     }
@@ -338,7 +345,8 @@ unsafe fn placed(row: &WhaleRow, view: *mut c_void, rect: &[i32; 4]) -> Option<[
     if (*(parent as *const usize)).wrapping_sub(base) != row.container {
         return None;
     }
-    let right = rect[0] + rect[2];
+    // The container's trailing spacer stays out: the field ends where the container does.
+    let right = if crate::whale_caption::active() { parent_bounds[2] } else { rect[0] + rect[2] };
     if right - FIELD_X <= 0 {
         return None;
     }
@@ -364,8 +372,87 @@ unsafe fn place_buttons(row: &WhaleRow, container: *mut c_void, height: i32, set
         if let Some(position) = row.buttons.iter().position(|known| *known == class) {
             let wanted = [FIRST_BUTTON + position as i32 * BUTTON_STEP, (height - BUTTON) / 2 + CONTENT_SHIFT, BUTTON, BUTTON];
             set(child as *mut c_void, &wanted);
+            hide_image(row, child, image.base, set);
         }
     }
+}
+
+/// Empties the image view of a navigation button, which the button lays out only once.
+unsafe fn hide_image(row: &WhaleRow, button: usize, base: usize, set: SetBounds) {
+    let begin = *((button + row.children_offset) as *const usize);
+    let end = *((button + row.children_offset + 8) as *const usize);
+    if begin < 0x10000 || end < begin || (end - begin) / 8 > 16 {
+        return;
+    }
+    for index in 0..(end - begin) / 8 {
+        let child = *((begin + index * 8) as *const usize);
+        if child >= 0x10000 && (*(child as *const usize)).wrapping_sub(base) == row.button_image {
+            set(child as *mut c_void, &[0, 0, 0, 0]);
+        }
+    }
+}
+
+/// The ink of a navigation icon for a button state: disabled icons are 35% opaque, as in the row's design.
+fn nav_colour(state: i32) -> u32 {
+    match state {
+        1 | 2 => 0xff1f_2024,
+        3 => 0x594a_4850,
+        _ => 0xff4a_4850,
+    }
+}
+
+type PaintContents = unsafe extern "system" fn(*mut c_void, *mut c_void);
+type PaintIcon = unsafe extern "system" fn(*mut c_void, *const c_void, i32, u32);
+
+static NAV_ICONS: OnceLock<[usize; 4]> = OnceLock::new();
+static NAV_ORIGINAL: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+unsafe extern "system" fn nav_paint(view: *mut c_void, canvas: *mut c_void) {
+    let table = *(view as *const usize);
+    let original = NAV_ORIGINAL
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(known, _)| *known == table)
+        .map(|(_, function)| *function);
+    let (Some(row), Some(image), Some(icons)) = (row(), image::recorded(), NAV_ICONS.get()) else { return };
+    if !in_rivet_window(view) {
+        if let Some(original) = original {
+            std::mem::transmute::<usize, PaintContents>(original)(view, canvas);
+        }
+        return;
+    }
+    let class = table.wrapping_sub(image.base);
+    let Some(position) = row.buttons.iter().position(|known| *known == class) else { return };
+    let stopping = position == 2 && *((view as usize + row.reload_mode_offset) as *const i32) != 0;
+    let icon = icons[if stopping { 3 } else { position }];
+    let state = *((view as usize + row.button_state_offset) as *const i32);
+    let paint: PaintIcon = std::mem::transmute(image.base + row.paint_vector_icon);
+    paint(canvas, icon as *const c_void, BUTTON, nav_colour(state));
+}
+
+/// Replaces the paint of the navigation buttons. Every slot is read first, so a build
+/// with other functions is left as it is.
+unsafe fn install_paint(row: &WhaleRow, base: usize) -> Result<(), String> {
+    let image = image::recorded().ok_or("no recorded browser image")?;
+    if !image.has(row.paint_vector_icon, row.paint_vector_icon_prologue) {
+        return Err("this browser build has no recorded icon paint".into());
+    }
+    for (vtable, function) in row.buttons.iter().zip(row.nav_button_paints) {
+        if !image.points_to(vtable + row.button_paint_slot * 8, function) {
+            return Err(format!("{vtable:#x} does not hold the recorded button paint"));
+        }
+    }
+    use crate::chrome_toolbar::{nav_icon, NavMark};
+    let size = BUTTON as f32;
+    let _ = NAV_ICONS.set([NavMark::Back, NavMark::Forward, NavMark::Reload, NavMark::Stop].map(|mark| nav_icon(mark, size, row.canvas_command) as usize));
+    crate::chrome_toolbar::transaction(|| {
+        for (vtable, function) in row.buttons.iter().zip(row.nav_button_paints) {
+            NAV_ORIGINAL.lock().unwrap_or_else(|error| error.into_inner()).push((base + vtable, base + function));
+            crate::chrome_toolbar::replace_slot((base + vtable + row.button_paint_slot * 8) as *mut usize, nav_paint as *const () as usize)?;
+        }
+        Ok(())
+    })
 }
 
 unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 4]) {
@@ -396,6 +483,7 @@ unsafe fn install_row() -> Result<(), String> {
                     return Err(format!("{vtable:#x} is not a recorded vtable"));
                 }
             }
+            install_paint(row, image.base)?;
             crate::chrome_toolbar::transaction(|| {
                 crate::chrome_toolbar::detour(
                     image.base,
@@ -424,5 +512,12 @@ mod tests {
         // lower than centred, and the row Chrome has is one DIP taller than Whale's.
         assert!(FIELD_HEIGHT + CONTENT_SHIFT <= 42 && BUTTON <= FIELD_HEIGHT);
         assert_eq!((ROW_EXTRA, CONTENT_SHIFT), (1, 1));
+    }
+
+    #[test]
+    fn fr12_whale_navigation_icons_use_the_designs_ink() {
+        assert_eq!(nav_colour(0), 0xff4a_4850);
+        assert_eq!(nav_colour(1), 0xff1f_2024);
+        assert_eq!(nav_colour(3) >> 24, 0x59);
     }
 }

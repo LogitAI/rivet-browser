@@ -2350,6 +2350,105 @@ fn reload_path() -> Vec<PathElement> {
     path
 }
 
+/// Rivet's back, forward and reload marks and a stop mark, centred on a square canvas of `size` DIPs,
+/// for a build that paints them itself.
+pub(crate) fn nav_icon(mark: NavMark, size: f32, canvas_command: u32) -> VectorIconRef {
+    let path = match mark {
+        NavMark::Back => back_path(),
+        NavMark::Forward => forward_path(),
+        NavMark::Reload => reload_path(),
+        NavMark::Stop => {
+            let mut path = vec![op(CANVAS_DIMENSIONS), at(NAV_CANVAS), op(STROKE), at(ICON_STROKE)];
+            for (x0, y0, x1, y1) in [(-6.0, -6.0, 6.0, 6.0), (6.0, -6.0, -6.0, 6.0)] {
+                path.push(op(MOVE_TO));
+                path.extend(nav(x0, y0));
+                path.push(op(LINE_TO));
+                path.extend(nav(x1, y1));
+            }
+            path
+        }
+    };
+    leak_icon(moved_to_canvas(&path, size, canvas_command))
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum NavMark {
+    Back,
+    Forward,
+    Reload,
+    Stop,
+}
+
+/// Moves a path of the 20 DIP navigation canvas to the middle of a larger one, so an icon painted at
+/// a view's origin is centred in the view.
+fn moved_to_canvas(path: &[PathElement], size: f32, canvas_command: u32) -> Vec<PathElement> {
+    let shift = (size - NAV_CANVAS) / 2.0;
+    let mut out = Vec::with_capacity(path.len());
+    let mut index = 0;
+    while index < path.len() {
+        let command = unsafe { path[index].command };
+        out.push(op(if command == CANVAS_DIMENSIONS { canvas_command } else { command }));
+        index += 1;
+        match command {
+            CANVAS_DIMENSIONS => {
+                out.push(at(size));
+                index += 1;
+            }
+            MOVE_TO | LINE_TO => {
+                out.push(at(unsafe { path[index].value } + shift));
+                out.push(at(unsafe { path[index + 1].value } + shift));
+                index += 2;
+            }
+            STROKE => {
+                out.push(at(unsafe { path[index].value }));
+                index += 1;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A Windows caption glyph on a 46 DIP canvas, around the middle of a button 46 wide and 44 tall.
+pub(crate) fn caption_icon(glyph: CaptionGlyph, canvas_command: u32) -> VectorIconRef {
+    let segments: &[&[(f32, f32)]] = match glyph {
+        CaptionGlyph::Minimize => &[&[(18.0, 22.0), (28.0, 22.0)]],
+        CaptionGlyph::Maximize => &[&[(18.5, 17.5), (27.5, 17.5), (27.5, 26.5), (18.5, 26.5), (18.5, 17.5)]],
+        CaptionGlyph::Restore => &[
+            &[(18.5, 19.5), (25.5, 19.5), (25.5, 26.5), (18.5, 26.5), (18.5, 19.5)],
+            &[(20.5, 19.5), (20.5, 17.5), (27.5, 17.5), (27.5, 24.5), (25.5, 24.5)],
+        ],
+        CaptionGlyph::Close => &[&[(18.0, 17.0), (28.0, 27.0)], &[(28.0, 17.0), (18.0, 27.0)]],
+    };
+    let mut path = vec![op(canvas_command), at(46.0), op(STROKE), at(ICON_STROKE)];
+    for segment in segments {
+        for (index, (x, y)) in segment.iter().enumerate() {
+            path.push(op(if index == 0 { MOVE_TO } else { LINE_TO }));
+            path.push(at(*x));
+            path.push(at(*y));
+        }
+    }
+    leak_icon(path)
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum CaptionGlyph {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+/// An icon that lives as long as the process, as `gfx::PaintVectorIcon` takes it.
+pub(crate) type VectorIconRef = *const c_void;
+
+fn leak_icon(path: Vec<PathElement>) -> VectorIconRef {
+    let path: &'static [PathElement] = Box::leak(path.into_boxed_slice());
+    let rep: &'static IconRep = Box::leak(Box::new(IconRep { path: path.as_ptr(), size: path.len() }));
+    let icon: &'static VectorIcon = Box::leak(Box::new(VectorIcon { reps: rep, count: 1, name: b"rivet\0".as_ptr() }));
+    (icon as *const VectorIcon).cast()
+}
+
 #[repr(C)]
 struct IconRep {
     path: *const PathElement,

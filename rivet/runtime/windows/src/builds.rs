@@ -354,6 +354,23 @@ pub struct WhaleRow {
     pub children_offset: usize,
     pub caption: usize,
     pub tab_search: usize,
+    /// `gfx::PaintVectorIcon(canvas, icon, dip, colour)`, which draws Rivet's icons here. Whale's own
+    /// come from resource images and image views, so there is no icon to swap as on Chrome.
+    pub paint_vector_icon: usize,
+    pub paint_vector_icon_prologue: &'static [u8],
+    /// `CANVAS_DIMENSIONS` in this build's `gfx::CommandType`. Whale adds commands of its own to the
+    /// enum after `R_QUADRATIC_TO_SHORTHAND`, which moves it; the commands before them are Chromium's.
+    pub canvas_command: u32,
+    /// The slot of `views::Button::PaintButtonContents`, and what it holds for the caption buttons and
+    /// for the back, forward and reload buttons.
+    pub button_paint_slot: usize,
+    pub caption_button_paint: usize,
+    pub nav_button_paints: [usize; 3],
+    /// The vtable of the image view a navigation button holds its icon in, `views::Button::state_`, and
+    /// where the reload button keeps whether it shows stop.
+    pub button_image: usize,
+    pub button_state_offset: usize,
+    pub reload_mode_offset: usize,
 }
 
 /// Values for `edge_page.rs`: Edge insets its page and paints a border around it, which would
@@ -2496,7 +2513,7 @@ pub static WHALE: Build = Build {
         parent_offset: 0x190,
         bounds_offset: 0x1C0,
         container: 0xfaac4e0,
-        buttons: [0xfb06c50, 0xfae1150, 0xfacbff0],
+        buttons: [0xfad0b10, 0xfad0670, 0xfacbff0],
         field: 0xfabf960,
         frame_layout_slot: 23,
         frame_layout: 0x0E6D_E310,
@@ -2506,6 +2523,17 @@ pub static WHALE: Build = Build {
         children_offset: 0x198,
         caption: 0xfb15d60,
         tab_search: 0xfac5608,
+        // Found by Chrome 150's body: the rep loop over `[rdx]` and `[rdx + 8]`, then dip times the
+        // canvas scale at +8 and `ceilf`.
+        paint_vector_icon: 0x09BB_B210,
+        paint_vector_icon_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x40],
+        canvas_command: 30,
+        button_paint_slot: 114,
+        caption_button_paint: 0x0901_A370,
+        nav_button_paints: [0x03EE_6B20, 0x03EE_6B20, 0x083C_D8D0],
+        button_image: 0xfaf7480,
+        button_state_offset: 0x3C4,
+        reload_mode_offset: 0x8DC,
     }),
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
