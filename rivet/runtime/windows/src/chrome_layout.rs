@@ -603,6 +603,7 @@ pub unsafe fn install(reserved: Reserve) -> Result<(), String> {
 
 unsafe fn patch(reserved: Reserve) -> Result<Hook, String> {
     log(&format!("rivet: {}", crate::builds::table_note()));
+    crate::vertical_tabs::trace(&format!("build table: {}", crate::builds::table_note()));
     let (build, image) = crate::builds::frame_rows()
         .iter()
         .find_map(|build| {

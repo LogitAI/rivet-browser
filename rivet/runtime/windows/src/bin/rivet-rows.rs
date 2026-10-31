@@ -1,8 +1,9 @@
 //! What the row generator needs from the runtime's own idea of a row.
 //!
 //! `rivet-rows row <browser> <version>` prints a row built into this binary as `{frame, build}`.
-//! `rivet-rows latest <browser>` prints the same for that browser's newest row, in this binary or in
-//! a table given with `--table <file>`.
+//! `rivet-rows prior <browser> <version>` prints the newest row at or below a version, in this
+//! binary or in the tables given with `--table <file>`.
+//! `rivet-rows known` prints the browser and version of each of those rows.
 //! `rivet-rows check <table.json>` fails when this runtime cannot read a row of a table.
 
 #[cfg(windows)]
@@ -16,6 +17,19 @@ fn version_of(row: &serde_json::Value) -> Vec<u64> {
 fn table_rows(path: &str) -> Result<serde_json::Value, String> {
     let text = std::fs::read(path).map_err(|error| format!("{path}: {error}"))?;
     serde_json::from_slice(&text).map_err(|error| format!("{path}: {error}"))
+}
+
+/// The rows of this binary and of the tables named by `--table <file>`.
+#[cfg(windows)]
+fn rows_with(arguments: &[&str]) -> Result<Vec<serde_json::Value>, String> {
+    let mut rows = rivet_runtime_windows::compiled_rows();
+    for pair in arguments.chunks(2) {
+        let ["--table", path] = pair else {
+            return Err(format!("unknown argument {pair:?}"));
+        };
+        rows.extend(table_rows(path)?["rows"].as_array().cloned().unwrap_or_default());
+    }
+    Ok(rows)
 }
 
 #[cfg(windows)]
@@ -34,17 +48,29 @@ fn run(arguments: &[String]) -> Result<(), String> {
             print(&row);
             Ok(())
         }
-        ["latest", browser, rest @ ..] => {
-            let mut rows = rivet_runtime_windows::compiled_rows();
-            if let ["--table", path] = rest {
-                rows.extend(table_rows(path)?["rows"].as_array().cloned().unwrap_or_default());
-            }
-            let row = rows
+        ["prior", browser, version, rest @ ..] => {
+            // The newest row at or below a version, so a beta row of the next milestone serves that
+            // milestone's stable build, and a later row never serves an older build.
+            let parts: Vec<u64> = version.split('.').filter_map(|part| part.parse().ok()).collect();
+            let row = rows_with(rest)?
                 .into_iter()
-                .filter(|row| row["build"]["browser"] == *browser && !row["frame"].is_null())
+                .filter(|row| {
+                    row["build"]["browser"] == *browser && !row["frame"].is_null() && version_of(row) <= parts
+                })
                 .max_by_key(version_of)
-                .ok_or_else(|| format!("no row for {browser}"))?;
+                .ok_or_else(|| format!("no row for {browser} at or below {version}"))?;
             print(&row);
+            Ok(())
+        }
+        ["known", rest @ ..] => {
+            let known: Vec<_> = rows_with(rest)?
+                .iter()
+                .map(|row| {
+                    let version: Vec<String> = version_of(row).iter().map(u64::to_string).collect();
+                    serde_json::json!([row["build"]["browser"], version.join(".")])
+                })
+                .collect();
+            print(&serde_json::Value::Array(known));
             Ok(())
         }
         ["check", path] => {
@@ -55,7 +81,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 Err(format!("this runtime cannot read {refused:?}"))
             }
         }
-        _ => Err("usage: rivet-rows row <browser> <version> | latest <browser> [--table <file>] | check <table.json>".into()),
+        _ => Err("usage: rivet-rows row <browser> <version> | prior <browser> <version> [--table <file>] | known [--table <file>] | check <table.json>".into()),
     }
 }
 

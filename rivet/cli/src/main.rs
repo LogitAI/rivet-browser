@@ -4,12 +4,14 @@
 //! runtime over the versioned control protocol instead of adding a remote-debugging port.
 
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rivet_core::session::{SessionRecord, SessionRegistry};
 use rivet_core::{build_launch_plan, DisplayMode, LaunchRequest};
+use rivet_platform_windows::signed_table;
 use rivet_platform_windows::{
     browser_windows, close_browser_window, inject_runtime, resolve_browser_executable,
     wait_for_new_browser_window,
@@ -65,11 +67,49 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
         Some(command) if command == ["session", "start"] => run_start(parse_start(arguments)?),
         Some(command) if command == ["session", "list"] => run_list(parse_query(arguments)?),
         Some(command) if command == ["session", "close"] => run_close(parse_close(arguments)?),
-        _ => Err("expected `session start`, `session list` or `session close`".into()),
+        Some(command) if command == ["builds", "update"] => run_builds_update(&arguments[2..]),
+        Some(command) if command == ["builds", "apply"] => run_builds_apply(&arguments[2..]),
+        _ => Err("expected `session start`, `session list`, `session close`, `builds update` or `builds apply`".into()),
     }
 }
 
+/// The key this build trusts tables under.
+fn table_key() -> Result<&'static str, String> {
+    signed_table::RELEASE_KEY.ok_or_else(|| "this build of Rivet has no table key".to_owned())
+}
+
+fn table_store() -> Result<PathBuf, String> {
+    signed_table::default_store().ok_or_else(|| "LOCALAPPDATA is not set".to_owned())
+}
+
+/// `rivet builds apply <file>` applies a signed table that is already on this computer.
+fn run_builds_apply(arguments: &[String]) -> Result<(), String> {
+    let [file] = arguments else {
+        return Err("usage: rivet builds apply <file>".into());
+    };
+    let bytes = fs::read(file).map_err(|error| format!("could not read {file}: {error}"))?;
+    let sequence = signed_table::install(&table_store()?, table_key()?, &bytes)?;
+    println!("applied build table {sequence}");
+    Ok(())
+}
+
+/// `rivet builds update [--url <address>]` downloads the signed table and applies it now.
+fn run_builds_update(arguments: &[String]) -> Result<(), String> {
+    let url = match arguments {
+        [] => signed_table::RELEASE_URL.ok_or("this build of Rivet has no table address; pass --url")?,
+        [flag, url] if flag == "--url" => url.as_str(),
+        _ => return Err("usage: rivet builds update [--url <address>]".into()),
+    };
+    let anytime = std::time::Duration::ZERO;
+    match signed_table::refresh(&table_store()?, table_key()?, url, anytime, 30_000)? {
+        Some(sequence) => println!("applied build table {sequence}"),
+        None => println!("the build table is current"),
+    }
+    Ok(())
+}
+
 fn run_start(options: StartOptions) -> Result<(), String> {
+    signed_table::refresh_before_start();
     let request = LaunchRequest {
         browser: options.browser.clone(),
         url: options.url.clone(),
@@ -375,6 +415,14 @@ fn close_json(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nfr6_builds_commands_name_what_they_need() {
+        let run_words = |words: &[&str]| run(words.iter().map(|word| (*word).to_owned()));
+        assert!(run_words(&["builds", "apply"]).unwrap_err().contains("usage"));
+        assert!(run_words(&["builds", "update", "--nope"]).unwrap_err().contains("usage"));
+        assert!(run_words(&["builds", "apply", "no-such-file"]).unwrap_err().contains("no-such-file"));
+    }
 
     #[test]
     fn fr3_session_start_defaults_to_local_page() {

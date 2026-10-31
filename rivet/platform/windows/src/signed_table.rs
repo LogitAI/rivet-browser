@@ -112,6 +112,43 @@ pub fn read_store(store: &Path, public_key: &str) -> Result<Option<Value>, Strin
     parse(open(public_key, &file)?).map(Some)
 }
 
+/// Puts a generated row into a table's rows, replacing one of the same browser and version.
+pub fn upsert_row(table: &mut Value, row: Value) -> Result<(), String> {
+    let identity = |row: &Value| (row["frame"]["browser"].clone(), row["frame"]["version"].clone());
+    let new = identity(&row);
+    if new.0.is_null() || new.1.is_null() {
+        return Err("the row has no browser and version".into());
+    }
+    let rows = table["rows"].as_array_mut().ok_or("the table has no rows")?;
+    rows.retain(|known| identity(known) != new);
+    rows.push(row);
+    rows.sort_by_key(|row| {
+        let (browser, version) = identity(row);
+        let parts: Vec<u32> = version.as_str().unwrap_or_default().split('.').filter_map(|part| part.parse().ok()).collect();
+        (browser.as_str().unwrap_or_default().to_owned(), parts)
+    });
+    Ok(())
+}
+
+/// The table to publish: the rows already published, then the rows of `table`, which win. Published
+/// rows stay, since another run's row may not have reached the repository yet. Its sequence is
+/// later than the published one, so a client takes it, and at least `now`.
+pub fn merge_for_signing(table: &Value, published: Option<&Value>, now: u64) -> Result<Value, String> {
+    let mut merged = published.cloned().unwrap_or_else(|| table.clone());
+    for row in table["rows"].as_array().ok_or("the table has no rows")? {
+        upsert_row(&mut merged, row.clone())?;
+    }
+    if let Some(symbols) = table["symbols"].as_object() {
+        for (name, key) in symbols {
+            merged["symbols"][name] = key.clone();
+        }
+    }
+    let after = published.and_then(|table| table["sequence"].as_u64()).unwrap_or(0) + 1;
+    merged["sequence"] = now.max(after).into();
+    merged["schema"] = SCHEMA.into();
+    Ok(merged)
+}
+
 /// Applies a downloaded file when its signature holds and it is not older than the applied one.
 /// A person's running browser keeps what it loaded, and the next one reads the new file. The file
 /// moves into place whole, so a reader never sees half of one. Returns the applied sequence.
@@ -159,6 +196,17 @@ pub fn refresh(
     }
     let file = http::get(url, timeout_ms)?;
     install(store, public_key, &file).map(Some)
+}
+
+/// Brings the applied table up to date before a Rivet window opens, when this build has a key and
+/// an address. It waits a moment at most: a window never stays closed for a table, and a browser
+/// updated since the last check is the one case a fresh table can save.
+pub fn refresh_before_start() {
+    const AT_MOST_MS: i32 = 2_000;
+    const CHECKED_RECENTLY: std::time::Duration = std::time::Duration::from_secs(3_600);
+    if let (Some(key), Some(url), Some(store)) = (RELEASE_KEY, RELEASE_URL, default_store()) {
+        let _ = refresh(&store, key, url, CHECKED_RECENTLY, AT_MOST_MS);
+    }
 }
 
 #[cfg(windows)]
@@ -541,6 +589,25 @@ mod tests {
         *file.last_mut().unwrap() ^= 1;
         std::fs::write(&store, &file).unwrap();
         assert!(read_store(&store, &public).is_err());
+    }
+
+    #[test]
+    fn nfr6_publishing_keeps_published_rows_and_moves_the_sequence_forward() {
+        let row = |browser: &str, version: &str, mark: u64| {
+            serde_json::json!({"frame": {"browser": browser, "version": version}, "build": {"mark": mark}})
+        };
+        let published = serde_json::json!({"schema": 1, "sequence": 900, "symbols": {"old": "a"},
+            "rows": [row("B", "1.0.0.9", 1), row("B", "1.0.0.10", 1)]});
+        let table = serde_json::json!({"schema": 1, "sequence": 0, "symbols": {"new": "b"},
+            "rows": [row("B", "1.0.0.10", 2), row("A", "2.0.0.1", 2)]});
+        let merged = merge_for_signing(&table, Some(&published), 500).unwrap();
+        assert_eq!(merged["sequence"], 901);
+        assert_eq!(merge_for_signing(&table, Some(&published), 5000).unwrap()["sequence"], 5000);
+        let rows = merged["rows"].as_array().unwrap();
+        let listed: Vec<_> = rows.iter().map(|row| (row["frame"]["version"].as_str().unwrap(), row["build"]["mark"].as_u64().unwrap())).collect();
+        assert_eq!(listed, [("2.0.0.1", 2), ("1.0.0.9", 1), ("1.0.0.10", 2)]);
+        assert_eq!(merged["symbols"]["old"], "a");
+        assert_eq!(merged["symbols"]["new"], "b");
     }
 
     #[test]

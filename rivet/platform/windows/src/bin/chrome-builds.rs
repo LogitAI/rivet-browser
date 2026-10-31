@@ -8,12 +8,21 @@
 //! `chrome-builds port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json>`
 //! makes a whole row for a new build from the row of a prior build, and exits 3 when the row needs
 //! a person's review.
+//! `chrome-builds pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json>`
+//! prints the builds that have no row yet, most urgent first.
+//! `chrome-builds table-key` prints a new signing key pair.
+//! `chrome-builds table-add <table.json> <row.json> <module>` puts a row into a table, with the
+//! symbol key the next build's row will need.
+//! `chrome-builds table-sign <table.json> <signed-file> [published-file]` signs a table with the
+//! key in `RIVET_TABLE_SIGNING_KEY`, on top of the published rows, which must verify under
+//! `RIVET_TABLE_PUBLIC_KEY`.
 
 use std::path::Path;
 use std::process::ExitCode;
 
 use rivet_platform_windows::chrome_build::{self, ChromeBuild, PeFile};
 use rivet_platform_windows::row_port::{self, NewBuild};
+use rivet_platform_windows::{row_watch, signed_table};
 
 /// How many bytes of `views::HWNDForView` the runtime compares before patching.
 const PROLOGUE: usize = 15;
@@ -51,7 +60,19 @@ fn main() -> ExitCode {
                 }
             }
         }
-        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json>".into()),
+        ["pending", stable, beta, edge, brave, known] => {
+            pending(Path::new(stable), Path::new(beta), Path::new(edge), Path::new(brave), Path::new(known))
+        }
+        ["table-key"] => signed_table::generate_key().map(|(private, public)| {
+            println!("private {private}");
+            println!("public {public}");
+        }),
+        ["table-add", table, row, module] => table_add(Path::new(table), Path::new(row), Path::new(module)),
+        ["table-sign", table, signed] => table_sign(Path::new(table), Path::new(signed), None),
+        ["table-sign", table, signed, published] => {
+            table_sign(Path::new(table), Path::new(signed), Some(Path::new(published)))
+        }
+        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | table-key | table-add <table.json> <row.json> <module> | table-sign <table.json> <signed-file> [published-file]".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -131,6 +152,64 @@ mod erased {
             serde_json::to_string_pretty(self).unwrap_or_default() + "\n"
         }
     }
+}
+
+fn json_file(path: &Path) -> Result<serde_json::Value, String> {
+    serde_json::from_slice(&read(path)?).map_err(|error| format!("{} is not JSON: {error}", path.display()))
+}
+
+fn pending(stable: &Path, beta: &Path, edge: &Path, brave: &Path, known: &Path) -> Result<(), String> {
+    let mut candidates = row_watch::chrome_candidates(&json_file(stable)?, &json_file(beta)?);
+    candidates.extend(row_watch::edge_candidates(&json_file(edge)?));
+    candidates.extend(row_watch::brave_candidates(&json_file(brave)?));
+    let known = json_file(known)?
+        .as_array()
+        .ok_or("the known builds are not a list")?
+        .iter()
+        .filter_map(|pair| Some((pair[0].as_str()?.to_owned(), pair[1].as_str()?.to_owned())))
+        .collect();
+    let left = row_watch::pending(candidates, &known);
+    println!("{}", serde_json::to_string_pretty(&left).map_err(|error| error.to_string())?);
+    Ok(())
+}
+
+fn table_add(table_path: &Path, row: &Path, module: &Path) -> Result<(), String> {
+    let row = json_file(row)?;
+    let mut table = json_file(table_path)?;
+    let bytes = read(module)?;
+    let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
+    let key = pe.pdb_key().ok_or("the image has no CodeView record")?;
+    let name = format!(
+        "{} {}",
+        row["frame"]["browser"].as_str().unwrap_or_default(),
+        row["frame"]["version"].as_str().unwrap_or_default()
+    );
+    table["symbols"][name] = key.into();
+    signed_table::upsert_row(&mut table, row)?;
+    let text = serde_json::to_string_pretty(&table).map_err(|error| error.to_string())? + "\n";
+    std::fs::write(table_path, text).map_err(|error| error.to_string())
+}
+
+fn table_sign(table: &Path, signed: &Path, published: Option<&Path>) -> Result<(), String> {
+    let private = std::env::var("RIVET_TABLE_SIGNING_KEY").map_err(|_| "RIVET_TABLE_SIGNING_KEY is not set")?;
+    let published = match published {
+        Some(path) => {
+            let public = std::env::var("RIVET_TABLE_PUBLIC_KEY").map_err(|_| "RIVET_TABLE_PUBLIC_KEY is not set")?;
+            let file = read(path)?;
+            Some(signed_table::parse(signed_table::open(&public, &file)?)?)
+        }
+        None => None,
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    let merged = signed_table::merge_for_signing(&json_file(table)?, published.as_ref(), now)?;
+    let payload = serde_json::to_vec(&merged).map_err(|error| error.to_string())?;
+    let file = signed_table::sign(&private, &payload)?;
+    std::fs::write(signed, file).map_err(|error| error.to_string())?;
+    println!("sequence {}, {} rows", merged["sequence"], merged["rows"].as_array().map_or(0, Vec::len));
+    Ok(())
 }
 
 fn pdb_key(module: &Path) -> Result<(), String> {

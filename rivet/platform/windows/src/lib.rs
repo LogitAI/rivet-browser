@@ -6,6 +6,7 @@
 
 pub mod chrome_build;
 pub mod row_port;
+pub mod row_watch;
 pub mod signed_table;
 
 use std::path::Path;
