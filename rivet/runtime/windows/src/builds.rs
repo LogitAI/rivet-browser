@@ -552,6 +552,13 @@ pub struct TopRow {
     /// The image view a button keeps its icon in, `views::Button::state_`, and where reload keeps
     /// whether it shows stop.
     pub button_image: usize,
+    /// The views the location icon holds that Rivet's chip replaces: its image, label and separator.
+    pub chip_children: &'static [usize],
+    /// `gfx::Canvas::DrawStringRect` and `gfx::Canvas::GetStringWidth`, for the chip's words.
+    pub draw_string: usize,
+    pub draw_string_prologue: &'static [u8],
+    pub string_width: usize,
+    pub string_width_prologue: &'static [u8],
     pub button_state_offset: usize,
     pub reload_mode_offset: usize,
     /// The address field's location bar, its location icon and its text field.
@@ -4233,6 +4240,12 @@ pub static SAMSUNG: Build = Build {
             button_paint_slot: 114,
             button_paints: &[(0xe266528, 0x5f9e0), (0xe268e88, 0x1bbb2b0), (0xe2708a8, 0x5f9e0)],
             button_image: 0xe252008,
+            chip_children: &[0xe252008, 0xe258a68, 0xe24eaa8],
+            // Both match Chrome 150's functions instruction for instruction.
+            draw_string: 0x09D1_8BF0,
+            draw_string_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x44, 0x89, 0xCE],
+            string_width: 0x00D5_F170,
+            string_width_prologue: &[0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B, 0x05],
             // Reload's own paint reads the mode and the state at these two offsets.
             button_state_offset: 0x3B4,
             reload_mode_offset: 0x89C,
@@ -4952,6 +4965,8 @@ mod tests {
         }
         for (rva, bytes) in [
             (row.apply_color, row.apply_color_prologue),
+            (row.draw_string, row.draw_string_prologue),
+            (row.string_width, row.string_width_prologue),
             (row.textfield_set_font, row.textfield_set_font_prologue),
             (row.font_new, row.font_new_prologue),
             (row.font_list_new, row.font_list_new_prologue),

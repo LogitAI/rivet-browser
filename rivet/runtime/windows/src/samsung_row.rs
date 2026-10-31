@@ -30,6 +30,15 @@ const CHIP_X: i32 = 6;
 const CHIP_Y: i32 = 3;
 const CHIP_HEIGHT: i32 = 22;
 const CHIP_GLYPH_ONLY: i32 = 25;
+/// A chip with words: 6, the glyph, 5, the words and 6.
+const CHIP_WORDS_X: i32 = 24;
+const CHIP_WORDS_END: i32 = 6;
+const CHIP_RADIUS: f32 = 6.0;
+/// The design's 8% of its warning red behind the words.
+const WARNING_FILL: u32 = 0x14B3_261E;
+const WARNING_WORDS: &str = "Not secure";
+const WARNING_FONT: &[u8] = b"Segoe UI Semibold";
+const WARNING_FONT_SIZE: i32 = 12;
 const CHIP_GLYPH_CENTRE: [f32; 2] = [12.5, 11.0];
 const TEXT_GAP: i32 = 8;
 const TEXT_Y: i32 = 2;
@@ -59,7 +68,8 @@ pub enum Part {
     Corner,
     Button(usize),
     ButtonImage,
-    Chip,
+    /// The chip, with the width of its words if it shows any.
+    Chip { words: Option<i32> },
     Text { chip_end: i32 },
     Field,
     Page,
@@ -82,8 +92,8 @@ pub fn placed(part: Part, rect: [i32; 4], parent: [i32; 2], browser_row: i32) ->
         Part::Corner => [x, y, 0, 0],
         Part::Button(index) => [FIRST_BUTTON + index as i32 * BUTTON_STEP, 0, CONTENT, CONTENT],
         Part::ButtonImage => [x, y, 0, 0],
-        Part::Chip if width <= BROWSER_ICON_WIDTH => [CHIP_X, CHIP_Y, CHIP_GLYPH_ONLY, CHIP_HEIGHT],
-        Part::Chip => [CHIP_X, CHIP_Y, width, CHIP_HEIGHT],
+        Part::Chip { words: None } => [CHIP_X, CHIP_Y, CHIP_GLYPH_ONLY, CHIP_HEIGHT],
+        Part::Chip { words: Some(words) } => [CHIP_X, CHIP_Y, CHIP_WORDS_X + words + CHIP_WORDS_END, CHIP_HEIGHT],
         Part::Text { chip_end } => {
             let start = chip_end + TEXT_GAP;
             [start, TEXT_Y, (x + width - start).max(0), TEXT_HEIGHT]
@@ -173,7 +183,9 @@ unsafe fn part_of(view: usize, rect: &[i32; 4], row: &TopRow, base: usize) -> Op
     }
     if above == row.location_bar {
         if class == row.location_icon && rect[2] > 0 {
-            return Some(Part::Chip);
+            let warns = rect[2] > BROWSER_ICON_WIDTH;
+            let mark = page_mark(&active_address(view as *mut c_void).unwrap_or_default(), warns);
+            return Some(Part::Chip { words: (mark == PageMark::Warning).then(|| warning_label().1) });
         }
         if class == row.omnibox {
             let chip = children(parent, row).into_iter().find(|child| class_of(*child, base) == row.location_icon)?;
@@ -217,10 +229,10 @@ pub unsafe fn place(view: *mut c_void, rect: &mut [i32; 4]) {
     }
     let parent = bounds_of(parent_of(view, row), row);
     *rect = placed(part, *rect, [parent[2], parent[3]], row.browser_row);
-    // The chip lays its image out once and not again, so a later layout does not take it away.
-    if part == Part::Chip {
+    // The chip lays its children out once and not again, so a later layout does not take them away.
+    if matches!(part, Part::Chip { .. }) {
         for child in children(view, row) {
-            if class_of(child, image.base) == row.button_image {
+            if row.chip_children.contains(&class_of(child, image.base)) {
                 let bounds = (child + row.bounds_offset) as *mut [i32; 4];
                 (*bounds)[2] = 0;
                 (*bounds)[3] = 0;
@@ -337,11 +349,59 @@ fn mark_index(mark: PageMark) -> usize {
     }
 }
 
+/// A font of `size` DIPs by family name, as a `gfx::FontList`.
+unsafe fn font_list(row: &TopRow, base: usize, family: &[u8], size: i32) -> usize {
+    // A `std::string` of up to 22 bytes lives inside its three words, with the length in the last byte.
+    let mut name = [0u64; 3];
+    std::ptr::copy_nonoverlapping(family.as_ptr(), name.as_mut_ptr().cast::<u8>(), family.len());
+    name[2] = (family.len() as u64) << 56;
+    let new_font: unsafe extern "system" fn(*mut usize, *const [u64; 3], i32) -> *mut usize =
+        std::mem::transmute(base + row.font_new);
+    let new_list: unsafe extern "system" fn(*mut usize, *const usize) -> *mut usize =
+        std::mem::transmute(base + row.font_list_new);
+    let mut font = [0usize; 2];
+    new_font(font.as_mut_ptr(), &name, size);
+    let mut list: usize = 0;
+    new_list(&mut list, font.as_ptr());
+    list
+}
+
+/// The chip's words as UTF-16 and a `std::u16string_view` of them.
+fn warning_text() -> [usize; 2] {
+    static TEXT: OnceLock<Vec<u16>> = OnceLock::new();
+    let text = TEXT.get_or_init(|| WARNING_WORDS.encode_utf16().collect());
+    [text.as_ptr() as usize, text.len()]
+}
+
+/// The font of the chip's words and how wide they are in it. Built once, on the browser's UI thread.
+unsafe fn warning_label() -> (usize, i32) {
+    static LABEL: OnceLock<(usize, i32)> = OnceLock::new();
+    *LABEL.get_or_init(|| {
+        let (Some(row), Some(image)) = (row(), image::recorded()) else { return (0, 0) };
+        let list = font_list(row, image.base, WARNING_FONT, WARNING_FONT_SIZE);
+        let width: unsafe extern "system" fn(*const [usize; 2], *const usize) -> i32 =
+            std::mem::transmute(image.base + row.string_width);
+        (list, width(&warning_text(), &list))
+    })
+}
+
 /// The address of the window's active tab.
 unsafe fn active_address(view: *mut c_void) -> Option<String> {
     let window = crate::chrome_layout::hwnd_of_view(view)?;
     let tabs = crate::chrome_tabs::open_tabs(window)?;
     tabs.into_iter().find(|tab| tab.saved.active).map(|tab| tab.saved.url)
+}
+
+/// The rounded fill behind a chip with words, made once for each width.
+unsafe fn chip_fill(width: i32, row: &TopRow) -> usize {
+    static FILLS: Mutex<Vec<(i32, usize)>> = Mutex::new(Vec::new());
+    let mut fills = FILLS.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some((_, icon)) = fills.iter().find(|(known, _)| *known == width) {
+        return *icon;
+    }
+    let icon = crate::chrome_toolbar::fill_icon(width as f32, CHIP_HEIGHT as f32, CHIP_RADIUS, row.canvas_command) as usize;
+    fills.push((width, icon));
+    icon
 }
 
 /// A button of a Rivet window's row draws Rivet's icon instead of what the browser baked.
@@ -356,10 +416,29 @@ unsafe extern "system" fn button_paint(view: *mut c_void, canvas: *const c_void)
     let (Some(image), Some(icons)) = (image::recorded(), ICONS.get()) else { return };
     let draw: PaintIcon = std::mem::transmute(image.base + row.paint_vector_icon);
     if class_of(view as usize, image.base) == row.location_icon {
-        let warns = bounds_of(view as usize, row)[2] > CHIP_GLYPH_ONLY;
-        let mark = page_mark(&active_address(view).unwrap_or_default(), warns);
-        let ink = if mark == PageMark::Warning { WARNING_INK } else { LOCK_INK };
-        return draw(canvas, icons.marks[mark_index(mark)] as *const c_void, CHIP_GLYPH_ONLY, ink);
+        let width = bounds_of(view as usize, row)[2];
+        // The layout chose the chip for the page, and the paint follows it.
+        let mark = if width > CHIP_GLYPH_ONLY {
+            PageMark::Warning
+        } else {
+            match page_mark(&active_address(view).unwrap_or_default(), false) {
+                PageMark::Warning => PageMark::Info,
+                mark => mark,
+            }
+        };
+        if mark != PageMark::Warning {
+            return draw(canvas, icons.marks[mark_index(mark)] as *const c_void, CHIP_GLYPH_ONLY, LOCK_INK);
+        }
+        let fill = chip_fill(width, row);
+        draw(canvas, fill as *const c_void, width, WARNING_FILL);
+        draw(canvas, icons.marks[mark_index(mark)] as *const c_void, CHIP_GLYPH_ONLY, WARNING_INK);
+        let (list, words) = warning_label();
+        if list != 0 {
+            let text: unsafe extern "system" fn(*const c_void, *const [usize; 2], *const usize, u32, *const [i32; 4]) =
+                std::mem::transmute(image.base + row.draw_string);
+            text(canvas, &warning_text(), &list, WARNING_INK, &[CHIP_WORDS_X, 0, words, CHIP_HEIGHT]);
+        }
+        return;
     }
     let parent = parent_of(view as usize, row);
     let shown = children(parent, row).into_iter().filter(|child| row.buttons.contains(&class_of(*child, image.base)));
@@ -392,21 +471,10 @@ unsafe fn apply_text_colour(view: usize, row: &TopRow, base: usize, colour: u32)
 unsafe extern "system" fn set_field_fonts(window: HWND, _message: u32, id: usize, _time: u32) {
     windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, id);
     let (Some(row), Some(image)) = (row(), image::recorded()) else { return };
-    // A `std::string` of up to 22 bytes lives inside its three words, with the length in the last byte.
-    let mut name = [0u64; 3];
-    std::ptr::copy_nonoverlapping(ADDRESS_FONT.as_ptr(), name.as_mut_ptr().cast::<u8>(), ADDRESS_FONT.len());
-    name[2] = (ADDRESS_FONT.len() as u64) << 56;
-    let new_font: unsafe extern "system" fn(*mut usize, *const [u64; 3], i32) -> *mut usize =
-        std::mem::transmute(image.base + row.font_new);
-    let new_list: unsafe extern "system" fn(*mut usize, *const usize) -> *mut usize =
-        std::mem::transmute(image.base + row.font_list_new);
     let set: unsafe extern "system" fn(usize, *const usize) = std::mem::transmute(image.base + row.textfield_set_font);
     let waiting = std::mem::take(&mut *FONT_WAITING.lock().unwrap_or_else(|error| error.into_inner()));
     for view in waiting {
-        let mut font = [0usize; 2];
-        new_font(font.as_mut_ptr(), &name, ADDRESS_FONT_SIZE);
-        let mut list: usize = 0;
-        new_list(&mut list, font.as_ptr());
+        let list = font_list(row, image.base, ADDRESS_FONT, ADDRESS_FONT_SIZE);
         if list != 0 {
             set(view, &list);
         }
@@ -516,6 +584,8 @@ unsafe fn patch(row: &'static TopRow) -> Result<(), String> {
         return Err("this browser build has another address field".into());
     }
     if !image.has(row.apply_color, row.apply_color_prologue)
+        || !image.has(row.draw_string, row.draw_string_prologue)
+        || !image.has(row.string_width, row.string_width_prologue)
         || !image.has(row.textfield_set_font, row.textfield_set_font_prologue)
         || !image.has(row.font_new, row.font_new_prologue)
         || !image.has(row.font_list_new, row.font_list_new_prologue)
@@ -627,8 +697,9 @@ mod tests {
     fn fr12_samsung_chip_and_text_sit_where_the_design_has_them() {
         // The image views go: Rivet draws the icons in the buttons.
         assert_eq!(placed(Part::ButtonImage, [6, 4, 20, 20], [28, 28], 38), [6, 4, 0, 0]);
-        assert_eq!(placed(Part::Chip, [8, 2, 24, 24], [1048, 28], 38), [6, 3, 25, 22]);
-        assert_eq!(placed(Part::Chip, [8, 2, 92, 24], [1048, 28], 38), [6, 3, 92, 22]);
+        assert_eq!(placed(Part::Chip { words: None }, [8, 2, 24, 24], [1048, 28], 38), [6, 3, 25, 22]);
+        // 6, the glyph, 5, the words and 6.
+        assert_eq!(placed(Part::Chip { words: Some(60) }, [8, 2, 24, 24], [1048, 28], 38), [6, 3, 90, 22]);
         assert_eq!(placed(Part::Text { chip_end: 31 }, [37, 2, 993, 24], [1048, 28], 38), [39, 2, 991, 24]);
     }
 
