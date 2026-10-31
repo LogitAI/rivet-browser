@@ -471,8 +471,59 @@ pub struct EdgeVertical {
     pub state_offset: usize,
 }
 
+/// The views of a top row that is placed one by one, told apart by their vtables.
+#[derive(Debug)]
+pub struct TopRow {
+    pub parent_offset: usize,
+    pub children_offset: usize,
+    pub bounds_offset: usize,
+    /// The caption button container and its buttons, in the frame view.
+    pub caption: usize,
+    pub caption_button: usize,
+    /// The parent of the row and of the page, the row, its line, and the row's content.
+    pub content: usize,
+    pub toolbar: usize,
+    pub separator: usize,
+    pub container: usize,
+    pub corner: usize,
+    pub inner: usize,
+    /// Back and forward, then reload.
+    pub buttons: &'static [usize],
+    pub field: usize,
+    pub page: usize,
+    /// The height the browser gives the row.
+    pub browser_row: i32,
+    /// How far the browser's client view starts below the frame's top, which the panel's gap replaces.
+    pub panel_top_trim: i32,
+    /// `PaintChildren` and `OnPaint`.
+    pub paint_slots: [usize; 2],
+    /// The classes that paint with Rivet's colours, each with the functions those slots hold.
+    pub painted: &'static [(usize, [usize; 2])],
+    /// Views whose fill or border was baked when their theme changed, each with the slot of the paint
+    /// to leave out in Rivet windows and the function it holds: `OnPaint`, or `OnPaintBackground` for
+    /// a view that draws more than that. The design's field has no fill at rest and its page no border.
+    pub bare: &'static [(usize, usize, usize)],
+    /// The view that holds the page inside the page's border, which Rivet windows have no room for.
+    pub holder: usize,
+    pub holder_parent: usize,
+    /// The sidebar's root view and the functions those slots hold.
+    pub sidebar_root: (usize, [usize; 2]),
+    /// Where a root view keeps its widget and a widget its native widget.
+    pub root_widget: usize,
+    pub widget_native: usize,
+    /// The native widget's vtable and `Hide`.
+    pub native_vtable: usize,
+    pub native_hide_slot: usize,
+    pub native_hide: usize,
+    pub native_hide_prologue: &'static [u8],
+    /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
+    pub colours: &'static [(i32, u32)],
+}
+
 /// Values for `vertical_tabs.rs`.
 pub struct VerticalTabs {
+    /// The classes of a top row that is placed view by view, for a build whose toolbar is not mapped.
+    pub top_row: Option<TopRow>,
     /// Whether this build has been checked for this feature. When it is false the feature is left alone.
     pub supported: bool,
     /// The vtable slot of `VerticalTabStripStateControllerImpl::ShouldDisplayVerticalTabs`.
@@ -1131,6 +1182,7 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
 };
 
 const UNCHECKED_VERTICALTABS: VerticalTabs = VerticalTabs {
+    top_row: None,
     supported: false,
     slot: 0,
     should_display: ABSENT,
@@ -3117,6 +3169,43 @@ pub static SAMSUNG: Build = Build {
         // then sits 30 DIPs from the toggle's centre, as Chrome's does.
         toolbar_leading: 32,
         detour_strip: true,
+        top_row: Some(TopRow {
+            parent_offset: 0x190,
+            children_offset: 0x198,
+            bounds_offset: 0x1C0,
+            caption: 0xe310268,
+            caption_button: 0xe30fea8,
+            content: 0xe2f0a28,
+            toolbar: 0xe2f0d68,
+            separator: 0xe2def88,
+            container: 0xe26a968,
+            corner: 0xe2800a8,
+            inner: 0xe26acc8,
+            buttons: &[0xe266528, 0xe268e88],
+            field: 0xe2a3168,
+            page: 0xe2800a8,
+            browser_row: 38,
+            panel_top_trim: 1,
+            paint_slots: [88, 89],
+            painted: &[(0xe25fda8, [0x23b0b30, 0x593450]), (0xe2f0d68, [0x2b44ac0, 0x593450]), (0xe30fea8, [0x593140, 0x2930de0])],
+            bare: &[(0xe270568, 89, 0x593450), (0xe2dec28, 89, 0x593450), (0xe2826e8, 90, 0x593580), (0xe2ee868, 89, 0x593450), (0xe2def88, 89, 0x593450)],
+            holder: 0xe284ec8,
+            holder_parent: 0xe2dec28,
+            sidebar_root: (0xe27e8e8, [0x593140, 0x2928ee0]),
+            root_widget: 0x340,
+            widget_native: 0xF8,
+            native_vtable: 0xe21ddc0,
+            native_hide_slot: 46,
+            native_hide: 0x9032e30,
+            native_hide_prologue: &[0x48, 0x8B, 0x89, 0xA8, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC9, 0x0F, 0x85],
+            // Samsung's row and everything behind it take the design's paper.
+            colours: &[
+                (309, 0xFFFB_FAF7), (514, 0xFFFB_FAF7), (520, 0xFFFB_FAF7), (1321, 0xFFFB_FAF7), (1322, 0xFFFB_FAF7),
+                (1450, 0xFFFB_FAF7), (1650, 0xFFFB_FAF7), (1319, 0xFFFB_FAF7), (1320, 0xFFFB_FAF7),
+                // The close button's hover and the caption glyphs.
+                (1512, 0xFFC4_2B1C), (1527, 0xFF1A_1A1A), (1541, 0xFF1A_1A1A),
+            ],
+        }),
         ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
@@ -3693,6 +3782,27 @@ mod tests {
         for (rva, bytes) in SAMSUNG.navigation.signatures {
             assert_eq!(file_bytes(&file, *rva, bytes.len()).as_deref(), Some(*bytes), "{rva:#x}");
         }
+    }
+
+    #[test]
+    fn fr12_samsung_top_row_matches_the_installed_build() {
+        let row = SAMSUNG.vertical.top_row.as_ref().expect("Samsung's row is recorded");
+        let path = r"C:\Program Files\Samsung\Internet\Application\143.0.4.29\samsunginternet.dll";
+        let Ok(file) = std::fs::read(path) else { return };
+        let holds = |vtable: usize, slot: usize, function: usize| {
+            file_bytes(&file, vtable + slot * 8, 8).map(|bytes| u64::from_le_bytes(bytes.try_into().unwrap()) - 0x1_8000_0000)
+                == Some(function as u64)
+        };
+        for (vtable, functions) in row.painted.iter().chain(std::iter::once(&row.sidebar_root)) {
+            assert!(holds(*vtable, row.paint_slots[0], functions[0]), "{vtable:#x}");
+            assert!(holds(*vtable, row.paint_slots[1], functions[1]), "{vtable:#x}");
+        }
+        for (vtable, slot, function) in row.bare {
+            assert!(holds(*vtable, *slot, *function), "{vtable:#x}");
+        }
+        assert!(holds(row.native_vtable, row.native_hide_slot, row.native_hide));
+        let hide = row.native_hide_prologue;
+        assert_eq!(file_bytes(&file, row.native_hide, hide.len()).as_deref(), Some(hide));
     }
 
     #[test]

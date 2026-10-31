@@ -264,6 +264,7 @@ pub unsafe fn hide(window: HWND) -> bool {
     if install().is_err() {
         return false;
     }
+    crate::vertical_tabs::trace(&format!("samsung row: {:?}", crate::samsung_row::install()));
     // A row that cannot be placed leaves the toolbar as the browser lays it out.
     let placed = install_row();
     crate::vertical_tabs::trace(&format!("whale row: {placed:?}"));

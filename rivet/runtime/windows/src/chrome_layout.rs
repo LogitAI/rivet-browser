@@ -547,6 +547,9 @@ unsafe extern "system" fn client_view_bounds(view: *const c_void, out: *mut Rect
         *out = reserve_leading(*out, reserved);
         if PANEL.load(std::sync::atomic::Ordering::Relaxed) {
             *out = inset_panel(*out);
+            let trim = crate::builds::get().vertical.top_row.as_ref().map_or(0, |row| row.panel_top_trim);
+            (*out).y -= trim;
+            (*out).height += trim;
         }
         record_panel((hook.hwnd_for_view)(view), *out);
     }

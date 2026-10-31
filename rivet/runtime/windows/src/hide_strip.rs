@@ -200,6 +200,7 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
             at = word(ancestor + PARENT);
         }
     }
+    crate::samsung_row::place(view, &mut moved);
     original(view, &moved)
 }
 

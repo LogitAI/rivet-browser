@@ -1596,7 +1596,7 @@ fn attached(window: HWND) -> bool {
     unsafe { attached_window(window) }
 }
 
-unsafe fn attached_window(window: HWND) -> bool {
+pub(crate) unsafe fn attached_window(window: HWND) -> bool {
     APPBARS.with(|appbars| appbars.borrow().contains_key(&(window as isize)))
 }
 
