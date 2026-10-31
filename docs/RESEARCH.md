@@ -423,3 +423,11 @@
 - 150과 다른 점: `GetTopInset` 슬롯이 127에서 126으로, `GetBoundsForClientView`가 읽는 오프셋이 `0x370`에서
   `0x338`로 바뀌었다. 143에는 인덱스로 웹 콘텐츠를 돌려주는 함수가 없어 탭 컬렉션의 탭 개체에서 직접 읽는다.
 - Appbar, 페이지 자리, 프레임 색, 상단 여백, 탭 목록, 전환, 닫기가 동작한다. 가로 탭 줄을 숨길 함수는 찾지 못했다.
+
+## Edge 156.0.4314.50 상단 줄 관찰
+
+- `GetTopInset`은 탭이 하나인 창에서 6 DIP를, 프로필을 복원해 탭이 여러 개로 시작한 창에서 0 DIP를 돌려준다. 그 창은 세로 탭 상태(2)를
+  유지하면서도 `EdgeTabStripRegionView`를 보이고 툴바를 6 DIP 위로 올린다. 새 프로필의 두 번째 실행에서 재현된다.
+- `TopContainerView`의 `ContentsSeparator`(vtable `0x118B7B38`)는 Edge가 숨겨 두는 뷰이며 툴바 아래 구분선으로 다시 쓸 수 있다.
+- `PrintWindow`로 잡은 Rivet 창의 페이지 영역은 페이지 색과 상관없이 흰색으로 나온다. 일반 Chrome 창의 캡처에는 페이지가 나온다.
+  게시된 `WM_MOUSEMOVE`로는 캡션 버튼 hover가 그려지지 않는다.

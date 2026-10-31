@@ -108,7 +108,7 @@ unsafe extern "system" fn sized_preferred(view: *mut c_void, out: *mut [i32; 2],
     let (Some(edge), Some(image)) = (bv(), image::recorded()) else { return result };
     if !skipped("edgesize") && is_rivet_view_tree(view as usize) {
         if table == image.base + edge.toolbar_vtable {
-            (*out)[1] = edge.toolbar_height + edge.toolbar_overlap;
+            (*out)[1] = edge.toolbar_height + edge.separator_height + edge.toolbar_overlap;
         } else {
             *out = [edge.button_size, edge.button_size];
         }
@@ -140,13 +140,23 @@ unsafe fn is_forward_button(view: usize) -> bool {
     buttons.get(1) == Some(&view)
 }
 
+/// Whether `view` is the hairline under the toolbar of a top container.
+unsafe fn is_row_separator(view: usize) -> bool {
+    let (Some(edge), Some(image)) = (bv(), image::recorded()) else { return false };
+    if *(view as *const usize) != image.base + edge.separator_vtable {
+        return false;
+    }
+    let parent = *((view + 0x198) as *const usize);
+    parent > 0x10000 && *(parent as *const usize) == image.base + edge.top_container_vtable
+}
+
 /// Edge hides the forward button until a page can go forward. The design shows it, greyed, so a
-/// Rivet window keeps it visible. Showing a view that is already shown changes nothing, so the
-/// toolbar does not lay itself out again.
+/// Rivet window keeps it visible, and the hairline below the row with it. Showing a view that is
+/// already shown changes nothing, so the toolbar does not lay itself out again.
 unsafe extern "system" fn set_visible(view: *mut c_void, visible: bool) {
     type Original = unsafe extern "system" fn(*mut c_void, bool);
     let original: Original = std::mem::transmute(ORIGINAL_SET_VISIBLE.load(Ordering::Acquire));
-    let keep = !visible && !skipped("edgeforward") && is_rivet_view_tree(view as usize) && is_forward_button(view as usize);
+    let keep = !visible && !skipped("edgeforward") && is_rivet_view_tree(view as usize) && (is_forward_button(view as usize) || is_row_separator(view as usize));
     original(view, visible || keep);
 }
 
@@ -221,6 +231,11 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
             }
         }
     }
+    // The hairline runs the row's width right under the toolbar, and the page starts below it.
+    if !skipped("edgebounds") && is_row_separator(view as usize) && is_rivet_view_tree(view as usize) {
+        let parent = *((view as usize + 0x198) as *const usize);
+        moved = [0, edge.toolbar_height, *((parent + 0x1C8 + 8) as *const i32), edge.separator_height];
+    }
     // The toolbar's own children keep the design's positions. Their order in the toolbar is back,
     // forward, reload.
     if !skipped("edgechildren") && is_rivet_view_tree(view as usize) {
@@ -243,17 +258,6 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
                     }
                 }
                 moved = [edge.button_x + index * edge.button_pitch, edge.button_y, edge.button_size, edge.button_size];
-            } else if table == image.base + edge.extensions_vtable {
-                // Edge lays this container out from the toolbar's right edge, which runs under the
-                // caption buttons: it would sit beneath the close button and show through its glyph.
-                // It moves left by the width the caption buttons cover.
-                if let Some(container) = caption_container(view as usize) {
-                    let toolbar_width = *((parent + 0x1C8 + 8) as *const i32);
-                    let caption_x = *((container + 0x1C8) as *const i32) - window_x(parent);
-                    if caption_x > 0 && caption_x < toolbar_width {
-                        moved[0] -= toolbar_width - caption_x;
-                    }
-                }
             } else if table == image.base + edge.field_vtable {
                 let toolbar_width = *((parent + 0x1C8 + 8) as *const i32);
                 let mut width = toolbar_width - edge.field_x - edge.field_margin;
@@ -510,7 +514,7 @@ pub unsafe fn relayout(window: HWND) {
                 walk(child, depth + 1);
             }
         }
-        if !skipped("edgeforward") && ORIGINAL_SET_VISIBLE.load(Ordering::Acquire) != 0 && is_forward_button(view) {
+        if !skipped("edgeforward") && ORIGINAL_SET_VISIBLE.load(Ordering::Acquire) != 0 && (is_forward_button(view) || is_row_separator(view)) {
             let show: unsafe extern "system" fn(*mut c_void, bool) = std::mem::transmute(ORIGINAL_SET_VISIBLE.load(Ordering::Acquire));
             show(view as *mut c_void, true);
         }

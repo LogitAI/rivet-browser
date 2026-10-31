@@ -677,6 +677,16 @@ mod tests {
     }
 
     #[test]
+    fn fr12_edge_top_inset_does_not_drop_with_several_tabs() {
+        let edge = crate::builds::EDGE.edge_vertical.as_ref().unwrap();
+        let extra = Some(PANEL_TOP + edge.top_inset_adjust);
+        assert_eq!(panel_top_inset(6, edge.top_inset_floor, extra), 0);
+        assert_eq!(panel_top_inset(0, edge.top_inset_floor, extra), 0);
+        // Another window of the same browser keeps the browser's answer.
+        assert_eq!(panel_top_inset(0, edge.top_inset_floor, None), 0);
+    }
+
+    #[test]
     fn fr12_caption_ink_is_independent_of_window_activation() {
         assert_eq!(caption_ink(), 0xff1a_1a1a);
     }
@@ -838,8 +848,22 @@ unsafe extern "system" fn top_inset(view: *const c_void, restored: bool) -> i32 
         crate::vertical_tabs::trace(&format!("top inset original {inset} restored {restored}"));
     }
     match HOOK.get() {
-        Some(Ok(hook)) => inset + extra((hook.hwnd_for_view)(view)).unwrap_or(0),
+        Some(Ok(hook)) => panel_top_inset(
+            inset,
+            crate::builds::get().edge_vertical.as_ref().map_or(0, |edge| edge.top_inset_floor),
+            extra((hook.hwnd_for_view)(view)),
+        ),
         _ => inset,
+    }
+}
+
+/// The top inset of a window: the browser's own, or for a Rivet window the browser's own, at least
+/// `floor`, plus the panel's change. Edge answers with less once its window has held several tabs,
+/// which would lift a Rivet window's page and toolbar away from the caption buttons.
+fn panel_top_inset(original: i32, floor: i32, extra: Option<i32>) -> i32 {
+    match extra {
+        Some(extra) => original.max(floor) + extra,
+        None => original,
     }
 }
 

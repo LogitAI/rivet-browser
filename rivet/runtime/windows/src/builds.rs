@@ -436,13 +436,17 @@ pub struct EdgeVertical {
     pub text_margin: i32,
     pub size_slot: usize,
     pub caption_gap: i32,
-    /// `EdgeExtensionsToolbarContainer`, the toolbar's extensions button, which Edge places against the
-    /// toolbar's right edge.
-    pub extensions_vtable: usize,
+    /// The hairline below the row: `ContentsSeparator` inside `TopContainerView`, which Edge keeps
+    /// hidden, and its height in DIPs. The toolbar and this line make the row.
+    pub separator_vtable: usize,
+    pub top_container_vtable: usize,
+    pub separator_height: i32,
     /// The room Rivet's toggle button takes before the toolbar's first button, in DIPs, so the back
     /// button sits where Chrome's does.
     pub toolbar_leading: i32,
     pub top_inset_adjust: i32,
+    /// The least top inset the panel is measured from. Edge answers 6 DIPs with one tab and 0 later.
+    pub top_inset_floor: i32,
     /// Where the browser view keeps its container view, and where that keeps its state.
     pub container_offset: usize,
     pub state_offset: usize,
@@ -1878,6 +1882,14 @@ pub static EDGE: Build = Build {
                 (0x1191F5B8, 0x02E3FF50), // EdgeCopilotToolbarLabelButton, the chat button inside the address field
                 (0x119498F8, 0x02B70B40), // EdgeCopilotDropdownMenuButton
                 (0x11817938, 0x033CA380), // BookmarkBarView, which the design has no row for
+                (0x1181FC38, 0x02D1CAF0), // EdgeTabStripRegionView, which a window restored with several tabs would show
+                (0x118118B8, 0x02E8BD80), // EdgeExtensionsToolbarContainer
+                (0x11810CB8, 0x02E8BD80), // PinnedToolbarActionsContainer
+                (0x1187DE38, 0x02B70B40), // split_screen::edge::ToolbarSplitWindowButton
+                (0x1184E298, 0x02B70B40), // EdgeRemixToolbarButton
+                (0x118BBF58, 0x02B70B40), // MediaToolbarButtonView
+                (0x1191EAD8, 0x02B70B40), // ToggleToolbarButton
+                (0x11931A18, 0x033F8950), // edge::workspaces::EdgeWorkspacesViewsContainer
             ],
         get_widget_slot: 10,
         size_slots: (86, 15),
@@ -2278,12 +2290,15 @@ pub static EDGE: Build = Build {
         text_x: 35, // Edge insets its text 4 DIPs more than Chrome does
         text_y: 5,
         text_height: 24,
-        text_margin: 20,
+        text_margin: 10,
         size_slot: 86,
-        caption_gap: 34,
-        extensions_vtable: 0x118118B8, // EdgeExtensionsToolbarContainer
+        caption_gap: 10,
+        separator_vtable: 0x118B7B38, // ContentsSeparator
+        top_container_vtable: 0x118B9BD8, // TopContainerView
+        separator_height: 1,
         toolbar_leading: 0,
         top_inset_adjust: -18,
+        top_inset_floor: 6,
         container_offset: 0x958,
         state_offset: 0x610,
     }),
@@ -3220,7 +3235,7 @@ mod tests {
         // The edge vertical functions and the vtables Rivet reshapes.
         let edge = EDGE.edge_vertical.as_ref().expect("Edge has its own vertical tabs");
         assert_eq!(file_bytes(&file, edge.set_bounds_rect, edge.set_bounds_rect_prologue.len()).as_deref(), Some(edge.set_bounds_rect_prologue));
-        for vtable in edge.button_vtables.iter().copied().chain([edge.toolbar_vtable, edge.field_vtable, edge.icon_vtable, edge.text_vtable, edge.extensions_vtable]) {
+        for vtable in edge.button_vtables.iter().copied().chain([edge.toolbar_vtable, edge.field_vtable, edge.icon_vtable, edge.text_vtable, edge.separator_vtable, edge.top_container_vtable]) {
             assert!(pointer(vtable).is_some(), "vtable {vtable:#x} lies inside msedge.dll");
         }
     }
@@ -3670,6 +3685,16 @@ mod tests {
     }
 
     #[test]
+    fn fr12_edge_row_is_44_dips_and_its_field_runs_to_the_design_gap() {
+        let edge = EDGE.edge_vertical.as_ref().expect("Edge has its own vertical tabs");
+        assert_eq!(edge.toolbar_height + edge.separator_height, 44);
+        // The toolbar's gap, the field's margin and the caption buttons' margin.
+        assert_eq!(edge.caption_gap, 2 + 4 + 4);
+        // The field's padding: the text stops where the design's does.
+        assert_eq!(edge.text_margin, 10);
+    }
+
+    #[test]
     fn fr12_edge_hides_every_toolbar_view_the_design_has_no_row_for() {
         let hidden: Vec<usize> = EDGE.toolbar.hidden.iter().map(|(vtable, _)| *vtable).collect();
         for (vtable, name) in [
@@ -3680,6 +3705,14 @@ mod tests {
             (0x1181E578, "vertical tab strip"),
             (0x11918C58, "translate, reader and favorite icons"),
             (0x1191F5B8, "chat button in the address field"),
+            (0x1181FC38, "horizontal tab strip"),
+            (0x118118B8, "extensions"),
+            (0x11810CB8, "pinned actions"),
+            (0x1187DE38, "split window"),
+            (0x1184E298, "Remix"),
+            (0x118BBF58, "media"),
+            (0x1191EAD8, "toggle button"),
+            (0x11931A18, "workspaces"),
         ] {
             assert!(hidden.contains(&vtable), "{name} is not hidden");
         }
