@@ -252,6 +252,8 @@ mod dev_mode;
 #[cfg(windows)]
 mod builds;
 #[cfg(windows)]
+mod row_data;
+#[cfg(windows)]
 mod chrome_layout;
 #[cfg(windows)]
 mod chrome_navigation;

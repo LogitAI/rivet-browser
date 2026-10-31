@@ -10,6 +10,8 @@
 
 use std::sync::OnceLock;
 
+use crate::row_data::row_struct;
+
 #[allow(unused_imports)]
 use crate::chrome_toolbar::{ACCENT_TINT, FOCUS_RING, HAIRLINE, INK, PAPER, SELECTION, SOFT_INK};
 
@@ -17,6 +19,7 @@ use crate::chrome_toolbar::{ACCENT_TINT, FOCUS_RING, HAIRLINE, INK, PAPER, SELEC
 /// stays off.
 pub(crate) const ABSENT: usize = 0x7FFF_0000;
 
+row_struct! {
 /// One browser build.
 pub struct Build {
     pub browser: &'static str,
@@ -38,8 +41,12 @@ pub struct Build {
     pub hidden_views: Option<HiddenViews>,
     /// Where Whale's top row puts its buttons and address field, which a Rivet window moves to Chrome's.
     pub whale_row: Option<WhaleRow>,
+    /// The location bar change of this build, for the builds that need one.
+    pub location_bar: Option<LocationBarMinimum>,
+}
 }
 
+row_struct! {
 /// Values for `chrome_toolbar.rs`.
 pub struct Toolbar {
     /// `GetLayoutConstant(LayoutConstant)`.
@@ -297,7 +304,9 @@ pub struct Toolbar {
     pub button_padding: i32,
     pub field_fill_margin: i32,
 }
+}
 
+row_struct! {
 /// Values for `whale_toolbar.rs`. Whale's toolbar holds buttons that a Rivet window does not want, and
 /// a sidebar that takes a column of the page. A view the layout cannot be told to skip is made to ask
 /// for no room and to draw nothing, which keeps `SetVisible` out of it: the layout shows a view again
@@ -324,7 +333,9 @@ pub struct HiddenViews {
     /// can paint on a layer of its own, which its parent's silence does not stop.
     pub inside: &'static [(usize, [usize; 2])],
 }
+}
 
+row_struct! {
 /// Values for the row geometry in `whale_toolbar.rs`. Whale's toolbar view lays out one container view
 /// whose children are the buttons and the address field. With the tab strip gone the container starts
 /// 100 DIPs in and stops 219 DIPs short of the right edge, and its buttons are 26 DIPs wide. The row
@@ -408,7 +419,9 @@ pub struct WhaleRow {
     pub paint_flags_drop: usize,
     pub paint_flags_drop_prologue: &'static [u8],
 }
+}
 
+row_struct! {
 /// Values for `edge_page.rs`: Edge insets its page and paints a border around it, which would
 /// fight Rivet's own panel.
 pub struct EdgePage {
@@ -427,7 +440,9 @@ pub struct EdgePage {
     /// `EdgeRoundedCornerView::SetVisible(this, visible)`.
     pub corner_set_visible: usize,
 }
+}
 
+row_struct! {
 /// Values for `edge_vertical.rs`: Edge keeps its vertical tabs in its own container view, which
 /// the browser view creates for every window and which a state number puts into vertical mode.
 pub struct EdgeVertical {
@@ -504,7 +519,9 @@ pub struct EdgeVertical {
     pub container_offset: usize,
     pub state_offset: usize,
 }
+}
 
+row_struct! {
 /// The views of a top row that is placed one by one, told apart by their vtables.
 #[derive(Debug)]
 pub struct TopRow {
@@ -596,7 +613,9 @@ pub struct TopRow {
     pub font_list_new: usize,
     pub font_list_new_prologue: &'static [u8],
 }
+}
 
+row_struct! {
 /// Values for `vertical_tabs.rs`.
 pub struct VerticalTabs {
     /// The classes of a top row that is placed view by view, for a build whose toolbar is not mapped.
@@ -666,7 +685,9 @@ pub struct VerticalTabs {
     /// prologue copied to a trampoline. Only builds where this has been checked set it.
     pub detour_strip: bool,
 }
+}
 
+row_struct! {
 /// Values for `chrome_navigation.rs`.
 pub struct Navigation {
     /// Whether this build has been checked for this feature. When it is false the feature is left alone.
@@ -691,7 +712,9 @@ pub struct Navigation {
     /// The first instructions of the functions the navigation calls need.
     pub signatures: &'static [(usize, &'static [u8])],
 }
+}
 
+row_struct! {
 /// Values for `chrome_tabs.rs`.
 pub struct Tabs {
     /// Whether this build has been checked for this feature. When it is false the feature is left alone.
@@ -745,7 +768,9 @@ pub struct Tabs {
     /// The first instructions of the functions the tab calls need.
     pub signatures: &'static [(usize, &'static [u8])],
 }
+}
 
+row_struct! {
 /// Values for `chrome_split.rs`.
 pub struct Split {
     /// Whether this build has been checked for this feature. When it is false the feature is left alone.
@@ -804,7 +829,9 @@ pub struct Split {
     /// The first instructions of the functions the split and group calls need.
     pub signatures: &'static [(usize, &'static [u8])],
 }
+}
 
+row_struct! {
 /// Values for `chrome_side_panel.rs`.
 pub struct SidePanel {
     /// Whether this build has been checked for this feature. When it is false the feature is left alone.
@@ -875,7 +902,9 @@ pub struct SidePanel {
     /// `views::View::GetEventHandlerForPoint`, which the click diagnostic calls.
     pub event_handler_for_point: usize,
 }
+}
 
+row_struct! {
 /// Values for `chrome_layout.rs`.
 pub struct Layout {
     /// Experiment, Chrome 156.0.8078.48 only. The frame view paints its title bar with colours from
@@ -963,7 +992,9 @@ pub struct Layout {
     /// page lower than the row, so its extra cancels out.
     pub top_inset_adjust: i32,
 }
+}
 
+row_struct! {
 /// What a build needs to show a page in developer mode.
 pub struct DevMode {
     /// The browser's own commands the developer bar runs, as `WM_COMMAND` ids, or zero when the build
@@ -980,6 +1011,7 @@ pub struct DevMode {
     pub font_new_prologue: &'static [u8],
     pub font_list_new: usize,
     pub font_list_new_prologue: &'static [u8],
+}
 }
 
 const UNCHECKED_DEV: DevMode = DevMode {
@@ -1478,6 +1510,7 @@ const UNCHECKED_LAYOUT: Layout = Layout {
 };
 
 pub static CHROME: Build = Build {
+    location_bar: None,
     browser: "Google Chrome",
     module: "chrome.dll",
     version: [156, 0, 8078, 48],
@@ -2056,6 +2089,7 @@ pub static CHROME: Build = Build {
 
 /// Google Chrome 156.0.8078.74, filled from that build's own public symbols and instruction bytes.
 pub static CHROME_156_74: Build = Build {
+    location_bar: Some(LocationBarMinimum { vtable: 0x0FCF_8EF0, slot: 15, function: 0x046A_A890, preferred_slot: 74, preferred: 0x046A_A630, width: 120, toolbar_past_caption: 1 }),
     browser: "Google Chrome",
     module: "chrome.dll",
     version: [156, 0, 8078, 74],
@@ -2615,6 +2649,7 @@ pub static CHROME_156_74: Build = Build {
 };
 
 pub static EDGE: Build = Build {
+    location_bar: None,
     browser: "Microsoft Edge",
     module: "msedge.dll",
     version: [156, 0, 4314, 50],
@@ -3167,6 +3202,7 @@ pub static EDGE: Build = Build {
 /// Google Chrome 150.0.7871.187. Only the frame, caption and panel hooks are checked against this
 /// build's symbols; every other feature stays off until its addresses are verified.
 pub static CHROME_150: Build = Build {
+    location_bar: None,
     browser: "Google Chrome",
     module: "chrome.dll",
     version: [150, 0, 7871, 187],
@@ -3236,6 +3272,7 @@ pub static CHROME_150: Build = Build {
 /// virtual functions override Chromium's, so the table names the overrides that sit in its vtable.
 /// Only the client-view bounds, frame paint and top inset are mapped; everything else stays off.
 pub static WHALE: Build = Build {
+    location_bar: None,
     browser: "Naver Whale",
     module: "whale.dll",
     version: [5, 39, 412, 57],
@@ -3432,6 +3469,7 @@ pub static WHALE: Build = Build {
 /// stays off until its addresses are verified. Chromium's colour ids after the frame ones are shifted by
 /// Brave's own, so `caption_ink_ids` are read from this build's `PaintButtonContents`.
 pub static BRAVE: Build = Build {
+    location_bar: Some(LocationBarMinimum { vtable: 0x111625C0, slot: 15, function: 0x038C54F0, preferred_slot: 74, preferred: 0x03973090, width: 120, toolbar_past_caption: 1 }),
     browser: "Brave",
     module: "chrome.dll",
     version: [156, 1, 98, 62],
@@ -3813,6 +3851,7 @@ pub static BRAVE: Build = Build {
 /// 156.1.98.62 at new addresses from its own symbols. `WindowsCaptionButton::PaintButtonContents` is a
 /// jump to the next function here, and the vtable slot holds that jump.
 pub static BRAVE_63: Build = Build {
+    location_bar: Some(LocationBarMinimum { vtable: 0x11120500, slot: 15, function: 0x038E1210, preferred_slot: 74, preferred: 0x0398C100, width: 120, toolbar_past_caption: 1 }),
     browser: "Brave",
     module: "chrome.dll",
     version: [156, 1, 98, 63],
@@ -4195,6 +4234,7 @@ pub static BRAVE_63: Build = Build {
 /// versioned launcher. The file version resource names the Samsung release, not Chromium's.
 /// Only the frame paint, the client-view bounds and the top inset are mapped; everything else stays off.
 pub static SAMSUNG: Build = Build {
+    location_bar: None,
     browser: "Samsung Internet",
     module: "samsunginternet.dll",
     version: [30, 0, 4, 29],
@@ -4438,6 +4478,7 @@ pub static SAMSUNG: Build = Build {
     },
 };
 
+row_struct! {
 /// Brave's location bar asks for a width that leaves too little of the row beside the appbar: its
 /// toolbar then drops the forward button and shows its overflow chevron. In Rivet windows it asks for
 /// `width` DIPs at most, as its minimum and preferred size, and still takes the room that is left.
@@ -4453,17 +4494,11 @@ pub struct LocationBarMinimum {
     /// inside the toolbar, so a toolbar 1 DIP under them leaves the 8 DIP gap of the design.
     pub toolbar_past_caption: i32,
 }
+}
 
 /// The location bar change of a build, for the builds that need one.
 pub fn location_bar_minimum(build: &Build) -> Option<LocationBarMinimum> {
-    match (build.browser, build.version) {
-        // ??_7BraveLocationBarView@@6BLayerDelegate@ui@@@, ?GetMinimumSize@BraveLocationBarView@@UEBA?AVSize@gfx@@XZ
-        // ??_7LocationBarView@@6BLayerDelegate@ui@@@, ?GetMinimumSize@LocationBarView@@UEBA?AVSize@gfx@@XZ, ?CalculatePreferredSize@LocationBarView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        ("Google Chrome", [156, 0, 8078, 74]) => Some(LocationBarMinimum { vtable: 0x0FCF_8EF0, slot: 15, function: 0x046A_A890, preferred_slot: 74, preferred: 0x046A_A630, width: 120, toolbar_past_caption: 1 }),
-        ("Brave", [156, 1, 98, 62]) => Some(LocationBarMinimum { vtable: 0x111625C0, slot: 15, function: 0x038C54F0, preferred_slot: 74, preferred: 0x03973090, width: 120, toolbar_past_caption: 1 }),
-        ("Brave", [156, 1, 98, 63]) => Some(LocationBarMinimum { vtable: 0x11120500, slot: 15, function: 0x038E1210, preferred_slot: 74, preferred: 0x0398C100, width: 120, toolbar_past_caption: 1 }),
-        _ => None,
-    }
+    build.location_bar
 }
 
 /// The builds Rivet supports, in the order they are tried.
@@ -4488,6 +4523,11 @@ pub fn get() -> &'static Build {
 
 /// Every supported row.
 pub fn all() -> &'static [&'static Build] {
+    &TABLE
+}
+
+/// The rows built into this binary.
+pub fn compiled() -> &'static [&'static Build] {
     &TABLE
 }
 

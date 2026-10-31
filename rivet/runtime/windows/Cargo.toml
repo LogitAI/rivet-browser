@@ -13,6 +13,7 @@ path = "src/lib.rs"
 [dependencies]
 rivet-core.workspace = true
 rivet-platform-windows = { path = "../../platform/windows" }
+serde_json.workspace = true
 windows-sys.workspace = true
 
 [target.'cfg(windows)'.dependencies]
