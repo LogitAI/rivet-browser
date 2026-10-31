@@ -38,6 +38,14 @@ const TEXT_HEIGHT: i32 = 24;
 const BROWSER_ICON_WIDTH: i32 = 24;
 const LOCK_INK: u32 = 0xFF4A_4850;
 const WARNING_INK: u32 = 0xFFB3_261E;
+/// The field's text: the design's muted address at rest, ink while a person edits it.
+const ADDRESS_INK: u32 = 0xFF8A_8690;
+const EDITING_INK: u32 = 0xFF1F_2024;
+const ADDRESS_FONT: &[u8] = b"Segoe UI";
+const ADDRESS_FONT_SIZE: i32 = 12;
+const FONT_TIMER: usize = 0x5249_5648;
+/// A range that reaches past any text. `RenderText` keeps it inside its own length.
+const WHOLE_TEXT: [u32; 2] = [0, 0x7FFF_FFFF];
 
 /// What a view of the row is to the layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,6 +370,102 @@ unsafe extern "system" fn button_paint(view: *mut c_void, canvas: *const c_void)
     draw(canvas, icon as *const c_void, CONTENT, crate::whale_toolbar::nav_colour(state))
 }
 
+/// The fields a person is editing, and those that already have the design's font or wait for it.
+static EDITING: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+static FONT_SET: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+static FONT_WAITING: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+unsafe fn apply_text_colour(view: usize, row: &TopRow, base: usize, colour: u32) {
+    let holder = *((view + row.textfield_render_text) as *const usize);
+    if holder < 0x10000 {
+        return;
+    }
+    let render_text = *((holder + 0x10) as *const usize);
+    if render_text < 0x10000 {
+        return;
+    }
+    let apply: unsafe extern "system" fn(usize, u32, *const [u32; 2]) = std::mem::transmute(base + row.apply_color);
+    apply(render_text, colour, &WHOLE_TEXT);
+}
+
+/// Gives the waiting fields the design's font. A paint is no place to change what lays a view out.
+unsafe extern "system" fn set_field_fonts(window: HWND, _message: u32, id: usize, _time: u32) {
+    windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, id);
+    let (Some(row), Some(image)) = (row(), image::recorded()) else { return };
+    // A `std::string` of up to 22 bytes lives inside its three words, with the length in the last byte.
+    let mut name = [0u64; 3];
+    std::ptr::copy_nonoverlapping(ADDRESS_FONT.as_ptr(), name.as_mut_ptr().cast::<u8>(), ADDRESS_FONT.len());
+    name[2] = (ADDRESS_FONT.len() as u64) << 56;
+    let new_font: unsafe extern "system" fn(*mut usize, *const [u64; 3], i32) -> *mut usize =
+        std::mem::transmute(image.base + row.font_new);
+    let new_list: unsafe extern "system" fn(*mut usize, *const usize) -> *mut usize =
+        std::mem::transmute(image.base + row.font_list_new);
+    let set: unsafe extern "system" fn(usize, *const usize) = std::mem::transmute(image.base + row.textfield_set_font);
+    let waiting = std::mem::take(&mut *FONT_WAITING.lock().unwrap_or_else(|error| error.into_inner()));
+    for view in waiting {
+        let mut font = [0usize; 2];
+        new_font(font.as_mut_ptr(), &name, ADDRESS_FONT_SIZE);
+        let mut list: usize = 0;
+        new_list(&mut list, font.as_ptr());
+        if list != 0 {
+            set(view, &list);
+        }
+    }
+}
+
+/// The browser colours the field's text when the text changes, so a paint at rest colours it again.
+unsafe extern "system" fn omnibox_paint(view: *mut c_void, canvas: *const c_void) {
+    let Some(row) = row() else { return };
+    let table = *(view as *const usize);
+    let Some(function) = held(table, row.omnibox_paint.0) else { return };
+    let run: Paint = std::mem::transmute(function);
+    let at = view as usize;
+    if in_rivet_window(at, row) {
+        if let Some(image) = image::recorded() {
+            if !EDITING.lock().unwrap_or_else(|error| error.into_inner()).contains(&at) {
+                apply_text_colour(at, row, image.base, ADDRESS_INK);
+            }
+            let fresh = {
+                let mut set = FONT_SET.lock().unwrap_or_else(|error| error.into_inner());
+                let fresh = !set.contains(&at);
+                if fresh {
+                    set.push(at);
+                }
+                fresh
+            };
+            if fresh {
+                if let Some(window) = crate::chrome_layout::hwnd_of_view(view) {
+                    FONT_WAITING.lock().unwrap_or_else(|error| error.into_inner()).push(at);
+                    windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(window, FONT_TIMER, 0, Some(set_field_fonts));
+                }
+            }
+        }
+    }
+    run(view, canvas)
+}
+
+type Called = unsafe extern "system" fn(*mut c_void);
+
+unsafe extern "system" fn omnibox_focus(view: *mut c_void) {
+    let Some(row) = row() else { return };
+    let Some(function) = held(*(view as *const usize), row.omnibox_focus.0) else { return };
+    std::mem::transmute::<usize, Called>(function)(view);
+    if !in_rivet_window(view as usize, row) {
+        return;
+    }
+    EDITING.lock().unwrap_or_else(|error| error.into_inner()).push(view as usize);
+    if let Some(image) = image::recorded() {
+        apply_text_colour(view as usize, row, image.base, EDITING_INK);
+    }
+}
+
+unsafe extern "system" fn omnibox_blur(view: *mut c_void) {
+    let Some(row) = row() else { return };
+    let Some(function) = held(*(view as *const usize), row.omnibox_blur.0) else { return };
+    EDITING.lock().unwrap_or_else(|error| error.into_inner()).retain(|known| *known != view as usize);
+    std::mem::transmute::<usize, Called>(function)(view);
+}
+
 /// Hides the sidebars their paint asked for. A paint is no place to change a widget's visibility.
 unsafe extern "system" fn hide_sidebars(window: HWND, _message: u32, id: usize, _time: u32) {
     windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, id);
@@ -411,6 +515,14 @@ unsafe fn patch(row: &'static TopRow) -> Result<(), String> {
     }) {
         return Err("this browser build has another address field".into());
     }
+    if !image.has(row.apply_color, row.apply_color_prologue)
+        || !image.has(row.textfield_set_font, row.textfield_set_font_prologue)
+        || !image.has(row.font_new, row.font_new_prologue)
+        || !image.has(row.font_list_new, row.font_list_new_prologue)
+        || ![row.omnibox_paint, row.omnibox_focus, row.omnibox_blur].iter().all(|(slot, function)| image.points_to(row.omnibox + slot * 8, *function))
+    {
+        return Err("this browser build has another address text field".into());
+    }
     if !image.has(row.paint_vector_icon, row.paint_vector_icon_prologue)
         || !row.button_paints.iter().all(|(vtable, function)| image.points_to(vtable + row.button_paint_slot * 8, *function))
     {
@@ -445,6 +557,9 @@ unsafe fn patch(row: &'static TopRow) -> Result<(), String> {
         for (vtable, function) in row.button_paints {
             known.push((base + vtable, row.button_paint_slot, base + function));
         }
+        for (slot, function) in [row.omnibox_paint, row.omnibox_focus, row.omnibox_blur] {
+            known.push((base + row.omnibox, slot, base + function));
+        }
     }
     crate::chrome_toolbar::transaction(|| {
         for (vtable, _) in row.painted {
@@ -459,6 +574,10 @@ unsafe fn patch(row: &'static TopRow) -> Result<(), String> {
         for (vtable, _) in row.button_paints {
             crate::chrome_toolbar::replace_slot(((base + vtable) as *mut usize).add(row.button_paint_slot), button_paint as *const () as usize)?;
         }
+        let field = (base + row.omnibox) as *mut usize;
+        crate::chrome_toolbar::replace_slot(field.add(row.omnibox_paint.0), omnibox_paint as *const () as usize)?;
+        crate::chrome_toolbar::replace_slot(field.add(row.omnibox_focus.0), omnibox_focus as *const () as usize)?;
+        crate::chrome_toolbar::replace_slot(field.add(row.omnibox_blur.0), omnibox_blur as *const () as usize)?;
         let table = (base + row.sidebar_root.0) as *mut usize;
         crate::chrome_toolbar::replace_slot(table.add(row.paint_slots[0]), sidebar_paint_children as *const () as usize)
     })
@@ -521,6 +640,14 @@ mod tests {
         assert_eq!(page_mark("rivet://start", false), PageMark::Info);
         assert_eq!(page_mark("file:///C:/a.html", false), PageMark::Info);
         assert_eq!(page_mark("https://expired.example/", true), PageMark::Warning);
+    }
+
+    #[test]
+    fn fr12_samsung_address_text_is_the_designs() {
+        // 12 DIP text in the design's muted colour, and a range that holds any text.
+        assert_eq!((ADDRESS_FONT_SIZE, ADDRESS_INK), (12, 0xFF8A_8690));
+        assert!(ADDRESS_FONT.len() <= 22);
+        assert_ne!(WHOLE_TEXT, [u32::MAX, u32::MAX]);
     }
 
     #[test]

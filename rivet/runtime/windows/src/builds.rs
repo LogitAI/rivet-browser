@@ -558,6 +558,22 @@ pub struct TopRow {
     pub location_bar: usize,
     pub location_icon: usize,
     pub omnibox: usize,
+    /// The text field's `OnPaint`, `OnFocus` and `OnBlur`, each with its slot.
+    pub omnibox_paint: (usize, usize),
+    pub omnibox_focus: (usize, usize),
+    pub omnibox_blur: (usize, usize),
+    /// `gfx::RenderText::ApplyColor(this, colour, range)`, and where a text field keeps the holder of
+    /// its render text, which the holder keeps at +0x10.
+    pub apply_color: usize,
+    pub apply_color_prologue: &'static [u8],
+    pub textfield_render_text: usize,
+    /// `views::Textfield::SetFontList`, `gfx::Font::Font(name, size)` and `gfx::FontList::FontList(font)`.
+    pub textfield_set_font: usize,
+    pub textfield_set_font_prologue: &'static [u8],
+    pub font_new: usize,
+    pub font_new_prologue: &'static [u8],
+    pub font_list_new: usize,
+    pub font_list_new_prologue: &'static [u8],
 }
 
 /// Values for `vertical_tabs.rs`.
@@ -4223,6 +4239,19 @@ pub static SAMSUNG: Build = Build {
             location_bar: 0xe270568,
             location_icon: 0xe2708a8,
             omnibox: 0xe2826e8,
+            omnibox_paint: (89, 0x171fb60),
+            omnibox_focus: (97, 0x379f9d0),
+            omnibox_blur: (98, 0x379faa0),
+            // Its body is `ApplyWeight`'s neighbour at 0x2998d00 with the colours' list at +0xA0.
+            apply_color: 0x0299_8C60,
+            apply_color_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x81, 0xC1, 0xA0, 0x00, 0x00, 0x00, 0xE8],
+            textfield_render_text: 0x360,
+            textfield_set_font: 0x0292_CA50,
+            textfield_set_font_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x81, 0x60, 0x03, 0x00, 0x00],
+            font_new: 0x09D2_7510,
+            font_new_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2, 0xE8],
+            font_list_new: 0x09D2_7410,
+            font_list_new_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE, 0xB9, 0x50],
         }),
         ..UNCHECKED_VERTICALTABS
     },
@@ -4917,6 +4946,17 @@ mod tests {
         }
         for (vtable, function) in row.button_paints {
             assert!(holds(*vtable, row.button_paint_slot, *function), "{vtable:#x}");
+        }
+        for (slot, function) in [row.omnibox_paint, row.omnibox_focus, row.omnibox_blur] {
+            assert!(holds(row.omnibox, slot, function), "{slot}");
+        }
+        for (rva, bytes) in [
+            (row.apply_color, row.apply_color_prologue),
+            (row.textfield_set_font, row.textfield_set_font_prologue),
+            (row.font_new, row.font_new_prologue),
+            (row.font_list_new, row.font_list_new_prologue),
+        ] {
+            assert_eq!(file_bytes(&file, rva, bytes.len()).as_deref(), Some(bytes), "{rva:#x}");
         }
         let icon = row.paint_vector_icon_prologue;
         assert_eq!(file_bytes(&file, row.paint_vector_icon, icon.len()).as_deref(), Some(icon));
