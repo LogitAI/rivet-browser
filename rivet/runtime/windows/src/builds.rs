@@ -2147,6 +2147,7 @@ pub static CHROME_156_74: Build = Build {
         (55, 8),  // kToolbarCornerRadius
         (60, 0),  // kVerticalTabMinWidth
     ],
+        dev: DEV_CHROME_156,
         colours: &[
         (0x13C, PAPER),      // kColorFrameActive
         (796, PAPER),        // kColorLocationBarBackground
