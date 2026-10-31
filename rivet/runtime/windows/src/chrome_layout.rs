@@ -602,8 +602,8 @@ pub unsafe fn install(reserved: Reserve) -> Result<(), String> {
 }
 
 unsafe fn patch(reserved: Reserve) -> Result<Hook, String> {
-    let builds = chrome_build::builds(chrome_build::TABLE);
-    let (build, image) = builds
+    log(&format!("rivet: {}", crate::builds::table_note()));
+    let (build, image) = crate::builds::frame_rows()
         .iter()
         .find_map(|build| {
             let module = wide(&build.module);

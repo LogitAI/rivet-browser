@@ -4521,9 +4521,52 @@ pub fn get() -> &'static Build {
     current().expect("a recorded build is loaded before its table is read")
 }
 
-/// Every supported row.
+/// The rows that came as data with this binary, which needed no code change to add.
+pub const CHECKED_IN: &str = include_str!("../rows/table.json");
+
+/// The rows in the order they are tried: a signed row first, since it can replace one that shipped.
+pub fn in_order(signed: Vec<&'static Build>, compiled: &[&'static Build]) -> Vec<&'static Build> {
+    signed.into_iter().chain(compiled.iter().copied()).collect()
+}
+
+struct Loaded {
+    builds: Vec<&'static Build>,
+    frames: Vec<rivet_platform_windows::chrome_build::ChromeBuild>,
+    note: String,
+}
+
+fn loaded() -> &'static Loaded {
+    static LOADED: OnceLock<Loaded> = OnceLock::new();
+    LOADED.get_or_init(|| {
+        use rivet_platform_windows::{chrome_build, signed_table};
+        let (signed, note) = match signed_table::default_store().filter(|_| !cfg!(test)) {
+            Some(store) => crate::row_data::signed_rows(&store, signed_table::RELEASE_KEY),
+            None => Default::default(),
+        };
+        let checked_in = signed_table::parse(CHECKED_IN.as_bytes())
+            .map(|table| crate::row_data::table_rows(&table))
+            .unwrap_or_default();
+        let compiled: Vec<_> = checked_in.builds.into_iter().chain(TABLE).collect();
+        let mut frames = signed.frames;
+        frames.extend(checked_in.frames);
+        frames.extend(chrome_build::builds(chrome_build::TABLE));
+        Loaded { builds: in_order(signed.builds, &compiled), frames, note }
+    })
+}
+
+/// Every supported row, in the order they are tried.
 pub fn all() -> &'static [&'static Build] {
-    &TABLE
+    &loaded().builds
+}
+
+/// The frame layout entries of every supported row, in the order they are tried.
+pub fn frame_rows() -> &'static [rivet_platform_windows::chrome_build::ChromeBuild] {
+    &loaded().frames
+}
+
+/// What happened to the signed table in this process.
+pub fn table_note() -> &'static str {
+    &loaded().note
 }
 
 /// The rows built into this binary.

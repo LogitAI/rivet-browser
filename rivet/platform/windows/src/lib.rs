@@ -5,6 +5,7 @@
 //! ownership checks.
 
 pub mod chrome_build;
+pub mod signed_table;
 
 use std::path::Path;
 use std::time::{Duration, Instant};

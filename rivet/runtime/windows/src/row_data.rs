@@ -9,7 +9,11 @@
 //! only addresses, offsets and slots have that type. Colours and constants are plain numbers and
 //! instruction bytes are bare hex, so neither can be taken for an address.
 
-use serde_json::{json, Map, Value};
+use rivet_platform_windows::chrome_build::ChromeBuild;
+use rivet_platform_windows::signed_table;
+#[cfg(test)]
+use serde_json::json;
+use serde_json::{Map, Value};
 
 /// Why a row was refused, with the path of the value that was wrong.
 pub type RowResult<T> = Result<T, String>;
@@ -36,7 +40,7 @@ macro_rules! row_number {
     ($($type:ty),*) => {$(
         impl RowValue for $type {
             fn to_row(&self) -> Value {
-                json!(*self)
+                serde_json::json!(*self)
             }
             fn from_row(value: &Value) -> RowResult<Self> {
                 value
@@ -175,10 +179,138 @@ macro_rules! row_struct {
 }
 pub(crate) use row_struct;
 
+/// The rows of one table, and what happened to the ones left out.
+#[derive(Default)]
+pub struct TableRows {
+    pub builds: Vec<&'static crate::builds::Build>,
+    pub frames: Vec<ChromeBuild>,
+    pub refused: Vec<String>,
+}
+
+/// Reads the rows of a table. A row this runtime cannot read is left out on its own, since the
+/// rest of the table can still serve its browsers.
+pub fn table_rows(table: &Value) -> TableRows {
+    let mut rows = TableRows::default();
+    for row in table["rows"].as_array().map_or(&[][..], Vec::as_slice) {
+        let frame = serde_json::from_value::<ChromeBuild>(row["frame"].clone());
+        let build = crate::builds::Build::from_row(&row["build"]);
+        match (frame, build) {
+            (Ok(frame), Ok(build)) => {
+                rows.builds.push(Box::leak(Box::new(build)));
+                rows.frames.push(frame);
+            }
+            (Err(error), _) => rows.refused.push(format!("frame: {error}")),
+            (_, Err(error)) => rows.refused.push(error),
+        }
+    }
+    rows
+}
+
+/// The rows of the signed table in `store`. Any failure leaves them out and says why, and the
+/// caller goes on with the rows built into this binary. No key means no file is trusted.
+pub fn signed_rows(store: &std::path::Path, key: Option<&str>) -> (TableRows, String) {
+    let Some(key) = key else {
+        return (TableRows::default(), "no table key in this build".to_owned());
+    };
+    match signed_table::read_store(store, key) {
+        Ok(None) => (TableRows::default(), "no signed table applied".to_owned()),
+        Err(error) => (TableRows::default(), format!("signed table refused: {error}")),
+        Ok(Some(table)) => {
+            let rows = table_rows(&table);
+            let note = format!(
+                "signed table {} with {} rows, {} refused {:?}",
+                table["sequence"],
+                rows.builds.len(),
+                rows.refused.len(),
+                rows.refused
+            );
+            (rows, note)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::builds;
+    use rivet_platform_windows::chrome_build;
+
+    fn frame() -> Value {
+        serde_json::to_value(chrome_build::builds(chrome_build::TABLE).remove(0)).unwrap()
+    }
+
+    /// A signed table holding one row: Chrome's, marked so it can be told from the compiled one.
+    fn signed_table_with_row(folder: &str) -> (std::path::PathBuf, String) {
+        let (private, public) = signed_table::generate_key().unwrap();
+        let mut row = builds::CHROME_156_74.to_row();
+        row["toolbar"]["title_weight"] = json!(777);
+        let payload = json!({"schema": 1, "sequence": 5, "rows": [{"frame": frame(), "build": row}]});
+        let file = signed_table::sign(&private, payload.to_string().as_bytes()).unwrap();
+        let root = std::env::temp_dir().join(format!("rivet-rows-{folder}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = signed_table::store_path(&root);
+        signed_table::install(&store, &public, &file).unwrap();
+        (store, public)
+    }
+
+    #[test]
+    fn nfr6_a_signed_row_applies_without_reinstalling() {
+        let (store, public) = signed_table_with_row("good");
+        let (rows, note) = signed_rows(&store, Some(&public));
+        assert_eq!(rows.builds.len(), 1, "{note}");
+        assert_eq!(rows.builds[0].toolbar.title_weight, 777);
+        assert_eq!(rows.frames.len(), 1);
+        assert!(note.starts_with("signed table 5"), "{note}");
+    }
+
+    #[test]
+    fn nfr6_a_table_whose_signature_fails_gives_no_rows() {
+        let (store, public) = signed_table_with_row("tampered");
+        let mut file = std::fs::read(&store).unwrap();
+        let at = file.len() - 3;
+        file[at] ^= 1;
+        std::fs::write(&store, &file).unwrap();
+        let (rows, note) = signed_rows(&store, Some(&public));
+        assert!(rows.builds.is_empty());
+        assert!(note.contains("refused"), "{note}");
+    }
+
+    #[test]
+    fn nfr6_a_build_without_a_key_trusts_no_file() {
+        let (store, _) = signed_table_with_row("nokey");
+        let (rows, note) = signed_rows(&store, None);
+        assert!(rows.builds.is_empty());
+        assert_eq!(note, "no table key in this build");
+    }
+
+    #[test]
+    fn nfr6_a_row_this_runtime_cannot_read_does_not_lose_the_others() {
+        let mut bad = builds::CHROME.to_row();
+        bad["toolbar"].as_object_mut().unwrap().remove("paint");
+        let table = json!({"rows": [
+            {"frame": frame(), "build": bad},
+            {"frame": frame(), "build": builds::CHROME_156_74.to_row()},
+        ]});
+        let rows = table_rows(&table);
+        assert_eq!(rows.builds.len(), 1);
+        assert_eq!(rows.refused, ["toolbar: paint is missing"]);
+    }
+
+    #[test]
+    fn nfr6_signed_rows_come_before_every_other_row() {
+        let (store, public) = signed_table_with_row("order");
+        let (rows, _) = signed_rows(&store, Some(&public));
+        let signed = rows.builds[0];
+        let order = builds::in_order(rows.builds, builds::compiled());
+        assert!(std::ptr::eq(order[0], signed));
+        assert_eq!(order.len(), builds::compiled().len() + 1);
+    }
+
+    #[test]
+    fn nfr6_the_checked_in_table_is_valid_and_every_row_reads() {
+        let table = signed_table::parse(builds::CHECKED_IN.as_bytes()).unwrap();
+        assert!(table_rows(&table).refused.is_empty());
+    }
 
     #[test]
     fn nfr6_every_compiled_row_survives_the_data_form() {
