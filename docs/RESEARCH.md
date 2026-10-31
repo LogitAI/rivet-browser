@@ -506,3 +506,11 @@
 - 캡션 글리프는 프레임이 그릴 때 고정색으로 덮어쓰므로 개발자 모드 창에서는 흰색으로 덮는다.
 - 줄무늬는 단추 영역 비주얼을 줄 전체로 넓혀 흰색 3.5% 띠를 겹쳐 그렸다. 브라우저의 줄 색 위에 얹어 목업의 두 색 줄무늬와 비슷하다.
 - Chrome `156.0.8078.74`의 `gfx::Font::Font`와 `FontList::FontList(const Font&)`는 `0x02F72AE0`과 `0x02F727D0`이고 Edge와 같은 앞 바이트를 가진다.
+
+- `gfx::PaintVectorIcon`은 `0x13417A0`이다. Whale의 함수와 본문을 비교해 찾았다. `CANVAS_DIMENSIONS`는 `.rdata`의 벡터 아이콘 머리에서 28로 확인했다.
+- `PaintButtonContents`는 슬롯 114다. 뒤로와 앞으로 `0x5f9e0`(빈 함수, 아이콘은 이미지 뷰 `0xe252008`), 새로 고침 `0x1bbb2b0`, 위치 아이콘 `0xe2708a8`의 `0x5f9e0`, 캡션 `0x1cd8580`. `Button::state_`는 `+0x3B4`, 새로 고침의 모드는 `+0x89C`이다.
+- 위치 아이콘은 자식 이미지를 한 번만 배치하므로 `SetBoundsRect` 후크로는 비워지지 않는다. Rivet은 칩을 배치할 때 자식 bounds를 직접 0으로 쓴다.
+- 주소 텍스트: `RenderText::ApplyColor` `0x2998C60`, `Textfield::SetFontList` `0x292CA50`(render text는 `+0x360`의 `+0x10`), `Font` `0x9D27510`, `FontList` `0x9D27410`. 주소 뷰의 `OnPaint`, `OnFocus`, `OnBlur`는 슬롯 89, 97, 98이다.
+- 칩의 글자: `Canvas::DrawStringRect` `0x9D18BF0`, `Canvas::GetStringWidth` `0xD5F170`. 둘 다 Chrome 150 함수와 명령어 해시가 같다. Samsung은 HTTP 페이지에 글자를 표시하지 않으므로 글자를 Rivet이 그린다.
+- 위치 표시줄 뷰 `+0x4E8`은 hover 애니메이션 값(0에서 1)이다. 살아 있는 창에서 hover 동안 올라가는 값으로 찾았다.
+- 최소화와 최대화 hover의 회색은 캡션 그리기 함수를 대체해도 남고 Rivet이 그린 색 위에 덮인다. 잉크 드롭으로 보이며 컨테이너 `0xe286c48`의 크기를 0으로 해도 사라지지 않는다. 종이 위 결과는 `(225,225,222)`이고 목업은 3.73%(약 `(242,241,238)`)이다. 새로 고침 hover도 `(231,230,228)`로 목업 6%(약 `(238,237,235)`)보다 진하다. `InkDropImpl::SetHovered`나 레이어 불투명도를 매핑해야 맞출 수 있다.
