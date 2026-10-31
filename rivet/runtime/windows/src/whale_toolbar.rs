@@ -516,14 +516,15 @@ fn field_hover_rect(width: i32, height: i32) -> [f32; 4] {
 }
 
 unsafe fn paint_field_hover(row: &WhaleRow, base: usize, canvas: *const c_void, width: i32, height: i32) {
-    // `cc::PaintFlags` keeps its colour first and its style bits at 0x18, as the browser's own painters set them.
+    // `cc::PaintFlags` keeps its colour first and its bits at 0x18: 1 is antialiasing, and 0xC0 the
+    // style, where 0 fills.
     let mut flags = [0u64; 9];
     let flags_at = flags.as_mut_ptr() as usize;
     let create: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + row.paint_flags_new);
     create(flags_at);
     *(flags_at as *mut [f32; 4]) = FIELD_HOVER;
     let style = (flags_at + 0x18) as *mut u32;
-    *style = (*style & 0xffff_ff3f) | 0x41;
+    *style = (*style & 0xffff_ff3f) | 1;
     let draw: unsafe extern "system" fn(*const c_void, *const [f32; 4], f32, usize) = std::mem::transmute(base + row.draw_round_rect);
     draw(canvas, &field_hover_rect(width, height), FIELD_HOVER_RADIUS, flags_at);
     let drop: unsafe extern "system" fn(usize) = std::mem::transmute(base + row.paint_flags_drop);
