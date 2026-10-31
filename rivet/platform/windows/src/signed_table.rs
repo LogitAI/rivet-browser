@@ -63,7 +63,9 @@ fn digest(payload: &[u8]) -> Result<[u8; 32], String> {
 /// Checks a signed file and returns its payload.
 pub fn open<'a>(public_key: &str, file: &'a [u8]) -> Result<&'a [u8], String> {
     let public = hex_bytes(public_key, "public key", 64)?;
-    let rest = file.strip_prefix(MAGIC).ok_or("the file is not a Rivet build table")?;
+    let rest = file
+        .strip_prefix(MAGIC)
+        .ok_or("the file is not a Rivet build table")?;
     if rest.len() < SIGNATURE {
         return Err("the file is too short to hold a signature".into());
     }
@@ -74,8 +76,8 @@ pub fn open<'a>(public_key: &str, file: &'a [u8]) -> Result<&'a [u8], String> {
 
 /// Reads a verified payload, refusing one this Rivet cannot read.
 pub fn parse(payload: &[u8]) -> Result<Value, String> {
-    let value: Value =
-        serde_json::from_slice(payload).map_err(|error| format!("the payload is not JSON: {error}"))?;
+    let value: Value = serde_json::from_slice(payload)
+        .map_err(|error| format!("the payload is not JSON: {error}"))?;
     match value["schema"].as_u64() {
         Some(SCHEMA) => {}
         schema => return Err(format!("the table has schema {schema:?}, not {SCHEMA}")),
@@ -89,7 +91,10 @@ pub fn parse(payload: &[u8]) -> Result<Value, String> {
 /// Where the applied table lives, below `%LOCALAPPDATA%`. It is not in the install folder, which
 /// the person's account cannot write. Anyone who can write here still cannot forge a signature.
 pub fn store_path(local_app_data: &Path) -> PathBuf {
-    local_app_data.join("Rivet").join("builds").join("table.bin")
+    local_app_data
+        .join("Rivet")
+        .join("builds")
+        .join("table.bin")
 }
 
 /// The store below the current user's `%LOCALAPPDATA%`.
@@ -117,13 +122,17 @@ pub fn install(store: &Path, public_key: &str, file: &[u8]) -> Result<u64, Strin
     if let Ok(Some(applied)) = read_store(store, public_key) {
         let applied = applied["sequence"].as_u64().unwrap_or_default();
         if sequence < applied {
-            return Err(format!("the file has sequence {sequence}, older than the applied {applied}"));
+            return Err(format!(
+                "the file has sequence {sequence}, older than the applied {applied}"
+            ));
         }
     }
     let folder = store.parent().ok_or("the store has no folder")?;
-    std::fs::create_dir_all(folder).map_err(|error| format!("could not create {}: {error}", folder.display()))?;
+    std::fs::create_dir_all(folder)
+        .map_err(|error| format!("could not create {}: {error}", folder.display()))?;
     let unfinished = store.with_extension(format!("{}.tmp", std::process::id()));
-    std::fs::write(&unfinished, file).map_err(|error| format!("could not write {}: {error}", unfinished.display()))?;
+    std::fs::write(&unfinished, file)
+        .map_err(|error| format!("could not write {}: {error}", unfinished.display()))?;
     std::fs::rename(&unfinished, store).map_err(|error| {
         let _ = std::fs::remove_file(&unfinished);
         format!("could not replace {}: {error}", store.display())
@@ -133,7 +142,13 @@ pub fn install(store: &Path, public_key: &str, file: &[u8]) -> Result<u64, Strin
 
 /// Downloads and applies the table when the applied one is older than `max_age`. It is limited by
 /// `timeout_ms`, and every failure leaves the applied table in place, so it never holds up a window.
-pub fn refresh(store: &Path, public_key: &str, url: &str, max_age: std::time::Duration, timeout_ms: i32) -> Result<Option<u64>, String> {
+pub fn refresh(
+    store: &Path,
+    public_key: &str,
+    url: &str,
+    max_age: std::time::Duration,
+    timeout_ms: i32,
+) -> Result<Option<u64>, String> {
     let fresh = std::fs::metadata(store)
         .and_then(|data| data.modified())
         .ok()
@@ -149,10 +164,11 @@ pub fn refresh(store: &Path, public_key: &str, url: &str, max_age: std::time::Du
 #[cfg(windows)]
 mod cng {
     use windows_sys::Win32::Security::Cryptography::{
-        BCryptDestroyKey, BCryptExportKey, BCryptFinalizeKeyPair, BCryptGenerateKeyPair, BCryptHash,
-        BCryptImportKeyPair, BCryptSignHash, BCryptVerifySignature, BCRYPT_ECCKEY_BLOB, BCRYPT_ECCPRIVATE_BLOB,
-        BCRYPT_ECCPUBLIC_BLOB, BCRYPT_ECDSA_P256_ALG_HANDLE, BCRYPT_ECDSA_PRIVATE_P256_MAGIC,
-        BCRYPT_ECDSA_PUBLIC_P256_MAGIC, BCRYPT_KEY_HANDLE, BCRYPT_SHA256_ALG_HANDLE,
+        BCryptDestroyKey, BCryptExportKey, BCryptFinalizeKeyPair, BCryptGenerateKeyPair,
+        BCryptHash, BCryptImportKeyPair, BCryptSignHash, BCryptVerifySignature, BCRYPT_ECCKEY_BLOB,
+        BCRYPT_ECCPRIVATE_BLOB, BCRYPT_ECCPUBLIC_BLOB, BCRYPT_ECDSA_P256_ALG_HANDLE,
+        BCRYPT_ECDSA_PRIVATE_P256_MAGIC, BCRYPT_ECDSA_PUBLIC_P256_MAGIC, BCRYPT_KEY_HANDLE,
+        BCRYPT_SHA256_ALG_HANDLE,
     };
 
     const HEADER: usize = std::mem::size_of::<BCRYPT_ECCKEY_BLOB>();
@@ -217,9 +233,15 @@ mod cng {
 
     pub fn generate() -> Result<Vec<u8>, String> {
         let mut key: BCRYPT_KEY_HANDLE = std::ptr::null_mut();
-        check(unsafe { BCryptGenerateKeyPair(BCRYPT_ECDSA_P256_ALG_HANDLE, &mut key, 256, 0) }, "making a key")?;
+        check(
+            unsafe { BCryptGenerateKeyPair(BCRYPT_ECDSA_P256_ALG_HANDLE, &mut key, 256, 0) },
+            "making a key",
+        )?;
         let key = Key(key);
-        check(unsafe { BCryptFinalizeKeyPair(key.0, 0) }, "finishing the key")?;
+        check(
+            unsafe { BCryptFinalizeKeyPair(key.0, 0) },
+            "finishing the key",
+        )?;
         let mut blob = vec![0u8; HEADER + 96];
         let mut written = 0u32;
         check(
@@ -240,7 +262,11 @@ mod cng {
     }
 
     pub fn sign(private: &[u8], hash: &[u8; 32]) -> Result<[u8; 64], String> {
-        let key = import(BCRYPT_ECDSA_PRIVATE_P256_MAGIC, BCRYPT_ECCPRIVATE_BLOB, private)?;
+        let key = import(
+            BCRYPT_ECDSA_PRIVATE_P256_MAGIC,
+            BCRYPT_ECCPRIVATE_BLOB,
+            private,
+        )?;
         let mut signature = [0u8; 64];
         let mut written = 0u32;
         check(
@@ -262,7 +288,11 @@ mod cng {
     }
 
     pub fn verify(public: &[u8], hash: &[u8; 32], signature: &[u8]) -> Result<(), String> {
-        let key = import(BCRYPT_ECDSA_PUBLIC_P256_MAGIC, BCRYPT_ECCPUBLIC_BLOB, public)?;
+        let key = import(
+            BCRYPT_ECDSA_PUBLIC_P256_MAGIC,
+            BCRYPT_ECCPUBLIC_BLOB,
+            public,
+        )?;
         let status = unsafe {
             BCryptVerifySignature(
                 key.0,
@@ -305,9 +335,10 @@ mod http {
     use core::ffi::c_void;
 
     use windows_sys::Win32::Networking::WinHttp::{
-        WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders, WinHttpReadData,
-        WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-        WINHTTP_FLAG_SECURE, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
+        WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders,
+        WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts,
+        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE, WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_QUERY_STATUS_CODE,
     };
 
     struct Handle(*mut c_void);
@@ -335,8 +366,12 @@ mod http {
     /// Fetches an https address. The signature is what is trusted, but a table has no reason to
     /// travel in the clear.
     pub fn get(url: &str, timeout_ms: i32) -> Result<Vec<u8>, String> {
-        let rest = url.strip_prefix("https://").ok_or("the table address must be https")?;
-        let (host, path) = rest.split_once('/').ok_or("the table address has no path")?;
+        let rest = url
+            .strip_prefix("https://")
+            .ok_or("the table address must be https")?;
+        let (host, path) = rest
+            .split_once('/')
+            .ok_or("the table address has no path")?;
         unsafe {
             let session = opened(
                 WinHttpOpen(
@@ -349,7 +384,10 @@ mod http {
                 "starting the download",
             )?;
             WinHttpSetTimeouts(session.0, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
-            let connection = opened(WinHttpConnect(session.0, wide(host).as_ptr(), 443, 0), "connecting")?;
+            let connection = opened(
+                WinHttpConnect(session.0, wide(host).as_ptr(), 443, 0),
+                "connecting",
+            )?;
             let request = opened(
                 WinHttpOpenRequest(
                     connection.0,
@@ -385,7 +423,13 @@ mod http {
             let mut chunk = vec![0u8; 256 * 1024];
             loop {
                 let mut read = 0u32;
-                if WinHttpReadData(request.0, chunk.as_mut_ptr().cast(), chunk.len() as u32, &mut read) == 0 {
+                if WinHttpReadData(
+                    request.0,
+                    chunk.as_mut_ptr().cast(),
+                    chunk.len() as u32,
+                    &mut read,
+                ) == 0
+                {
                     return Err("the download stopped".into());
                 }
                 if read == 0 {
@@ -433,7 +477,13 @@ mod tests {
     fn nfr6_a_changed_byte_anywhere_is_refused() {
         let (private, public) = generate_key().unwrap();
         let file = sign(&private, &payload(7)).unwrap();
-        for at in [0, MAGIC.len(), MAGIC.len() + 63, MAGIC.len() + SIGNATURE, file.len() - 1] {
+        for at in [
+            0,
+            MAGIC.len(),
+            MAGIC.len() + 63,
+            MAGIC.len() + SIGNATURE,
+            file.len() - 1,
+        ] {
             let mut changed = file.clone();
             changed[at] ^= 1;
             assert!(open(&public, &changed).is_err(), "byte {at}");
@@ -446,7 +496,10 @@ mod tests {
         let (private, _) = generate_key().unwrap();
         let (_, other) = generate_key().unwrap();
         let file = sign(&private, &payload(7)).unwrap();
-        assert_eq!(open(&other, &file).unwrap_err(), "the signature does not match");
+        assert_eq!(
+            open(&other, &file).unwrap_err(),
+            "the signature does not match"
+        );
     }
 
     #[test]
@@ -468,8 +521,15 @@ mod tests {
         let (private, public) = generate_key().unwrap();
         let store = store_path(&folder("older"));
         install(&store, &public, &sign(&private, &payload(7)).unwrap()).unwrap();
-        assert!(install(&store, &public, &sign(&private, &payload(6)).unwrap()).unwrap_err().contains("older"));
-        assert_eq!(install(&store, &public, &sign(&private, &payload(8)).unwrap()), Ok(8));
+        assert!(
+            install(&store, &public, &sign(&private, &payload(6)).unwrap())
+                .unwrap_err()
+                .contains("older")
+        );
+        assert_eq!(
+            install(&store, &public, &sign(&private, &payload(8)).unwrap()),
+            Ok(8)
+        );
     }
 
     #[test]
@@ -494,8 +554,15 @@ mod tests {
         let (private, public) = generate_key().unwrap();
         let store = store_path(&folder("refresh"));
         let hour = std::time::Duration::from_secs(3600);
-        assert!(refresh(&store, &public, "http://example.invalid/t", hour, 100).unwrap_err().contains("https"));
+        assert!(
+            refresh(&store, &public, "http://example.invalid/t", hour, 100)
+                .unwrap_err()
+                .contains("https")
+        );
         install(&store, &public, &sign(&private, &payload(7)).unwrap()).unwrap();
-        assert_eq!(refresh(&store, &public, "http://example.invalid/t", hour, 100), Ok(None));
+        assert_eq!(
+            refresh(&store, &public, "http://example.invalid/t", hour, 100),
+            Ok(None)
+        );
     }
 }

@@ -58,7 +58,9 @@ impl RowValue for bool {
         Value::Bool(*self)
     }
     fn from_row(value: &Value) -> RowResult<Self> {
-        value.as_bool().ok_or_else(|| format!("{value} is not a flag"))
+        value
+            .as_bool()
+            .ok_or_else(|| format!("{value} is not a flag"))
     }
 }
 
@@ -67,7 +69,9 @@ impl RowValue for &'static str {
         Value::String((*self).to_owned())
     }
     fn from_row(value: &Value) -> RowResult<Self> {
-        let text = value.as_str().ok_or_else(|| format!("{value} is not text"))?;
+        let text = value
+            .as_str()
+            .ok_or_else(|| format!("{value} is not text"))?;
         Ok(Box::leak(text.to_owned().into_boxed_str()))
     }
 }
@@ -77,7 +81,9 @@ impl RowValue for &'static [u8] {
         Value::String(self.iter().map(|byte| format!("{byte:02x}")).collect())
     }
     fn from_row(value: &Value) -> RowResult<Self> {
-        let text = value.as_str().ok_or_else(|| format!("{value} is not bytes"))?;
+        let text = value
+            .as_str()
+            .ok_or_else(|| format!("{value} is not bytes"))?;
         let bytes = rivet_platform_windows::chrome_build::hex(text)
             .ok_or_else(|| format!("{value} is not hex"))?;
         Ok(Box::leak(bytes.into_boxed_slice()))
@@ -89,8 +95,13 @@ impl<T: RowValue + 'static> RowValue for &'static [T] {
         Value::Array(self.iter().map(RowValue::to_row).collect())
     }
     fn from_row(value: &Value) -> RowResult<Self> {
-        let items = value.as_array().ok_or_else(|| format!("{value} is not a list"))?;
-        let items = items.iter().map(T::from_row).collect::<RowResult<Vec<_>>>()?;
+        let items = value
+            .as_array()
+            .ok_or_else(|| format!("{value} is not a list"))?;
+        let items = items
+            .iter()
+            .map(T::from_row)
+            .collect::<RowResult<Vec<_>>>()?;
         Ok(Box::leak(items.into_boxed_slice()))
     }
 }
@@ -113,9 +124,16 @@ impl<T: RowValue, const N: usize> RowValue for [T; N] {
         Value::Array(self.iter().map(RowValue::to_row).collect())
     }
     fn from_row(value: &Value) -> RowResult<Self> {
-        let items = value.as_array().ok_or_else(|| format!("{value} is not a list"))?;
-        let items = items.iter().map(T::from_row).collect::<RowResult<Vec<_>>>()?;
-        items.try_into().map_err(|_| format!("{value} does not hold {N} values"))
+        let items = value
+            .as_array()
+            .ok_or_else(|| format!("{value} is not a list"))?;
+        let items = items
+            .iter()
+            .map(T::from_row)
+            .collect::<RowResult<Vec<_>>>()?;
+        items
+            .try_into()
+            .map_err(|_| format!("{value} does not hold {N} values"))
     }
 }
 
@@ -140,7 +158,9 @@ row_tuple!(A 0, B 1, C 2);
 
 /// Reads one named field of a row object, naming it in any error.
 pub fn field<T: RowValue>(object: &Map<String, Value>, name: &str) -> RowResult<T> {
-    let value = object.get(name).ok_or_else(|| format!("{name} is missing"))?;
+    let value = object
+        .get(name)
+        .ok_or_else(|| format!("{name} is missing"))?;
     T::from_row(value).map_err(|error| format!("{name}: {error}"))
 }
 
@@ -210,11 +230,17 @@ pub fn table_rows(table: &Value) -> TableRows {
 /// caller goes on with the rows built into this binary. No key means no file is trusted.
 pub fn signed_rows(store: &std::path::Path, key: Option<&str>) -> (TableRows, String) {
     let Some(key) = key else {
-        return (TableRows::default(), "no table key in this build".to_owned());
+        return (
+            TableRows::default(),
+            "no table key in this build".to_owned(),
+        );
     };
     match signed_table::read_store(store, key) {
         Ok(None) => (TableRows::default(), "no signed table applied".to_owned()),
-        Err(error) => (TableRows::default(), format!("signed table refused: {error}")),
+        Err(error) => (
+            TableRows::default(),
+            format!("signed table refused: {error}"),
+        ),
         Ok(Some(table)) => {
             let rows = table_rows(&table);
             let note = format!(
@@ -244,7 +270,8 @@ mod tests {
         let (private, public) = signed_table::generate_key().unwrap();
         let mut row = builds::CHROME_156_74.to_row();
         row["toolbar"]["title_weight"] = json!(777);
-        let payload = json!({"schema": 1, "sequence": 5, "rows": [{"frame": frame(), "build": row}]});
+        let payload =
+            json!({"schema": 1, "sequence": 5, "rows": [{"frame": frame(), "build": row}]});
         let file = signed_table::sign(&private, payload.to_string().as_bytes()).unwrap();
         let root = std::env::temp_dir().join(format!("rivet-rows-{folder}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -316,15 +343,17 @@ mod tests {
     fn nfr6_every_compiled_row_survives_the_data_form() {
         for build in builds::compiled() {
             let row = build.to_row();
-            let read = builds::Build::from_row(&row).unwrap_or_else(|error| {
-                panic!("{} {:?}: {error}", build.browser, build.version)
-            });
+            let read = builds::Build::from_row(&row)
+                .unwrap_or_else(|error| panic!("{} {:?}: {error}", build.browser, build.version));
             assert_eq!(read.to_row(), row, "{} {:?}", build.browser, build.version);
             assert_eq!(read.version, build.version);
             assert_eq!(read.toolbar.layout_constant, build.toolbar.layout_constant);
             assert_eq!(read.toolbar.overrides, build.toolbar.overrides);
             assert_eq!(read.toolbar.colours, build.toolbar.colours);
-            assert_eq!(read.toolbar.layout_constant_prologue, build.toolbar.layout_constant_prologue);
+            assert_eq!(
+                read.toolbar.layout_constant_prologue,
+                build.toolbar.layout_constant_prologue
+            );
         }
     }
 
@@ -350,7 +379,12 @@ mod tests {
     #[test]
     fn nfr6_written_values_tell_addresses_from_colours_and_bytes() {
         let row = builds::CHROME.to_row();
-        assert_eq!(row["toolbar"]["layout_constant"].as_str().map(|text| &text[..2]), Some("0x"));
+        assert_eq!(
+            row["toolbar"]["layout_constant"]
+                .as_str()
+                .map(|text| &text[..2]),
+            Some("0x")
+        );
         assert!(row["toolbar"]["colours"][0][1].is_number());
         let bytes = row["toolbar"]["layout_constant_prologue"].as_str().unwrap();
         assert!(!bytes.starts_with("0x") && bytes.len() % 2 == 0);
@@ -362,7 +396,8 @@ mod tests {
         assert!(builds::location_bar_minimum(&builds::CHROME_156_74).is_some());
         assert!(builds::location_bar_minimum(&builds::BRAVE_63).is_some());
         assert!(builds::location_bar_minimum(&builds::CHROME).is_none());
-        let read = builds::Build::from_row(&builds::BRAVE_63.to_row()).unwrap_or_else(|error| panic!("{error}"));
+        let read = builds::Build::from_row(&builds::BRAVE_63.to_row())
+            .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(read.location_bar.map(|bar| bar.function), Some(0x038E_1210));
     }
 }

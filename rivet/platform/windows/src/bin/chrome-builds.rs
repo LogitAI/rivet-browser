@@ -5,11 +5,15 @@
 //! resolves the layout hook's addresses with DbgHelp, checks them against the module file and
 //! updates the table. The frame class is `BrowserFrameViewWin` unless the browser builds its
 //! windows from a subclass, as Microsoft Edge does with `EdgeBrowserFrameViewWin`.
+//! `chrome-builds port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json>`
+//! makes a whole row for a new build from the row of a prior build, and exits 3 when the row needs
+//! a person's review.
 
 use std::path::Path;
 use std::process::ExitCode;
 
 use rivet_platform_windows::chrome_build::{self, ChromeBuild, PeFile};
+use rivet_platform_windows::row_port::{self, NewBuild};
 
 /// How many bytes of `views::HWNDForView` the runtime compares before patching.
 const PROLOGUE: usize = 15;
@@ -29,7 +33,25 @@ fn main() -> ExitCode {
         ["extract", module, pdbs, browser, version, table, class] => {
             extract(Path::new(module), Path::new(pdbs), browser, version, Path::new(table), class)
         }
-        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class]".into()),
+        ["port", prior, old_pdb, new_pdb, module, version, row, report] => {
+            return match port(
+                Path::new(prior),
+                Path::new(old_pdb),
+                Path::new(new_pdb),
+                Path::new(module),
+                version,
+                Path::new(row),
+                Path::new(report),
+            ) {
+                Ok(true) => ExitCode::SUCCESS,
+                Ok(false) => ExitCode::from(3),
+                Err(error) => {
+                    eprintln!("chrome-builds: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json>".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -42,6 +64,73 @@ fn main() -> ExitCode {
 
 fn read(path: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|error| format!("could not read {}: {error}", path.display()))
+}
+
+fn port(
+    prior: &Path,
+    old_pdb: &Path,
+    new_pdb: &Path,
+    module: &Path,
+    version: &str,
+    row_path: &Path,
+    report_path: &Path,
+) -> Result<bool, String> {
+    let prior: serde_json::Value =
+        serde_json::from_slice(&read(prior)?).map_err(|error| format!("the prior row is not JSON: {error}"))?;
+    let bytes = read(module)?;
+    let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
+    let mut old = Vec::new();
+    symbols::publics(old_pdb, &mut |address, name| old.push((address, name.to_owned())))?;
+    old.sort();
+    // The frame entry keeps plain numbers.
+    let mut targets = row_port::addresses_of(&prior["build"]);
+    for key in ["frame_view_vtable", "client_view_bounds", "hwnd_for_view"] {
+        targets.extend(prior["frame"][key].as_u64().map(|value| value as u32));
+    }
+    let named = row_port::name_addresses(&targets, &old);
+    let wanted = row_port::wanted_names(&named);
+    drop(old);
+    let mut new = std::collections::HashMap::<String, Vec<u32>>::new();
+    symbols::publics(new_pdb, &mut |address, name| {
+        let name = row_port::stable_name(name);
+        if wanted.contains(name) {
+            new.entry(name.to_owned()).or_default().push(address);
+        }
+    })?;
+    let unnamed = row_port::unnamed_code(&prior, &named, &pe);
+    let names = symbols::private_names(old_pdb, &unnamed)?;
+    let places = symbols::private_places(new_pdb, &names.values().cloned().collect::<Vec<_>>())?;
+    let private = names
+        .iter()
+        .filter_map(|(address, name)| match places.get(name).map(Vec::as_slice) {
+            Some([place]) => Some((*address, *place)),
+            _ => None,
+        })
+        .collect();
+    let (row, report) = row_port::port_row(&prior, &named, &NewBuild { version, pe: &pe, symbols: &new, private: &private });
+    let text = |value: &dyn erased::Json| value.pretty();
+    std::fs::write(row_path, text(&row)).map_err(|error| error.to_string())?;
+    std::fs::write(report_path, text(&report)).map_err(|error| error.to_string())?;
+    println!(
+        "{} {}: {} of {} addresses, {} for review",
+        report.browser,
+        report.version,
+        report.mapped,
+        report.addresses,
+        report.review.len()
+    );
+    Ok(report.review.is_empty())
+}
+
+mod erased {
+    pub trait Json {
+        fn pretty(&self) -> String;
+    }
+    impl<T: serde::Serialize> Json for T {
+        fn pretty(&self) -> String {
+            serde_json::to_string_pretty(self).unwrap_or_default() + "\n"
+        }
+    }
 }
 
 fn pdb_key(module: &Path) -> Result<(), String> {
@@ -112,11 +201,12 @@ fn extract(
 
 #[cfg(windows)]
 mod symbols {
+    use std::collections::{BTreeMap, HashMap};
     use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
 
     use windows_sys::Win32::System::Diagnostics::Debug::{
-        SymCleanup, SymEnumSymbolsW, SymFromNameW, SymInitializeW, SymLoadModuleExW, SymSetOptions,
+        SymCleanup, SymEnumSymbolsW, SymFromAddrW, SymFromNameW, SymInitializeW, SymLoadModuleExW, SymSetOptions,
         SYMBOL_INFOW, SYMOPT_UNDNAME,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
@@ -128,6 +218,144 @@ mod symbols {
 
     fn wide(path: &Path) -> Vec<u16> {
         path.as_os_str().encode_wide().chain(Some(0)).collect()
+    }
+
+    /// Where a PDB opened on its own is placed: wide enough for every browser's module.
+    const IMAGE_SIZE: u32 = 0x2000_0000;
+    /// Reads only the linker's public names, which are decorated and stable between builds.
+    const SYMOPT_PUBLICS_ONLY: u32 = 0x4000;
+
+    /// Visits every public symbol of a PDB, with its address in the module and its decorated name.
+    pub fn publics(pdb: &Path, visit: &mut dyn FnMut(u32, &str)) -> Result<(), String> {
+        unsafe extern "system" fn each(
+            info: *const SYMBOL_INFOW,
+            _size: u32,
+            context: *const core::ffi::c_void,
+        ) -> i32 {
+            let info = &*info;
+            let visit = &mut *(context as *mut &mut dyn FnMut(u32, &str));
+            let name = std::slice::from_raw_parts(info.Name.as_ptr(), info.NameLen as usize);
+            if let Ok(address) = u32::try_from(info.Address - BASE) {
+                visit(address, &String::from_utf16_lossy(name));
+            }
+            1
+        }
+        unsafe {
+            SymSetOptions(SYMOPT_LOAD_ANYTHING | SYMOPT_PUBLICS_ONLY);
+            if SymInitializeW(GetCurrentProcess(), std::ptr::null(), 0) == 0 {
+                return Err("DbgHelp could not start".into());
+            }
+            let base = SymLoadModuleExW(
+                GetCurrentProcess(),
+                std::ptr::null_mut(),
+                wide(pdb).as_ptr(),
+                std::ptr::null(),
+                BASE,
+                IMAGE_SIZE,
+                std::ptr::null(),
+                0,
+            );
+            if base == 0 {
+                SymCleanup(GetCurrentProcess());
+                return Err(format!("DbgHelp could not load {}", pdb.display()));
+            }
+            let mask: Vec<u16> = "*".encode_utf16().chain(Some(0)).collect();
+            let mut visit = visit;
+            let done = SymEnumSymbolsW(
+                GetCurrentProcess(),
+                BASE,
+                mask.as_ptr(),
+                Some(each),
+                (&raw mut visit).cast(),
+            );
+            SymCleanup(GetCurrentProcess());
+            if done == 0 {
+                return Err(format!("DbgHelp could not list {}", pdb.display()));
+            }
+        }
+        Ok(())
+    }
+
+    fn load_all(pdb: &Path) -> Result<(), String> {
+        unsafe {
+            SymSetOptions(SYMOPT_LOAD_ANYTHING | SYMOPT_UNDNAME);
+            if SymInitializeW(GetCurrentProcess(), std::ptr::null(), 0) == 0 {
+                return Err("DbgHelp could not start".into());
+            }
+            let base = SymLoadModuleExW(
+                GetCurrentProcess(),
+                std::ptr::null_mut(),
+                wide(pdb).as_ptr(),
+                std::ptr::null(),
+                BASE,
+                IMAGE_SIZE,
+                std::ptr::null(),
+                0,
+            );
+            if base == 0 {
+                SymCleanup(GetCurrentProcess());
+                return Err(format!("DbgHelp could not load {}", pdb.display()));
+            }
+        }
+        Ok(())
+    }
+
+    /// The function that starts at each address, from the PDB's private symbols.
+    pub fn private_names(pdb: &Path, addresses: &[u32]) -> Result<BTreeMap<u32, String>, String> {
+        load_all(pdb)?;
+        let mut names = BTreeMap::new();
+        for address in addresses {
+            unsafe {
+                // SYMBOL_INFOW ends in the name, whose room the caller provides.
+                let mut storage = vec![0u64; (std::mem::size_of::<SYMBOL_INFOW>() + 2048) / 8];
+                let info = storage.as_mut_ptr().cast::<SYMBOL_INFOW>();
+                (*info).SizeOfStruct = std::mem::size_of::<SYMBOL_INFOW>() as u32;
+                (*info).MaxNameLen = 1000;
+                let mut distance = 0u64;
+                if SymFromAddrW(GetCurrentProcess(), BASE + u64::from(*address), &mut distance, info) != 0 && distance == 0 {
+                    let name = std::slice::from_raw_parts((*info).Name.as_ptr(), (*info).NameLen as usize);
+                    names.insert(*address, String::from_utf16_lossy(name).trim_end_matches(['\0', ' ']).to_owned());
+                }
+            }
+        }
+        unsafe { SymCleanup(GetCurrentProcess()) };
+        Ok(names)
+    }
+
+    /// Where each function name lies, from the PDB's private symbols.
+    pub fn private_places(pdb: &Path, names: &[String]) -> Result<HashMap<String, Vec<u32>>, String> {
+        unsafe extern "system" fn each(
+            info: *const SYMBOL_INFOW,
+            _size: u32,
+            context: *const core::ffi::c_void,
+        ) -> i32 {
+            let info = &*info;
+            let found = &mut *(context as *mut Vec<(String, u32)>);
+            let name = std::slice::from_raw_parts(info.Name.as_ptr(), info.NameLen as usize);
+            if let Ok(address) = u32::try_from(info.Address - BASE) {
+                found.push((String::from_utf16_lossy(name), address));
+            }
+            1
+        }
+        load_all(pdb)?;
+        let mut places: HashMap<String, Vec<u32>> = HashMap::new();
+        for name in names {
+            let mask: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+            let mut found: Vec<(String, u32)> = Vec::new();
+            unsafe {
+                SymEnumSymbolsW(GetCurrentProcess(), BASE, mask.as_ptr(), Some(each), (&raw mut found).cast());
+            }
+            let mut exact: Vec<u32> = found
+                .into_iter()
+                .filter(|(other, _)| other.trim_end_matches(['\0', ' ']) == name)
+                .map(|(_, place)| place)
+                .collect();
+            exact.sort_unstable();
+            exact.dedup();
+            places.insert(name.clone(), exact);
+        }
+        unsafe { SymCleanup(GetCurrentProcess()) };
+        Ok(places)
     }
 
     pub struct Session;
@@ -218,6 +446,16 @@ mod symbols {
 #[cfg(not(windows))]
 mod symbols {
     use std::path::Path;
+
+    pub fn publics(_pdb: &Path, _visit: &mut dyn FnMut(u32, &str)) -> Result<(), String> {
+        Err("symbol extraction needs Windows DbgHelp".into())
+    }
+    pub fn private_names(_pdb: &Path, _addresses: &[u32]) -> Result<std::collections::BTreeMap<u32, String>, String> {
+        Err("symbol extraction needs Windows DbgHelp".into())
+    }
+    pub fn private_places(_pdb: &Path, _names: &[String]) -> Result<std::collections::HashMap<String, Vec<u32>>, String> {
+        Err("symbol extraction needs Windows DbgHelp".into())
+    }
 
     pub struct Session;
 

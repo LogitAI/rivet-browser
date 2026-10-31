@@ -66,6 +66,7 @@ pub struct PeFile<'a> {
     bytes: &'a [u8],
     image_base: u64,
     sections: Vec<(u32, u32, u32)>,
+    code_sections: Vec<(u32, u32)>,
     debug_directory: (u32, u32),
 }
 
@@ -107,6 +108,17 @@ impl<'a> PeFile<'a> {
             u32_at(bytes, optional + 116 + 48)?,
         );
         let table = optional + optional_size;
+        // IMAGE_SCN_MEM_EXECUTE.
+        let code_sections = (0..sections)
+            .map(|index| {
+                let header = table + 40 * index;
+                let executable = u32_at(bytes, header + 36)? & 0x2000_0000 != 0;
+                Some(executable.then_some((u32_at(bytes, header + 12)?, u32_at(bytes, header + 8)?)))
+            })
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         let sections = (0..sections)
             .map(|index| {
                 let header = table + 40 * index;
@@ -121,6 +133,7 @@ impl<'a> PeFile<'a> {
             bytes,
             image_base,
             sections,
+            code_sections,
             debug_directory,
         })
     }
@@ -130,6 +143,11 @@ impl<'a> PeFile<'a> {
             .iter()
             .find(|(address, size, _)| (*address..address.saturating_add(*size)).contains(&rva))
             .map(|(address, _, raw)| (rva - address + raw) as usize)
+    }
+
+    /// Whether an RVA lies in a section of instructions.
+    pub fn is_code(&self, rva: u32) -> bool {
+        self.code_sections.iter().any(|(address, size)| (*address..address.saturating_add(*size)).contains(&rva))
     }
 
     /// Reads bytes at an RVA.

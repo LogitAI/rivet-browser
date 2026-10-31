@@ -225,6 +225,27 @@ fn title_row_hit(x: f32, y: f32, width: f32, resizing: bool, leading: f32, zoome
     }
 }
 
+/// Every row built into this binary, as `{frame, build}`, for the row generator.
+#[cfg(windows)]
+pub fn compiled_rows() -> Vec<serde_json::Value> {
+    use row_data::RowValue;
+    let frames = rivet_platform_windows::chrome_build::builds(rivet_platform_windows::chrome_build::TABLE);
+    builds::compiled()
+        .iter()
+        .map(|build| {
+            let version = build.version.map(|part| part.to_string()).join(".");
+            let frame = frames.iter().find(|frame| frame.module == build.module && frame.version == version);
+            serde_json::json!({ "frame": frame, "build": build.to_row() })
+        })
+        .collect()
+}
+
+/// Whether this runtime can read every row of a table: the reasons when it cannot.
+#[cfg(windows)]
+pub fn refused_rows(table: &serde_json::Value) -> Vec<String> {
+    row_data::table_rows(table).refused
+}
+
 /// Starts Rivet after the DLL has loaded and the Windows loader lock has been released.
 ///
 /// The launcher supplies the exact browser window discovered for its session. A zero handle is
