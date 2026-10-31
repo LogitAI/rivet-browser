@@ -20,6 +20,9 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 /// 46 DIPs each, and the panel's gap before them.
 pub const RESERVE: i32 = 3 * 46 + PANEL_GAP;
 
+/// The row's last DIP is its hairline, and the buttons stop above it.
+const HAIRLINE_ROW: i32 = 1;
+
 fn row() -> Option<&'static WhaleRow> {
     crate::builds::get().whale_row.as_ref()
 }
@@ -67,7 +70,7 @@ unsafe extern "system" fn frame_layout(view: *mut c_void) {
         let class = (*(child as *const usize)).wrapping_sub(image.base);
         let bounds = *((child + row.bounds_offset) as *const [i32; 4]);
         let wanted = if class == row.caption {
-            caption_rect(bounds, height)
+            caption_rect(bounds, height - HAIRLINE_ROW)
         } else if class == row.tab_search && bounds[2] > 0 {
             Some([0, 0, 0, 0])
         } else {
@@ -192,6 +195,8 @@ mod tests {
         // Chrome's container ends one gap before the window edge and reaches the 44 DIP row from the gap.
         assert_eq!(caption_rect([1187, 0, 46, 32], 44), Some([1179, 8, 46, 44]));
         assert_eq!(caption_rect([1141, 0, 46, 32], 44), Some([1133, 8, 46, 44]));
+        // The line under the row stays below the buttons' hover.
+        assert_eq!(HAIRLINE_ROW, 1);
         // A button with no room keeps none, and one already in place is not set again.
         assert_eq!(caption_rect([0, 0, 0, 0], 44), None);
         assert_eq!(caption_rect([1179, 8, 46, 44], 44), None);

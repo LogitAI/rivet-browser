@@ -378,9 +378,9 @@ pub struct WhaleRow {
     pub page_corner: usize,
     pub page_corner_paint: usize,
     /// The address field, its lock chip, its text view and the view holding the address and title Whale
-    /// shows at rest paint the pill, the white circle and boxes of the pill's colour through
+    /// shows at rest paint the pill, the white circle and boxes of the pill's colour, and the row's container is white, through
     /// `views::View::OnPaintBackground`, which this slot holds.
-    pub bare: [usize; 4],
+    pub bare: [usize; 5],
     pub paint_background_slot: usize,
     pub paint_background: usize,
     /// `views::View::SchedulePaint`. A view keeps its recorded paint until it is asked again.
@@ -395,6 +395,18 @@ pub struct WhaleRow {
     pub layer_set_color: usize,
     pub layer_set_color_prologue: &'static [u8],
     pub layer_offset: usize,
+    /// The button showing the address at rest, inside `bare[3]`, which knows the hover and would paint
+    /// its own, and what its `OnPaintBackground` slot holds.
+    pub address_button: usize,
+    pub address_button_background: usize,
+    /// `gfx::Canvas::DrawRoundRect(this, rect, radius, flags)` and the constructor and destructor of
+    /// `cc::PaintFlags`, which draw the address field's hover.
+    pub draw_round_rect: usize,
+    pub draw_round_rect_prologue: &'static [u8],
+    pub paint_flags_new: usize,
+    pub paint_flags_new_prologue: &'static [u8],
+    pub paint_flags_drop: usize,
+    pub paint_flags_drop_prologue: &'static [u8],
 }
 
 /// Values for `edge_page.rs`: Edge insets its page and paints a border around it, which would
@@ -3367,7 +3379,7 @@ pub static WHALE: Build = Build {
         reload_mode_offset: 0x8DC,
         page_corner: 0xfb81360,
         page_corner_paint: 0x0E68_CCE0,
-        bare: [0xfabf960, 0xfabfca0, 0xfb78080, 0xfb23de0],
+        bare: [0xfabf960, 0xfabfca0, 0xfb78080, 0xfb23de0, 0xfaac4e0],
         paint_background_slot: 90,
         paint_background: 0x08F8_4930,
         schedule_paint: 0x08F7_E530,
@@ -3378,6 +3390,14 @@ pub static WHALE: Build = Build {
         layer_set_color: 0x0907_5850,
         layer_set_color_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x89, 0xD6],
         layer_offset: 0x20,
+        address_button: 0xfb23660,
+        address_button_background: 0x0E3B_C6C0,
+        draw_round_rect: 0x09BC_4FD0,
+        draw_round_rect_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x50, 0x0F, 0x29, 0x74, 0x24, 0x40],
+        paint_flags_new: 0x03AC_5D60,
+        paint_flags_new_prologue: &[0x48, 0x89, 0xC8, 0x0F, 0x10, 0x05],
+        paint_flags_drop: 0x031B_E260,
+        paint_flags_drop_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE],
     }),
     side_panel: UNCHECKED_SIDEPANEL,
     layout: Layout {
@@ -5162,6 +5182,7 @@ mod tests {
         assert!(hidden.classes.iter().all(|(vtable, _)| *vtable != row.page_corner));
         // The field itself is one of the views that lose their background.
         assert_eq!(row.bare[0], row.field);
+        assert_eq!(row.bare[4], row.container);
         assert_eq!(row.paint_background_slot, 90);
         assert!(!row.bare.contains(&row.address_fade));
         assert_eq!(row.layer_offset, 0x20);

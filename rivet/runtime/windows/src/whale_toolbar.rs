@@ -38,8 +38,12 @@ const FIELD_HEIGHT: i32 = 34;
 const ROW_EXTRA: i32 = 1;
 /// The field and the buttons sit one DIP below the middle of what the container leaves, as Chrome's do.
 const CONTENT_SHIFT: i32 = 1;
-/// The row's colour behind the address, which Whale paints white.
-const ROW_PAPER: u32 = 0xffff_ffff;
+/// The row's colour in the design, also behind the address where its end fades.
+const ROW_PAPER: u32 = 0xfffb_faf7;
+/// The address field's hover in the design: rgba(31, 32, 36, .05), 28 DIPs tall with an 8 DIP radius.
+const FIELD_HOVER: [f32; 4] = [31.0 / 255.0, 32.0 / 255.0, 36.0 / 255.0, 0.05];
+const FIELD_HOVER_HEIGHT: i32 = 28;
+const FIELD_HOVER_RADIUS: f32 = 8.0;
 /// The row's hairline in the design: rgba(31, 32, 36, .08).
 const HAIRLINE: u32 = 0x141f_2024;
 
@@ -257,7 +261,7 @@ unsafe fn invalidate(view: usize, base: usize, depth: usize, views: &HiddenViews
         if *(view as *const usize) == base + row.separator {
             colour_separator(row, view);
         }
-        if row.bare.iter().chain([&row.address_fade]).any(|vtable| *(view as *const usize) == base + vtable) {
+        if row.bare.iter().chain([&row.address_fade, &row.toolbar]).any(|vtable| *(view as *const usize) == base + vtable) {
             let schedule: unsafe extern "system" fn(usize) = std::mem::transmute(base + row.schedule_paint);
             schedule(view);
         }
@@ -473,7 +477,73 @@ unsafe fn install_paint(row: &WhaleRow, base: usize) -> Result<(), String> {
 /// A Rivet window's address has no box at rest.
 unsafe extern "system" fn bare_background(view: *mut c_void, canvas: *const c_void) {
     let Some(row) = row() else { return };
+    let Some(image) = image::recorded() else { return };
+    if (*(view as *const usize)).wrapping_sub(image.base) == row.field && in_rivet_window(view) {
+        if address_hovered(row, view as usize, image.base, 0) {
+            let bounds = *((view as usize + row.bounds_offset) as *const [i32; 4]);
+            paint_field_hover(row, image.base, canvas, bounds[2], bounds[3]);
+        }
+        return;
+    }
     painted(view, canvas, row.paint_background_slot)
+}
+
+/// Whether the mouse is on the button showing the address, a few views below the field. The field
+/// repaints with it: a view that repaints also marks the views up to its layer.
+unsafe fn address_hovered(row: &WhaleRow, view: usize, base: usize, depth: usize) -> bool {
+    if view < 0x10000 || depth > 3 {
+        return false;
+    }
+    if (*(view as *const usize)).wrapping_sub(base) == row.address_button {
+        return button_hovers(*((view + row.button_state_offset) as *const i32));
+    }
+    let begin = *((view + row.children_offset) as *const usize);
+    let end = *((view + row.children_offset + 8) as *const usize);
+    if begin < 0x10000 || end < begin || (end - begin) / 8 > 64 {
+        return false;
+    }
+    (0..(end - begin) / 8).any(|index| address_hovered(row, *((begin + index * 8) as *const usize), base, depth + 1))
+}
+
+/// `views::Button::ButtonState`: hovered and pressed show the hover.
+fn button_hovers(state: i32) -> bool {
+    state == 1 || state == 2
+}
+
+/// Where the hover sits in a field of this size: x, y, width and height, centred in its height.
+fn field_hover_rect(width: i32, height: i32) -> [f32; 4] {
+    [0.0, ((height - FIELD_HOVER_HEIGHT) / 2) as f32, width as f32, FIELD_HOVER_HEIGHT as f32]
+}
+
+unsafe fn paint_field_hover(row: &WhaleRow, base: usize, canvas: *const c_void, width: i32, height: i32) {
+    // `cc::PaintFlags` keeps its colour first and its style bits at 0x18, as the browser's own painters set them.
+    let mut flags = [0u64; 9];
+    let flags_at = flags.as_mut_ptr() as usize;
+    let create: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + row.paint_flags_new);
+    create(flags_at);
+    *(flags_at as *mut [f32; 4]) = FIELD_HOVER;
+    let style = (flags_at + 0x18) as *mut u32;
+    *style = (*style & 0xffff_ff3f) | 0x41;
+    let draw: unsafe extern "system" fn(*const c_void, *const [f32; 4], f32, usize) = std::mem::transmute(base + row.draw_round_rect);
+    draw(canvas, &field_hover_rect(width, height), FIELD_HOVER_RADIUS, flags_at);
+    let drop: unsafe extern "system" fn(usize) = std::mem::transmute(base + row.paint_flags_drop);
+    drop(flags_at);
+}
+
+/// The row has the design's paper behind everything Whale draws in it.
+unsafe extern "system" fn toolbar_background(view: *mut c_void, canvas: *mut c_void) {
+    let Some(row) = row() else { return };
+    let Some(image) = image::recorded() else { return };
+    if in_rivet_window(view) {
+        let fill: unsafe extern "system" fn(*mut c_void, u32) = std::mem::transmute(image.base + crate::builds::get().layout.draw_color);
+        fill(canvas, ROW_PAPER);
+        return;
+    }
+    let table = *(view as *const usize);
+    if let Some(function) = held(table, row.paint_background_slot) {
+        let run: unsafe extern "system" fn(*mut c_void, *mut c_void) = std::mem::transmute(function);
+        run(view, canvas);
+    }
 }
 
 /// The separator's line in the design's colour.
@@ -511,6 +581,21 @@ unsafe fn install_page(row: &WhaleRow, base: usize) -> Result<(), String> {
     if !image.points_to(row.address_fade + slot * 8, row.address_fade_paint) {
         return Err(format!("{:#x} does not hold the recorded fade paint", row.address_fade));
     }
+    if !image.points_to(row.address_button + row.paint_background_slot * 8, row.address_button_background) {
+        return Err(format!("{:#x} does not hold the recorded background paint", row.address_button));
+    }
+    if !image.points_to(row.toolbar + row.paint_background_slot * 8, row.paint_background) {
+        return Err(format!("{:#x} does not hold the recorded background paint", row.toolbar));
+    }
+    for (rva, prologue) in [
+        (row.draw_round_rect, row.draw_round_rect_prologue),
+        (row.paint_flags_new, row.paint_flags_new_prologue),
+        (row.paint_flags_drop, row.paint_flags_drop_prologue),
+    ] {
+        if !image.has(rva, prologue) {
+            return Err(format!("{rva:#x} does not hold the recorded field hover function"));
+        }
+    }
     if !image.has(row.schedule_paint, row.schedule_paint_prologue) {
         return Err("this browser build has no recorded schedule paint".into());
     }
@@ -524,6 +609,10 @@ unsafe fn install_page(row: &WhaleRow, base: usize) -> Result<(), String> {
         crate::chrome_toolbar::replace_slot((base + row.page_corner + slot * 8) as *mut usize, paint as *const () as usize)?;
         HELD.lock().unwrap_or_else(|error| error.into_inner()).push((base + row.address_fade, slot, base + row.address_fade_paint));
         crate::chrome_toolbar::replace_slot((base + row.address_fade + slot * 8) as *mut usize, address_fade as *const () as usize)?;
+        HELD.lock().unwrap_or_else(|error| error.into_inner()).push((base + row.address_button, row.paint_background_slot, base + row.address_button_background));
+        crate::chrome_toolbar::replace_slot((base + row.address_button + row.paint_background_slot * 8) as *mut usize, bare_background as *const () as usize)?;
+        HELD.lock().unwrap_or_else(|error| error.into_inner()).push((base + row.toolbar, row.paint_background_slot, base + row.paint_background));
+        crate::chrome_toolbar::replace_slot((base + row.toolbar + row.paint_background_slot * 8) as *mut usize, toolbar_background as *const () as usize)?;
         for vtable in row.bare {
             HELD.lock().unwrap_or_else(|error| error.into_inner()).push((base + vtable, row.paint_background_slot, base + row.paint_background));
             crate::chrome_toolbar::replace_slot((base + vtable + row.paint_background_slot * 8) as *mut usize, bare_background as *const () as usize)?;
@@ -594,6 +683,15 @@ mod tests {
         // lower than centred, and the row Chrome has is one DIP taller than Whale's.
         assert!(FIELD_HEIGHT + CONTENT_SHIFT <= 42 && BUTTON <= FIELD_HEIGHT);
         assert_eq!((ROW_EXTRA, CONTENT_SHIFT), (1, 1));
+    }
+
+    #[test]
+    fn fr12_whale_row_paper_and_field_hover_are_the_designs() {
+        assert_eq!(ROW_PAPER & 0xff_ffff, crate::ground::PAPER);
+        assert_eq!(ROW_PAPER >> 24, 0xff);
+        assert_eq!(field_hover_rect(239, 34), [0.0, 3.0, 239.0, 28.0]);
+        assert_eq!(FIELD_HOVER_RADIUS, 8.0);
+        assert!(button_hovers(1) && button_hovers(2) && !button_hovers(0) && !button_hovers(3));
     }
 
     #[test]
