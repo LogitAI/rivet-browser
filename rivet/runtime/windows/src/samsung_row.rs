@@ -12,6 +12,7 @@ use windows_sys::Win32::Foundation::HWND;
 
 use crate::builds::TopRow;
 use crate::chrome_layout::{image, PANEL_GAP};
+use crate::chrome_toolbar::{NavMark, PageMark};
 
 /// The row of the design, in DIPs: 44 tall with its hairline as the last line, and 28 DIP buttons
 /// two apart. The address field keeps 4 DIPs from what follows it.
@@ -23,6 +24,20 @@ const BUTTON_STEP: i32 = 30;
 const FIELD_X: i32 = 102;
 const FIELD_END: i32 = 4;
 const NAVIGATION_BUTTONS: usize = 3;
+/// The security chip inside the field: 22 tall, 6 from the field's start, and the text 8 after it.
+/// A chip with only its glyph is 25 wide, 6 either side of a 13 DIP glyph.
+const CHIP_X: i32 = 6;
+const CHIP_Y: i32 = 3;
+const CHIP_HEIGHT: i32 = 22;
+const CHIP_GLYPH_ONLY: i32 = 25;
+const CHIP_GLYPH_CENTRE: [f32; 2] = [12.5, 11.0];
+const TEXT_GAP: i32 = 8;
+const TEXT_Y: i32 = 2;
+const TEXT_HEIGHT: i32 = 24;
+/// The width the browser gives the location icon when it shows no text.
+const BROWSER_ICON_WIDTH: i32 = 24;
+const LOCK_INK: u32 = 0xFF4A_4850;
+const WARNING_INK: u32 = 0xFFB3_261E;
 
 /// What a view of the row is to the layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +50,9 @@ pub enum Part {
     Inner,
     Corner,
     Button(usize),
+    ButtonImage,
+    Chip,
+    Text { chip_end: i32 },
     Field,
     Page,
     Holder,
@@ -55,6 +73,13 @@ pub fn placed(part: Part, rect: [i32; 4], parent: [i32; 2], browser_row: i32) ->
         Part::Inner => [x, 0, width, CONTENT],
         Part::Corner => [x, y, 0, 0],
         Part::Button(index) => [FIRST_BUTTON + index as i32 * BUTTON_STEP, 0, CONTENT, CONTENT],
+        Part::ButtonImage => [x, y, 0, 0],
+        Part::Chip if width <= BROWSER_ICON_WIDTH => [CHIP_X, CHIP_Y, CHIP_GLYPH_ONLY, CHIP_HEIGHT],
+        Part::Chip => [CHIP_X, CHIP_Y, width, CHIP_HEIGHT],
+        Part::Text { chip_end } => {
+            let start = chip_end + TEXT_GAP;
+            [start, TEXT_Y, (x + width - start).max(0), TEXT_HEIGHT]
+        }
         Part::Field => [FIELD_X, 0, (parent[0] - FIELD_X - FIELD_END).max(0), CONTENT],
         Part::Page => [0, ROW, parent[0], (parent[1] - ROW).max(0)],
         Part::Holder => [0, 0, parent[0], parent[1]],
@@ -135,6 +160,19 @@ unsafe fn part_of(view: usize, rect: &[i32; 4], row: &TopRow, base: usize) -> Op
     if class == row.inner && above == row.container {
         return Some(Part::Inner);
     }
+    if class == row.button_image && (row.buttons.contains(&above) || above == row.location_icon) {
+        return Some(Part::ButtonImage);
+    }
+    if above == row.location_bar {
+        if class == row.location_icon && rect[2] > 0 {
+            return Some(Part::Chip);
+        }
+        if class == row.omnibox {
+            let chip = children(parent, row).into_iter().find(|child| class_of(*child, base) == row.location_icon)?;
+            let bounds = bounds_of(chip, row);
+            return Some(Part::Text { chip_end: bounds[0] + bounds[2] });
+        }
+    }
     if above == row.inner {
         if class == row.field {
             return Some(Part::Field);
@@ -171,6 +209,30 @@ pub unsafe fn place(view: *mut c_void, rect: &mut [i32; 4]) {
     }
     let parent = bounds_of(parent_of(view, row), row);
     *rect = placed(part, *rect, [parent[2], parent[3]], row.browser_row);
+    // The chip lays its image out once and not again, so a later layout does not take it away.
+    if part == Part::Chip {
+        for child in children(view, row) {
+            if class_of(child, image.base) == row.button_image {
+                let bounds = (child + row.bounds_offset) as *mut [i32; 4];
+                (*bounds)[2] = 0;
+                (*bounds)[3] = 0;
+            }
+        }
+    }
+}
+
+/// Which mark a page gets, as in the design: the address decides, and a browser that shows a
+/// warning text next to the mark overrules a padlock.
+pub fn page_mark(address: &str, warns: bool) -> PageMark {
+    if warns {
+        PageMark::Warning
+    } else if address.starts_with("https://") {
+        PageMark::Lock
+    } else if crate::dev_mode::starts_in_dev_mode(address) || !address.starts_with("http://") {
+        PageMark::Info
+    } else {
+        PageMark::Warning
+    }
 }
 
 /// Which colour a colour id holds in the row of a Rivet window, or `None` to keep its own.
@@ -250,6 +312,56 @@ unsafe extern "system" fn bare_background(view: *mut c_void, canvas: *const c_vo
     bare(view, canvas, BARE_BACKGROUND)
 }
 
+type PaintIcon = unsafe extern "system" fn(*const c_void, *const c_void, i32, u32);
+
+/// Back, forward, reload and stop, and the three marks of the field.
+struct Icons {
+    navigation: [usize; 4],
+    marks: [usize; 3],
+}
+static ICONS: OnceLock<Icons> = OnceLock::new();
+
+fn mark_index(mark: PageMark) -> usize {
+    match mark {
+        PageMark::Lock => 0,
+        PageMark::Warning => 1,
+        PageMark::Info => 2,
+    }
+}
+
+/// The address of the window's active tab.
+unsafe fn active_address(view: *mut c_void) -> Option<String> {
+    let window = crate::chrome_layout::hwnd_of_view(view)?;
+    let tabs = crate::chrome_tabs::open_tabs(window)?;
+    tabs.into_iter().find(|tab| tab.saved.active).map(|tab| tab.saved.url)
+}
+
+/// A button of a Rivet window's row draws Rivet's icon instead of what the browser baked.
+unsafe extern "system" fn button_paint(view: *mut c_void, canvas: *const c_void) {
+    let Some(row) = row() else { return };
+    let table = *(view as *const usize);
+    let Some(function) = held(table, row.button_paint_slot) else { return };
+    if !in_rivet_window(view as usize, row) {
+        let run: Paint = std::mem::transmute(function);
+        return run(view, canvas);
+    }
+    let (Some(image), Some(icons)) = (image::recorded(), ICONS.get()) else { return };
+    let draw: PaintIcon = std::mem::transmute(image.base + row.paint_vector_icon);
+    if class_of(view as usize, image.base) == row.location_icon {
+        let warns = bounds_of(view as usize, row)[2] > CHIP_GLYPH_ONLY;
+        let mark = page_mark(&active_address(view).unwrap_or_default(), warns);
+        let ink = if mark == PageMark::Warning { WARNING_INK } else { LOCK_INK };
+        return draw(canvas, icons.marks[mark_index(mark)] as *const c_void, CHIP_GLYPH_ONLY, ink);
+    }
+    let parent = parent_of(view as usize, row);
+    let shown = children(parent, row).into_iter().filter(|child| row.buttons.contains(&class_of(*child, image.base)));
+    let Some(position) = shown.take(NAVIGATION_BUTTONS).position(|child| child == view as usize) else { return };
+    let stopping = position == 2 && *((view as usize + row.reload_mode_offset) as *const i32) != 0;
+    let state = *((view as usize + row.button_state_offset) as *const i32);
+    let icon = icons.navigation[if stopping { 3 } else { position }];
+    draw(canvas, icon as *const c_void, CONTENT, crate::whale_toolbar::nav_colour(state))
+}
+
 /// Hides the sidebars their paint asked for. A paint is no place to change a widget's visibility.
 unsafe extern "system" fn hide_sidebars(window: HWND, _message: u32, id: usize, _time: u32) {
     windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, id);
@@ -299,6 +411,11 @@ unsafe fn patch(row: &'static TopRow) -> Result<(), String> {
     }) {
         return Err("this browser build has another address field".into());
     }
+    if !image.has(row.paint_vector_icon, row.paint_vector_icon_prologue)
+        || !row.button_paints.iter().all(|(vtable, function)| image.points_to(vtable + row.button_paint_slot * 8, *function))
+    {
+        return Err("this browser build has other row buttons".into());
+    }
     // Every slot is read before any is replaced, so a build with other classes is left untouched.
     for (vtable, functions) in row.painted.iter().chain(std::iter::once(&row.sidebar_root)) {
         for (index, slot) in row.paint_slots.iter().enumerate() {
@@ -308,6 +425,13 @@ unsafe fn patch(row: &'static TopRow) -> Result<(), String> {
         }
     }
     HIDE_FUNCTION.store(base + row.native_hide, Ordering::Release);
+    let _ = ICONS.set(Icons {
+        navigation: [NavMark::Back, NavMark::Forward, NavMark::Reload, NavMark::Stop]
+            .map(|mark| crate::chrome_toolbar::nav_icon(mark, CONTENT as f32, row.canvas_command) as usize),
+        marks: [PageMark::Lock, PageMark::Warning, PageMark::Info].map(|mark| {
+            crate::chrome_toolbar::page_mark_icon(mark, CHIP_GLYPH_ONLY as f32, CHIP_GLYPH_CENTRE, row.canvas_command) as usize
+        }),
+    });
     {
         let mut known = HELD.lock().unwrap_or_else(|error| error.into_inner());
         for (vtable, functions) in row.painted {
@@ -317,6 +441,9 @@ unsafe fn patch(row: &'static TopRow) -> Result<(), String> {
         known.push((base + row.sidebar_root.0, row.paint_slots[0], base + row.sidebar_root.1[0]));
         for (vtable, slot, function) in row.bare {
             known.push((base + vtable, *slot, base + function));
+        }
+        for (vtable, function) in row.button_paints {
+            known.push((base + vtable, row.button_paint_slot, base + function));
         }
     }
     crate::chrome_toolbar::transaction(|| {
@@ -328,6 +455,9 @@ unsafe fn patch(row: &'static TopRow) -> Result<(), String> {
         for (vtable, slot, _) in row.bare {
             let hook = if *slot == BARE_PAINT { bare_paint as *const () as usize } else { bare_background as *const () as usize };
             crate::chrome_toolbar::replace_slot(((base + vtable) as *mut usize).add(*slot), hook)?;
+        }
+        for (vtable, _) in row.button_paints {
+            crate::chrome_toolbar::replace_slot(((base + vtable) as *mut usize).add(row.button_paint_slot), button_paint as *const () as usize)?;
         }
         let table = (base + row.sidebar_root.0) as *mut usize;
         crate::chrome_toolbar::replace_slot(table.add(row.paint_slots[0]), sidebar_paint_children as *const () as usize)
@@ -372,6 +502,25 @@ mod tests {
         assert_eq!(placed(Part::Below, [0, 38, 524, 30], [524, 483], 38), [0, 44, 524, 30]);
         // The holder of the page leaves no room for Samsung's rounded border.
         assert_eq!(placed(Part::Holder, [2, 2, 520, 435], [524, 439], 38), [0, 0, 524, 439]);
+    }
+
+    #[test]
+    fn fr12_samsung_chip_and_text_sit_where_the_design_has_them() {
+        // The image views go: Rivet draws the icons in the buttons.
+        assert_eq!(placed(Part::ButtonImage, [6, 4, 20, 20], [28, 28], 38), [6, 4, 0, 0]);
+        assert_eq!(placed(Part::Chip, [8, 2, 24, 24], [1048, 28], 38), [6, 3, 25, 22]);
+        assert_eq!(placed(Part::Chip, [8, 2, 92, 24], [1048, 28], 38), [6, 3, 92, 22]);
+        assert_eq!(placed(Part::Text { chip_end: 31 }, [37, 2, 993, 24], [1048, 28], 38), [39, 2, 991, 24]);
+    }
+
+    #[test]
+    fn fr12_samsung_page_marks_follow_the_address_like_the_design() {
+        assert_eq!(page_mark("https://example.com/", false), PageMark::Lock);
+        assert_eq!(page_mark("http://example.com/", false), PageMark::Warning);
+        assert_eq!(page_mark("http://localhost:3000/", false), PageMark::Info);
+        assert_eq!(page_mark("rivet://start", false), PageMark::Info);
+        assert_eq!(page_mark("file:///C:/a.html", false), PageMark::Info);
+        assert_eq!(page_mark("https://expired.example/", true), PageMark::Warning);
     }
 
     #[test]

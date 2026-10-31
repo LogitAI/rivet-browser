@@ -408,7 +408,7 @@ unsafe fn hide_image(row: &WhaleRow, button: usize, base: usize, set: SetBounds)
 }
 
 /// The ink of a navigation icon for a button state: disabled icons are 35% opaque, as in the row's design.
-fn nav_colour(state: i32) -> u32 {
+pub(crate) fn nav_colour(state: i32) -> u32 {
     match state {
         1 | 2 => 0xff1f_2024,
         3 => 0x594a_4850,

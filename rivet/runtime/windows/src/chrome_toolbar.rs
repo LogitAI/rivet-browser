@@ -2647,6 +2647,64 @@ pub(crate) fn nav_icon(mark: NavMark, size: f32, canvas_command: u32) -> VectorI
     leak_icon(moved_to_canvas(&path, size, canvas_command))
 }
 
+/// The mark that leads the address, drawn on a canvas `size` wide so one unit is one DIP, with the
+/// middle of the 13 DIP glyph at `centre`.
+pub(crate) fn page_mark_icon(mark: PageMark, size: f32, centre: [f32; 2], canvas_command: u32) -> VectorIconRef {
+    let path = match mark {
+        PageMark::Lock => lock_path(),
+        PageMark::Warning => warning_path(),
+        PageMark::Info => info_path(),
+    };
+    leak_icon(shifted_to_canvas(&path, size, [centre[0] - MARK_X, centre[1] - MARK_Y], canvas_command))
+}
+
+/// A filled rounded rectangle as big as its canvas, for a fill that follows a view's size.
+pub(crate) fn fill_icon(width: f32, height: f32, radius: f32, canvas_command: u32) -> VectorIconRef {
+    leak_icon(vec![op(canvas_command), at(width), op(ROUND_RECT), at(0.0), at(0.0), at(width), at(height), at(radius)])
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageMark {
+    Lock,
+    Warning,
+    Info,
+}
+
+/// Moves every point of a path by `shift`, on a canvas of `size` DIPs.
+fn shifted_to_canvas(path: &[PathElement], size: f32, shift: [f32; 2], canvas_command: u32) -> Vec<PathElement> {
+    let mut out = Vec::with_capacity(path.len());
+    let mut index = 0;
+    // Each command, with how many of its arguments come as x and y pairs and how many follow unmoved.
+    while index < path.len() {
+        let command = unsafe { path[index].command };
+        index += 1;
+        let (pairs, rest) = match command {
+            CANVAS_DIMENSIONS => {
+                out.extend([op(canvas_command), at(size)]);
+                index += 1;
+                continue;
+            }
+            MOVE_TO | LINE_TO => (1, 0),
+            QUADRATIC_TO => (2, 0),
+            CIRCLE => (1, 1),
+            ROUND_RECT => (1, 3),
+            STROKE => (0, 1),
+            _ => (0, 0),
+        };
+        out.push(op(command));
+        for _ in 0..pairs {
+            out.push(at(unsafe { path[index].value } + shift[0]));
+            out.push(at(unsafe { path[index + 1].value } + shift[1]));
+            index += 2;
+        }
+        for _ in 0..rest {
+            out.push(at(unsafe { path[index].value }));
+            index += 1;
+        }
+    }
+    out
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum NavMark {
     Back,

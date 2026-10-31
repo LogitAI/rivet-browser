@@ -540,6 +540,24 @@ pub struct TopRow {
     pub native_hide_prologue: &'static [u8],
     /// Colour ids of this build and the Rivet colours, as `0xAARRGGBB`.
     pub colours: &'static [(i32, u32)],
+    /// `gfx::PaintVectorIcon(canvas, icon, dip, colour)` and `CANVAS_DIMENSIONS` in this build's
+    /// `gfx::CommandType`. The row's own icons are images baked by theme changes, so Rivet draws its own.
+    pub paint_vector_icon: usize,
+    pub paint_vector_icon_prologue: &'static [u8],
+    pub canvas_command: u32,
+    /// The slot of `views::Button::PaintButtonContents`, with what it holds for back and forward, for
+    /// reload and for the location icon.
+    pub button_paint_slot: usize,
+    pub button_paints: &'static [(usize, usize)],
+    /// The image view a button keeps its icon in, `views::Button::state_`, and where reload keeps
+    /// whether it shows stop.
+    pub button_image: usize,
+    pub button_state_offset: usize,
+    pub reload_mode_offset: usize,
+    /// The address field's location bar, its location icon and its text field.
+    pub location_bar: usize,
+    pub location_icon: usize,
+    pub omnibox: usize,
 }
 
 /// Values for `vertical_tabs.rs`.
@@ -4191,6 +4209,20 @@ pub static SAMSUNG: Build = Build {
                 // The close button's hover and the caption glyphs.
                 (1512, 0xFFC4_2B1C), (1527, 0xFF1A_1A1A), (1541, 0xFF1A_1A1A),
             ],
+            // Found by its body, which matches Whale's: it reads the icon's two fields, scales the dip
+            // size by the canvas and paints the path. Samsung's vector icons start with command 28.
+            paint_vector_icon: 0x0134_17A0,
+            paint_vector_icon_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x38],
+            canvas_command: 28,
+            button_paint_slot: 114,
+            button_paints: &[(0xe266528, 0x5f9e0), (0xe268e88, 0x1bbb2b0), (0xe2708a8, 0x5f9e0)],
+            button_image: 0xe252008,
+            // Reload's own paint reads the mode and the state at these two offsets.
+            button_state_offset: 0x3B4,
+            reload_mode_offset: 0x89C,
+            location_bar: 0xe270568,
+            location_icon: 0xe2708a8,
+            omnibox: 0xe2826e8,
         }),
         ..UNCHECKED_VERTICALTABS
     },
@@ -4883,6 +4915,11 @@ mod tests {
         for (vtable, slot, function) in row.bare {
             assert!(holds(*vtable, *slot, *function), "{vtable:#x}");
         }
+        for (vtable, function) in row.button_paints {
+            assert!(holds(*vtable, row.button_paint_slot, *function), "{vtable:#x}");
+        }
+        let icon = row.paint_vector_icon_prologue;
+        assert_eq!(file_bytes(&file, row.paint_vector_icon, icon.len()).as_deref(), Some(icon));
         assert!(holds(row.native_vtable, row.native_hide_slot, row.native_hide));
         let hide = row.native_hide_prologue;
         assert_eq!(file_bytes(&file, row.native_hide, hide.len()).as_deref(), Some(hide));
