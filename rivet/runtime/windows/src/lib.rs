@@ -17,7 +17,7 @@ pub extern "C" fn rivet_runtime_abi_version() -> u32 {
 }
 
 /// The default appbar width in device-independent pixels.
-const APPBAR_WIDTH: i32 = 268;
+const APPBAR_WIDTH: i32 = 276;
 
 /// The range the appbar width can be dragged between, in device-independent pixels.
 const APPBAR_MIN_WIDTH: i32 = 200;

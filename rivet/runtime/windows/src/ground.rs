@@ -261,6 +261,16 @@ mod tests {
     }
 
     #[test]
+    fn fr9_in_a_grid_only_the_focused_page_is_raised_by_its_shadow() {
+        let half = Rect { width: 476, height: 360, ..PAGE };
+        let pages = [half, Rect { x: 752, ..half }, Rect { y: 420, ..half }, Rect { x: 752, y: 420, ..half }];
+        let holes = split_holes(&pages, 2, 44);
+        let raised: Vec<usize> = holes.iter().enumerate().filter(|(_, hole)| hole.raise == Raise::Focused).map(|(index, _)| index).collect();
+        assert_eq!(raised, [2]);
+        assert!(holes.iter().all(|hole| hole.raise != Raise::Page), "a split page is either focused or behind");
+    }
+
+    #[test]
     fn fr12_the_raised_page_is_painted_last() {
         let holes = [
             Hole { rect: PAGE, raise: Raise::Focused },

@@ -2,7 +2,7 @@
 # when this passes on a launch like the installed build's. Unit tests and build rows do not count.
 #
 #   pwsh -NoProfile -File scripts/tests/windows-features.ps1 [-Browsers chrome,edge,...]
-#       [-Features split,sidebar,newtab,space,bar-layout] [-OutDir <dir>] [-NoBuild]
+#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout] [-OutDir <dir>] [-NoBuild]
 #
 # One row per browser and feature: PASS, FAIL or NOT_DRIVEN. NOT_DRIVEN means the scene could not
 # be set up, so the feature was not exercised. Nothing is decided from build rows or `supported`.
@@ -13,7 +13,7 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'bar-layout'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout'),
   [string]$OutDir,
   [switch]$NoBuild
 )
@@ -92,6 +92,8 @@ function New-TestPage([string]$Name, [int]$Rgb) {
 }
 $urlA = New-TestPage 'page-a' $script:ColourA
 $urlB = New-TestPage 'page-b' $script:ColourB
+$urlC = New-TestPage 'page-c' $script:ColourC
+$urlD = New-TestPage 'page-d' $script:ColourD
 
 # The sub page's pages. `sub-b` is blue and a click anywhere in it follows a link to `sub-c`, which is
 # green, and yellow when it was loaded by a reload. Back and forward restore it green, so the colour
@@ -438,11 +440,11 @@ function Invoke-Space($Name, $version, $shots) {
     Send-RivetMessage $ctx 'Rivet.NewStartPage'
     Start-Sleep 6
     $one = Get-Capture $ctx (Join-Path $shots 'space-1-first.png')
-    # Click the second dot of the footer. The footer layout is the appbar's: 268 DIP wide, 10 DIP
+    # Click the second dot of the footer. The footer layout is the appbar's: 276 DIP wide, 10 DIP
     # inset, dots 32 DIP apart and centred between the settings and add buttons, 24 DIP above the bottom.
     $f = $ctx.Dpi / 96.0
     $dots = 2 * 32 - 4
-    $x = 10 + 28 + (250 - 56 - $dots) / 2 + 32 + 14
+    $x = 10 + 28 + (258 - 56 - $dots) / 2 + 32 + 14
     $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
     Send-AppbarClick $ctx ([int]($x * $f)) ([int]($cr.B - 24 * $f))
     Start-Sleep 7
@@ -497,7 +499,7 @@ function Invoke-TabDrag($ctx, [int]$Tab, $shotPath) {
   $f = $ctx.Dpi / 96.0
   $x = [int](100 * $f); $y = [int](2 + (Get-TabRowY $Tab) * $f)
   $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
-  $left = [int]((268 + 8) * $f); $right = $cr.Ri - [int](8 * $f)
+  $left = [int]((276 + 8) * $f); $right = $cr.Ri - [int](8 * $f)
   $dropX = $left + [int](($right - $left) * 0.05); $dropY = [int]($cr.B / 2)
   Send-AppbarNc $ctx 0xA1 $x $y
   Start-Sleep -Milliseconds 150
@@ -540,7 +542,7 @@ function Invoke-SplitPath($Name, $shots, [string]$Feature, [string]$Path, [strin
       # One space switch first: the window keeps one start tab of the other space.
       $f = $ctx.Dpi / 96.0
       $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
-      $dx = 10 + 28 + (250 - 56 - 60) / 2 + 32 + 14
+      $dx = 10 + 28 + (258 - 56 - 60) / 2 + 32 + 14
       Send-AppbarClick $ctx ([int]($dx * $f)) ([int]($cr.B - 24 * $f))
       Start-Sleep 7
       if (-not (Read-Log | Where-Object { $_ -match 'space: to FeatureB' })) { return @('NOT_DRIVEN', $one.Path, 'the click did not switch space') }
@@ -609,6 +611,63 @@ function Invoke-SplitPath($Name, $shots, [string]$Feature, [string]$Path, [strin
     Stop-Scene $ctx
     if ($seeded) { Remove-Item $seeded -ErrorAction SilentlyContinue }
   }
+}
+
+# A split beyond two pages beside each other: a tab dropped on the top or bottom of the page stacks
+# the pages, and further drops make grids of three and four pages. The drops come from the drop
+# flag, which names a side and the slot of the page to split, as a tab drop on that page's edge does.
+# Every page must be one of Rivet's own page views.
+function Invoke-SplitGrid($Name, $shots, [string]$Feature) {
+  $ctx, $state = Start-Scene $Name $Feature $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    $one = Get-Capture $ctx (Join-Path $shots "$Feature-1-page-a.png")
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    $v = Test-OnePage $one $script:ColourA $script:ColourB
+    if ($v.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $one.Path, "the first test page was not shown: $($v.Reason)") }
+    # The pages, the drops and the arrangement they must give. The last page opened is active and
+    # is the window's own page; each drop takes the first tab that is not shown yet.
+    $plan = switch ($Feature) {
+      'split-drop-top' { @{ Urls = @($urlB); Drops = @('top'); Colours = @($script:ColourA, $script:ColourB); Shape = 'above' } }
+      'split-drop-bottom' { @{ Urls = @($urlB); Drops = @('bottom'); Colours = @($script:ColourB, $script:ColourA); Shape = 'above' } }
+      'split-grid-3' { @{ Urls = @($urlB, $urlC); Drops = @('right', 'bottom 1'); Colours = @($script:ColourC, $script:ColourA, $script:ColourB); Shape = 'three' } }
+      'split-grid-4' { @{ Urls = @($urlB, $urlC, $urlD); Drops = @('right', 'bottom', 'bottom 1'); Colours = @($script:ColourD, $script:ColourB, $script:ColourA, $script:ColourC); Shape = 'four' } }
+    }
+    foreach ($url in $plan.Urls) {
+      if (-not (Open-SecondPage $ctx $url)) { return @('NOT_DRIVEN', $one.Path, 'a page did not open as a tab of the app window alone') }
+    }
+    $before = Get-Capture $ctx (Join-Path $shots "$Feature-2-before.png")
+    # The check must fail on this window, which has its tabs and no split.
+    $control = Test-GridPages $before $plan.Colours $plan.Shape
+    if ($control.Verdict -ne 'FAIL') { return @('NOT_DRIVEN', $before.Path, "the grid check did not fail on a window without a split ($($control.Verdict)): $($control.Reason)") }
+    $opens = Get-ViewOpens 'Split'
+    $added = @(Read-Log | Where-Object { $_ -match 'second view: slot \d' }).Count
+    foreach ($drop in $plan.Drops) {
+      if (-not (Send-Flag $ctx 'rivet-drop.flag' $drop)) { return @('NOT_DRIVEN', $before.Path, "the runtime did not take the drop '$drop'") }
+      Start-Sleep 3
+    }
+    Start-Sleep 3
+    $grid = Get-Capture $ctx (Join-Path $shots "$Feature-3-grid.png")
+    $on = Test-GridPages $grid $plan.Colours $plan.Shape
+    if ($on.Verdict -ne 'PASS') {
+      $log = (Read-Log | Where-Object { $_ -match 'drop flag|second view' } | Select-Object -Last 4) -join ' / '
+      return @($on.Verdict, $grid.Path, "after the drops: $($on.Reason). trace: $log")
+    }
+    if (-not (Test-ViewOwns $opens 'Split')) { return @('FAIL', $grid.Path, 'the pages are shown, but the split did not open in a page view of Rivet') }
+    $more = @(Read-Log | Where-Object { $_ -match 'second view: slot \d' }).Count - $added
+    if ($more -lt $plan.Drops.Count - 1) { return @('FAIL', $grid.Path, "the pages are shown, but only $more of the $($plan.Drops.Count - 1) later pages are in Rivet's page views") }
+    $pages = Read-Log | Where-Object { $_ -match 'drop flag: .* pages \d+' } | Select-Object -Last 1
+    if (-not ($pages -match "pages $($plan.Colours.Count)\b")) { return @('FAIL', $grid.Path, "the runtime reports a split of another size: $pages") }
+    # Ending the split must leave one page.
+    Send-RivetMessage $ctx 'Rivet.ToggleSplit'
+    Start-Sleep 6
+    $off = Get-Capture $ctx (Join-Path $shots "$Feature-4-off.png")
+    if ((Test-GridPages $off $plan.Colours $plan.Shape).Verdict -eq 'PASS') { return @('FAIL', $off.Path, "$($on.Reason); but turning it off left the grid") }
+    if (Test-Blank $off) { return @('FAIL', $off.Path, "$($on.Reason); but turning it off left a blank window") }
+    @('PASS', $grid.Path, "$($on.Reason); off: the grid ended")
+  } finally { Stop-Scene $ctx }
 }
 
 # A click on a row button, with the client messages a real click makes, posted without moving the
@@ -849,6 +908,10 @@ foreach ($name in $Browsers) {
         'split-space' { Invoke-SplitPath $name $shots 'split-space' 'message' 'colour' -AfterSpace }
         'split-click' { Invoke-SplitPath $name $shots 'split-click' 'message' 'colour' -ThenClick }
         'split-rows' { Invoke-SplitRows $name $shots }
+        'split-drop-top' { Invoke-SplitGrid $name $shots 'split-drop-top' }
+        'split-drop-bottom' { Invoke-SplitGrid $name $shots 'split-drop-bottom' }
+        'split-grid-3' { Invoke-SplitGrid $name $shots 'split-grid-3' }
+        'split-grid-4' { Invoke-SplitGrid $name $shots 'split-grid-4' }
         'bar-layout' { Invoke-BarLayout $name $shots }
       }
       $verdict, $evidence, $reason = $result
