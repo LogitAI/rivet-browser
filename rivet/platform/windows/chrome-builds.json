@@ -1,0 +1,92 @@
+[
+  {
+    "browser": "Brave",
+    "version": "156.1.98.62",
+    "module": "chrome.dll",
+    "frame_view_vtable": 286454880,
+    "client_view_slot": 103,
+    "client_view_bounds": 60771104,
+    "hwnd_for_view": 62882208,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Brave",
+    "version": "156.1.98.63",
+    "module": "chrome.dll",
+    "frame_view_vtable": 286184352,
+    "client_view_slot": 103,
+    "client_view_bounds": 60863056,
+    "hwnd_for_view": 62942288,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Google Chrome",
+    "version": "150.0.7871.187",
+    "module": "chrome.dll",
+    "frame_view_vtable": 250818328,
+    "client_view_slot": 103,
+    "client_view_bounds": 52624288,
+    "hwnd_for_view": 51826864,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Google Chrome",
+    "version": "156.0.8078.48",
+    "module": "chrome.dll",
+    "frame_view_vtable": 266812968,
+    "client_view_slot": 103,
+    "client_view_bounds": 57270768,
+    "hwnd_for_view": 57321808,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Google Chrome",
+    "version": "156.0.8078.74",
+    "module": "chrome.dll",
+    "frame_view_vtable": 265183536,
+    "client_view_slot": 103,
+    "client_view_bounds": 54872304,
+    "hwnd_for_view": 54923040,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Google Chrome",
+    "version": "156.0.8078.80",
+    "module": "chrome.dll",
+    "frame_view_vtable": 265162864,
+    "client_view_slot": 103,
+    "client_view_bounds": 55062656,
+    "hwnd_for_view": 55105520,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Microsoft Edge",
+    "version": "156.0.4314.50",
+    "module": "msedge.dll",
+    "frame_view_vtable": 293959448,
+    "client_view_slot": 115,
+    "client_view_bounds": 54691616,
+    "hwnd_for_view": 17271385,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Naver Whale",
+    "version": "5.39.412.57",
+    "module": "whale.dll",
+    "frame_view_vtable": 263282976,
+    "client_view_slot": 103,
+    "client_view_bounds": 237974640,
+    "hwnd_for_view": 150289552,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Samsung Internet",
+    "version": "30.0.4.29",
+    "module": "samsunginternet.dll",
+    "frame_view_vtable": 237881384,
+    "client_view_slot": 103,
+    "client_view_bounds": 58899088,
+    "hwnd_for_view": 54450352,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  }
+]

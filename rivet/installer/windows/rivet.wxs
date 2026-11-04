@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Rivet's Windows package. This is the reduced adaptation of DSA's WiX package flow: stage
+  the signed Rust payload, install it per-machine and expose the CLI on PATH.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+    <Package Name="Rivet Browser"
+             Manufacturer="LogitAI"
+             Version="$(Version)"
+             UpgradeCode="5a3b0f5e-fd95-44fa-93cf-5e0c517e8b37"
+             Scope="perMachine"
+             Compressed="yes">
+        <MajorUpgrade Schedule="afterInstallExecute"
+                      DowngradeErrorMessage="A newer Rivet Browser is already installed." />
+        <Media Id="1" Cabinet="rivet.cab" EmbedCab="yes" />
+
+        <StandardDirectory Id="ProgramFiles64Folder">
+            <Directory Id="INSTALLFOLDER" Name="Rivet Browser">
+                <Directory Id="LICENSESFOLDER" Name="licenses" />
+            </Directory>
+        </StandardDirectory>
+        <StandardDirectory Id="ProgramMenuFolder">
+            <Directory Id="RivetStartMenuFolder" Name="Rivet Browser" />
+        </StandardDirectory>
+
+        <Icon Id="RivetStartMenuIcon" SourceFile="$(SourceDir)\rivet.ico" />
+
+        <ComponentGroup Id="Rivet" Directory="INSTALLFOLDER">
+            <Component Id="RivetCli" Guid="*">
+                <File Id="RivetCli" Source="$(SourceDir)\rivet.exe" KeyPath="yes" />
+                <Environment Id="RivetPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
+            </Component>
+            <Component Id="RivetLauncher" Guid="*">
+                <File Id="RivetLauncher" Source="$(SourceDir)\rivet-launcher.exe" KeyPath="yes" />
+            </Component>
+            <Component Id="RivetRuntime" Guid="*">
+                <File Id="RivetRuntime" Source="$(SourceDir)\rivet_runtime_windows.dll" KeyPath="yes" />
+            </Component>
+            <!-- The start page Rivet windows open for a new tab, and the font it loads beside it. -->
+            <Component Id="RivetStartPage" Guid="*">
+                <File Id="RivetStartPage" Source="$(SourceDir)\start.html" KeyPath="yes" />
+            </Component>
+            <Component Id="RivetStartPageFont" Guid="*">
+                <File Id="RivetStartPageFont" Source="$(SourceDir)\Manrope.ttf" KeyPath="yes" />
+            </Component>
+            <Component Id="RivetIcon" Guid="*">
+                <File Id="RivetIcon" Source="$(SourceDir)\rivet.ico" KeyPath="yes" />
+            </Component>
+            <Component Id="RivetLicense" Directory="LICENSESFOLDER" Guid="*">
+                <File Id="RivetLicense" Source="$(SourceDir)\LICENSE" KeyPath="yes" />
+            </Component>
+            <!-- The runtime embeds these fonts. The Open Font License travels with them. -->
+            <Component Id="FontLicenseNewsreader" Directory="LICENSESFOLDER" Guid="*">
+                <File Id="FontLicenseNewsreader" Source="$(SourceDir)\OFL-Newsreader.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="FontLicenseManrope" Directory="LICENSESFOLDER" Guid="*">
+                <File Id="FontLicenseManrope" Source="$(SourceDir)\OFL-Manrope.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="FontLicenseDMMono" Directory="LICENSESFOLDER" Guid="*">
+                <File Id="FontLicenseDMMono" Source="$(SourceDir)\OFL-DMMono.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="RivetStartMenu" Directory="RivetStartMenuFolder" Guid="*">
+                <Shortcut Id="RivetStartMenuShortcut"
+                          Name="Rivet Browser"
+                          Description="Rivet Browser"
+                          Target="[INSTALLFOLDER]rivet-launcher.exe"
+                          WorkingDirectory="INSTALLFOLDER"
+                          Icon="RivetStartMenuIcon">
+                    <!-- Running Rivet windows carry the same ID, so they share this pinned button. -->
+                    <ShortcutProperty Key="System.AppUserModel.ID" Value="LogitAI.Rivet.Browser" />
+                </Shortcut>
+                <RemoveFolder Id="RemoveRivetStartMenuFolder" On="uninstall" />
+                <RegistryValue Root="HKLM" Key="SOFTWARE\LogitAI\Rivet" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+            </Component>
+            <Component Id="InstallFolderRecord" Guid="a9986310-5135-4fc1-a3ac-319829bb0ea6">
+                <RegistryValue Root="HKLM" Key="SOFTWARE\LogitAI\Rivet" Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+            </Component>
+        </ComponentGroup>
+
+        <Feature Id="Main" Title="Rivet Browser" Level="1">
+            <ComponentGroupRef Id="Rivet" />
+        </Feature>
+    </Package>
+</Wix>

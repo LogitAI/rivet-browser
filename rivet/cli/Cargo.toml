@@ -1,0 +1,29 @@
+[package]
+name = "rivet"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rivet_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rivet"
+path = "src/main.rs"
+
+[[bin]]
+name = "rivet-launcher"
+path = "src/launcher.rs"
+
+[dependencies]
+rivet-core.workspace = true
+rivet-platform-windows = { path = "../platform/windows" }
+serde_json.workspace = true
+windows-sys.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+windows-numerics.workspace = true

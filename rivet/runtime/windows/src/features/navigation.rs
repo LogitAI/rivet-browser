@@ -1,0 +1,170 @@
+//! Opens pinned destinations through Chromium on the browser UI thread.
+//!
+//! The addresses below belong to Google Chrome 156.0.8078.48 only. They move to the
+//! supported-build table once the experiment holds.
+
+use std::ffi::c_void;
+use std::sync::OnceLock;
+
+use windows_sys::Win32::Foundation::HWND;
+use crate::chromium::image;
+use crate::builds::Build;
+use crate::feature::Needs;
+use crate::targets::Target;
+
+/// Size of a `GURL`, which Chromium 156 lays out the same way in every build it ships.
+const GURL_SIZE: usize = 0x78;
+
+/// The values of the loaded browser build.
+fn bv() -> &'static crate::builds::Navigation {
+    &crate::builds::get().navigation
+}
+
+/// What opening an address needs from the browser.
+pub(crate) fn needs(build: &Build) -> Needs {
+    let row = &build.navigation;
+    Needs::checked(
+        row.supported,
+        crate::builds::unchecked_reason(build, "opening addresses"),
+        row.signatures.iter().map(|(rva, bytes)| Target::new("navigation function", *rva, bytes)).collect(),
+    )
+}
+
+const REFERRER_POLICY_DEFAULT: i32 = 1;
+const CURRENT_TAB: i32 = 1;
+/// `ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR`.
+const TYPED_IN_ADDRESS_BAR: u32 = 0x0200_0001;
+
+type Pointer = unsafe extern "system" fn(*const c_void) -> *mut c_void;
+type GurlFromText = unsafe extern "system" fn(*mut c_void, *const [usize; 2]) -> *mut c_void;
+type Construct = unsafe extern "system" fn(*mut c_void) -> *mut c_void;
+type OpenUrlParams = unsafe extern "system" fn(
+    *mut c_void,
+    *const c_void,
+    *const c_void,
+    i32,
+    u32,
+    bool,
+) -> *mut c_void;
+type OpenUrl = unsafe extern "system" fn(*mut c_void, *const c_void, *mut usize) -> *mut c_void;
+/// Storage for a Chromium object built in place, aligned like any C++ object.
+#[repr(C, align(16))]
+struct Raw<const N: usize>([u8; N]);
+
+impl<const N: usize> Raw<N> {
+    fn zeroed() -> Box<Self> {
+        Box::new(Raw([0; N]))
+    }
+    fn at(&mut self) -> *mut c_void {
+        self.0.as_mut_ptr().cast()
+    }
+}
+
+static BASE: OnceLock<Option<usize>> = OnceLock::new();
+
+
+fn base() -> Option<usize> {
+    *BASE.get_or_init(|| unsafe {
+        let image = image::recorded()?;
+        crate::feature::needs_here(needs).verify(&image).ok().map(|()| image.base)
+    })
+}
+
+/// Whether this build can open addresses, with every function it needs matching the record.
+pub(crate) fn ready() -> bool {
+    base().is_some()
+}
+
+unsafe fn function<T: Copy>(base: usize, rva: usize) -> T {
+    std::mem::transmute_copy(&(base + rva))
+}
+
+unsafe fn web_contents(base: usize, window: HWND) -> Option<*mut c_void> {
+    let content = function::<Pointer>(base, bv().content_window_for_hwnd)(window);
+    if content.is_null() {
+        return None;
+    }
+    let view = function::<Pointer>(base, bv().browser_view_for_window)(content);
+    if view.is_null() {
+        return None;
+    }
+    let contents = function::<Pointer>(base, bv().active_web_contents)(view);
+    (!contents.is_null()).then_some(contents)
+}
+
+/// Opens `url` in the active page of `window`, as if typed in the address bar.
+pub unsafe fn open(window: HWND, url: &str) -> bool {
+    let Some(base) = base() else { return false };
+    let Some(contents) = web_contents(base, window) else {
+        return false;
+    };
+    open_in(base, contents, url)
+}
+
+/// Opens `url` in the page `contents`, for a page that is not yet the window's active one.
+pub unsafe fn open_page(contents: *mut c_void, url: &str) -> bool {
+    let Some(base) = base() else { return false };
+    open_in(base, contents, url)
+}
+
+/// Opens `url` in `contents` when it is still the active page of `window`. The page may have been
+/// closed since the pointer was taken, so only its address is compared and it is never read.
+pub unsafe fn open_if_active(window: HWND, contents: usize, url: &str) -> bool {
+    let Some(base) = base() else { return false };
+    match web_contents(base, window) {
+        Some(active) if active as usize == contents => open_in(base, active, url),
+        _ => false,
+    }
+}
+
+/// Runs `work` with `url` as a `GURL`, which lives only for the call.
+pub(crate) unsafe fn with_address<R>(url: &str, work: impl FnOnce(*const c_void) -> R) -> Option<R> {
+    let base = base()?;
+    let mut target = Raw::<GURL_SIZE>::zeroed();
+    let wide: Vec<u16> = url.encode_utf16().collect();
+    let text = if bv().gurl_wide {
+        [wide.as_ptr() as usize, wide.len()]
+    } else {
+        [url.as_ptr() as usize, url.len()]
+    };
+    function::<GurlFromText>(base, bv().gurl_from_text)(target.at(), &text);
+    let result = work(target.at() as *const c_void);
+    function::<Construct>(base, bv().gurl_drop)(target.at());
+    Some(result)
+}
+
+unsafe fn open_in(base: usize, contents: *mut c_void, url: &str) -> bool {
+    let mut target = Raw::<GURL_SIZE>::zeroed();
+    let wide: Vec<u16> = url.encode_utf16().collect();
+    let text = if bv().gurl_wide {
+        [wide.as_ptr() as usize, wide.len()]
+    } else {
+        [url.as_ptr() as usize, url.len()]
+    };
+    function::<GurlFromText>(base, bv().gurl_from_text)(target.at(), &text);
+    let mut referrer = Raw::<{ GURL_SIZE + 8 }>::zeroed();
+    function::<Construct>(base, bv().gurl_empty)(referrer.at());
+    *(referrer.at().cast::<u8>().add(GURL_SIZE) as *mut i32) = REFERRER_POLICY_DEFAULT;
+    // Generously sized: the constructor writes the whole object.
+    let mut params = Raw::<0x1000>::zeroed();
+    function::<OpenUrlParams>(base, bv().open_url_params)(
+        params.at(),
+        target.at(),
+        referrer.at(),
+        CURRENT_TAB,
+        TYPED_IN_ADDRESS_BAR,
+        false,
+    );
+    // An empty `base::OnceCallback`, passed by address and consumed by the callee.
+    let mut callback: usize = 0;
+    let opened = function::<OpenUrl>(base, bv().open_url)(contents, params.at(), &mut callback);
+    function::<Construct>(base, bv().open_url_params_drop)(params.at());
+    function::<Construct>(base, bv().gurl_drop)(referrer.at());
+    function::<Construct>(base, bv().gurl_drop)(target.at());
+    !opened.is_null()
+}
+
+/// The active page of `window`, for Chromium functions that act on a page.
+pub(crate) unsafe fn active_contents(window: HWND) -> Option<*mut c_void> {
+    web_contents(base()?, window)
+}
