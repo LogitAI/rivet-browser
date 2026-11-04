@@ -472,8 +472,10 @@ mod tests {
     use super::fake::Memory;
     use super::*;
 
+    #[cfg(windows)]
     const CHROME: &str = r"C:\Program Files\Google\Chrome\Application";
 
+    #[cfg(windows)]
     fn chrome_like(disk: &mut Memory, folder: &str, exe: &str, elf: &str) {
         disk.program(&format!(r"{folder}\{exe}"), &["KERNEL32.dll", elf], &[]);
         disk.program(
@@ -485,6 +487,8 @@ mod tests {
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_a_browser_is_known_by_its_chromium_module_not_by_its_name() {
         let mut disk = Memory::default();
         chrome_like(
@@ -515,6 +519,8 @@ mod tests {
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_a_helper_beside_the_browser_is_not_a_browser() {
         let mut disk = Memory::default();
         chrome_like(&mut disk, CHROME, "chrome.exe", "chrome_elf.dll");
@@ -531,6 +537,8 @@ mod tests {
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_a_module_without_chromium_exports_does_not_prove_a_browser() {
         let mut disk = Memory::default();
         disk.program(r"C:\App\app.exe", &["app_elf.dll"], &[]);
@@ -561,6 +569,8 @@ mod tests {
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_a_launcher_stub_is_proved_by_the_program_in_its_version_folder() {
         let mut disk = Memory::default();
         disk.program(r"C:\B\Application\stub.exe", &["KERNEL32.dll"], &[]);
@@ -574,6 +584,8 @@ mod tests {
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_detection_reads_registered_and_installed_programs_once_each() {
         let mut disk = Memory::default();
         chrome_like(&mut disk, CHROME, "chrome.exe", "chrome_elf.dll");
@@ -676,6 +688,8 @@ mod tests {
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_a_browser_is_named_from_its_file_when_it_has_no_product_name() {
         let named = Browser::new(
             PathBuf::from(r"C:\B\odd.exe"),

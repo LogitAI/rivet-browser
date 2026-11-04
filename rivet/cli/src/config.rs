@@ -239,6 +239,8 @@ mod tests {
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_profiles_live_below_rivets_own_folder_by_browser() {
         let root = Path::new(r"C:\Data");
         let chrome = Path::new(r"C:\B\Chrome.exe");

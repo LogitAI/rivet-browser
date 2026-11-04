@@ -424,6 +424,8 @@ mod tests {
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_finishing_saves_the_browser_and_the_cleaned_profile_name() {
         let mut model = model(&[("chrome", Status::Ready)]);
         model.profile = "Work: 1".into();
@@ -437,6 +439,8 @@ mod tests {
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_the_command_line_makes_the_same_choice_as_the_window() {
         let root = rivet_core::paths::TestDir::new("rivet-model-choose");
         let saved = choose(browser("chrome", Status::Ready), "Lab 2", &root).unwrap();

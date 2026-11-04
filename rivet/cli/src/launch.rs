@@ -85,6 +85,8 @@ mod tests {
     use crate::detect::Status;
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr3_setup_opens_the_start_page_in_the_chosen_rivet_profile() {
         let root = Path::new(r"C:\Data");
         let browser = Path::new(r"C:\B\chrome.exe");
