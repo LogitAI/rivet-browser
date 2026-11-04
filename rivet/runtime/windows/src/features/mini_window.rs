@@ -5,8 +5,9 @@
 //! window's own surface, with a hole where the page is, and take their input from the window's own
 //! messages. Nothing here is a window of its own.
 //!
-//! The row moves it, its edges resize it, and its buttons send it back to its tab as a split or
-//! close it. Dropping it on an edge of the pages splits the page there with it.
+//! The row moves it, its edges resize it, and its buttons open its page in the window or
+//! close it. Dropped near an edge of the pages it splits the page there, and dropped elsewhere
+//! over the pages it opens there, as a dragged tab does.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -43,8 +44,6 @@ pub const MIN_SIZE: [i32; 2] = [220, 140];
 const MARGIN: i32 = 24;
 /// How far outside and inside the frame a press grabs an edge to resize.
 const GRAB: f32 = 6.0;
-/// How close to an edge of the pages the pointer must be for a drop to split the page there.
-pub const EDGE_BAND: f32 = 32.0;
 /// The buttons of the row, and the room they take at its right end.
 const BUTTON: f32 = 28.0;
 const BUTTON_PAD: f32 = 4.0;
@@ -56,7 +55,7 @@ const PAPER: u32 = 0xfbfaf7;
 const INK: u32 = 0x1f2024;
 const SOFT_INK: u32 = 0x4a4850;
 const ICONS: &str = "Segoe Fluent Icons";
-/// Back to the tab as a split, and close.
+/// Open in the window, and close.
 const RETURN_GLYPH: char = '\u{E73F}';
 const CLOSE_GLYPH: char = '\u{E8BB}';
 
@@ -74,7 +73,7 @@ pub struct Edges {
 pub enum Hit {
     /// The row outside its buttons, which moves the window.
     Row,
-    /// The button that sends the page back to its tab as a split.
+    /// The button that opens the page in the window, in place of the page shown there.
     Return,
     Close,
     Resize(Edges),
@@ -161,19 +160,43 @@ pub fn resized(start: [i32; 4], edges: Edges, dx: i32, dy: i32) -> [i32; 4] {
     [left, top, right - left, bottom - top]
 }
 
-/// The edge of the pages' area a drop at (`x`, `y`) returns the Mini Window to, or none when the
-/// pointer is not near an edge. Only a narrow band splits, so the window can be moved anywhere over
-/// the pages without being taken in.
-pub fn return_edge(area: [i32; 4], x: f32, y: f32) -> Option<Edge> {
-    let [left, top, right, bottom] = area.map(|value| value as f32);
-    if x < left || x >= right || y < top || y >= bottom {
+/// Where a Mini Window dropped at (`x`, `y`) lands, as a tab dropped there would: near an edge of
+/// the pages it returns as a split on that edge, elsewhere over the pages it opens there in place
+/// of the page, and off the pages it stays a Mini Window (none).
+pub fn drop_target(area: [i32; 4], x: f32, y: f32) -> Option<Option<Edge>> {
+    if outside(area, x, y) {
         return None;
     }
-    [(Edge::Left, x - left), (Edge::Right, right - x), (Edge::Top, y - top), (Edge::Bottom, bottom - y)]
-        .into_iter()
-        .filter(|(_, distance)| *distance < EDGE_BAND)
-        .min_by(|one, two| one.1.total_cmp(&two.1))
-        .map(|(edge, _)| edge)
+    let [left, top, right, bottom] = area.map(|value| value as f32);
+    let (side, _) = crate::features::split::drop_zone([left, top, right - left, bottom - top], x, y, false, 0.0);
+    Some(side.map(|side| match side {
+        Side::Left => Edge::Left,
+        Side::Right => Edge::Right,
+        Side::Top => Edge::Top,
+        Side::Bottom => Edge::Bottom,
+    }))
+}
+
+/// Opens the Mini Window's page in the window's page: its tab becomes the active one.
+pub unsafe fn open_here(window: HWND) -> bool {
+    let Some(page) = with(window, |mini| mini.page) else { return false };
+    let tab = tab_of(window, page);
+    close(window);
+    let done = tab.is_some_and(|tab| crate::features::tabs::activate_tab(window, tab));
+    crate::trace::trace(&format!("mini window: opened tab {tab:?} in the page: {done}"));
+    crate::frame::update_appbar(window);
+    done
+}
+
+/// The cursor that shows which edges a press resizes.
+pub fn cursor_of(edges: Edges) -> windows_sys::core::PCWSTR {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE};
+    match (edges.left || edges.right, edges.top || edges.bottom) {
+        (true, true) if (edges.left && edges.top) || (edges.right && edges.bottom) => IDC_SIZENWSE,
+        (true, true) => IDC_SIZENESW,
+        (true, false) => IDC_SIZEWE,
+        _ => IDC_SIZENS,
+    }
 }
 
 /// Whether a split pane's grip released at (`x`, `y`) left the pages, which makes that page a Mini
@@ -444,7 +467,9 @@ unsafe fn keep_page(window: HWND) {
 /// presses in the page belong to the browser.
 pub unsafe fn on_mouse(window: HWND, message: u32, lparam: isize) -> Option<isize> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        LoadCursorW, SetCursor, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR,
+    };
     if !is_open(window) {
         return None;
     }
@@ -452,6 +477,15 @@ pub unsafe fn on_mouse(window: HWND, message: u32, lparam: isize) -> Option<isiz
     let x = (lparam & 0xffff) as i16 as f32 / factor;
     let y = ((lparam >> 16) & 0xffff) as i16 as f32 / factor;
     match message {
+        WM_SETCURSOR => {
+            // The edges show the resize cursor while the pointer is on them or drags them.
+            let edges = with(window, |mini| match mini.drag.map(|drag| drag.hit).or(mini.hover) {
+                Some(Hit::Resize(edges)) => Some(edges),
+                _ => None,
+            })??;
+            SetCursor(LoadCursorW(std::ptr::null_mut(), cursor_of(edges)));
+            Some(1)
+        }
         WM_LBUTTONDOWN => {
             let target = with(window, |mini| {
                 let target = hit(mini.rect, x, y);
@@ -508,14 +542,18 @@ pub unsafe fn on_mouse(window: HWND, message: u32, lparam: isize) -> Option<isiz
                     close(window);
                 }
                 Hit::Return if hit(rect_of(window)?, x, y) == Some(Hit::Return) => {
-                    // The button puts the page back beside the window's page, on the right.
-                    return_to(window, Edge::Right);
+                    // The button opens the page in the window, as the demo's "Open in space".
+                    open_here(window);
                 }
-                Hit::Row if drag.moved => {
-                    if let Some(edge) = area(window).and_then(|area| return_edge(area, x, y)) {
+                Hit::Row if drag.moved => match area(window).and_then(|area| drop_target(area, x, y)) {
+                    Some(Some(edge)) => {
                         return_to(window, edge);
                     }
-                }
+                    Some(None) => {
+                        open_here(window);
+                    }
+                    None => {}
+                },
                 _ => {}
             }
             crate::frame::update_appbar(window);
@@ -738,12 +776,21 @@ mod tests {
 
     #[test]
     fn fr9_a_mini_window_dropped_on_a_page_edge_returns_as_a_split_there() {
-        assert_eq!(return_edge(AREA, 110.0, 400.0), Some(Edge::Left));
-        assert_eq!(return_edge(AREA, 1090.0, 400.0), Some(Edge::Right));
-        assert_eq!(return_edge(AREA, 600.0, 90.0), Some(Edge::Top));
-        assert_eq!(return_edge(AREA, 600.0, 770.0), Some(Edge::Bottom));
-        assert_eq!(return_edge(AREA, 600.0, 400.0), None, "a drop over the middle only moves it");
-        assert_eq!(return_edge(AREA, 50.0, 400.0), None);
+        assert_eq!(drop_target(AREA, 110.0, 400.0), Some(Some(Edge::Left)));
+        assert_eq!(drop_target(AREA, 1090.0, 400.0), Some(Some(Edge::Right)));
+        assert_eq!(drop_target(AREA, 600.0, 90.0), Some(Some(Edge::Top)));
+        assert_eq!(drop_target(AREA, 600.0, 770.0), Some(Some(Edge::Bottom)));
+        assert_eq!(drop_target(AREA, 600.0, 400.0), Some(None), "a drop over the middle opens the page there");
+        assert_eq!(drop_target(AREA, 50.0, 400.0), None, "off the pages it stays a Mini Window");
+    }
+
+    #[test]
+    fn fr9_the_mini_windows_edges_show_the_resize_cursor_of_their_direction() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE};
+        assert_eq!(cursor_of(Edges { left: true, ..Edges::default() }), IDC_SIZEWE);
+        assert_eq!(cursor_of(Edges { bottom: true, ..Edges::default() }), IDC_SIZENS);
+        assert_eq!(cursor_of(Edges { right: true, bottom: true, ..Edges::default() }), IDC_SIZENWSE);
+        assert_eq!(cursor_of(Edges { right: true, top: true, ..Edges::default() }), IDC_SIZENESW);
         assert_eq!(side_of(Edge::Top), Side::Top);
     }
 
