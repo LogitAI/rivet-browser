@@ -59,6 +59,9 @@ mod palette {
 }
 use palette::*;
 
+/// The command bar and the link preview, drawn with the appbar's canvas.
+mod overlays;
+
 /// A text style from the shell study: family, size, weight and letter spacing in em.
 #[derive(Clone, Copy)]
 struct Type {
@@ -79,6 +82,8 @@ const fn style(family: &'static str, size: f32, weight: i32, tracking: f32) -> T
 
 const SPACE_NAME: Type = style("Newsreader", 14.0, 600, -0.01);
 const BADGE: Type = style("DM Mono", 10.0, 500, 0.0);
+/// The title of the split group in the tab list, as the study's `.group .title`.
+const GROUP_TITLE: Type = style("DM Mono", 10.0, 500, 0.08);
 const META: Type = style("DM Mono", 10.0, 400, 0.0);
 const META_ROW: Type = style("Manrope", 12.0, 400, 0.0);
 const HELD_TEXT: Type = style("Manrope", 12.0, 500, 0.0);
@@ -87,6 +92,13 @@ const ACTIVE: Type = style("Manrope", 12.5, 600, 0.0);
 /// The study's `.where b` and `.security`.
 const ADDRESS_TITLE: Type = style("Manrope", 12.0, 600, 0.0);
 const CHIP_TEXT: Type = style("Manrope", 11.5, 600, 0.0);
+/// The address of a page in developer mode: a monospace font every Windows has, its size and the
+/// width of one of its characters at that size, in DIPs.
+const MONO_FAMILY: &str = "Consolas";
+const MONO_SIZE: f32 = 12.0;
+const MONO_ADVANCE: f32 = 6.6;
+/// The developer ground behind the address, a cool slate.
+const DEV_FIELD: u32 = 0x3d5a80;
 const FAVICON: Type = style("Manrope", 9.0, 700, 0.0);
 /// Interface icons come from the font Windows 11 draws its own caption buttons with.
 const ICONS: &str = "Segoe Fluent Icons";
@@ -197,6 +209,12 @@ pub struct Appbar {
     /// The top bar of a window with a single page, and what it was last painted for.
     address: IDCompositionVisual2,
     address_painted: Option<(crate::features::address_bar::View, u32)>,
+    /// The command bar over the page, and what it was last painted for.
+    command: IDCompositionVisual2,
+    command_painted: Option<(crate::features::command_bar::View, u32)>,
+    /// The header and shadow of a link preview, and what they were last painted for.
+    preview: IDCompositionVisual2,
+    preview_painted: Option<(crate::features::link_preview::View, u32)>,
 }
 
 /// What one page's top row shows. `x`, `y`, `width` and `height` are window pixels.
@@ -360,6 +378,11 @@ impl Appbar {
         // The top bar lies under the toggle and the floating appbar, like the browser row it replaces.
         let address = device.CreateVisual()?;
         root.AddVisual(&address, true, &ground)?;
+        // The link preview and the command bar lie over everything else of the window.
+        let preview = device.CreateVisual()?;
+        root.AddVisual(&preview, true, None::<&IDCompositionVisual>)?;
+        let command = device.CreateVisual()?;
+        root.AddVisual(&command, true, None::<&IDCompositionVisual>)?;
         target.SetRoot(&root)?;
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
@@ -394,6 +417,10 @@ impl Appbar {
             held_painted: None,
             address,
             address_painted: None,
+            command,
+            command_painted: None,
+            preview,
+            preview_painted: None,
         })
     }
 
@@ -901,7 +928,7 @@ impl Appbar {
         bar: Option<&crate::features::address_bar::View>,
         dpi: u32,
     ) -> Result<()> {
-        use crate::features::address_bar::{parts_of, Part, Security, CHIP, FIELD_GROUND};
+        use crate::features::address_bar::{Part, Security, CHIP, FIELD_GROUND};
         let Some(bar) = bar else {
             if self.address_painted.take().is_some() {
                 self.address.SetContent(None)?;
@@ -958,7 +985,9 @@ impl Appbar {
                 canvas.fill(rect(0.0, h / 2.0, w, h / 2.0), PAPER)?;
                 canvas.fill(rect(0.0, h - 1.0, w, 1.0), HAIRLINE)?;
             }
-            for (part, x, pw) in parts_of(w, bar.pane) {
+            for (part, x, pw) in
+                crate::features::address_bar::parts_reserving(w, bar.pane, bar.reserve)
+            {
                 let area = rect(x, (h - 28.0) / 2.0, pw, 28.0);
                 let hot = bar.hover == Some(part);
                 match part {
@@ -981,6 +1010,13 @@ impl Appbar {
                     Part::Address => {
                         if bar.editing {
                             canvas.fill_rounded(area, 8.0, rgba(FIELD_GROUND, 1.0))?;
+                        } else if bar.dev {
+                            // The developer row's own ground, so a local page is told apart at a glance.
+                            canvas.fill_rounded(
+                                area,
+                                8.0,
+                                rgba(DEV_FIELD, if hot { 0.28 } else { 0.18 }),
+                            )?;
                         } else if hot || bar.hover == Some(Part::Chip) {
                             canvas.fill_rounded(area, 8.0, rgba(INK, 0.05))?;
                         }
@@ -1012,7 +1048,11 @@ impl Appbar {
                         }
                         let left = chip.right + 4.0;
                         let room = (area.right - 10.0 - left).max(0.0);
-                        if !bar.editing {
+                        if !bar.editing && bar.dev {
+                            // Developer mode: the whole address in a monospace system font.
+                            let shown = crate::dev_mode::fit_address(&bar.url, room, MONO_ADVANCE);
+                            canvas.mono_text(rect(left, area.top, room, 28.0), &shown, SOFT_INK)?;
+                        } else if !bar.editing {
                             let title_w = if bar.title.is_empty() {
                                 0.0
                             } else {
@@ -1463,6 +1503,43 @@ impl Canvas<'_> {
         self.dot(x + 35.5 * unit, y + 35.5 * unit, 17.0 * unit, 0x7c2d4f)
     }
 
+    /// Draws one line in the system's monospace font, vertically centred in a box.
+    unsafe fn mono_text(&self, area: D2D_RECT_F, value: &str, rgb: u32) -> Result<()> {
+        let locale = HSTRING::from("en-us");
+        let format = self.dwrite.CreateTextFormat(
+            &HSTRING::from(MONO_FAMILY),
+            // The system's own fonts: Rivet's collection holds only the fonts it brings.
+            None::<&windows::Win32::Graphics::DirectWrite::IDWriteFontCollection>,
+            DWRITE_FONT_WEIGHT(400),
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            MONO_SIZE,
+            PCWSTR(locale.as_ptr()),
+        )?;
+        format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        let wide: Vec<u16> = value.encode_utf16().collect();
+        let layout = self.dwrite.CreateTextLayout(
+            &wide,
+            &format,
+            area.right - area.left,
+            area.bottom - area.top,
+        )?;
+        self.context
+            .PushAxisAlignedClip(&area, D2D1_ANTIALIAS_MODE_ALIASED);
+        self.context.DrawTextLayout(
+            Vector2 {
+                X: area.left,
+                Y: area.top,
+            },
+            &layout,
+            &self.brush(rgb)?,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+        );
+        self.context.PopAxisAlignedClip();
+        Ok(())
+    }
+
     /// Draws one line of text vertically centred in a box, optionally aligned to its right edge.
     unsafe fn text(
         &self,
@@ -1804,6 +1881,15 @@ impl Canvas<'_> {
                             if hover == Some(hit) { INK } else { SOFT_INK },
                             false,
                         )?;
+                        if group.count > 0 {
+                            self.text(
+                                TAB,
+                                rect(left + inner - 50.0, top, 22.0, 34.0),
+                                &group.count.to_string(),
+                                MUTED,
+                                false,
+                            )?;
+                        }
                         self.icon(
                             if group.collapsed {
                                 '\u{E76C}'
@@ -1815,6 +1901,23 @@ impl Canvas<'_> {
                             MUTED,
                         )
                     })?;
+                }
+                TabRow::SplitTitle { count } => {
+                    // The group's glass reaches over its title and the tabs that follow, as the
+                    // study's `.group`.
+                    let tall = crate::tab_rows::SPLIT_TITLE_HEIGHT + 34.0 * *count as f32;
+                    let glass = rect(left - 4.0, top - 2.0, inner + 8.0, tall + 6.0);
+                    self.fill_rounded(glass, 12.0, rgba(WHITE, 0.35))?;
+                    self.ring(glass, 12.0, rgba(INK, 0.06))?;
+                    let height = crate::tab_rows::SPLIT_TITLE_HEIGHT;
+                    self.icon('\u{ECA5}', rect(left + 8.0, top, 12.0, height), 12.0, MUTED)?;
+                    self.text(
+                        GROUP_TITLE,
+                        rect(left + 26.0, top, inner - 34.0, height),
+                        "SPLIT VIEW",
+                        MUTED,
+                        false,
+                    )?;
                 }
                 TabRow::NewTab => {
                     let row = row(Lead::Glyph('\u{E710}'), "New tab", "Ctrl T");
@@ -1852,7 +1955,7 @@ impl Canvas<'_> {
                     )?;
                 }
             }
-            top += 34.0;
+            top += crate::tab_rows::height(item);
         }
 
         // The foot: the settings, the spaces and a new space.
@@ -1990,7 +2093,9 @@ impl Canvas<'_> {
                 for (row, title) in crate::frame::TAB_ITEMS.iter().enumerate() {
                     let y = top + 4.0 + row as f32 * 34.0;
                     let item = rect(left + 4.0, y, inner - 8.0, 34.0);
-                    let hit = AppbarHit::SplitTab(tab);
+                    let Some(hit) = crate::frame::tab_item_hit(row, tab) else {
+                        continue;
+                    };
                     self.pressed(item, 8.0, 0.98, scene.effect(&[hit]), || {
                         if scene.hover == Some(hit) {
                             self.fill_rounded(item, 8.0, rgba(INK, 0.04))?;
@@ -2006,7 +2111,9 @@ impl Canvas<'_> {
                 }
             }
             Menu::Settings => {
+                let provider = crate::frame::saved_credentials();
                 for (index, (title, hit)) in crate::frame::SETTINGS_ITEMS.iter().enumerate() {
+                    let title = crate::frame::settings_title(title, *hit, provider);
                     let y = top + 4.0 + index as f32 * 34.0;
                     let item = rect(left + 4.0, y, inner - 8.0, 34.0);
                     let effect = hit.and_then(|hit| scene.effect(&[hit]));
@@ -2017,7 +2124,7 @@ impl Canvas<'_> {
                         self.text(
                             TAB,
                             rect(left + 13.0, y, inner - 26.0, 34.0),
-                            title,
+                            &title,
                             if hit.is_some() { SOFT_INK } else { MUTED },
                             false,
                         )
@@ -2171,7 +2278,10 @@ impl Canvas<'_> {
             // Rivet draws the caption buttons on the row of the page at the window's top right.
             self.fill(rect(vw, oy, full - vw, h), PAPER)?;
             self.fill(rect(vw, oy + h - 1.0, full - vw, 1.0), HAIRLINE)?;
-            self.caption_buttons(full, oy, h, row.caption_hover, row.zoomed, false)?;
+            // The window buttons fade with the rest of a row whose page is not focused.
+            self.with_opacity(crate::features::split::row_ink_opacity(row.active), || {
+                self.caption_buttons(full, oy, h, row.caption_hover, row.zoomed, false)
+            })?;
         }
         self.with_opacity(crate::features::split::row_ink_opacity(row.active), || {
             self.pane_row_buttons(row, &buttons, ox, oy, h)
@@ -2240,9 +2350,12 @@ impl Canvas<'_> {
                     } else {
                         format!("{} \u{b7} {}", row.title, row.url)
                     };
+                    // A long address ends in an ellipsis inside its field.
+                    let room = (width - 20.0).max(0.0);
+                    let shown = elide(self.dwrite, self.fonts, META_ROW, &shown, room)?;
                     self.text(
                         META_ROW,
-                        rect(area.left + 10.0, area.top, (width - 20.0).max(0.0), 28.0),
+                        rect(area.left + 10.0, area.top, room, 28.0),
                         &shown,
                         MUTED,
                         false,

@@ -156,6 +156,7 @@ pub static CHROME: Build = Build {
         new_tab_address: None,
         new_tab_takes_address: false,
         new_tab_delay_ms: 0,
+        new_tab_by_open_url: None,
         new_tab: 0x0A0B_8F50, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
         last_committed_url: 0x058A_48A0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
         visible_url: 0x05CF_8BA0,        // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
@@ -550,6 +551,7 @@ pub static CHROME_156_74: Build = Build {
         new_tab_address: None,
         new_tab_takes_address: false,
         new_tab_delay_ms: 0,
+        new_tab_by_open_url: None,
         new_tab: 0x09E7_61A0, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
         last_committed_url: 0x0559_38B0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
         visible_url: 0x00B6_3BC0,        // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
@@ -960,6 +962,7 @@ pub static CHROME_156_80: Build = Build {
         new_tab_address: None,
         new_tab_takes_address: false,
         new_tab_delay_ms: 0,
+        new_tab_by_open_url: None,
         new_tab: 0x09E6_B310, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
         last_committed_url: 0x0557_5640, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
         visible_url: 0x00AC_1480,        // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ

@@ -14,17 +14,21 @@ use rivet_core::{build_launch_plan, profile_allows_rivet, DisplayMode, LaunchReq
 use rivet_platform_windows::hold::{self, Launch};
 use rivet_platform_windows::signed_table;
 use rivet_platform_windows::{
-    browser_windows, close_browser_window, inject_runtime, launch_clock, process_tree_is_alive,
-    process_was_launched, resolve_browser_executable, wait_for_new_browser_window, BrowserWindow,
+    browser_windows, close_browser_window, inject_runtime, launch_clock, post_window_command,
+    process_tree_is_alive, process_was_launched, resolve_browser_executable,
+    wait_for_new_browser_window, BrowserWindow,
 };
 
 const USAGE: &str = "\
 Usage:
-  rivet setup [--browser <path> [--profile <name>]] [--list] [--json]
+  rivet setup [--browser <path> [--profile <name>] [--credentials browser|system]] [--list] [--json]
   rivet session start --browser <path> [--url <url>] [--user-data-dir <path>] \\
-      [--display visible|hidden|auto] [--runtime <path>] [--state <path>] [--hold <path>] [--json]
+      [--display visible|hidden|auto] [--runtime <path>] [--state <path>] [--hold <path>]
+      [--credentials browser|system] [--json]
   rivet session list [--state <path>] [--json]
   rivet session close --id <id> [--state <path>] [--json]
+  rivet session mini-window --id <id> [--state <path>] \\
+      pop-out | close | return left|right|top|bottom | move <x> <y> | resize <width> <height>
   rivet hold refresh --browser <path> [--hold <path>]
 
 The browser executable is always explicit in this first release. Rivet does not guess a browser
@@ -40,6 +44,8 @@ struct StartOptions {
     state: Option<PathBuf>,
     /// Where held browser builds live, instead of the folder below local application data.
     hold: Option<PathBuf>,
+    /// Who keeps passwords and passkeys, when the caller chose. Otherwise the saved setup decides.
+    credentials: Option<rivet_core::CredentialProvider>,
     json: bool,
 }
 
@@ -75,10 +81,11 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
         Some(command) if command == ["session", "start"] => run_start(parse_start(arguments)?),
         Some(command) if command == ["session", "list"] => run_list(parse_query(arguments)?),
         Some(command) if command == ["session", "close"] => run_close(parse_close(arguments)?),
+        Some(command) if command == ["session", "mini-window"] => run_mini_window(parse_mini_window(arguments)?),
         Some(command) if command == ["builds", "update"] => run_builds_update(&arguments[2..]),
         Some(command) if command == ["builds", "apply"] => run_builds_apply(&arguments[2..]),
         Some(command) if command == ["hold", "refresh"] => run_hold_refresh(arguments),
-        _ => Err("expected `setup`, `session start`, `session list`, `session close`, `builds update`, `builds apply` or `hold refresh`".into()),
+        _ => Err("expected `setup`, `session start`, `session list`, `session close`, `session mini-window`, `builds update`, `builds apply` or `hold refresh`".into()),
     }
 }
 
@@ -93,6 +100,7 @@ enum SetupRequest {
     Choose {
         browser: PathBuf,
         profile: String,
+        credentials: rivet_core::CredentialProvider,
         json: bool,
     },
 }
@@ -100,6 +108,7 @@ enum SetupRequest {
 fn parse_setup(arguments: &[String]) -> Result<SetupRequest, String> {
     let mut browser = None;
     let mut profile = None;
+    let mut credentials = None;
     let mut list = false;
     let mut json = false;
     let mut index = 0;
@@ -113,6 +122,13 @@ fn parse_setup(arguments: &[String]) -> Result<SetupRequest, String> {
                 )?))
             }
             "--profile" => profile = Some(next_value(arguments, &mut index, "--profile")?),
+            "--credentials" => {
+                credentials = Some(parse_credentials(&next_value(
+                    arguments,
+                    &mut index,
+                    "--credentials",
+                )?)?)
+            }
             "--list" => list = true,
             "--json" => json = true,
             option => return Err(format!("unknown option {option:?}")),
@@ -125,6 +141,7 @@ fn parse_setup(arguments: &[String]) -> Result<SetupRequest, String> {
         (false, Some(browser), profile) => Ok(SetupRequest::Choose {
             browser,
             profile: profile.unwrap_or_else(|| rivet_cli::config::DEFAULT_PROFILE.to_owned()),
+            credentials: credentials.unwrap_or_default(),
             json,
         }),
         (false, None, Some(_)) => Err("--profile needs --browser".into()),
@@ -178,12 +195,14 @@ fn run_setup(arguments: &[String]) -> Result<(), String> {
         SetupRequest::Choose {
             browser,
             profile,
+            credentials,
             json,
         } => {
             let found = system::inspect(&browser)
                 .map_err(|rejection| format!("{}: {rejection}", browser.display()))?;
             let root = config::data_root()?;
-            let saved = model::choose(found, &profile, &root)?;
+            let mut saved = model::choose(found, &profile, &root)?;
+            saved.credentials = credentials;
             config::save(&root, &saved)?;
             if json {
                 println!("{}", config::to_json(&saved));
@@ -243,6 +262,7 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         url: options.url.clone(),
         user_data_dir: options.user_data_dir.clone(),
         display: options.display,
+        credentials: options.credentials.unwrap_or_else(saved_credentials),
     };
     // Only a window with Rivet's surface may open. A hidden session has no window to protect.
     let held_root = options.hold.clone().or_else(hold::default_root);
@@ -280,6 +300,16 @@ fn run_start(options: StartOptions) -> Result<(), String> {
             "Rivet runs only on a profile of its own, so that it never enters your own browser; pass --user-data-dir with a folder outside the browser's User Data"
                 .into(),
         );
+    }
+    // The provider's preferences are written into a Rivet profile only, before the browser reads them.
+    if let Some(dir) = request
+        .user_data_dir
+        .as_deref()
+        .filter(|dir| profile_allows_rivet(Some(dir)))
+    {
+        if let Err(error) = rivet_core::credentials::prepare_profile(dir, request.credentials) {
+            eprintln!("rivet: {error}");
+        }
     }
     let launch_started = launch_clock();
     let existing_windows = if runtime.is_some() && plan.display == DisplayMode::Visible {
@@ -355,6 +385,19 @@ fn run_start(options: StartOptions) -> Result<(), String> {
     Ok(())
 }
 
+/// The provider in the saved setup, the browser's when nothing is saved.
+fn saved_credentials() -> rivet_core::CredentialProvider {
+    rivet_cli::config::data_root()
+        .ok()
+        .and_then(|root| rivet_cli::config::load(&root).ok().flatten())
+        .map_or_else(Default::default, |saved| saved.credentials)
+}
+
+fn parse_credentials(value: &str) -> Result<rivet_core::CredentialProvider, String> {
+    rivet_core::CredentialProvider::parse(value)
+        .ok_or_else(|| format!("--credentials must be browser or system, not {value:?}"))
+}
+
 fn resolve_runtime(explicit: Option<&std::path::Path>) -> Option<PathBuf> {
     if let Some(path) = explicit {
         return Some(path.to_path_buf());
@@ -375,11 +418,19 @@ fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
     let mut runtime = None;
     let mut state = None;
     let mut hold = None;
+    let mut credentials = None;
     let mut json = false;
     let mut index = 2;
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--hold" => hold = Some(PathBuf::from(next_value(&arguments, &mut index, "--hold")?)),
+            "--credentials" => {
+                credentials = Some(parse_credentials(&next_value(
+                    &arguments,
+                    &mut index,
+                    "--credentials",
+                )?)?)
+            }
             "--browser" => {
                 browser = Some(PathBuf::from(next_value(
                     &arguments,
@@ -442,6 +493,7 @@ fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
         runtime,
         state,
         hold,
+        credentials,
         json,
     })
 }
@@ -533,6 +585,63 @@ fn run_list(options: QueryOptions) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// What `rivet session mini-window` was asked to do.
+#[derive(Debug, PartialEq, Eq)]
+struct MiniWindowOptions {
+    id: String,
+    state: Option<PathBuf>,
+    command: rivet_protocol::window::MiniWindowCommand,
+}
+
+fn parse_mini_window(arguments: Vec<String>) -> Result<MiniWindowOptions, String> {
+    let mut id = None;
+    let mut state = None;
+    let mut words = Vec::new();
+    let mut index = 2;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--id" => id = Some(next_value(&arguments, &mut index, "--id")?),
+            "--state" => {
+                state = Some(PathBuf::from(next_value(
+                    &arguments, &mut index, "--state",
+                )?))
+            }
+            option if option.starts_with("--") => return Err(format!("unknown option {option:?}")),
+            word => words.push(word.to_owned()),
+        }
+        index += 1;
+    }
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    Ok(MiniWindowOptions {
+        id: id.ok_or_else(|| "--id is required".to_owned())?,
+        state,
+        command: rivet_protocol::window::MiniWindowCommand::parse(&words)?,
+    })
+}
+
+/// Sends a Mini Window command to the window of one Rivet session, the same command the window's
+/// own buttons run.
+fn run_mini_window(options: MiniWindowOptions) -> Result<(), String> {
+    let registry = SessionRegistry::load(&state_path(options.state.as_deref())?)
+        .map_err(|error| error.to_string())?;
+    let session = registry
+        .list()
+        .find(|session| session.id == options.id)
+        .ok_or_else(|| format!("Rivet session {:?} does not exist", options.id))?;
+    let (wparam, lparam) = options.command.encode();
+    post_window_command(
+        &session.browser,
+        BrowserWindow {
+            handle: session.window_handle,
+            process_id: session.process_id,
+        },
+        rivet_protocol::window::MINI_WINDOW_MESSAGE,
+        wparam,
+        lparam,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn run_close(options: CloseOptions) -> Result<(), String> {
@@ -672,6 +781,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fr9_cli_names_a_session_and_a_mini_window_command() {
+        use rivet_protocol::window::{Edge, MiniWindowCommand};
+        let words = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            parse_mini_window(words(&[
+                "session",
+                "mini-window",
+                "--id",
+                "s1",
+                "return",
+                "left"
+            ])),
+            Ok(MiniWindowOptions {
+                id: "s1".into(),
+                state: None,
+                command: MiniWindowCommand::Return(Edge::Left)
+            })
+        );
+        assert_eq!(
+            parse_mini_window(words(&["session", "mini-window", "pop-out", "--id", "s2"]))
+                .map(|options| options.command),
+            Ok(MiniWindowCommand::PopOut)
+        );
+        assert!(
+            parse_mini_window(words(&["session", "mini-window", "close"])).is_err(),
+            "the session is required"
+        );
+        assert!(
+            parse_mini_window(words(&["session", "mini-window", "--id", "s1"])).is_err(),
+            "a command is required"
+        );
+    }
+
+    #[test]
     fn fr1_setup_without_options_opens_the_window() {
         assert_eq!(parse_setup(&[]), Ok(SetupRequest::Window));
     }
@@ -695,6 +843,7 @@ mod tests {
             Ok(SetupRequest::Choose {
                 browser: PathBuf::from(r"C:\B\chrome.exe"),
                 profile: "Work".into(),
+                credentials: Default::default(),
                 json: true
             })
         );
@@ -703,9 +852,20 @@ mod tests {
             Ok(SetupRequest::Choose {
                 browser: PathBuf::from(r"C:\B\chrome.exe"),
                 profile: "Default".into(),
+                credentials: Default::default(),
                 json: false
             })
         );
+        assert_eq!(
+            parse_setup(&words(&["--browser", "b.exe", "--credentials", "system"])),
+            Ok(SetupRequest::Choose {
+                browser: PathBuf::from("b.exe"),
+                profile: "Default".into(),
+                credentials: rivet_core::CredentialProvider::System,
+                json: false
+            })
+        );
+        assert!(parse_setup(&words(&["--browser", "b.exe", "--credentials", "vault"])).is_err());
         assert_eq!(
             parse_setup(&words(&["--list", "--json"])),
             Ok(SetupRequest::List { json: true })
@@ -771,7 +931,8 @@ mod tests {
             browser: options.browser,
             url: options.url,
             user_data_dir: None,
-            display: DisplayMode::Visible
+            display: DisplayMode::Visible,
+            credentials: Default::default(),
         })
         .is_ok());
     }

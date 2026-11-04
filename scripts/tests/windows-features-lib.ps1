@@ -108,6 +108,21 @@ function Test-Blank($Capture) {
     [FeaturePixels]::NonDominant($Capture.Pixels, $Capture.Width, 0, 0, $Capture.Width, $Capture.Height) -lt 0.02
 }
 
+# A link preview: the `Floating` page shows solidly inside the area of the `Under` page, which still
+# shows around it, so it lies over that page instead of beside it.
+function Test-FloatingPage($Capture, [int]$Under, [int]$Floating) {
+    if (Test-Blank $Capture) { return New-Verdict 'NOT_DRIVEN' 'the capture is blank' }
+    $window = $Capture.Width * $Capture.Height
+    $u = Get-PageRegion $Capture $Under
+    $f = Get-PageRegion $Capture $Floating
+    if ($f.Count -lt $window * 0.08) { return New-Verdict 'FAIL' ('the preview page does not show: {0:P1} of the window has its colour' -f ($f.Count / $window)) }
+    if ($f.Count -lt $f.Area * 0.85) { return New-Verdict 'FAIL' ('the preview page is not painted solidly (fill {0:P0})' -f ($f.Count / $f.Area)) }
+    if ($u.Count -lt $window * 0.05) { return New-Verdict 'FAIL' 'the page under the preview no longer shows' }
+    $inside = $f.X0 -gt $u.X0 -and $f.X1 -lt $u.X1 -and $f.Y0 -gt $u.Y0 -and $f.Y1 -le $u.Y1
+    if (-not $inside) { return New-Verdict 'FAIL' ('the preview {0}x{1} at {2},{3} is not inside the page {4}x{5} at {6},{7}' -f $f.Width, $f.Height, $f.X0, $f.Y0, $u.Width, $u.Height, $u.X0, $u.Y0) }
+    New-Verdict 'PASS' ('preview {0}x{1} at {2},{3} over the page {4}x{5} at {6},{7}' -f $f.Width, $f.Height, $f.X0, $f.Y0, $u.Width, $u.Height, $u.X0, $u.Y0)
+}
+
 function Get-Coverage($Region, $Capture) { if ($Region.Area -eq 0) { 0 } else { $Region.Count / ($Capture.Width * $Capture.Height) } }
 
 function Test-Overlap($A, $B) {
@@ -138,6 +153,38 @@ function Test-TwoPages($Capture, [int]$ColourOne, [int]$ColourTwo) {
     }
     if (Test-Overlap $a $b) { return New-Verdict 'FAIL' 'the two areas overlap' }
     New-Verdict 'PASS' ('first {0}x{1} at {2},{3}; second {4}x{5} at {6},{7}' -f $a.Width, $a.Height, $a.X0, $a.Y0, $b.Width, $b.Height, $b.X0, $b.Y0)
+}
+
+# The pages of a split grid. Every colour shows as a solid page, no two overlap, and they sit as
+# `Shape` says: 'above' puts the first page above the second in one column; 'three' puts the first
+# page beside the other two, which are stacked; 'four' is two columns of two, given as the left
+# column top to bottom, then the right column.
+function Test-GridPages($Capture, [int[]]$Colours, [string]$Shape) {
+    if (Test-Blank $Capture) { return New-Verdict 'NOT_DRIVEN' 'the capture is blank' }
+    $window = $Capture.Width * $Capture.Height
+    $r = @($Colours | ForEach-Object { Get-PageRegion $Capture $_ })
+    for ($i = 0; $i -lt $r.Count; $i++) {
+        if ($r[$i].Count -lt $window * 0.04) { return New-Verdict 'FAIL' ('page {0} does not show: {1:P1} of the window has its colour' -f ($i + 1), ($r[$i].Count / $window)) }
+        if ($r[$i].Count -lt $r[$i].Area * 0.85) { return New-Verdict 'FAIL' ('page {0} is not painted solidly (fill {1:P0})' -f ($i + 1), ($r[$i].Count / $r[$i].Area)) }
+        for ($j = $i + 1; $j -lt $r.Count; $j++) {
+            if (Test-Overlap $r[$i] $r[$j]) { return New-Verdict 'FAIL' ('pages {0} and {1} overlap' -f ($i + 1), ($j + 1)) }
+        }
+    }
+    # Two pages share a column when their middles are close, and one is above the other when it
+    # ends before the other starts.
+    $tol = $Capture.Width * 0.06
+    $column = { param($a, $b) [Math]::Abs(($a.X0 + $a.X1) / 2 - ($b.X0 + $b.X1) / 2) -lt $tol }
+    $above = { param($a, $b) $a.Y1 -le $b.Y0 -and $a.X0 -lt $b.X1 -and $b.X0 -lt $a.X1 }
+    $beside = { param($a, $b) $a.X1 -le $b.X0 -or $b.X1 -le $a.X0 }
+    $ok = switch ($Shape) {
+        'above' { $r.Count -eq 2 -and (& $above $r[0] $r[1]) }
+        'three' { $r.Count -eq 3 -and (& $beside $r[0] $r[1]) -and (& $beside $r[0] $r[2]) -and (& $column $r[1] $r[2]) -and (& $above $r[1] $r[2]) -and $r[0].Height -gt 1.5 * $r[1].Height }
+        'four' { $r.Count -eq 4 -and (& $column $r[0] $r[1]) -and (& $column $r[2] $r[3]) -and (& $above $r[0] $r[1]) -and (& $above $r[2] $r[3]) -and (& $beside $r[0] $r[2]) -and [Math]::Abs($r[0].Y0 - $r[2].Y0) -lt $Capture.Height * 0.06 }
+        default { $false }
+    }
+    $where = ($r | ForEach-Object { '{0}x{1} at {2},{3}' -f $_.Width, $_.Height, $_.X0, $_.Y0 }) -join '; '
+    if (-not $ok) { return New-Verdict 'FAIL' "the pages are not arranged as '$Shape': $where" }
+    New-Verdict 'PASS' ('{0}: {1}' -f $Shape, $where)
 }
 
 # Page narrower and a rail beside it, then a panel in front of the page.
@@ -226,7 +273,7 @@ function Write-SpaceSeed([string]$Profile, [string]$Key) {
   $file = Join-Path $local ('Rivet\state\spaces\' + $hash.ToString('x').PadLeft(16, '0').TrimStart('0').PadLeft(16, '0') + '.json')
   New-Item -ItemType Directory -Force (Split-Path $file) | Out-Null
   $json = @{
-    version = 2; user_data_dir = $Profile; current = 0; appbar = @{ width = 268; hidden = $false }
+    version = 2; user_data_dir = $Profile; current = 0; appbar = @{ width = 276; hidden = $false }
     spaces = @(
       @{ name = 'FeatureA'; tint = 0xd08a52; browser = $Key; profile = 'FeatureA'; tabs = @() },
       @{ name = 'FeatureB'; tint = 0x5b8bab; browser = $Key; profile = 'FeatureB'; tabs = @() }

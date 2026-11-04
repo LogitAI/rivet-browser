@@ -10,6 +10,8 @@ pub mod generated {
     include!(concat!(env!("OUT_DIR"), "/rivet.control.v1.rs"));
 }
 
+pub mod window;
+
 pub use generated::{Hello, HelloAccepted, HelloRejected, ProtocolVersion};
 
 /// The protocol major version. A different major version is never accepted.

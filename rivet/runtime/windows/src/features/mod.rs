@@ -2,15 +2,25 @@
 
 pub(crate) mod address_bar;
 pub(crate) mod app_window;
+pub(crate) mod bubble_anchor;
+pub(crate) mod command_bar;
 pub(crate) mod dev_page;
 pub(crate) mod frame_layout;
+pub(crate) mod link_preview;
+pub(crate) mod link_tabs;
 pub(crate) mod look;
+pub(crate) mod mini_window;
 pub(crate) mod navigation;
 pub(crate) mod omnibox;
 pub(crate) mod page_bar;
+pub(crate) mod page_fit;
+pub(crate) mod pane_infobar;
 pub(crate) mod second_view;
 pub(crate) mod side_panel;
+pub(crate) mod sidebar_page;
 pub(crate) mod split;
+pub(crate) mod split_grid;
+pub(crate) mod tab_list;
 pub(crate) mod tab_strip;
 pub(crate) mod tabs;
 pub(crate) mod vertical_tabs;

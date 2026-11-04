@@ -577,6 +577,7 @@ pub(crate) fn start_early() {
 
 /// Installs the window feature answer once, at attach or before the first window.
 pub(crate) fn install_features() {
+    crate::features::bubble_anchor::install();
     let Some(image) = crate::chromium::image::recorded() else {
         crate::trace::trace("app window features: no recorded image");
         return;

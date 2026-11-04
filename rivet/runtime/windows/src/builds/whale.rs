@@ -174,6 +174,7 @@ pub static WHALE: Build = Build {
         new_tab_address: Some(0x68),
         new_tab_takes_address: true,
         new_tab_delay_ms: 0,
+        new_tab_by_open_url: None,
         new_tab: 0x02569CB0,
         last_committed_url: 0x06762170,
         visible_url: 0x06762120,

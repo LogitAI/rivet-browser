@@ -47,6 +47,21 @@ Expect 'fr_split_white_capture_is_not_driven' (Test-TwoPages (New-Window 0xFFFFF
 Expect 'fr_split_black_capture_is_not_driven' (Test-TwoPages (New-Window 0x000000) $A $B) 'NOT_DRIVEN'
 Expect 'fr_one_page_white_capture_is_not_driven' (Test-OnePage (New-Window 0xFFFFFF) $A $B) 'NOT_DRIVEN'
 
+# A split grid: stacked, three and four pages, and the windows the checks must reject.
+$C = $script:ColourC; $D = $script:ColourD
+Expect 'fr9_grid_page_above_passes' (Test-GridPages $stack @($A, $B) 'above') 'PASS'
+Expect 'fr9_grid_page_above_fails_side_by_side' (Test-GridPages $two @($A, $B) 'above') 'FAIL'
+Expect 'fr9_grid_page_above_fails_upside_down' (Test-GridPages $stack @($B, $A) 'above') 'FAIL'
+$three = Fill (Fill (Fill (New-Window) 160 60 520 540 $C) 530 60 890 290 $A) 530 300 890 540 $B
+Expect 'fr9_grid_three_pages_pass' (Test-GridPages $three @($C, $A, $B) 'three') 'PASS'
+Expect 'fr9_grid_three_fails_with_two_pages' (Test-GridPages $two @($A, $B, $C) 'three') 'FAIL'
+$four = Fill (Fill (Fill (Fill (New-Window) 160 60 520 290 $D) 160 300 520 540 $B) 530 60 890 290 $A) 530 300 890 540 $C
+Expect 'fr9_grid_four_pages_pass' (Test-GridPages $four @($D, $B, $A, $C) 'four') 'PASS'
+Expect 'fr9_grid_four_fails_on_three_pages' (Test-GridPages $three @($C, $A, $B, $D) 'four') 'FAIL'
+$row4 = Fill (Fill (Fill (Fill (New-Window) 160 60 330 540 $D) 340 60 520 540 $B) 530 60 700 540 $A) 710 60 890 540 $C
+Expect 'fr9_grid_four_fails_on_a_row_of_four' (Test-GridPages $row4 @($D, $B, $A, $C) 'four') 'FAIL'
+Expect 'fr9_grid_blank_capture_is_not_driven' (Test-GridPages (New-Window 0xFFFFFF) @($A, $B) 'above') 'NOT_DRIVEN'
+
 # Ending the split leaves one page.
 Expect 'fr_unsplit_one_page_passes' (Test-OnePage $one $B $A) 'PASS'
 Expect 'fr_unsplit_fails_while_two_pages_show' (Test-OnePage $two $A $B) 'FAIL'

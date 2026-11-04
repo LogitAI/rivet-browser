@@ -21,6 +21,8 @@ pub struct Model {
     pub error: Option<String>,
     /// The first browser row shown, when more rows exist than fit.
     pub scroll: usize,
+    /// Who keeps passwords and passkeys in the profile.
+    pub credentials: rivet_core::CredentialProvider,
 }
 
 impl Model {
@@ -44,6 +46,7 @@ impl Model {
             reason,
             error: None,
             scroll: 0,
+            credentials: choose.map_or_else(Default::default, |saved| saved.credentials),
         };
         let first = choose
             .and_then(|saved| {
@@ -153,7 +156,9 @@ impl Model {
 
     pub fn finish(&self) -> Result<Saved, String> {
         let browser = self.selected_browser().ok_or("Choose a browser first.")?;
-        config::finish(browser, &self.profile)
+        let mut saved = config::finish(browser, &self.profile)?;
+        saved.credentials = self.credentials;
+        Ok(saved)
     }
 }
 
@@ -217,7 +222,7 @@ pub const MANUAL_ROW: f32 = 44.0;
 const GROUP_PAD: f32 = 4.0;
 const HEADER_END: f32 = 96.0;
 /// The height of everything except the browser rows, without a notice.
-const FIXED: f32 = 450.0;
+const FIXED: f32 = 518.0;
 
 /// Where everything sits, for one set of counts.
 #[derive(Clone, Debug, PartialEq)]
@@ -238,6 +243,9 @@ pub struct Layout {
     pub chips: Vec<Rect>,
     pub chip_hint: Rect,
     pub preview: Rect,
+    pub credentials_label: Rect,
+    /// The password and passkey providers, in the order of `CredentialProvider::ALL`.
+    pub credentials: [Rect; 2],
     pub message: Rect,
     pub finish: Rect,
 }
@@ -306,6 +314,14 @@ pub fn layout(visible: usize, notice: bool, chip_widths: &[f32]) -> Layout {
     y += 36.0;
     let preview = Rect::new(PAD + 4.0, y, WIDTH - 2.0 * PAD - 8.0, 16.0);
     y += 30.0;
+    let credentials_label = Rect::new(PAD + 4.0, y, 320.0, 14.0);
+    y += 22.0;
+    let half = (WIDTH - 2.0 * PAD - 8.0) / 2.0;
+    let credentials = [
+        Rect::new(PAD, y, half, 36.0),
+        Rect::new(PAD + half + 8.0, y, half, 36.0),
+    ];
+    y += 46.0;
     let finish = Rect::new(WIDTH - PAD - 132.0, y, 132.0, 44.0);
     let message = Rect::new(PAD + 4.0, y, finish.x - PAD - 16.0, 44.0);
     y += 44.0 + 28.0;
@@ -324,6 +340,8 @@ pub fn layout(visible: usize, notice: bool, chip_widths: &[f32]) -> Layout {
         chips,
         chip_hint,
         preview,
+        credentials_label,
+        credentials,
         message,
         finish,
     }
@@ -341,6 +359,8 @@ pub enum Hit {
     Manual,
     Field,
     Chip(usize),
+    /// A password and passkey provider, by its place in `CredentialProvider::ALL`.
+    Credentials(usize),
     Finish,
 }
 
@@ -359,6 +379,13 @@ pub fn hit(layout: &Layout, x: f32, y: f32) -> Hit {
     }
     if let Some(index) = layout.chips.iter().position(|chip| chip.contains(x, y)) {
         return Hit::Chip(index);
+    }
+    if let Some(index) = layout
+        .credentials
+        .iter()
+        .position(|option| option.contains(x, y))
+    {
+        return Hit::Credentials(index);
     }
     if layout.finish.contains(x, y) {
         return Hit::Finish;
@@ -480,6 +507,7 @@ mod tests {
         let saved = Saved {
             browser: PathBuf::from(r"c:\b\brave\BRAVE.exe"),
             profile: "Lab".into(),
+            credentials: Default::default(),
         };
         let model = Model::new(
             list,
@@ -545,6 +573,9 @@ mod tests {
                 layout.profile_label,
                 layout.field,
                 layout.preview,
+                layout.credentials_label,
+                layout.credentials[0],
+                layout.credentials[1],
                 layout.finish,
             ];
             all.extend(layout.notice);
@@ -592,6 +623,24 @@ mod tests {
         assert_eq!(hit(&layout, x, y), Hit::Close);
         assert_eq!(hit(&layout, 100.0, 20.0), Hit::Caption);
         assert_eq!(hit(&layout, 5.0, layout.height - 4.0), Hit::None);
+    }
+
+    #[test]
+    fn nfr8_setup_window_offers_both_providers_and_finishes_with_the_choice() {
+        let layout = layout(2, false, &[]);
+        for (index, option) in layout.credentials.iter().enumerate() {
+            assert_eq!(
+                hit(&layout, option.x + 4.0, option.y + 4.0),
+                Hit::Credentials(index)
+            );
+        }
+        let mut model = model(&[("chrome", Status::Ready)]);
+        assert_eq!(model.credentials, rivet_core::CredentialProvider::Browser);
+        model.credentials = rivet_core::CredentialProvider::ALL[1];
+        assert_eq!(
+            model.finish().unwrap().credentials,
+            rivet_core::CredentialProvider::System
+        );
     }
 
     #[test]

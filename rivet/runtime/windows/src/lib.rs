@@ -18,7 +18,7 @@ pub extern "C" fn rivet_runtime_abi_version() -> u32 {
 
 /// The default appbar width in device-independent pixels.
 #[cfg(any(windows, test))]
-const APPBAR_WIDTH: i32 = 268;
+const APPBAR_WIDTH: i32 = 276;
 
 /// The range the appbar width can be dragged between, in device-independent pixels.
 #[cfg(any(windows, test))]
@@ -443,7 +443,10 @@ mod tests {
     #[test]
     fn fr3_appbar_width_stays_between_200_and_420() {
         let mut layout = AppbarLayout::new();
-        assert_eq!(layout.side, 268);
+        assert_eq!(
+            layout.side, 276,
+            "the default width is the study's 276 DIP sidebar"
+        );
         assert!(layout.set_width(100));
         assert_eq!(layout.side, 200);
         assert!(layout.set_width(900));
@@ -483,8 +486,8 @@ mod tests {
         let mut layout = AppbarLayout::new();
         layout.toggle();
         assert!(layout.keeps_peek(5, 400, 900));
-        assert!(layout.keeps_peek(FLOAT_INSET + 267, 400, 900));
-        assert!(!layout.keeps_peek(FLOAT_INSET + 268, 400, 900));
+        assert!(layout.keeps_peek(FLOAT_INSET + 275, 400, 900));
+        assert!(!layout.keeps_peek(FLOAT_INSET + 276, 400, 900));
         assert!(!layout.keeps_peek(100, 900, 900));
         layout.toggle();
         assert!(
@@ -637,3 +640,5 @@ mod tests {
 
 #[cfg(windows)]
 mod tab_rows;
+#[cfg(windows)]
+mod tab_sections;

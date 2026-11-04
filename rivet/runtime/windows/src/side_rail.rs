@@ -1083,6 +1083,8 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
         return;
     }
     ScreenToClient(window, &mut pointer);
+    // An extension page may load into the browser's side panel after the click that opened it.
+    crate::features::sidebar_page::follow(window);
     let known = RAILS.with(|rails| {
         rails
             .borrow()
@@ -1219,6 +1221,16 @@ fn entries_of(window: HWND) -> Vec<panel::EntryKey> {
 
 /// What a click on a target does.
 unsafe fn perform(window: HWND, target: Target) {
+    // The browser destroys an entry's page when the entry closes, so a page in the second view
+    // goes back to the browser's view before any entry changes.
+    if !matches!(target, Target::Open | Target::Rail(RailHit::Add)) {
+        crate::features::sidebar_page::give_back(window);
+    }
+    perform_target(window, target);
+    crate::features::sidebar_page::follow(window);
+}
+
+unsafe fn perform_target(window: HWND, target: Target) {
     match target {
         Target::Open => panel::set_unfolded(window, true),
         Target::PanelClose => {
