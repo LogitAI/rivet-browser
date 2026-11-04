@@ -13,7 +13,7 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'bar-layout'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'bar-layout', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab'),
   [string]$OutDir,
   [switch]$NoBuild
 )
@@ -823,6 +823,168 @@ function Invoke-BarLayout($Name, $shots) {
   } finally { Stop-Scene $ctx }
 }
 
+# --- FR-3 tab list ------------------------------------------------------------------------
+$urlC = New-TestPage 'page-c' $script:ColourC
+# A page that is one link opening `page-c` in a new window, as `target=_blank` asks.
+$urlLink = & {
+  $path = Join-Path $pageDir 'page-link.html'
+  $hexA = '#{0:X6}' -f $script:ColourA
+  [IO.File]::WriteAllText($path, "<!doctype html><meta charset=utf-8><title>page-link</title><style>html,body{margin:0;height:100%;background:$hexA}</style><a href=`"page-c.html`" target=`"_blank`" style=`"display:block;width:100%;height:100%`"></a>")
+  'file:///' + ($path -replace '\', '/')
+}
+
+# The last `tab sections` trace, split into its parts.
+function Get-Sections {
+  $line = Read-Log | Where-Object { $_ -match 'tab sections ' } | Select-Object -Last 1
+  if (-not $line) { return $null }
+  $part = { param($name) if ($line -match "$name (\[[^\]]*\])") { @([regex]::Matches($Matches[1], '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value }) } else { @() } }
+  [pscustomobject]@{
+    Line = $line
+    Pinned = & $part 'pinned'
+    Today = & $part 'today'
+    Order = & $part 'order'
+    Closed = if ($line -match 'closed (\d+)') { [int]$Matches[1] } else { -1 }
+    Archived = if ($line -match 'archived (\d+)') { [int]$Matches[1] } else { -1 }
+    CtrlT = if ($line -match 'ctrl_t (\S+)') { $Matches[1] } else { $null }
+  }
+}
+
+# A window with the pages a, b and c as its three tabs, or the reason it could not be made.
+function Open-ThreeTabs($ctx, $state, $shots, [string]$Prefix) {
+  Open-Scene $ctx $state $urlA $null
+  if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return $ctx.Error }
+  if (-not (Test-Attached $ctx)) { return 'Rivet did not attach to the window' }
+  if (-not (Open-SecondPage $ctx $urlB)) { return 'the second page did not open as a tab of the app window alone' }
+  if (-not (Open-SecondPage $ctx $urlC)) { return 'the third page did not open as a tab of the app window alone' }
+  $null
+}
+
+function Invoke-TabSections($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'tab-sections' $urlA
+  try {
+    $why = Open-ThreeTabs $ctx $state $shots 'tab-sections'
+    if ($why) { return @('NOT_DRIVEN', $null, $why) }
+    foreach ($command in 'pin 2', 'folder 1 Launch Atlas', 'into 0', 'sections') {
+      if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $null, "the runtime did not take '$command'") }
+    }
+    $shot = Get-Capture $ctx (Join-Path $shots 'tab-sections-1.png')
+    $s = Get-Sections
+    if (-not $s) { return @('NOT_DRIVEN', $shot.Path, 'the runtime reported no sections') }
+    if ($s.Pinned -notcontains 'page-c') { return @('FAIL', $shot.Path, "page-c is not pinned: $($s.Line)") }
+    if ($s.Line -notmatch 'Launch Atlas:2:open') { return @('FAIL', $shot.Path, "the folder does not hold two tabs: $($s.Line)") }
+    if (($s.Order -join ',') -ne 'page-c,page-b,page-a') { return @('FAIL', $shot.Path, "the order is not pinned, folder, today: $($s.Order -join ',')") }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'foldertoggle') -or -not (Send-Flag $ctx 'rivet-tab.txt' 'sections')) { return @('NOT_DRIVEN', $shot.Path, 'the folder toggle was not taken') }
+    if ((Get-Sections).Line -notmatch 'Launch Atlas:2:collapsed') { return @('FAIL', $shot.Path, 'the folder did not collapse') }
+    $closed = Get-Capture $ctx (Join-Path $shots 'tab-sections-2.png')
+    @('PASS', $closed.Path, "pinned page-c, folder Launch Atlas with 2 tabs collapsed, check the captures for the count and rows")
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-TabCloseSelect($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'tab-close-select' $urlA
+  try {
+    $why = Open-ThreeTabs $ctx $state $shots 'tab-close-select'
+    if ($why) { return @('NOT_DRIVEN', $null, $why) }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'activate 1')) { return @('NOT_DRIVEN', $null, 'activate was not taken') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'closesel 1')) { return @('NOT_DRIVEN', $null, 'closesel was not taken') }
+    $below = Get-ActiveTitle
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'closesel 1')) { return @('NOT_DRIVEN', $null, 'the second closesel was not taken') }
+    $above = Get-ActiveTitle
+    $shot = Get-Capture $ctx (Join-Path $shots 'tab-close-select-1.png')
+    if ($below -ne 'page-c') { return @('FAIL', $shot.Path, "closing page-b selected $below, not the tab below") }
+    if ($above -ne 'page-a') { return @('FAIL', $shot.Path, "closing the last tab selected $above, not the tab above") }
+    @('PASS', $shot.Path, 'below, then above')
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-TabReopen($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'tab-reopen' $urlA
+  try {
+    $why = Open-ThreeTabs $ctx $state $shots 'tab-reopen'
+    if ($why) { return @('NOT_DRIVEN', $null, $why) }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'closesel 1')) { return @('NOT_DRIVEN', $null, 'closesel was not taken') }
+    # Ctrl+Shift+T posts this message; posted keys do not change GetKeyState, so the message is sent.
+    Send-RivetMessage $ctx 'Rivet.ReopenTab'
+    Start-Sleep 5
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'sections')) { return @('NOT_DRIVEN', $null, 'sections was not taken') }
+    $shot = Get-Capture $ctx (Join-Path $shots 'tab-reopen-1.png')
+    $s = Get-Sections
+    if (($s.Order -join ',') -ne 'page-a,page-b,page-c') { return @('FAIL', $shot.Path, "the reopened tab is not where it was: $($s.Order -join ',')") }
+    @('PASS', $shot.Path, 'page-b came back between page-a and page-c')
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-TabArchive($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'tab-archive' $urlA
+  try {
+    $why = Open-ThreeTabs $ctx $state $shots 'tab-archive'
+    if ($why) { return @('NOT_DRIVEN', $null, $why) }
+    foreach ($command in 'sections', 'pin 0', 'archive 2', 'age 1', 'sections') { if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $null, "'$command' was not taken") } }
+    if ((Get-Sections).Archived -ne 0) { return @('FAIL', $null, 'tabs archived before the period') }
+    if ((Get-Sections).Line -notmatch 'archive_after Some\(7200\)') { return @('FAIL', $null, "the period setting was not kept: $((Get-Sections).Line)") }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'age 2')) { return @('NOT_DRIVEN', $null, 'age was not taken') }
+    Start-Sleep 3
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'sections')) { return @('NOT_DRIVEN', $null, 'sections was not taken') }
+    $shot = Get-Capture $ctx (Join-Path $shots 'tab-archive-1.png')
+    $s = Get-Sections
+    # page-c is active and page-a pinned, so only page-b is archived.
+    if ($s.Archived -ne 1 -or $s.Order -contains 'page-b') { return @('FAIL', $shot.Path, "expected page-b alone archived: $($s.Line)") }
+    @('PASS', $shot.Path, 'page-b archived after the 2 hour period, pinned and active tabs stayed')
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-CtrlTSetting($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'ctrl-t-setting' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    foreach ($command in 'ctrlt newtab', 'sections') { if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $null, "'$command' was not taken") } }
+    if ((Get-Sections).CtrlT -ne 'new_tab_page') { return @('FAIL', $null, 'the setting did not change') }
+    Send-RivetMessage $ctx 'Rivet.CtrlT'
+    Start-Sleep 6
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
+    $urls = Get-TabUrls
+    $shot = Get-Capture $ctx (Join-Path $shots 'ctrl-t-setting-1.png')
+    if ($urls.Count -ne 2 -or $urls[1] -notmatch 'start\.html') { return @('FAIL', $shot.Path, "Ctrl+T with the new tab page setting did not open the start page: $($urls -join ' ')") }
+    @('PASS', $shot.Path, 'the new tab page setting opens the start page; the command bar route is checked with the command bar')
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-LinkNewTab($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'link-new-tab' $urlLink
+  try {
+    Open-Scene $ctx $state $urlLink $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    $before = Get-MyTops $ctx
+    $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
+    $page = [FeatureWin]::Inside($ctx.Hwnd, (& { $p = New-Object FeatureWin+P; $p.X = [int]($cr.Ri * 0.7); $p.Y = [int]($cr.B / 2); [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$p) | Out-Null; $p }))
+    $l = [IntPtr](([int]($cr.B / 2) -shl 16) -bor ([int]($cr.Ri * 0.7) -band 0xffff))
+    $target = if ($page -ne [IntPtr]::Zero) { $page } else { $ctx.Hwnd }
+    [FeatureWin]::PostMessage($target, 0x201, [IntPtr]1, $l) | Out-Null
+    [FeatureWin]::PostMessage($target, 0x202, [IntPtr]0, $l) | Out-Null
+    # A window the link opened must not stay on screen: it is moved off at once if it shows.
+    $extraSeen = $false
+    foreach ($i in 1..120) {
+      Start-Sleep -Milliseconds 50
+      foreach ($t in @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ })) {
+        $extraSeen = $true
+        [FeatureWin]::SetWindowPos($t, [IntPtr]::Zero, -3000, -3000, 1600, 1000, 0x14) | Out-Null
+      }
+    }
+    Start-Sleep 3
+    $left = @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ })
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
+    $urls = Get-TabUrls
+    $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png')
+    if (-not ($urls | Where-Object { $_ -match 'page-c' }) -and -not $extraSeen) { return @('NOT_DRIVEN', $shot.Path, 'the click did not open the link') }
+    if ($left.Count -gt 0) { foreach ($t in $left) { [FeatureWin]::PostMessage($t, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }; return @('FAIL', $shot.Path, 'the link stayed in a window of its own') }
+    if (-not ($urls | Where-Object { $_ -match 'page-c' })) { return @('FAIL', $shot.Path, "page-c is not a tab of the Rivet window: $($urls -join ' ')") }
+    @('PASS', $shot.Path, "the new-window link is a tab of the Rivet window; a window of its own showed first: $extraSeen")
+  } finally { Stop-Scene $ctx }
+}
+
 # --- Run ---------------------------------------------------------------------------------
 foreach ($name in $Browsers) {
   $exePath, $exeName = $table[$name]
@@ -850,6 +1012,12 @@ foreach ($name in $Browsers) {
         'split-click' { Invoke-SplitPath $name $shots 'split-click' 'message' 'colour' -ThenClick }
         'split-rows' { Invoke-SplitRows $name $shots }
         'bar-layout' { Invoke-BarLayout $name $shots }
+        'tab-sections' { Invoke-TabSections $name $shots }
+        'tab-close-select' { Invoke-TabCloseSelect $name $shots }
+        'tab-reopen' { Invoke-TabReopen $name $shots }
+        'tab-archive' { Invoke-TabArchive $name $shots }
+        'ctrl-t-setting' { Invoke-CtrlTSetting $name $shots }
+        'link-new-tab' { Invoke-LinkNewTab $name $shots }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason

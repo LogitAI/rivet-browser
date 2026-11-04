@@ -32,7 +32,8 @@ pub fn build_rows(tabs: &[Tab]) -> Vec<Row> {
                 continue;
             }
             seen.push(group.id);
-            rows.push(Row::Group(group.clone()));
+            let count = tabs.iter().filter(|t| t.group.as_ref().is_some_and(|g| g.id == group.id)).count();
+            rows.push(Row::Group(Group { count, ..group.clone() }));
             if !group.collapsed {
                 rows.extend(
                     tabs.iter()
@@ -73,6 +74,7 @@ mod tests {
             title: "Work".into(),
             color: 3,
             collapsed,
+            count: 0,
         }
     }
     #[test]

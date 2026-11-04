@@ -1648,6 +1648,15 @@ impl Canvas<'_> {
                             if hover == Some(hit) { INK } else { SOFT_INK },
                             false,
                         )?;
+                        if group.count > 0 {
+                            self.text(
+                                TAB,
+                                rect(left + inner - 50.0, top, 22.0, 34.0),
+                                &group.count.to_string(),
+                                MUTED,
+                                false,
+                            )?;
+                        }
                         self.icon(
                             if group.collapsed {
                                 '\u{E76C}'
@@ -1834,7 +1843,7 @@ impl Canvas<'_> {
                 for (row, title) in crate::frame::TAB_ITEMS.iter().enumerate() {
                     let y = top + 4.0 + row as f32 * 34.0;
                     let item = rect(left + 4.0, y, inner - 8.0, 34.0);
-                    let hit = AppbarHit::SplitTab(tab);
+                    let Some(hit) = crate::frame::tab_item_hit(row, tab) else { continue };
                     self.pressed(item, 8.0, 0.98, scene.effect(&[hit]), || {
                         if scene.hover == Some(hit) {
                             self.fill_rounded(item, 8.0, rgba(INK, 0.04))?;

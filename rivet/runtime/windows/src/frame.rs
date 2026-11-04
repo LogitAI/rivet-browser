@@ -75,6 +75,10 @@ pub(crate) enum AppbarHit {
     ManageProfiles,
     /// The entry of a tab's menu that shows the tab beside the one after it.
     SplitTab(usize),
+    /// The entry of a tab's menu that pins the tab, or unpins a pinned one.
+    PinTab(usize),
+    /// The entry of a tab's menu that puts the tab into a new folder.
+    FolderTab(usize),
     /// The button in the toolbar row that hides and shows the appbar.
     Toggle,
     /// The seam on the appbar's right edge that drags its width.
@@ -94,7 +98,17 @@ pub(crate) enum Menu {
 }
 
 /// The entries of a tab's menu.
-pub(crate) const TAB_ITEMS: [&str; 1] = ["Split with next tab"];
+pub(crate) const TAB_ITEMS: [&str; 3] = ["Split with next tab", "Pin or unpin tab", "Move to new folder"];
+
+/// The action of a tab menu entry.
+pub(crate) fn tab_item_hit(row: usize, index: usize) -> Option<AppbarHit> {
+    match row {
+        0 => Some(AppbarHit::SplitTab(index)),
+        1 => Some(AppbarHit::PinTab(index)),
+        2 => Some(AppbarHit::FolderTab(index)),
+        _ => None,
+    }
+}
 
 /// The entries of the settings menu. An entry without an action is shown dimmed.
 pub(crate) const SETTINGS_ITEMS: [(&str, Option<AppbarHit>); 3] = [
@@ -167,7 +181,11 @@ fn menu_hit(
         }
         Menu::Tab { index, .. } => {
             let row = ((y - ay - SETTINGS_PAD) / SETTINGS_ROW).floor();
-            (row == 0.0).then_some(AppbarHit::SplitTab(index))
+            if row < 0.0 {
+                None
+            } else {
+                tab_item_hit(row as usize, index)
+            }
         }
     };
     (true, hit)
@@ -393,7 +411,10 @@ unsafe fn tab_drag_end(window: HWND, release: Option<LPARAM>) {
             x: (lparam & 0xffff) as i16 as i32,
             y: ((lparam >> 16) & 0xffff) as i16 as i32,
         };
-        if let Some(drop) = drop_at(window, point) {
+        let (x, y) = local_dip(window, point.x, point.y);
+        if x >= 0.0 && x < layout_of(window).side as f32 && crate::features::tab_list::drop_on_list(window, drag.index, y) {
+            crate::trace::trace(&format!("tab drag: moved tab {} in the tab list", drag.index));
+        } else if let Some(drop) = drop_at(window, point) {
             let done = match drop.side {
                 Some(side) => crate::features::split::split_beside(window, drag.index, side),
                 None => crate::features::tabs::activate_tab(window, drag.index),
@@ -692,6 +713,11 @@ fn with_spaces<R>(window: HWND, edit: impl FnOnce(&mut Spaces) -> R) -> R {
     })
 }
 
+/// The name of the space a window shows now.
+pub(crate) fn space_name(window: HWND) -> String {
+    with_spaces(window, |spaces| spaces.list()[spaces.current()].name.clone())
+}
+
 /// The address of the Rivet start page for the space called `space`.
 unsafe fn start_url(space: &crate::spaces::SpaceInfo) -> Option<String> {
     let browser = crate::installed_browsers::sole_label().unwrap_or(space.browser.label());
@@ -749,6 +775,7 @@ unsafe fn switch_space(window: HWND, index: usize) {
     }
     let old: Vec<usize> = open.iter().map(|tab| tab.id).collect();
     let saved: Vec<SavedTab> = open.into_iter().map(|tab| tab.saved).collect();
+    crate::features::tab_list::leave_space(window);
     let Some(restore) = with_spaces(window, |spaces| spaces.switch_to(index, saved, &start)) else {
         return;
     };
@@ -900,7 +927,7 @@ thread_local! {
 }
 
 /// The spaces file of this process's browser profile.
-fn spaces_file() -> Option<(std::path::PathBuf, String)> {
+pub(crate) fn spaces_file() -> Option<(std::path::PathBuf, String)> {
     let root = rivet_core::paths::local_app_data()?;
     let dir = crate::spaces::user_data_dir_of(
         std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()),
@@ -1072,6 +1099,20 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
                 message.message = WM_NULL;
             }
         }
+        // Ctrl+Shift+T reopens the closed tab where it was.
+        if message.message == WM_KEYDOWN
+            && message.wParam == b'T' as usize
+            && GetKeyState(0x11) < 0
+            && GetKeyState(0x10) < 0
+            && GetKeyState(0x12) >= 0
+        {
+            let window = GetAncestor(message.hwnd, GA_ROOT);
+            if attached(window) {
+                PostMessageW(window, RegisterWindowMessageW(wide("Rivet.ReopenTab").as_ptr()), 0, 0);
+                message.message = WM_NULL;
+            }
+        }
+        // Ctrl+T opens the command bar or the new tab page, as the setting says.
         if message.message == WM_KEYDOWN
             && message.wParam == b'T' as usize
             && GetKeyState(0x11) < 0
@@ -1082,7 +1123,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
             if attached(window) {
                 PostMessageW(
                     window,
-                    RegisterWindowMessageW(wide("Rivet.NewStartPage").as_ptr()),
+                    RegisterWindowMessageW(wide("Rivet.CtrlT").as_ptr()),
                     0,
                     0,
                 );
@@ -1249,6 +1290,9 @@ fn appbar_hit(
 }
 
 fn appbar_model(window: HWND) -> Vec<Row> {
+    if let Some(rows) = unsafe { crate::features::tab_list::rows(window) } {
+        return rows;
+    }
     let tabs = unsafe { crate::features::tabs::tabs(window) }.unwrap_or_default();
     tab_rows::build_rows(&tabs)
 }
@@ -1359,7 +1403,15 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
             crate::trace::trace(&format!("tab menu: split tab {index}: {activated} {split}"));
         }
         AppbarHit::CloseTab(index) => {
-            crate::features::tabs::close_tab(window, index);
+            crate::features::tab_list::close(window, index);
+        }
+        AppbarHit::PinTab(index) => {
+            close_menu(window);
+            crate::features::tab_list::toggle_pinned(window, index);
+        }
+        AppbarHit::FolderTab(index) => {
+            close_menu(window);
+            crate::features::tab_list::new_folder(window, index, "New folder");
         }
         AppbarHit::NewTab => {
             start_page(window);
@@ -1385,7 +1437,9 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
             }
         }
         AppbarHit::Folder(id) => {
-            crate::features::tabs::toggle_group(window, &id);
+            if !crate::features::tab_list::toggle_folder(window, &id) {
+                crate::features::tabs::toggle_group(window, &id);
+            }
         }
         AppbarHit::Toggle => toggle_appbar(window),
         AppbarHit::Resizer => {}
@@ -2460,6 +2514,17 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         start_page(window);
         return 0;
     }
+    if message == RegisterWindowMessageW(wide("Rivet.CtrlT").as_ptr()) && attached(window) {
+        if !crate::features::tab_list::open_command_bar(window) {
+            start_page(window);
+        }
+        return 0;
+    }
+    if message == RegisterWindowMessageW(wide("Rivet.ReopenTab").as_ptr()) && attached(window) {
+        crate::features::tab_list::reopen(window);
+        update_appbar(window);
+        return 0;
+    }
     if message == RegisterWindowMessageW(wide(crate::features::second_view::LAYOUT_MESSAGE).as_ptr())
         && attached(window)
     {
@@ -2973,6 +3038,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
             crate::features::side_panel::tick(window, debug_directory().as_deref());
+            crate::features::tab_list::tick(window);
             // A browser can write its own identity again, for example when a profile finishes
             // loading. The taskbar groups by that identity, so Rivet puts its own back.
             if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
@@ -3001,6 +3067,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         }
                         Some("activate") => crate::features::tabs::activate_tab(window, index),
                         Some("close") => crate::features::tabs::close_tab(window, index),
+                        Some("closesel") => crate::features::tab_list::close(window, index),
                         // App window spike: a tab added through Chromium's own tab strip functions.
                         Some(word @ ("back" | "forward" | "reload" | "stop")) => crate::features::page_bar::Command::parse(word)
                             .is_some_and(|command| crate::features::page_bar::run(window, command)),
@@ -3069,7 +3136,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                             let address = text.trim().trim_start_matches("navigate").trim();
                             crate::features::navigation::open(window, address)
                         }
-                        _ => false,
+                        _ => crate::features::tab_list::command(window, &text).unwrap_or(false),
                     };
                     let titles: Vec<String> = crate::features::tabs::tabs(window)
                         .map(|tabs| tabs.iter().map(|tab| format!("{}{}", if tab.active { "*" } else { "" }, tab.title)).collect())
@@ -3224,6 +3291,7 @@ mod tests {
             title: "Work".into(),
             color: 3,
             collapsed: false,
+            count: 0,
         };
         let tabs = vec![crate::tab_rows::Tab {
             index: 4,
