@@ -637,3 +637,5 @@ mod tests {
 
 #[cfg(windows)]
 mod tab_rows;
+#[cfg(windows)]
+mod tab_sections;

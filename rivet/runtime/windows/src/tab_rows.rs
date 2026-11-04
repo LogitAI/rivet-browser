@@ -4,6 +4,8 @@ pub struct Group {
     pub title: String,
     pub color: i32,
     pub collapsed: bool,
+    /// How many tabs the group holds.
+    pub count: usize,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tab {
@@ -70,7 +72,8 @@ pub fn build_rows(tabs: &[Tab]) -> Vec<Row> {
                 continue;
             }
             seen.push(group.id);
-            rows.push(Row::Group(group.clone()));
+            let count = tabs.iter().filter(|t| t.group.as_ref().is_some_and(|g| g.id == group.id)).count();
+            rows.push(Row::Group(Group { count, ..group.clone() }));
             if !group.collapsed {
                 rows.extend(
                     tabs.iter()
@@ -111,6 +114,7 @@ mod tests {
             title: "Work".into(),
             color: 3,
             collapsed,
+            count: 0,
         }
     }
     #[test]

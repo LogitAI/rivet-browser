@@ -243,6 +243,7 @@ pub unsafe fn tabs(window: HWND) -> Option<Vec<crate::tab_rows::Tab>> {
                         title: chromium_string(visual).unwrap_or_default(),
                         color,
                         collapsed,
+                        count: 0,
                     })
                 }
             } else {
