@@ -74,6 +74,9 @@
       if (/^[0-9a-f]{6}$/u.test(colour)) document.documentElement.style.setProperty('--' + name, '#' + colour);
     }
     input.addEventListener('input', () => send.classList.toggle('ready', !!input.value.trim()));
+    // Rivet watches the start page's address and opens its command bar, which finds open tabs, for
+    // each new fragment. The page cannot reach Rivet any other way.
+    document.querySelector('.attach').addEventListener('click', () => { location.hash = 'rivet-command-' + Date.now(); });
     document.querySelector('.ask').addEventListener('submit', event => {
       event.preventDefault();
       if (input.value.trim()) location.href = addressFor(input.value);

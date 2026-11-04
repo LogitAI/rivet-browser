@@ -245,9 +245,33 @@ unsafe fn move_by_command(window: HWND, index: usize, how: &str, other: usize) -
 pub(crate) type CommandBarHook = unsafe fn(HWND) -> bool;
 static COMMAND_BAR: AtomicUsize = AtomicUsize::new(0);
 
-#[allow(dead_code)]
 pub(crate) fn set_command_bar_hook(hook: CommandBarHook) {
     COMMAND_BAR.store(hook as usize, Ordering::Release);
+}
+
+/// Connects the command bar: Ctrl+T opens it, and the bar's own "Ctrl T opens" buttons read and
+/// keep the tab list's setting, which is saved with the list.
+pub(crate) fn connect_command_bar() {
+    set_command_bar_hook(crate::features::command_bar::open);
+    crate::features::command_bar::set_setting_source(ctrl_t_now, set_ctrl_t_now);
+}
+
+/// The setting as the loaded list holds it, or the default before the list is loaded.
+fn ctrl_t_now() -> CtrlT {
+    STATE.with(|state| {
+        state
+            .borrow()
+            .as_ref()
+            .map_or(crate::tab_sections::Settings::default().ctrl_t, |state| state.store.settings.ctrl_t)
+    })
+}
+
+fn set_ctrl_t_now(value: CtrlT) {
+    STATE.with(|state| {
+        if let Some(state) = state.borrow_mut().as_mut() {
+            state.store.settings.ctrl_t = value;
+        }
+    });
 }
 
 /// What Ctrl+T opens in this window by the setting.

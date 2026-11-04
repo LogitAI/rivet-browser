@@ -2,10 +2,12 @@
 
 pub(crate) mod address_bar;
 pub(crate) mod app_window;
+pub(crate) mod command_bar;
 pub(crate) mod dev_page;
 pub(crate) mod frame_layout;
 pub(crate) mod look;
 pub(crate) mod mini_window;
+pub(crate) mod link_preview;
 pub(crate) mod link_tabs;
 pub(crate) mod navigation;
 pub(crate) mod page_fit;

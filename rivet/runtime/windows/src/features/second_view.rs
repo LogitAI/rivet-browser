@@ -42,6 +42,22 @@ pub(crate) enum Mode {
     Docked { width: i32 },
     /// No page in the view. The window's page view only leaves the Sidebar's rail free.
     Inset,
+    /// Floating over the page, which keeps its full size, below a header Rivet draws. This is the
+    /// link preview.
+    Floating,
+}
+
+/// The height of the header Rivet draws above a floating page, in DIPs.
+pub(crate) const PREVIEW_HEADER: i32 = 40;
+
+/// Where a floating page sits in the page area `full`, below its header. The study's preview keeps
+/// 64 DIPs at the sides, 20 above its header and 40 below. A small window keeps a narrower margin.
+pub(crate) fn floating(full: [i32; 4]) -> [i32; 4] {
+    let [x, y, w, h] = full;
+    let side = 64.min(w / 10);
+    let top = 20.min(h / 10);
+    let bottom = 40.min(h / 10);
+    [x + side, y + top + PREVIEW_HEADER, (w - 2 * side).max(1), (h - top - PREVIEW_HEADER - bottom).max(1)]
 }
 
 /// The width the Sidebar's rail keeps free at the right of the page area, by window.
@@ -344,6 +360,32 @@ pub(crate) fn is_split(window: HWND) -> bool {
     split().is_some_and(|split| split.window == window as isize && split.mode == Mode::Split)
 }
 
+/// Whether the window shows a floating page now.
+pub(crate) fn is_floating(window: HWND) -> bool {
+    split().is_some_and(|split| split.window == window as isize && split.mode == Mode::Floating)
+}
+
+/// The tab of the window whose page floats over it, and that page.
+pub(crate) unsafe fn floating_page(window: HWND) -> Option<(usize, usize)> {
+    let split = split().filter(|split| split.window == window as isize && split.mode == Mode::Floating)?;
+    let page = split.extras[0].page;
+    Some((tab_of(window, page)?, page))
+}
+
+/// The floating page's view in client pixels, as left, top, right and bottom.
+pub(crate) unsafe fn floating_client_rect(window: HWND) -> Option<[i32; 4]> {
+    let split = split().filter(|split| split.window == window as isize && split.mode == Mode::Floating)?;
+    let view = split.extras[0].view;
+    if view == 0 {
+        return None;
+    }
+    let scale = scale_of(window);
+    let [x, y] = window_origin(view);
+    let [_, _, width, height] = bounds_of(view);
+    let to_px = |value: i32| (value as f32 * scale).round() as i32;
+    Some([to_px(x), to_px(y), to_px(x + width), to_px(y + height)])
+}
+
 /// Whether the window shows an extra view now.
 pub(crate) fn is_open(window: HWND) -> bool {
     split().is_some_and(|split| split.window == window as isize)
@@ -525,6 +567,7 @@ pub(crate) fn layout(full: [i32; 4], mode: Mode, rail: i32) -> ([i32; 4], [i32; 
     let [x, y, w, h] = full;
     match mode {
         Mode::Inset | Mode::Split => (full, [x + w, y, 0, h]),
+        Mode::Floating => (full, floating(full)),
         Mode::Docked { width } => {
             let width = width.clamp(0, w.max(0));
             (full, [x + w - width, y, width, h])

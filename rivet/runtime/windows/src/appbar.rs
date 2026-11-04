@@ -59,6 +59,9 @@ mod palette {
 }
 use palette::*;
 
+/// The command bar and the link preview, drawn with the appbar's canvas.
+mod overlays;
+
 /// A text style from the shell study: family, size, weight and letter spacing in em.
 #[derive(Clone, Copy)]
 struct Type {
@@ -199,6 +202,12 @@ pub struct Appbar {
     /// The top bar of a window with a single page, and what it was last painted for.
     address: IDCompositionVisual2,
     address_painted: Option<(crate::features::address_bar::View, u32)>,
+    /// The command bar over the page, and what it was last painted for.
+    command: IDCompositionVisual2,
+    command_painted: Option<(crate::features::command_bar::View, u32)>,
+    /// The header and shadow of a link preview, and what they were last painted for.
+    preview: IDCompositionVisual2,
+    preview_painted: Option<(crate::features::link_preview::View, u32)>,
 }
 
 /// What one page's top row shows. `x`, `y`, `width` and `height` are window pixels.
@@ -362,6 +371,11 @@ impl Appbar {
         // The top bar lies under the toggle and the floating appbar, like the browser row it replaces.
         let address = device.CreateVisual()?;
         root.AddVisual(&address, true, &ground)?;
+        // The link preview and the command bar lie over everything else of the window.
+        let preview = device.CreateVisual()?;
+        root.AddVisual(&preview, true, None::<&IDCompositionVisual>)?;
+        let command = device.CreateVisual()?;
+        root.AddVisual(&command, true, None::<&IDCompositionVisual>)?;
         target.SetRoot(&root)?;
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
@@ -396,6 +410,10 @@ impl Appbar {
             held_painted: None,
             address,
             address_painted: None,
+            command,
+            command_painted: None,
+            preview,
+            preview_painted: None,
         })
     }
 

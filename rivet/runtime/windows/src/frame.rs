@@ -396,8 +396,11 @@ unsafe fn show_tab_drag(window: HWND, point: Option<POINT>) {
 unsafe fn tab_drag_press(window: HWND, hit: Option<AppbarHit>, lparam: LPARAM) {
     let Some(AppbarHit::Tab(index)) = hit else {
         TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize)));
+        crate::features::link_preview::cancel_hold(window);
         return;
     };
+    // Held long enough, the press opens the tab's link preview instead.
+    crate::features::link_preview::press(window, index);
     let title = crate::features::tabs::tabs(window)
         .and_then(|tabs| tabs.into_iter().find(|tab| tab.index == index))
         .map(|tab| tab.title)
@@ -429,6 +432,8 @@ unsafe fn tab_drag_start(window: HWND, lparam: LPARAM) {
         drag.live
     });
     if start {
+        // A press that became a drag is no long press.
+        crate::features::link_preview::cancel_hold(window);
         SetCapture(window);
         // The press no longer clicks the tab.
         press_up(window);
@@ -439,6 +444,18 @@ unsafe fn tab_drag_start(window: HWND, lparam: LPARAM) {
         });
         show_tab_drag(window, Some(point));
     }
+}
+
+/// Ends a press on the appbar without its click, for a press that did something else, such as
+/// opening a link preview.
+pub(crate) unsafe fn cancel_appbar_press(window: HWND) {
+    TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize)));
+    press_up(window);
+    APPBAR_STATE.with(|states| {
+        if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+            entry.1 = None;
+        }
+    });
 }
 
 /// The pointer moves, with the window capturing it, while a tab is dragged.
@@ -2409,11 +2426,17 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     log(&format!("rivet: could not draw the top bar: {error}"));
                 }
             }
-            let bar = if visible {
-                crate::dev_bar::view(window)
-            } else {
-                None
-            };
+            let preview = if visible { crate::features::link_preview::view(window) } else { None };
+            if let Err(error) = appbar.update_preview(preview.as_ref(), dpi) {
+                log(&format!("rivet: could not draw the link preview: {error}"));
+            }
+            if !crate::features::command_bar::busy() {
+                let command = if visible { crate::features::command_bar::view(window) } else { None };
+                if let Err(error) = appbar.update_command(window as isize, command.as_ref(), dpi) {
+                    log(&format!("rivet: could not draw the command bar: {error}"));
+                }
+            }
+            let bar = if visible { crate::dev_bar::view(window) } else { None };
             if let Err(error) = appbar.update_dev(bar.as_ref(), dpi) {
                 log(&format!("rivet: could not draw the developer bar: {error}"));
             }
@@ -2745,8 +2768,15 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         update_appbar(window);
         return 0;
     }
-    // The Mini Window floats over the pages, so its frame and row take the mouse first.
+    // The command bar's scrim and the link preview's header lie over the pages, and the Mini
+    // Window floats over them, so they take the pointer and the keyboard before the pages do.
     if attached(window) {
+        if let Some(result) = crate::features::command_bar::message(window, message, wparam, lparam) {
+            return result;
+        }
+        if let Some(result) = crate::features::link_preview::message(window, message, wparam, lparam) {
+            return result;
+        }
         if let Some(result) = crate::features::mini_window::on_mouse(window, message, lparam) {
             return result;
         }
@@ -3116,6 +3146,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         }
         WM_NCLBUTTONUP if wparam as u32 == APPBAR_HIT && attached(window) => {
             TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize)));
+            crate::features::link_preview::cancel_hold(window);
             let hit = appbar_point(window, lparam);
             let action = APPBAR_STATE.with(|states| {
                 let mut states = states.borrow_mut();
@@ -3245,6 +3276,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             PRESSES.with(|all| all.borrow_mut().remove(&(window as isize)));
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
             crate::features::address_bar::forget(window);
+            crate::features::command_bar::forget(window);
+            crate::features::link_preview::forget(window);
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::features::vertical_tabs::forget(window);
             crate::features::tab_strip::forget(window);
@@ -3295,6 +3328,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         {
             crate::features::side_panel::tick(window, debug_directory().as_deref());
             crate::features::tab_list::tick(window);
+            crate::features::command_bar::tick(window);
             // A browser can write its own identity again, for example when a profile finishes
             // loading. The taskbar groups by that identity, so Rivet puts its own back.
             if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
@@ -3382,6 +3416,18 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         // The top bar: `bar` starts editing the address, `bartext` traces what it holds,
                         // `barsecurity` the page's security level and `barinfo` opens the page info bubble.
                         Some("bar") => crate::features::address_bar::focus(window),
+                        // The command bar: `command` opens it, `commandtype TEXT` puts text in its
+                        // field, `commandrun N` runs row N. The link preview: `preview N` shows tab N
+                        // floating, `previewopen` opens it as a tab and `previewesc` dismisses it.
+                        Some("command") => crate::features::command_bar::open(window),
+                        Some("commandtype") => {
+                            let text = text.trim().trim_start_matches("commandtype").trim();
+                            crate::features::command_bar::type_for_test(window, text)
+                        }
+                        Some("commandrun") => crate::features::command_bar::run_for_test(window, index),
+                        Some("preview") => crate::features::link_preview::open(window, index),
+                        Some("previewopen") => crate::features::link_preview::open_as_tab(window),
+                        Some("previewesc") => crate::features::link_preview::dismiss(window),
                         Some("bartext") => {
                             crate::trace::trace(&format!(
                                 "address bar text {:?}",
@@ -3491,6 +3537,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ if message == attach_message() => {
+            crate::features::tab_list::connect_command_bar();
             create_appbar(window);
             0
         }
