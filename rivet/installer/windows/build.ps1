@@ -33,18 +33,18 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
 
 # The repository whose `builds-table` release holds the signed table: RIVET_REPO, else the one
 # this checkout belongs to.
-$repository = if ($env:RIVET_REPO) { $env:RIVET_REPO } else { (& gh repo view --json nameWithOwner --jq .nameWithOwner) }
+$tableRepository = if ($env:RIVET_REPO) { $env:RIVET_REPO } else { (& gh repo view --json nameWithOwner --jq .nameWithOwner) }
 
 # A package without these trusts no published table, so it would stop working as soon as the
 # browser updates past the rows compiled into it. Refuse to build one.
 if (-not $env:RIVET_TABLE_PUBLIC_KEY) {
-    $env:RIVET_TABLE_PUBLIC_KEY = (& gh variable get RIVET_TABLE_PUBLIC_KEY --repo $repository)
+    $env:RIVET_TABLE_PUBLIC_KEY = (& gh variable get RIVET_TABLE_PUBLIC_KEY --repo $tableRepository)
 }
 if ($env:RIVET_TABLE_PUBLIC_KEY -notmatch '^[0-9a-fA-F]{128}$') {
     throw "RIVET_TABLE_PUBLIC_KEY must be the public key of the table signing key."
 }
 if (-not $env:RIVET_TABLE_URL) {
-    $env:RIVET_TABLE_URL = "https://github.com/$repository/releases/download/builds-table/table.bin"
+    $env:RIVET_TABLE_URL = "https://github.com/$tableRepository/releases/download/builds-table/table.bin"
 }
 
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
