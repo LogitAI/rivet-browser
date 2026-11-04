@@ -2,7 +2,7 @@
 # when this passes on a launch like the installed build's. Unit tests and build rows do not count.
 #
 #   pwsh -NoProfile -File scripts/tests/windows-features.ps1 [-Browsers chrome,edge,...]
-#       [-Features split,sidebar,newtab,space,bar-layout] [-OutDir <dir>] [-NoBuild]
+#       [-Features split,sidebar,newtab,space,bar-layout,command-bar,link-preview] [-OutDir <dir>] [-NoBuild]
 #
 # One row per browser and feature: PASS, FAIL or NOT_DRIVEN. NOT_DRIVEN means the scene could not
 # be set up, so the feature was not exercised. Nothing is decided from build rows or `supported`.
@@ -13,7 +13,7 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'bar-layout'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'bar-layout', 'command-bar', 'link-preview'),
   [string]$OutDir,
   [switch]$NoBuild
 )
@@ -823,6 +823,67 @@ function Invoke-BarLayout($Name, $shots) {
   } finally { Stop-Scene $ctx }
 }
 
+# The command bar opens over the page, finds what is typed, and opens it in a new tab of the window.
+function Invoke-CommandBar($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'command-bar' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    $one = Get-Capture $ctx (Join-Path $shots 'command-bar-1-before.png')
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'command')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the command bar command') }
+    Start-Sleep 1
+    if (-not (Read-Log | Where-Object { $_ -match 'command bar: open: true' })) { return @('FAIL', $one.Path, 'the command bar did not open') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' "commandtype $urlB")) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the typing command') }
+    Start-Sleep 1
+    $open = Get-Capture $ctx (Join-Path $shots 'command-bar-2-open.png')
+    if (-not (Read-Log | Where-Object { $_ -match 'command bar rows \[".+' })) { return @('FAIL', $open.Path, 'the command bar listed no rows for the typed address') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'commandrun 0')) { return @('NOT_DRIVEN', $open.Path, 'the runtime did not take the run command') }
+    Start-Sleep 4
+    $after = Get-Capture $ctx (Join-Path $shots 'command-bar-3-opened.png')
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $after.Path, 'the runtime did not take the tab list command') }
+    $urls = Get-TabUrls
+    if (-not $urls -or $urls.Count -ne 2) { return @('FAIL', $after.Path, "expected two tabs after Enter, the window has $($urls.Count)") }
+    $v = Test-OnePage $after $script:ColourB $script:ColourA
+    if ($v.Verdict -ne 'PASS') { return @($v.Verdict, $after.Path, "the new tab does not show the typed page: $($v.Reason)") }
+    @('PASS', $open.Path, "bar open, Enter opened a second tab on page-b; $($v.Reason)")
+  } finally { Stop-Scene $ctx }
+}
+
+# A tab's link preview floats over the page being read, then opens as a tab or goes away.
+function Invoke-LinkPreview($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'link-preview' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    $one = Get-Capture $ctx (Join-Path $shots 'link-preview-1.png')
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Open-SecondPage $ctx $urlB)) { return @('NOT_DRIVEN', $one.Path, 'the second page did not open as a tab of the app window alone') }
+    $opens = Get-ViewOpens 'Floating'
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'preview 0')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the preview command') }
+    Start-Sleep 3
+    $shown = Get-Capture $ctx (Join-Path $shots 'link-preview-2-shown.png')
+    $v = Test-FloatingPage $shown $script:ColourB $script:ColourA
+    if ($v.Verdict -ne 'PASS') { return @($v.Verdict, $shown.Path, $v.Reason) }
+    if (-not (Test-ViewOwns $opens 'Floating')) { return @('FAIL', $shown.Path, 'the preview page is not in the second page view') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'previewesc')) { return @('NOT_DRIVEN', $shown.Path, 'the runtime did not take the dismiss command') }
+    Start-Sleep 3
+    $gone = Get-Capture $ctx (Join-Path $shots 'link-preview-3-dismissed.png')
+    $back = Test-OnePage $gone $script:ColourB $script:ColourA
+    if ($back.Verdict -ne 'PASS') { return @('FAIL', $gone.Path, "after Esc: $($back.Reason)") }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'preview 0')) { return @('NOT_DRIVEN', $gone.Path, 'the runtime did not take the preview command') }
+    Start-Sleep 3
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'previewopen')) { return @('NOT_DRIVEN', $gone.Path, 'the runtime did not take the open as tab command') }
+    Start-Sleep 3
+    $tab = Get-Capture $ctx (Join-Path $shots 'link-preview-4-tab.png')
+    $opened = Test-OnePage $tab $script:ColourA $script:ColourB
+    if ($opened.Verdict -ne 'PASS') { return @('FAIL', $tab.Path, "after Open as tab: $($opened.Reason)") }
+    @('PASS', $shown.Path, "$($v.Reason); Esc and Open as tab both leave one page")
+  } finally { Stop-Scene $ctx }
+}
+
 # --- Run ---------------------------------------------------------------------------------
 foreach ($name in $Browsers) {
   $exePath, $exeName = $table[$name]
@@ -850,6 +911,8 @@ foreach ($name in $Browsers) {
         'split-click' { Invoke-SplitPath $name $shots 'split-click' 'message' 'colour' -ThenClick }
         'split-rows' { Invoke-SplitRows $name $shots }
         'bar-layout' { Invoke-BarLayout $name $shots }
+        'command-bar' { Invoke-CommandBar $name $shots }
+        'link-preview' { Invoke-LinkPreview $name $shots }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason

@@ -38,6 +38,22 @@ pub(crate) enum Mode {
     Docked { width: i32 },
     /// No page in the second view. The window's page view only leaves the Sidebar's rail free.
     Inset,
+    /// Floating over the page, which keeps its full size, below a header Rivet draws. This is the
+    /// link preview.
+    Floating,
+}
+
+/// The height of the header Rivet draws above a floating page, in DIPs.
+pub(crate) const PREVIEW_HEADER: i32 = 40;
+
+/// Where a floating page sits in the page area `full`, below its header. The study's preview keeps
+/// 64 DIPs at the sides, 20 above its header and 40 below. A small window keeps a narrower margin.
+pub(crate) fn floating(full: [i32; 4]) -> [i32; 4] {
+    let [x, y, w, h] = full;
+    let side = 64.min(w / 10);
+    let top = 20.min(h / 10);
+    let bottom = 40.min(h / 10);
+    [x + side, y + top + PREVIEW_HEADER, (w - 2 * side).max(1), (h - top - PREVIEW_HEADER - bottom).max(1)]
 }
 
 /// The width the Sidebar's rail keeps free at the right of the page area, by window.
@@ -261,6 +277,17 @@ pub(crate) fn is_split(window: HWND) -> bool {
     split().is_some_and(|split| split.window == window as isize && matches!(split.mode, Mode::Split { .. }))
 }
 
+/// Whether the window shows a floating page now.
+pub(crate) fn is_floating(window: HWND) -> bool {
+    split().is_some_and(|split| split.window == window as isize && split.mode == Mode::Floating)
+}
+
+/// The tab of the window whose page floats over it, and that page.
+pub(crate) unsafe fn floating_page(window: HWND) -> Option<(usize, usize)> {
+    let split = split().filter(|split| split.window == window as isize && split.mode == Mode::Floating)?;
+    Some((tab_of(window, split.page)?, split.page))
+}
+
 /// Whether the window shows a second view now.
 pub(crate) fn is_open(window: HWND) -> bool {
     split().is_some_and(|split| split.window == window as isize)
@@ -410,6 +437,7 @@ pub(crate) fn layout(full: [i32; 4], mode: Mode, share: u32, rail: i32) -> ([i32
     let full = [x, y, (w - rail.max(0)).max(1), h];
     match mode {
         Mode::Inset => (full, [full[0] + full[2], y, 0, h]),
+        Mode::Floating => (full, floating(full)),
         Mode::Split { leading: false } => divide(full, share),
         Mode::Split { leading: true } => {
             // The second view takes the left part, the page the right, with the same share rules.
@@ -971,7 +999,7 @@ pub(crate) unsafe fn client_rects(window: HWND) -> Option<([i32; 4], [i32; 4])> 
         Mode::Split { leading: true } => [to_px(vx + view[2]), to_px(vy), to_px(vx + view[2] + DIVIDER), to_px(vy + view[3])],
         Mode::Split { leading: false } => [to_px(vx - DIVIDER), to_px(vy), to_px(vx), to_px(vy + view[3])],
         // A docked page has no divider to drag.
-        Mode::Docked { .. } | Mode::Inset => [0, 0, 0, 0],
+        Mode::Docked { .. } | Mode::Inset | Mode::Floating => [0, 0, 0, 0],
     };
     Some((second, divider))
 }
