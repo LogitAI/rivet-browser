@@ -14,8 +14,18 @@ pub(crate) const MAX_INSET: i32 = 8;
 pub(crate) fn fill(page: [i32; 4], container: [i32; 2]) -> [i32; 4] {
     let [x, y, width, height] = page;
     let [container_width, container_height] = container;
-    let margins = [x, y, container_width - x - width, container_height - y - height];
-    if width <= 0 || height <= 0 || margins.iter().any(|margin| !(0..=MAX_INSET).contains(margin)) {
+    let margins = [
+        x,
+        y,
+        container_width - x - width,
+        container_height - y - height,
+    ];
+    if width <= 0
+        || height <= 0
+        || margins
+            .iter()
+            .any(|margin| !(0..=MAX_INSET).contains(margin))
+    {
         return page;
     }
     if margins.iter().all(|margin| *margin == 0) {

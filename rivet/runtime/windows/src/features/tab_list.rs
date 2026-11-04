@@ -53,7 +53,12 @@ fn with<R>(window: HWND, edit: impl FnOnce(&mut State) -> R) -> R {
                 },
                 None => Store::default(),
             };
-            State { store, owner: window as isize, last: String::new(), hold_until: None }
+            State {
+                store,
+                owner: window as isize,
+                last: String::new(),
+                hold_until: None,
+            }
         });
         edit(state)
     })
@@ -65,13 +70,21 @@ unsafe fn live(window: HWND) -> Option<Vec<LiveTab>> {
     Some(
         tabs.into_iter()
             .enumerate()
-            .map(|(index, tab)| LiveTab { id: tab.id, index, url: tab.saved.url, title: tab.saved.title, active: tab.saved.active })
+            .map(|(index, tab)| LiveTab {
+                id: tab.id,
+                index,
+                url: tab.saved.url,
+                title: tab.saved.title,
+                active: tab.saved.active,
+            })
             .collect(),
     )
 }
 
 fn held(state: &State) -> bool {
-    state.hold_until.is_some_and(|until| std::time::Instant::now() < until)
+    state
+        .hold_until
+        .is_some_and(|until| std::time::Instant::now() < until)
 }
 
 /// Takes in the tabs the window shows now, unless it is swapping spaces.
@@ -105,7 +118,10 @@ pub(crate) unsafe fn tick(window: HWND) {
             return Vec::new();
         }
         let settings = state.store.settings;
-        state.store.list(&space).due_for_archive(&settings, now(), active)
+        state
+            .store
+            .list(&space)
+            .due_for_archive(&settings, now(), active)
     });
     for id in due {
         let closed = crate::features::tabs::close_tab_by_id(window, id);
@@ -116,7 +132,9 @@ pub(crate) unsafe fn tick(window: HWND) {
 
 unsafe fn save(window: HWND) {
     let Some((path, dir)) = file() else { return };
-    let text = with(window, |state| (state.owner == window as isize).then(|| state.store.to_json(&dir)));
+    let text = with(window, |state| {
+        (state.owner == window as isize).then(|| state.store.to_json(&dir))
+    });
     let Some(text) = text else { return };
     if with(window, |state| state.last == text) {
         return;
@@ -143,7 +161,9 @@ pub(crate) unsafe fn close(window: HWND, index: usize) -> bool {
     let Some(tabs) = sync(window) else {
         return crate::features::tabs::close_tab(window, index);
     };
-    let Some(closing) = tabs.iter().find(|tab| tab.index == index) else { return false };
+    let Some(closing) = tabs.iter().find(|tab| tab.index == index) else {
+        return false;
+    };
     if closing.active {
         let space = crate::frame::space_name(window);
         let order = with(window, |state| state.store.list(&space).order(&tabs));
@@ -165,64 +185,98 @@ pub(crate) unsafe fn reopen(window: HWND) -> bool {
     let Some(closed) = with(window, |state| state.store.list(&space).take_closed()) else {
         return false;
     };
-    let opened = crate::features::tabs::new_tab(window) && crate::features::navigation::open(window, &closed.url);
-    crate::trace::trace(&format!("tab list: reopened {:?} at {}: {opened}", closed.url, closed.position));
+    let opened = crate::features::tabs::new_tab(window)
+        && crate::features::navigation::open(window, &closed.url);
+    crate::trace::trace(&format!(
+        "tab list: reopened {:?} at {}: {opened}",
+        closed.url, closed.position
+    ));
     sync(window);
     opened
 }
 
 /// A click on a folder row. False when the row is a browser tab group, which the caller toggles.
 pub(crate) fn toggle_folder(window: HWND, key: &[u8; 16]) -> bool {
-    let Some(folder) = crate::tab_sections::folder_of_key(key) else { return false };
+    let Some(folder) = crate::tab_sections::folder_of_key(key) else {
+        return false;
+    };
     let space = crate::frame::space_name(window);
-    with(window, |state| state.store.list(&space).toggle_folder(folder))
+    with(window, |state| {
+        state.store.list(&space).toggle_folder(folder)
+    })
 }
 
 unsafe fn page_at(window: HWND, index: usize) -> Option<usize> {
-    live(window)?.into_iter().find(|tab| tab.index == index).map(|tab| tab.id)
+    live(window)?
+        .into_iter()
+        .find(|tab| tab.index == index)
+        .map(|tab| tab.id)
 }
 
 pub(crate) unsafe fn set_pinned(window: HWND, index: usize, pinned: bool) -> bool {
     sync(window);
-    let Some(id) = page_at(window, index) else { return false };
+    let Some(id) = page_at(window, index) else {
+        return false;
+    };
     let space = crate::frame::space_name(window);
-    with(window, |state| state.store.list(&space).set_pinned(id, pinned))
+    with(window, |state| {
+        state.store.list(&space).set_pinned(id, pinned)
+    })
 }
 
 /// Pins the tab at `index`, or unpins it when it is pinned.
 pub(crate) unsafe fn toggle_pinned(window: HWND, index: usize) -> bool {
     sync(window);
-    let Some(id) = page_at(window, index) else { return false };
+    let Some(id) = page_at(window, index) else {
+        return false;
+    };
     let space = crate::frame::space_name(window);
     with(window, |state| {
         let list = state.store.list(&space);
-        let pinned = list.entries.iter().any(|entry| entry.id == id && entry.place == crate::tab_sections::Place::Pinned);
+        let pinned = list
+            .entries
+            .iter()
+            .any(|entry| entry.id == id && entry.place == crate::tab_sections::Place::Pinned);
         list.set_pinned(id, !pinned)
     })
 }
 
 pub(crate) unsafe fn new_folder(window: HWND, index: usize, name: &str) -> bool {
     sync(window);
-    let Some(id) = page_at(window, index) else { return false };
+    let Some(id) = page_at(window, index) else {
+        return false;
+    };
     let space = crate::frame::space_name(window);
-    with(window, |state| state.store.list(&space).new_folder(id, name).is_some())
+    with(window, |state| {
+        state.store.list(&space).new_folder(id, name).is_some()
+    })
 }
 
 /// A tab dropped at `y`, in appbar DIPs, on the tab list. True when the drop was on a row.
 pub(crate) unsafe fn drop_on_list(window: HWND, index: usize, y: f32) -> bool {
-    let Some(tabs) = sync(window) else { return false };
-    let Some(id) = tabs.iter().find(|tab| tab.index == index).map(|tab| tab.id) else { return false };
+    let Some(tabs) = sync(window) else {
+        return false;
+    };
+    let Some(id) = tabs.iter().find(|tab| tab.index == index).map(|tab| tab.id) else {
+        return false;
+    };
     let space = crate::frame::space_name(window);
     // The rows as the appbar draws them, with the split's tabs together.
     let split = crate::features::split::shown_tabs(window);
     with(window, |state| {
         let list = state.store.list(&space);
         let rows = crate::tab_rows::group_split(list.rows(&tabs), &split);
-        let Some((row, lower)) = crate::tab_sections::row_at(&rows, y) else { return false };
+        let Some((row, lower)) = crate::tab_sections::row_at(&rows, y) else {
+            return false;
+        };
         let page_of = |index: usize| tabs.iter().find(|tab| tab.index == index).map(|tab| tab.id);
-        let Some(target) = crate::tab_sections::drop_target(&rows, row, lower, page_of) else { return false };
+        let Some(target) = crate::tab_sections::drop_target(&rows, row, lower, page_of) else {
+            return false;
+        };
         let moved = list.move_tab(id, target);
-        crate::trace::trace(&format!("tab list: dropped page {id:#x} on {target:?}: {moved}"));
+        crate::trace::trace(&format!(
+            "tab list: dropped page {id:#x} on {target:?}: {moved}"
+        ));
         moved
     })
 }
@@ -230,14 +284,18 @@ pub(crate) unsafe fn drop_on_list(window: HWND, index: usize, y: f32) -> bool {
 /// Moves the tab at `index` without a pointer, for checked builds: `before`, `after` or `folder`.
 unsafe fn move_by_command(window: HWND, index: usize, how: &str, other: usize) -> bool {
     sync(window);
-    let (Some(id), Some(near)) = (page_at(window, index), page_at(window, other)) else { return false };
+    let (Some(id), Some(near)) = (page_at(window, index), page_at(window, other)) else {
+        return false;
+    };
     let target = match how {
         "before" => Target::Before(near),
         "after" => Target::After(near),
         _ => return false,
     };
     let space = crate::frame::space_name(window);
-    with(window, |state| state.store.list(&space).move_tab(id, target))
+    with(window, |state| {
+        state.store.list(&space).move_tab(id, target)
+    })
 }
 
 /// The command bar of another feature registers itself here. It returns false when it could not
@@ -262,7 +320,9 @@ fn ctrl_t_now() -> CtrlT {
         state
             .borrow()
             .as_ref()
-            .map_or(crate::tab_sections::Settings::default().ctrl_t, |state| state.store.settings.ctrl_t)
+            .map_or(crate::tab_sections::Settings::default().ctrl_t, |state| {
+                state.store.settings.ctrl_t
+            })
     })
 }
 
@@ -299,7 +359,12 @@ pub(crate) fn set_ctrl_t(window: HWND, value: CtrlT) {
 
 /// Sets the archive period in hours. `None` never archives.
 pub(crate) fn set_archive_hours(window: HWND, hours: Option<u64>) {
-    with(window, |state| state.store.settings.set_archive_after(hours.map(|hours| hours * 3600)));
+    with(window, |state| {
+        state
+            .store
+            .settings
+            .set_archive_after(hours.map(|hours| hours * 3600))
+    });
 }
 
 /// Archives as if the tabs were last seen `secs` ago, for checked builds that cannot wait hours.
@@ -315,21 +380,42 @@ fn age_by(window: HWND, secs: u64) -> bool {
 
 /// Traces the sections, for checked builds: `tab sections pinned [..] folders [..] today [..]`.
 unsafe fn trace_sections(window: HWND) -> bool {
-    let Some(tabs) = sync(window) else { return false };
+    let Some(tabs) = sync(window) else {
+        return false;
+    };
     let space = crate::frame::space_name(window);
     let text = with(window, |state| {
         let settings = state.store.settings;
         let list = state.store.list(&space);
-        let title = |id: usize| tabs.iter().find(|tab| tab.id == id).map(|tab| tab.title.clone()).unwrap_or_default();
+        let title = |id: usize| {
+            tabs.iter()
+                .find(|tab| tab.id == id)
+                .map(|tab| tab.title.clone())
+                .unwrap_or_default()
+        };
         let pick = |place: crate::tab_sections::Place| -> Vec<String> {
-            list.entries.iter().filter(|entry| entry.place == place && entry.id != 0).map(|entry| title(entry.id)).collect()
+            list.entries
+                .iter()
+                .filter(|entry| entry.place == place && entry.id != 0)
+                .map(|entry| title(entry.id))
+                .collect()
         };
         let folders: Vec<String> = list
             .folders
             .iter()
             .map(|folder| {
                 let inside = pick(crate::tab_sections::Place::Folder(folder.id));
-                format!("{}:{}:{}:{:?}", folder.name, inside.len(), if folder.collapsed { "collapsed" } else { "open" }, inside)
+                format!(
+                    "{}:{}:{}:{:?}",
+                    folder.name,
+                    inside.len(),
+                    if folder.collapsed {
+                        "collapsed"
+                    } else {
+                        "open"
+                    },
+                    inside
+                )
             })
             .collect();
         let order: Vec<String> = list.order(&tabs).into_iter().map(&title).collect();
@@ -360,7 +446,14 @@ pub(crate) unsafe fn command(window: HWND, text: &str) -> Option<bool> {
         "folder" => new_folder(window, number(1)?, &words[2..].join(" ")),
         "foldertoggle" => {
             let space = crate::frame::space_name(window);
-            let id = with(window, |state| state.store.list(&space).folders.first().map(|folder| folder.id))?;
+            let id = with(window, |state| {
+                state
+                    .store
+                    .list(&space)
+                    .folders
+                    .first()
+                    .map(|folder| folder.id)
+            })?;
             toggle_folder(window, &crate::tab_sections::folder_key(id))
         }
         "into" => {
@@ -386,7 +479,14 @@ pub(crate) unsafe fn command(window: HWND, text: &str) -> Option<bool> {
         }
         "age" => age_by(window, number(1)? as u64 * 3600),
         "ctrlt" => {
-            set_ctrl_t(window, if words.get(1) == Some(&"newtab") { CtrlT::NewTabPage } else { CtrlT::CommandBar });
+            set_ctrl_t(
+                window,
+                if words.get(1) == Some(&"newtab") {
+                    CtrlT::NewTabPage
+                } else {
+                    CtrlT::CommandBar
+                },
+            );
             true
         }
         _ => return None,

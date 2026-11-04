@@ -94,8 +94,15 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
 enum SetupRequest {
     /// Open the setup window.
     Window,
-    List { json: bool },
-    Choose { browser: PathBuf, profile: String, credentials: rivet_core::CredentialProvider, json: bool },
+    List {
+        json: bool,
+    },
+    Choose {
+        browser: PathBuf,
+        profile: String,
+        credentials: rivet_core::CredentialProvider,
+        json: bool,
+    },
 }
 
 fn parse_setup(arguments: &[String]) -> Result<SetupRequest, String> {
@@ -115,7 +122,13 @@ fn parse_setup(arguments: &[String]) -> Result<SetupRequest, String> {
                 )?))
             }
             "--profile" => profile = Some(next_value(arguments, &mut index, "--profile")?),
-            "--credentials" => credentials = Some(parse_credentials(&next_value(arguments, &mut index, "--credentials")?)?),
+            "--credentials" => {
+                credentials = Some(parse_credentials(&next_value(
+                    arguments,
+                    &mut index,
+                    "--credentials",
+                )?)?)
+            }
             "--list" => list = true,
             "--json" => json = true,
             option => return Err(format!("unknown option {option:?}")),
@@ -179,8 +192,14 @@ fn run_setup(arguments: &[String]) -> Result<(), String> {
             }
             Ok(())
         }
-        SetupRequest::Choose { browser, profile, credentials, json } => {
-            let found = system::inspect(&browser).map_err(|rejection| format!("{}: {rejection}", browser.display()))?;
+        SetupRequest::Choose {
+            browser,
+            profile,
+            credentials,
+            json,
+        } => {
+            let found = system::inspect(&browser)
+                .map_err(|rejection| format!("{}: {rejection}", browser.display()))?;
             let root = config::data_root()?;
             let mut saved = model::choose(found, &profile, &root)?;
             saved.credentials = credentials;
@@ -283,7 +302,11 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         );
     }
     // The provider's preferences are written into a Rivet profile only, before the browser reads them.
-    if let Some(dir) = request.user_data_dir.as_deref().filter(|dir| profile_allows_rivet(Some(dir))) {
+    if let Some(dir) = request
+        .user_data_dir
+        .as_deref()
+        .filter(|dir| profile_allows_rivet(Some(dir)))
+    {
         if let Err(error) = rivet_core::credentials::prepare_profile(dir, request.credentials) {
             eprintln!("rivet: {error}");
         }
@@ -371,7 +394,8 @@ fn saved_credentials() -> rivet_core::CredentialProvider {
 }
 
 fn parse_credentials(value: &str) -> Result<rivet_core::CredentialProvider, String> {
-    rivet_core::CredentialProvider::parse(value).ok_or_else(|| format!("--credentials must be browser or system, not {value:?}"))
+    rivet_core::CredentialProvider::parse(value)
+        .ok_or_else(|| format!("--credentials must be browser or system, not {value:?}"))
 }
 
 fn resolve_runtime(explicit: Option<&std::path::Path>) -> Option<PathBuf> {
@@ -400,7 +424,13 @@ fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--hold" => hold = Some(PathBuf::from(next_value(&arguments, &mut index, "--hold")?)),
-            "--credentials" => credentials = Some(parse_credentials(&next_value(&arguments, &mut index, "--credentials")?)?),
+            "--credentials" => {
+                credentials = Some(parse_credentials(&next_value(
+                    &arguments,
+                    &mut index,
+                    "--credentials",
+                )?)?)
+            }
             "--browser" => {
                 browser = Some(PathBuf::from(next_value(
                     &arguments,
@@ -803,12 +833,28 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            parse_setup(&words(&["--browser", r"C:\B\chrome.exe", "--profile", "Work", "--json"])),
-            Ok(SetupRequest::Choose { browser: PathBuf::from(r"C:\B\chrome.exe"), profile: "Work".into(), credentials: Default::default(), json: true })
+            parse_setup(&words(&[
+                "--browser",
+                r"C:\B\chrome.exe",
+                "--profile",
+                "Work",
+                "--json"
+            ])),
+            Ok(SetupRequest::Choose {
+                browser: PathBuf::from(r"C:\B\chrome.exe"),
+                profile: "Work".into(),
+                credentials: Default::default(),
+                json: true
+            })
         );
         assert_eq!(
             parse_setup(&words(&["--browser", r"C:\B\chrome.exe"])),
-            Ok(SetupRequest::Choose { browser: PathBuf::from(r"C:\B\chrome.exe"), profile: "Default".into(), credentials: Default::default(), json: false })
+            Ok(SetupRequest::Choose {
+                browser: PathBuf::from(r"C:\B\chrome.exe"),
+                profile: "Default".into(),
+                credentials: Default::default(),
+                json: false
+            })
         );
         assert_eq!(
             parse_setup(&words(&["--browser", "b.exe", "--credentials", "system"])),
@@ -820,7 +866,10 @@ mod tests {
             })
         );
         assert!(parse_setup(&words(&["--browser", "b.exe", "--credentials", "vault"])).is_err());
-        assert_eq!(parse_setup(&words(&["--list", "--json"])), Ok(SetupRequest::List { json: true }));
+        assert_eq!(
+            parse_setup(&words(&["--list", "--json"])),
+            Ok(SetupRequest::List { json: true })
+        );
         assert!(parse_setup(&words(&["--profile", "Work"])).is_err());
         assert!(parse_setup(&words(&["--list", "--browser", "x"])).is_err());
         assert!(parse_setup(&words(&["--nope"])).is_err());

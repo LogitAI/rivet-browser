@@ -9,7 +9,11 @@ use std::process::Command;
 
 /// The arguments of `rivet session start` for a browser and its Rivet profile folder. Every launch
 /// argument is chosen here.
-pub fn session_arguments(browser: &Path, user_data_dir: &Path, credentials: rivet_core::CredentialProvider) -> Vec<String> {
+pub fn session_arguments(
+    browser: &Path,
+    user_data_dir: &Path,
+    credentials: rivet_core::CredentialProvider,
+) -> Vec<String> {
     // No URL: a session without one opens the Rivet start page.
     vec![
         "session".to_owned(),
@@ -72,7 +76,11 @@ pub fn start(saved: &Saved, root: &Path) -> Result<(), String> {
     let held = root.join("Rivet").join("browsers");
     hold::plan(&saved.browser, &held, now).map_err(|refusal| refusal.to_string())?;
     Command::new(rivet_executable()?)
-        .args(session_arguments(&saved.browser, &profile_dir(root, &saved.browser, &saved.profile), saved.credentials))
+        .args(session_arguments(
+            &saved.browser,
+            &profile_dir(root, &saved.browser, &saved.profile),
+            saved.credentials,
+        ))
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("could not start Rivet: {error}"))
@@ -89,7 +97,11 @@ mod tests {
     fn fr3_setup_opens_the_start_page_in_the_chosen_rivet_profile() {
         let root = Path::new(r"C:\Data");
         let browser = Path::new(r"C:\B\chrome.exe");
-        let arguments = session_arguments(browser, &profile_dir(root, browser, "Work"), Default::default());
+        let arguments = session_arguments(
+            browser,
+            &profile_dir(root, browser, "Work"),
+            Default::default(),
+        );
         assert!(!arguments.iter().any(|argument| argument == "--url"));
         let at = arguments
             .iter()
@@ -107,8 +119,15 @@ mod tests {
     #[test]
     fn nfr8_setup_opens_the_session_with_the_chosen_provider() {
         let browser = Path::new(r"C:\B\chrome.exe");
-        let arguments = session_arguments(browser, Path::new(r"C:\P"), rivet_core::CredentialProvider::System);
-        let at = arguments.iter().position(|argument| argument == "--credentials").unwrap();
+        let arguments = session_arguments(
+            browser,
+            Path::new(r"C:\P"),
+            rivet_core::CredentialProvider::System,
+        );
+        let at = arguments
+            .iter()
+            .position(|argument| argument == "--credentials")
+            .unwrap();
         assert_eq!(arguments[at + 1], "system");
     }
 

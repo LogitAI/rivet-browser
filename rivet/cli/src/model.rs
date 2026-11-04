@@ -317,7 +317,10 @@ pub fn layout(visible: usize, notice: bool, chip_widths: &[f32]) -> Layout {
     let credentials_label = Rect::new(PAD + 4.0, y, 320.0, 14.0);
     y += 22.0;
     let half = (WIDTH - 2.0 * PAD - 8.0) / 2.0;
-    let credentials = [Rect::new(PAD, y, half, 36.0), Rect::new(PAD + half + 8.0, y, half, 36.0)];
+    let credentials = [
+        Rect::new(PAD, y, half, 36.0),
+        Rect::new(PAD + half + 8.0, y, half, 36.0),
+    ];
     y += 46.0;
     let finish = Rect::new(WIDTH - PAD - 132.0, y, 132.0, 44.0);
     let message = Rect::new(PAD + 4.0, y, finish.x - PAD - 16.0, 44.0);
@@ -377,7 +380,11 @@ pub fn hit(layout: &Layout, x: f32, y: f32) -> Hit {
     if let Some(index) = layout.chips.iter().position(|chip| chip.contains(x, y)) {
         return Hit::Chip(index);
     }
-    if let Some(index) = layout.credentials.iter().position(|option| option.contains(x, y)) {
+    if let Some(index) = layout
+        .credentials
+        .iter()
+        .position(|option| option.contains(x, y))
+    {
         return Hit::Credentials(index);
     }
     if layout.finish.contains(x, y) {
@@ -493,9 +500,21 @@ mod tests {
 
     #[test]
     fn fr1_the_browser_chosen_before_stays_chosen() {
-        let list = vec![browser("chrome", Status::Ready), browser("brave", Status::Ready)];
-        let saved = Saved { browser: PathBuf::from(r"c:\b\brave\BRAVE.exe"), profile: "Lab".into(), credentials: Default::default() };
-        let model = Model::new(list, rivet_core::paths::TestDir::new("rivet-model-none").to_path_buf(), Some("gone".into()), Some(&saved));
+        let list = vec![
+            browser("chrome", Status::Ready),
+            browser("brave", Status::Ready),
+        ];
+        let saved = Saved {
+            browser: PathBuf::from(r"c:\b\brave\BRAVE.exe"),
+            profile: "Lab".into(),
+            credentials: Default::default(),
+        };
+        let model = Model::new(
+            list,
+            rivet_core::paths::TestDir::new("rivet-model-none").to_path_buf(),
+            Some("gone".into()),
+            Some(&saved),
+        );
         assert_eq!(model.selected, Some(1));
         assert_eq!(model.profile, "Lab");
     }
@@ -547,18 +566,18 @@ mod tests {
         ] {
             let layout = layout(visible, notice, &chips);
             let mut all = vec![
-            layout.close,
-            layout.browser_label,
-            layout.group,
-            layout.note,
-            layout.profile_label,
-            layout.field,
-            layout.preview,
-            layout.credentials_label,
-            layout.credentials[0],
-            layout.credentials[1],
-            layout.finish,
-        ];
+                layout.close,
+                layout.browser_label,
+                layout.group,
+                layout.note,
+                layout.profile_label,
+                layout.field,
+                layout.preview,
+                layout.credentials_label,
+                layout.credentials[0],
+                layout.credentials[1],
+                layout.finish,
+            ];
             all.extend(layout.notice);
             all.extend(&layout.chips);
             all.retain(|rect| rect.w > 0.0);
@@ -610,12 +629,18 @@ mod tests {
     fn nfr8_setup_window_offers_both_providers_and_finishes_with_the_choice() {
         let layout = layout(2, false, &[]);
         for (index, option) in layout.credentials.iter().enumerate() {
-            assert_eq!(hit(&layout, option.x + 4.0, option.y + 4.0), Hit::Credentials(index));
+            assert_eq!(
+                hit(&layout, option.x + 4.0, option.y + 4.0),
+                Hit::Credentials(index)
+            );
         }
         let mut model = model(&[("chrome", Status::Ready)]);
         assert_eq!(model.credentials, rivet_core::CredentialProvider::Browser);
         model.credentials = rivet_core::CredentialProvider::ALL[1];
-        assert_eq!(model.finish().unwrap().credentials, rivet_core::CredentialProvider::System);
+        assert_eq!(
+            model.finish().unwrap().credentials,
+            rivet_core::CredentialProvider::System
+        );
     }
 
     #[test]

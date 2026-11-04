@@ -590,7 +590,10 @@ fn fr3_samsung_new_tab_hook_and_navigation_match_the_installed_build() {
         .all(|build| build.navigation.gurl_wide == (build.module == "samsunginternet.dll")));
     assert!(WHALE.tabs.new_tab_delay_ms == 0 && EDGE.tabs.new_tab_delay_ms == 0);
     // Only Samsung opens a Rivet window's new tab through `OpenURL`, past its own new tab page.
-    assert!(all().iter().all(|build| (build.tabs.new_tab_by_open_url == Some(true)) == (build.module == "samsunginternet.dll")));
+    assert!(all()
+        .iter()
+        .all(|build| (build.tabs.new_tab_by_open_url == Some(true))
+            == (build.module == "samsunginternet.dll")));
     let path = r"C:\Program Files\Samsung\Internet\Application\143.0.4.29\samsunginternet.dll";
     let Ok(file) = std::fs::read(path) else {
         return;

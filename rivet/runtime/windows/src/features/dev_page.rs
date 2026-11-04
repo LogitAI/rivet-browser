@@ -62,7 +62,8 @@ pub(crate) fn dev_actions() -> Vec<(Action, u32)> {
 pub(crate) unsafe fn run_own(window: HWND, action: Action) -> bool {
     match action {
         Action::CopyLink => {
-            let copied = active_page(window).is_some_and(|(_, address)| copy_text(window, &address));
+            let copied =
+                active_page(window).is_some_and(|(_, address)| copy_text(window, &address));
             crate::trace::trace(&format!("developer bar: copy link {copied}"));
         }
         Action::MiniWindow => {
@@ -144,12 +145,19 @@ pub(crate) fn page_pixels(panel: [i32; 4], row: i32, scale: f32) -> [i32; 4] {
 /// PrintWindow asks it to, so nothing on top of the window gets into the picture.
 unsafe fn copy_page_picture(window: HWND) -> bool {
     use windows_sys::Win32::Graphics::Gdi::{
-        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject, SRCCOPY,
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
+        ReleaseDC, SelectObject, SRCCOPY,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
-    let Some(panel) = crate::features::frame_layout::panel_bounds(window) else { return false };
+    let Some(panel) = crate::features::frame_layout::panel_bounds(window) else {
+        return false;
+    };
     let scale = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
-    let [x, y, w, h] = page_pixels([panel.x, panel.y, panel.width, panel.height], crate::features::split::ROW_HEIGHT, scale);
+    let [x, y, w, h] = page_pixels(
+        [panel.x, panel.y, panel.width, panel.height],
+        crate::features::split::ROW_HEIGHT,
+        scale,
+    );
     let mut client: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
     let screen = GetDC(window);
@@ -181,7 +189,10 @@ mod tests {
     #[test]
     fn fr11_screenshot_takes_the_page_below_the_address_row() {
         assert_eq!(page_pixels([8, 0, 1000, 744], 44, 1.0), [8, 44, 1000, 700]);
-        assert_eq!(page_pixels([8, 0, 1000, 744], 44, 1.5), [12, 66, 1500, 1050]);
+        assert_eq!(
+            page_pixels([8, 0, 1000, 744], 44, 1.5),
+            [12, 66, 1500, 1050]
+        );
         assert_eq!(page_pixels([0, 0, 100, 20], 44, 1.0)[3], 0);
     }
 }

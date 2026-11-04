@@ -35,7 +35,8 @@ pub const SAVE_PASSWORDS_PREF: &str = "credentials_enable_service";
 pub const AUTO_SIGN_IN_PREF: &str = "credentials_enable_autosignin";
 
 impl CredentialProvider {
-    pub const ALL: [CredentialProvider; 2] = [CredentialProvider::Browser, CredentialProvider::System];
+    pub const ALL: [CredentialProvider; 2] =
+        [CredentialProvider::Browser, CredentialProvider::System];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -90,24 +91,36 @@ impl CredentialProvider {
 
 /// The provider saved in a setup file's JSON, the browser's when none was saved.
 pub fn from_setup(value: &Value) -> CredentialProvider {
-    value["credentials"].as_str().and_then(CredentialProvider::parse).unwrap_or_default()
+    value["credentials"]
+        .as_str()
+        .and_then(CredentialProvider::parse)
+        .unwrap_or_default()
 }
 
 /// Saves `provider` in the setup file at `path` and keeps every other key. The browser reads it at
 /// the next start of a Rivet profile. A setup that is not JSON is left alone.
 pub fn save_to_setup(path: &Path, provider: CredentialProvider) -> Result<(), String> {
     let mut setup = match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str::<Value>(&text).map_err(|_| format!("{} is not a valid setup", path.display()))?,
+        Ok(text) => serde_json::from_str::<Value>(&text)
+            .map_err(|_| format!("{} is not a valid setup", path.display()))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
         Err(error) => return Err(format!("could not read {}: {error}", path.display())),
     };
-    let object = setup.as_object_mut().ok_or_else(|| format!("{} is not a valid setup", path.display()))?;
-    object.insert("credentials".to_owned(), Value::String(provider.as_str().to_owned()));
+    let object = setup
+        .as_object_mut()
+        .ok_or_else(|| format!("{} is not a valid setup", path.display()))?;
+    object.insert(
+        "credentials".to_owned(),
+        Value::String(provider.as_str().to_owned()),
+    );
     let folder = path.parent().ok_or("the setup file has no folder")?;
-    std::fs::create_dir_all(folder).map_err(|error| format!("could not make {}: {error}", folder.display()))?;
+    std::fs::create_dir_all(folder)
+        .map_err(|error| format!("could not make {}: {error}", folder.display()))?;
     let temporary = folder.join("setup.json.tmp");
-    std::fs::write(&temporary, setup.to_string()).map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
-    std::fs::rename(&temporary, path).map_err(|error| format!("could not save {}: {error}", path.display()))
+    std::fs::write(&temporary, setup.to_string())
+        .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
+    std::fs::rename(&temporary, path)
+        .map_err(|error| format!("could not save {}: {error}", path.display()))
 }
 
 /// The provider saved in the setup file at `path`.
@@ -126,16 +139,24 @@ pub fn prepare_profile(user_data_dir: &Path, provider: CredentialProvider) -> Re
     let mut preferences = match std::fs::read_to_string(&path) {
         Ok(text) => match serde_json::from_str::<Value>(&text) {
             Ok(value) => value,
-            Err(_) => return Err(format!("{} is not JSON; the provider was not set", path.display())),
+            Err(_) => {
+                return Err(format!(
+                    "{} is not JSON; the provider was not set",
+                    path.display()
+                ))
+            }
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
         Err(error) => return Err(format!("could not read {}: {error}", path.display())),
     };
     provider.apply_to_preferences(&mut preferences);
-    std::fs::create_dir_all(&folder).map_err(|error| format!("could not make {}: {error}", folder.display()))?;
+    std::fs::create_dir_all(&folder)
+        .map_err(|error| format!("could not make {}: {error}", folder.display()))?;
     let temporary = folder.join("Preferences.rivet.tmp");
-    std::fs::write(&temporary, preferences.to_string()).map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
-    std::fs::rename(&temporary, &path).map_err(|error| format!("could not save {}: {error}", path.display()))
+    std::fs::write(&temporary, preferences.to_string())
+        .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
+    std::fs::rename(&temporary, &path)
+        .map_err(|error| format!("could not save {}: {error}", path.display()))
 }
 
 #[cfg(test)]
@@ -147,10 +168,16 @@ mod tests {
         for provider in CredentialProvider::ALL {
             assert_eq!(CredentialProvider::parse(provider.as_str()), Some(provider));
         }
-        assert_eq!(CredentialProvider::parse("Windows"), Some(CredentialProvider::System));
+        assert_eq!(
+            CredentialProvider::parse("Windows"),
+            Some(CredentialProvider::System)
+        );
         assert_eq!(CredentialProvider::parse("keychain"), None);
         assert_eq!(CredentialProvider::default(), CredentialProvider::Browser);
-        assert_eq!(CredentialProvider::Browser.other(), CredentialProvider::System);
+        assert_eq!(
+            CredentialProvider::Browser.other(),
+            CredentialProvider::System
+        );
     }
 
     #[test]
@@ -164,7 +191,8 @@ mod tests {
 
     #[test]
     fn nfr8_provider_sets_only_the_password_manager_preferences() {
-        let mut preferences = serde_json::json!({"homepage": "about:blank", "credentials_enable_service": true});
+        let mut preferences =
+            serde_json::json!({"homepage": "about:blank", "credentials_enable_service": true});
         CredentialProvider::System.apply_to_preferences(&mut preferences);
         assert_eq!(preferences["credentials_enable_service"], false);
         assert_eq!(preferences["credentials_enable_autosignin"], false);
@@ -178,9 +206,18 @@ mod tests {
 
     #[test]
     fn nfr8_saved_provider_is_read_from_the_setup() {
-        assert_eq!(from_setup(&serde_json::json!({"credentials": "system"})), CredentialProvider::System);
-        assert_eq!(from_setup(&serde_json::json!({})), CredentialProvider::Browser);
-        assert_eq!(from_setup(&serde_json::json!({"credentials": 3})), CredentialProvider::Browser);
+        assert_eq!(
+            from_setup(&serde_json::json!({"credentials": "system"})),
+            CredentialProvider::System
+        );
+        assert_eq!(
+            from_setup(&serde_json::json!({})),
+            CredentialProvider::Browser
+        );
+        assert_eq!(
+            from_setup(&serde_json::json!({"credentials": 3})),
+            CredentialProvider::Browser
+        );
     }
 
     #[test]
@@ -188,7 +225,11 @@ mod tests {
         let root = crate::paths::TestDir::new("rivet-credentials-setup");
         let path = root.join("setup.json");
         assert_eq!(load_from_setup(&path), CredentialProvider::Browser);
-        std::fs::write(&path, r#"{"version":1,"browser":"C:\\b.exe","profile":"Work"}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"version":1,"browser":"C:\\b.exe","profile":"Work"}"#,
+        )
+        .unwrap();
         save_to_setup(&path, CredentialProvider::System).unwrap();
         assert_eq!(load_from_setup(&path), CredentialProvider::System);
         let setup: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

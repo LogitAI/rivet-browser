@@ -143,7 +143,11 @@ pub unsafe fn split_active(window: HWND) -> bool {
         if active_is_split(window) {
             return false;
         }
-        let side = if other < active { Side::Left } else { Side::Right };
+        let side = if other < active {
+            Side::Left
+        } else {
+            Side::Right
+        };
         return split_in_view(window, other, 0, side);
     }
     backend().split_pair(window, active.min(other), active.max(other), false)
@@ -171,8 +175,15 @@ pub fn drop_pair(active: usize, dragged: usize, side: Side) -> (usize, usize, bo
 /// Puts `dragged` on `side` of the page in slot `target` of the window's split, or of the focused
 /// page when no slot is named. Up to four pages share the window. Returns false when the tab is the
 /// active one, does not exist, is already shown, or the split is full.
-pub unsafe fn split_beside_page(window: HWND, dragged: usize, side: Side, target: Option<usize>) -> bool {
-    let Some(tabs) = crate::features::tabs::tabs(window) else { return false };
+pub unsafe fn split_beside_page(
+    window: HWND,
+    dragged: usize,
+    side: Side,
+    target: Option<usize>,
+) -> bool {
+    let Some(tabs) = crate::features::tabs::tabs(window) else {
+        return false;
+    };
     let Some(active) = tabs.iter().find(|tab| tab.active).map(|tab| tab.index) else {
         return false;
     };
@@ -201,7 +212,11 @@ pub unsafe fn split_full(window: HWND) -> bool {
 pub unsafe fn drop_page(window: HWND, x: i32, y: i32) -> Option<([i32; 4], Option<usize>)> {
     for pane in panes(window) {
         if x >= pane.x && x < pane.x + pane.width && y >= pane.y && y < pane.y + pane.height {
-            let slot = if crate::features::second_view::is_split(window) { crate::features::second_view::slot_of_pane(window, &pane) } else { None };
+            let slot = if crate::features::second_view::is_split(window) {
+                crate::features::second_view::slot_of_pane(window, &pane)
+            } else {
+                None
+            };
             return Some(([pane.x, pane.y, pane.width, pane.height], slot));
         }
     }

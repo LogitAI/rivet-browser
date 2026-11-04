@@ -28,7 +28,11 @@ struct Seen {
 
 /// The height of the browser's bars right above the window's page, from the last layout.
 pub(crate) fn bar_above(window: HWND) -> i32 {
-    BARS.with(|bars| bars.borrow().get(&(window as isize)).map_or(0, |seen| seen.height))
+    BARS.with(|bars| {
+        bars.borrow()
+            .get(&(window as isize))
+            .map_or(0, |seen| seen.height)
+    })
 }
 
 /// The second view's bounds `second` with the pane raised over the browser's bars of height
@@ -53,7 +57,9 @@ pub(crate) fn narrow(bar: [i32; 4], contents: [i32; 4], columns: (i32, i32)) -> 
 /// open, and their height is kept for the second view's placement.
 pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) {
     let row = &crate::builds::get().side_panel;
-    let Some(contents) = area.bounds(row.contents_container) else { return };
+    let Some(contents) = area.bounds(row.contents_container) else {
+        return;
+    };
     let page = *contents;
     let columns = crate::features::second_view::split_columns(area.window, page[2]);
     let mut height = 0;
@@ -66,7 +72,11 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
             *bounds = narrow(*bounds, page, columns);
         }
     }
-    let seen = Seen { height, width: page[2], columns };
+    let seen = Seen {
+        height,
+        width: page[2],
+        columns,
+    };
     BARS.with(|bars| bars.borrow_mut().insert(area.window as isize, seen));
 }
 
@@ -80,7 +90,9 @@ fn stale(seen: Option<Seen>, columns: impl Fn(i32) -> Option<(i32, i32)>) -> boo
 /// were last narrowed. Called when the second view changes, outside the browser's layout.
 pub(crate) unsafe fn follow(window: HWND) {
     let seen = BARS.with(|bars| bars.borrow().get(&(window as isize)).copied());
-    if stale(seen, |width| crate::features::second_view::split_columns(window, width)) {
+    if stale(seen, |width| {
+        crate::features::second_view::split_columns(window, width)
+    }) {
         crate::hooks::page_area::relayout(window);
     }
 }
@@ -108,7 +120,10 @@ mod tests {
     fn fr9_the_other_pane_rises_to_the_infobar_top() {
         let second = [702, 100, 462, 600];
         assert_eq!(lift(Mode::Split, second, 56), [702, 44, 462, 656]);
-        assert_eq!(lift(Mode::Docked { width: 240 }, second, 56), [702, 44, 462, 656]);
+        assert_eq!(
+            lift(Mode::Docked { width: 240 }, second, 56),
+            [702, 44, 462, 656]
+        );
         // No bar, an empty view, or a view at the top leave it.
         assert_eq!(lift(Mode::Split, second, 0), second);
         assert_eq!(lift(Mode::Inset, second, 56), second);
@@ -117,12 +132,28 @@ mod tests {
 
     #[test]
     fn fr9_the_page_area_is_laid_out_again_only_when_the_columns_changed() {
-        let seen = Seen { height: 56, width: 1164, columns: None };
+        let seen = Seen {
+            height: 56,
+            width: 1164,
+            columns: None,
+        };
         assert!(stale(Some(seen), |_| Some((0, 694))), "a split opened");
         assert!(!stale(Some(seen), |_| None));
-        let narrowed = Seen { columns: Some((0, 694)), ..seen };
+        let narrowed = Seen {
+            columns: Some((0, 694)),
+            ..seen
+        };
         assert!(stale(Some(narrowed), |_| None), "the split closed");
-        assert!(!stale(Some(Seen { height: 0, ..narrowed }), |_| None), "no bar to widen");
+        assert!(
+            !stale(
+                Some(Seen {
+                    height: 0,
+                    ..narrowed
+                }),
+                |_| None
+            ),
+            "no bar to widen"
+        );
         assert!(!stale(None, |_| Some((0, 694))));
     }
 }

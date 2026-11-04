@@ -922,7 +922,12 @@ impl Appbar {
     /// Shows the top bar of a window with a single page: back, forward, reload, the security chip and
     /// the address, as the study's `.toolbar`. While the address is edited, the text engine's pixels
     /// take the place of the text. `None` removes the bar.
-    pub(crate) unsafe fn update_address(&mut self, window: isize, bar: Option<&crate::features::address_bar::View>, dpi: u32) -> Result<()> {
+    pub(crate) unsafe fn update_address(
+        &mut self,
+        window: isize,
+        bar: Option<&crate::features::address_bar::View>,
+        dpi: u32,
+    ) -> Result<()> {
         use crate::features::address_bar::{Part, Security, CHIP, FIELD_GROUND};
         let Some(bar) = bar else {
             if self.address_painted.take().is_some() {
@@ -980,7 +985,9 @@ impl Appbar {
                 canvas.fill(rect(0.0, h / 2.0, w, h / 2.0), PAPER)?;
                 canvas.fill(rect(0.0, h - 1.0, w, 1.0), HAIRLINE)?;
             }
-            for (part, x, pw) in crate::features::address_bar::parts_reserving(w, bar.pane, bar.reserve) {
+            for (part, x, pw) in
+                crate::features::address_bar::parts_reserving(w, bar.pane, bar.reserve)
+            {
                 let area = rect(x, (h - 28.0) / 2.0, pw, 28.0);
                 let hot = bar.hover == Some(part);
                 match part {
@@ -1005,7 +1012,11 @@ impl Appbar {
                             canvas.fill_rounded(area, 8.0, rgba(FIELD_GROUND, 1.0))?;
                         } else if bar.dev {
                             // The developer row's own ground, so a local page is told apart at a glance.
-                            canvas.fill_rounded(area, 8.0, rgba(DEV_FIELD, if hot { 0.28 } else { 0.18 }))?;
+                            canvas.fill_rounded(
+                                area,
+                                8.0,
+                                rgba(DEV_FIELD, if hot { 0.28 } else { 0.18 }),
+                            )?;
                         } else if hot || bar.hover == Some(Part::Chip) {
                             canvas.fill_rounded(area, 8.0, rgba(INK, 0.05))?;
                         }
@@ -1042,7 +1053,12 @@ impl Appbar {
                             let shown = crate::dev_mode::fit_address(&bar.url, room, MONO_ADVANCE);
                             canvas.mono_text(rect(left, area.top, room, 28.0), &shown, SOFT_INK)?;
                         } else if !bar.editing {
-                            let title_w = if bar.title.is_empty() { 0.0 } else { measure(&self.dwrite, &self.fonts, ADDRESS_TITLE, &bar.title)?.min(room) };
+                            let title_w = if bar.title.is_empty() {
+                                0.0
+                            } else {
+                                measure(&self.dwrite, &self.fonts, ADDRESS_TITLE, &bar.title)?
+                                    .min(room)
+                            };
                             if title_w > 0.0 {
                                 let title = elide(
                                     &self.dwrite,
@@ -1503,9 +1519,23 @@ impl Canvas<'_> {
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         let wide: Vec<u16> = value.encode_utf16().collect();
-        let layout = self.dwrite.CreateTextLayout(&wide, &format, area.right - area.left, area.bottom - area.top)?;
-        self.context.PushAxisAlignedClip(&area, D2D1_ANTIALIAS_MODE_ALIASED);
-        self.context.DrawTextLayout(Vector2 { X: area.left, Y: area.top }, &layout, &self.brush(rgb)?, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        let layout = self.dwrite.CreateTextLayout(
+            &wide,
+            &format,
+            area.right - area.left,
+            area.bottom - area.top,
+        )?;
+        self.context
+            .PushAxisAlignedClip(&area, D2D1_ANTIALIAS_MODE_ALIASED);
+        self.context.DrawTextLayout(
+            Vector2 {
+                X: area.left,
+                Y: area.top,
+            },
+            &layout,
+            &self.brush(rgb)?,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+        );
         self.context.PopAxisAlignedClip();
         Ok(())
     }
@@ -1881,7 +1911,13 @@ impl Canvas<'_> {
                     self.ring(glass, 12.0, rgba(INK, 0.06))?;
                     let height = crate::tab_rows::SPLIT_TITLE_HEIGHT;
                     self.icon('\u{ECA5}', rect(left + 8.0, top, 12.0, height), 12.0, MUTED)?;
-                    self.text(GROUP_TITLE, rect(left + 26.0, top, inner - 34.0, height), "SPLIT VIEW", MUTED, false)?;
+                    self.text(
+                        GROUP_TITLE,
+                        rect(left + 26.0, top, inner - 34.0, height),
+                        "SPLIT VIEW",
+                        MUTED,
+                        false,
+                    )?;
                 }
                 TabRow::NewTab => {
                     let row = row(Lead::Glyph('\u{E710}'), "New tab", "Ctrl T");
@@ -2057,7 +2093,9 @@ impl Canvas<'_> {
                 for (row, title) in crate::frame::TAB_ITEMS.iter().enumerate() {
                     let y = top + 4.0 + row as f32 * 34.0;
                     let item = rect(left + 4.0, y, inner - 8.0, 34.0);
-                    let Some(hit) = crate::frame::tab_item_hit(row, tab) else { continue };
+                    let Some(hit) = crate::frame::tab_item_hit(row, tab) else {
+                        continue;
+                    };
                     self.pressed(item, 8.0, 0.98, scene.effect(&[hit]), || {
                         if scene.hover == Some(hit) {
                             self.fill_rounded(item, 8.0, rgba(INK, 0.04))?;
@@ -2315,7 +2353,13 @@ impl Canvas<'_> {
                     // A long address ends in an ellipsis inside its field.
                     let room = (width - 20.0).max(0.0);
                     let shown = elide(self.dwrite, self.fonts, META_ROW, &shown, room)?;
-                    self.text(META_ROW, rect(area.left + 10.0, area.top, room, 28.0), &shown, MUTED, false)?;
+                    self.text(
+                        META_ROW,
+                        rect(area.left + 10.0, area.top, room, 28.0),
+                        &shown,
+                        MUTED,
+                        false,
+                    )?;
                 }
                 _ => {
                     if hot {

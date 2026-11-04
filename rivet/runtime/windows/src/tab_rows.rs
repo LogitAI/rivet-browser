@@ -26,7 +26,9 @@ pub enum Row {
     NewTab,
     /// The title of the tabs a split shows, which sit together below it as one group. `count` is
     /// how many follow.
-    SplitTitle { count: usize },
+    SplitTitle {
+        count: usize,
+    },
 }
 /// The height of a row of the tab list in DIPs. The split group's title is lower than a tab.
 pub fn height(row: &Row) -> f32 {
@@ -42,18 +44,36 @@ pub fn group_split(rows: Vec<Row>, split: &[usize]) -> Vec<Row> {
     let in_split = |row: &Row| matches!(row, Row::Tab { index, .. } if split.contains(index));
     let members: Vec<Row> = split
         .iter()
-        .filter_map(|wanted| rows.iter().find(|row| matches!(row, Row::Tab { index, .. } if index == wanted)).cloned())
+        .filter_map(|wanted| {
+            rows.iter()
+                .find(|row| matches!(row, Row::Tab { index, .. } if index == wanted))
+                .cloned()
+        })
         .collect();
     if members.len() < 2 {
         return rows;
     }
-    let Some(place) = rows.iter().position(in_split) else { return rows };
+    let Some(place) = rows.iter().position(in_split) else {
+        return rows;
+    };
     let mut out: Vec<Row> = Vec::with_capacity(rows.len() + 1);
     for (at, row) in rows.into_iter().enumerate() {
         if at == place {
-            out.push(Row::SplitTitle { count: members.len() });
+            out.push(Row::SplitTitle {
+                count: members.len(),
+            });
             out.extend(members.iter().cloned().map(|member| match member {
-                Row::Tab { index, title, active, .. } => Row::Tab { index, title, active, child: true },
+                Row::Tab {
+                    index,
+                    title,
+                    active,
+                    ..
+                } => Row::Tab {
+                    index,
+                    title,
+                    active,
+                    child: true,
+                },
                 other => other,
             }));
         }
@@ -72,8 +92,14 @@ pub fn build_rows(tabs: &[Tab]) -> Vec<Row> {
                 continue;
             }
             seen.push(group.id);
-            let count = tabs.iter().filter(|t| t.group.as_ref().is_some_and(|g| g.id == group.id)).count();
-            rows.push(Row::Group(Group { count, ..group.clone() }));
+            let count = tabs
+                .iter()
+                .filter(|t| t.group.as_ref().is_some_and(|g| g.id == group.id))
+                .count();
+            rows.push(Row::Group(Group {
+                count,
+                ..group.clone()
+            }));
             if !group.collapsed {
                 rows.extend(
                     tabs.iter()
@@ -179,7 +205,17 @@ mod tests {
                 _ => (None, false),
             })
             .collect();
-        assert_eq!(shape, [(None, false), (Some(0), false), (None, true), (Some(3), true), (Some(1), true), (Some(2), false)]);
+        assert_eq!(
+            shape,
+            [
+                (None, false),
+                (Some(0), false),
+                (None, true),
+                (Some(3), true),
+                (Some(1), true),
+                (Some(2), false)
+            ]
+        );
         assert_eq!(height(&rows[2]), SPLIT_TITLE_HEIGHT);
     }
     #[test]

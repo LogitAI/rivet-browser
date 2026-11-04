@@ -25,17 +25,29 @@ pub fn takes_window(urls: &[String]) -> bool {
 
 /// The windows that appeared since `known`, and the new set of known windows.
 pub fn appeared(known: &HashSet<isize>, now: &[isize], rivet: &[isize]) -> Vec<isize> {
-    now.iter().copied().filter(|window| !known.contains(window) && !rivet.contains(window)).collect()
+    now.iter()
+        .copied()
+        .filter(|window| !known.contains(window) && !rivet.contains(window))
+        .collect()
 }
 
 /// Looks for new browser windows of this process and moves their tabs into `window`, the Rivet
 /// window that is now in front of the others of this process.
 pub(crate) unsafe fn tick(window: HWND) {
-    let rivet: Vec<isize> = crate::frame::rivet_windows().into_iter().map(|window| window as isize).collect();
-    let now: Vec<isize> = crate::frame::browser_windows_of_process().into_iter().map(|window| window as isize).collect();
+    let rivet: Vec<isize> = crate::frame::rivet_windows()
+        .into_iter()
+        .map(|window| window as isize)
+        .collect();
+    let now: Vec<isize> = crate::frame::browser_windows_of_process()
+        .into_iter()
+        .map(|window| window as isize)
+        .collect();
     let fresh = KNOWN.with(|known| {
         let mut known = known.borrow_mut();
-        let fresh = known.as_ref().map(|seen| appeared(seen, &now, &rivet)).unwrap_or_default();
+        let fresh = known
+            .as_ref()
+            .map(|seen| appeared(seen, &now, &rivet))
+            .unwrap_or_default();
         *known = Some(now.iter().copied().collect());
         fresh
     });
@@ -52,7 +64,10 @@ pub(crate) unsafe fn tick(window: HWND) {
             continue;
         }
         let moved = move_all(window, other as HWND);
-        crate::trace::trace(&format!("link tabs: moved {moved} of {} tabs from window {other:#x}", urls.len()));
+        crate::trace::trace(&format!(
+            "link tabs: moved {moved} of {} tabs from window {other:#x}",
+            urls.len()
+        ));
     }
 }
 
@@ -77,12 +92,16 @@ type Insert = unsafe extern "system" fn(*mut c_void, i32, *mut usize, i32, *cons
 /// moved. A build whose row has no detach and insert moves none.
 unsafe fn move_all(window: HWND, from: HWND) -> usize {
     use crate::features::tabs::{base, function, tab_model};
-    let (Some(base), Some(detach), Some(insert)) =
-        (base(), crate::features::app_window::recorded("detach"), crate::features::app_window::recorded("insert"))
-    else {
+    let (Some(base), Some(detach), Some(insert)) = (
+        base(),
+        crate::features::app_window::recorded("detach"),
+        crate::features::app_window::recorded("insert"),
+    ) else {
         return 0;
     };
-    let (Some(source), Some(target)) = (tab_model(base, from), tab_model(base, window)) else { return 0 };
+    let (Some(source), Some(target)) = (tab_model(base, from), tab_model(base, window)) else {
+        return 0;
+    };
     let count = function::<Count>(base, crate::builds::get().tabs.tab_count);
     let mut moved = 0;
     while count(source) > 0 && moved < 64 {
@@ -106,14 +125,20 @@ mod tests {
     #[test]
     fn fr3_a_window_a_link_opened_is_taken_but_developer_tools_are_not() {
         assert!(takes_window(&["https://example.com/".into()]));
-        assert!(!takes_window(&["devtools://devtools/bundled/inspector.html".into()]));
+        assert!(!takes_window(&[
+            "devtools://devtools/bundled/inspector.html".into()
+        ]));
         assert!(!takes_window(&[]));
     }
 
     #[test]
     fn fr3_only_windows_that_appeared_after_the_first_look_are_new() {
         let known: HashSet<isize> = [1, 2].into_iter().collect();
-        assert_eq!(appeared(&known, &[1, 2, 3, 4], &[4]), vec![3], "a Rivet window is never taken");
+        assert_eq!(
+            appeared(&known, &[1, 2, 3, 4], &[4]),
+            vec![3],
+            "a Rivet window is never taken"
+        );
         assert!(appeared(&known, &[1], &[]).is_empty());
     }
 }

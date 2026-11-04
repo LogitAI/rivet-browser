@@ -31,7 +31,11 @@ pub(crate) const SIDEBAR_WIDTH: i32 = 360;
 pub(crate) const LAYOUT_MESSAGE: &str = "Rivet.SecondViewLayout";
 
 /// The sizes the grid keeps between and above its pages.
-const METRICS: Metrics = Metrics { divider: DIVIDER, row: crate::features::split::ROW_HEIGHT, min: MIN_PANE };
+const METRICS: Metrics = Metrics {
+    divider: DIVIDER,
+    row: crate::features::split::ROW_HEIGHT,
+    min: MIN_PANE,
+};
 
 /// How the extra views sit beside the window's page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,28 +61,47 @@ pub(crate) fn floating(full: [i32; 4]) -> [i32; 4] {
     let side = 64.min(w / 10);
     let top = 20.min(h / 10);
     let bottom = 40.min(h / 10);
-    [x + side, y + top + PREVIEW_HEADER, (w - 2 * side).max(1), (h - top - PREVIEW_HEADER - bottom).max(1)]
+    [
+        x + side,
+        y + top + PREVIEW_HEADER,
+        (w - 2 * side).max(1),
+        (h - top - PREVIEW_HEADER - bottom).max(1),
+    ]
 }
 
 /// The width the Sidebar's rail keeps free at the right of the page area, by window.
 static RAILS: Mutex<Vec<(isize, i32)>> = Mutex::new(Vec::new());
 
 fn rail_of(window: isize) -> i32 {
-    RAILS.lock().unwrap_or_else(|error| error.into_inner()).iter().find(|(key, _)| *key == window).map_or(0, |(_, width)| *width)
+    RAILS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(key, _)| *key == window)
+        .map_or(0, |(_, width)| *width)
 }
 
 /// The height Rivet's address bar keeps free at the top of the page area, by window.
 static TOPS: Mutex<Vec<(isize, i32)>> = Mutex::new(Vec::new());
 
 fn top_of(window: isize) -> i32 {
-    TOPS.lock().unwrap_or_else(|error| error.into_inner()).iter().find(|(key, _)| *key == window).map_or(0, |(_, height)| *height)
+    TOPS.lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(key, _)| *key == window)
+        .map_or(0, |(_, height)| *height)
 }
 
 /// The grid of each window's split.
 static GRIDS: Mutex<Vec<(isize, Grid)>> = Mutex::new(Vec::new());
 
 fn grid_of(window: isize) -> Grid {
-    GRIDS.lock().unwrap_or_else(|error| error.into_inner()).iter().find(|(key, _)| *key == window).map_or_else(Grid::single, |(_, grid)| grid.clone())
+    GRIDS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(key, _)| *key == window)
+        .map_or_else(Grid::single, |(_, grid)| grid.clone())
 }
 
 fn set_grid(window: isize, grid: Option<Grid>) {
@@ -116,7 +139,8 @@ unsafe fn top_inset(split: &Split, full: [i32; 4]) -> i32 {
     }
     let [_, origin_y] = window_origin(split.main);
     let area_top = origin_y - bounds_of(split.main)[1] + full[1];
-    let panel = crate::features::frame_layout::panel_bounds(split.window as HWND).map(|panel| panel.y);
+    let panel =
+        crate::features::frame_layout::panel_bounds(split.window as HWND).map(|panel| panel.y);
     bar_inset(height, panel, area_top)
 }
 
@@ -131,16 +155,32 @@ static FOCUSED: AtomicUsize = AtomicUsize::new(0);
 /// it, such as an infobar, stays between the row and the page. A lower page's row sits right above
 /// it. The top left page leaves room for the appbar toggle and the top right page carries the
 /// caption buttons.
-pub(crate) fn grid_panes(pages: &[([i32; 4], bool, Option<usize>)], window_right: i32, panel_top: Option<i32>) -> Vec<crate::features::split::Pane> {
+pub(crate) fn grid_panes(
+    pages: &[([i32; 4], bool, Option<usize>)],
+    window_right: i32,
+    panel_top: Option<i32>,
+) -> Vec<crate::features::split::Pane> {
     use crate::features::split::{caption_over, Pane, ROW_HEIGHT};
-    let Some(top) = pages.iter().map(|page| page.0[1]).min() else { return Vec::new() };
+    let Some(top) = pages.iter().map(|page| page.0[1]).min() else {
+        return Vec::new();
+    };
     // A lower page sits at least a page, a divider and a row below the top line; a browser bar
     // above a page moves it far less.
     let on_top = |rect: &[i32; 4]| rect[1] - top < MIN_PANE;
     let mut pages = pages.to_vec();
     pages.sort_by_key(|(rect, _, _)| (!on_top(rect), rect[1], rect[0]));
-    let left = pages.iter().filter(|page| on_top(&page.0)).map(|page| page.0[0]).min().unwrap_or(0);
-    let right = pages.iter().filter(|page| on_top(&page.0)).map(|page| page.0[0] + page.0[2]).max().unwrap_or(0);
+    let left = pages
+        .iter()
+        .filter(|page| on_top(&page.0))
+        .map(|page| page.0[0])
+        .min()
+        .unwrap_or(0);
+    let right = pages
+        .iter()
+        .filter(|page| on_top(&page.0))
+        .map(|page| page.0[0] + page.0[2])
+        .max()
+        .unwrap_or(0);
     pages
         .iter()
         .map(|(rect, active, tab)| {
@@ -150,11 +190,21 @@ pub(crate) fn grid_panes(pages: &[([i32; 4], bool, Option<usize>)], window_right
                 y: rect[1],
                 width: rect[2],
                 height: rect[3],
-                row_y: if top_line { panel_top.map_or(rect[1] - ROW_HEIGHT, |panel| panel.min(rect[1] - ROW_HEIGHT)) } else { rect[1] - ROW_HEIGHT },
+                row_y: if top_line {
+                    panel_top.map_or(rect[1] - ROW_HEIGHT, |panel| {
+                        panel.min(rect[1] - ROW_HEIGHT)
+                    })
+                } else {
+                    rect[1] - ROW_HEIGHT
+                },
                 active: *active,
                 first: top_line && rect[0] == left,
                 last: top_line && rect[0] + rect[2] == right,
-                caption: if top_line { caption_over(window_right, rect[0] + rect[2]) } else { 0.0 },
+                caption: if top_line {
+                    caption_over(window_right, rect[0] + rect[2])
+                } else {
+                    0.0
+                },
                 tab: *tab,
             }
         })
@@ -167,7 +217,9 @@ unsafe fn tab_of(window: HWND, page: usize) -> Option<usize> {
     let model = crate::features::tabs::tab_model(base, window)?;
     let count = crate::features::tabs::tabs(window)?.len();
     (page != 0).then_some(())?;
-    (0..count).find(|index| crate::features::tabs::contents_at(base, model, *index as i32) as usize == page)
+    (0..count).find(|index| {
+        crate::features::tabs::contents_at(base, model, *index as i32) as usize == page
+    })
 }
 
 /// A view's place in the window as x, y, width and height in DIPs.
@@ -197,7 +249,9 @@ unsafe fn active_slot(window: HWND, state: &Split, grid: &Grid) -> usize {
 
 /// The pages of the window's split, each with its own row, or none.
 pub(crate) unsafe fn panes(window: HWND) -> Vec<crate::features::split::Pane> {
-    let Some(state) = split().filter(|split| split.window == window as isize && split.mode == Mode::Split) else {
+    let Some(state) =
+        split().filter(|split| split.window == window as isize && split.mode == Mode::Split)
+    else {
         return Vec::new();
     };
     let grid = grid_of(window as isize);
@@ -208,14 +262,25 @@ pub(crate) unsafe fn panes(window: HWND) -> Vec<crate::features::split::Pane> {
         if rect[2] <= 0 || rect[3] <= 0 {
             return Vec::new();
         }
-        let page = if slot == 0 { state.shown } else { state.extras[slot - 1].page };
+        let page = if slot == 0 {
+            state.shown
+        } else {
+            state.extras[slot - 1].page
+        };
         pages.push((rect, slot == focused, tab_of(window, page)));
     }
-    grid_panes(&pages, crate::features::split::client_right(window), crate::features::frame_layout::panel_bounds(window).map(|panel| panel.y))
+    grid_panes(
+        &pages,
+        crate::features::split::client_right(window),
+        crate::features::frame_layout::panel_bounds(window).map(|panel| panel.y),
+    )
 }
 
 /// The slot of the window's split whose page `pane` is.
-pub(crate) unsafe fn slot_of_pane(window: HWND, pane: &crate::features::split::Pane) -> Option<usize> {
+pub(crate) unsafe fn slot_of_pane(
+    window: HWND,
+    pane: &crate::features::split::Pane,
+) -> Option<usize> {
     let state = split().filter(|split| split.window == window as isize)?;
     grid_of(window as isize).leaves().into_iter().find(|slot| {
         let [x, y] = window_origin(view_of(&state, *slot));
@@ -234,7 +299,9 @@ pub(crate) unsafe fn focused_slot(window: HWND) -> usize {
 /// Whether the window's split has room for another page.
 pub(crate) fn has_room(window: HWND) -> bool {
     match split().filter(|split| split.window == window as isize) {
-        Some(state) if state.mode == Mode::Split => grid_of(window as isize).leaves().len() < MAX_PANES,
+        Some(state) if state.mode == Mode::Split => {
+            grid_of(window as isize).leaves().len() < MAX_PANES
+        }
         Some(state) => state.mode == Mode::Inset,
         None => true,
     }
@@ -311,7 +378,14 @@ pub(crate) fn keep(active: usize, last_active: usize, pages: &[usize], shown: us
         return Keep::Nothing;
     }
     if let Some(index) = pages.iter().position(|page| *page != 0 && *page == active) {
-        return if shown != 0 && shown != active { Keep::Restore { main: shown, slot: index + 1 } } else { Keep::Nothing };
+        return if shown != 0 && shown != active {
+            Keep::Restore {
+                main: shown,
+                slot: index + 1,
+            }
+        } else {
+            Keep::Nothing
+        };
     }
     Keep::Follow { main: active }
 }
@@ -352,7 +426,9 @@ pub(crate) fn available() -> bool {
 
 /// Whether the window shows a docked sidebar page now.
 pub(crate) fn is_docked(window: HWND) -> bool {
-    split().is_some_and(|split| split.window == window as isize && matches!(split.mode, Mode::Docked { .. }))
+    split().is_some_and(|split| {
+        split.window == window as isize && matches!(split.mode, Mode::Docked { .. })
+    })
 }
 
 /// Whether the window shows a split now.
@@ -367,14 +443,16 @@ pub(crate) fn is_floating(window: HWND) -> bool {
 
 /// The tab of the window whose page floats over it, and that page.
 pub(crate) unsafe fn floating_page(window: HWND) -> Option<(usize, usize)> {
-    let split = split().filter(|split| split.window == window as isize && split.mode == Mode::Floating)?;
+    let split =
+        split().filter(|split| split.window == window as isize && split.mode == Mode::Floating)?;
     let page = split.extras[0].page;
     Some((tab_of(window, page)?, page))
 }
 
 /// The floating page's view in client pixels, as left, top, right and bottom.
 pub(crate) unsafe fn floating_client_rect(window: HWND) -> Option<[i32; 4]> {
-    let split = split().filter(|split| split.window == window as isize && split.mode == Mode::Floating)?;
+    let split =
+        split().filter(|split| split.window == window as isize && split.mode == Mode::Floating)?;
     let view = split.extras[0].view;
     if view == 0 {
         return None;
@@ -397,7 +475,13 @@ unsafe fn word(address: usize) -> Option<usize> {
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
     let mut value = 0usize;
     let mut done = 0usize;
-    let ok = ReadProcessMemory(GetCurrentProcess(), address as *const c_void, (&mut value as *mut usize).cast(), 8, &mut done);
+    let ok = ReadProcessMemory(
+        GetCurrentProcess(),
+        address as *const c_void,
+        (&mut value as *mut usize).cast(),
+        8,
+        &mut done,
+    );
     (ok != 0 && done == 8).then_some(value)
 }
 
@@ -409,7 +493,11 @@ fn base() -> Option<usize> {
 fn offsets() -> (usize, usize, usize) {
     let parent = recorded("vparent").unwrap_or(0x198);
     let children = recorded("vchildren").unwrap_or(0x1A0);
-    (parent, children, recorded("vbounds").unwrap_or(parent + 0x30))
+    (
+        parent,
+        children,
+        recorded("vbounds").unwrap_or(parent + 0x30),
+    )
 }
 
 unsafe fn bounds_of(view: usize) -> [i32; 4] {
@@ -432,7 +520,9 @@ unsafe fn children_of(view: usize) -> Vec<usize> {
     } else {
         return Vec::new();
     };
-    (0..count).filter_map(|index| word(begin + index * 8)).collect()
+    (0..count)
+        .filter_map(|index| word(begin + index * 8))
+        .collect()
 }
 
 /// The views below `root` whose vtable is `vtable`, which are the page views of that window.
@@ -448,14 +538,20 @@ unsafe fn views_with_vtable(root: usize, vtable: usize) -> Vec<usize> {
         if word(view) == Some(vtable) {
             found.push(view);
         }
-        queue.extend(children_of(view).into_iter().map(|child| (child, depth + 1)));
+        queue.extend(
+            children_of(view)
+                .into_iter()
+                .map(|child| (child, depth + 1)),
+        );
     }
     found
 }
 
 /// Whether a page view holds this page in one of its words, as `WebView::web_contents_`.
 unsafe fn holds(view: usize, page: usize, size: usize) -> bool {
-    (8..size).step_by(8).any(|offset| word(view + offset) == Some(page))
+    (8..size)
+        .step_by(8)
+        .any(|offset| word(view + offset) == Some(page))
 }
 
 /// The browser view's `views::View` of a window.
@@ -469,7 +565,11 @@ unsafe fn browser_view(window: HWND) -> Option<usize> {
             continue;
         }
         let children = children_of(q);
-        if (3..=64).contains(&children.len()) && children.iter().all(|child| word(*child).is_some_and(|vptr| vptr > base && vptr < end)) {
+        if (3..=64).contains(&children.len())
+            && children
+                .iter()
+                .all(|child| word(*child).is_some_and(|vptr| vptr > base && vptr < end))
+        {
             return Some(q);
         }
     }
@@ -483,7 +583,9 @@ unsafe fn set_page(view: usize, page: usize) -> bool {
         return false;
     }
     if let Some(rva) = recorded("set_contents") {
-        crate::features::tabs::function::<unsafe extern "system" fn(usize, usize)>(base, rva)(view, page);
+        crate::features::tabs::function::<unsafe extern "system" fn(usize, usize)>(base, rva)(
+            view, page,
+        );
     } else if let Some(slot) = recorded("slot") {
         let function = *((*(view as *const usize) + slot * 8) as *const usize);
         std::mem::transmute::<usize, unsafe extern "system" fn(usize, usize)>(function)(view, page);
@@ -498,7 +600,9 @@ unsafe fn set_page(view: usize, page: usize) -> bool {
 unsafe fn set_bounds(view: usize, rect: [i32; 4]) {
     let Some(base) = base() else { return };
     if let Some(rva) = recorded("set_bounds") {
-        crate::features::tabs::function::<unsafe extern "system" fn(usize, *const [i32; 4])>(base, rva)(view, &rect);
+        crate::features::tabs::function::<unsafe extern "system" fn(usize, *const [i32; 4])>(
+            base, rva,
+        )(view, &rect);
         return;
     }
     let previous = bounds_of(view);
@@ -508,26 +612,32 @@ unsafe fn set_bounds(view: usize, rect: [i32; 4]) {
     *((view + offsets().2) as *mut [i32; 4]) = rect;
     if let Some(slot) = recorded("bounds_slot") {
         let function = *((*(view as *const usize) + slot * 8) as *const usize);
-        std::mem::transmute::<usize, unsafe extern "system" fn(usize, *const [i32; 4])>(function)(view, &previous);
+        std::mem::transmute::<usize, unsafe extern "system" fn(usize, *const [i32; 4])>(function)(
+            view, &previous,
+        );
     }
 }
 
 /// The virtual function at `slot` of a view's vtable, or the recorded function `name`.
 unsafe fn virtual_of(view: usize, name: &str, slot_name: &str) -> Option<usize> {
     let base = base()?;
-    recorded(name)
-        .map(|rva| base + rva)
-        .or_else(|| recorded(slot_name).map(|slot| *((*(view as *const usize) + slot * 8) as *const usize)))
+    recorded(name).map(|rva| base + rva).or_else(|| {
+        recorded(slot_name).map(|slot| *((*(view as *const usize) + slot * 8) as *const usize))
+    })
 }
 
 /// The main page's columns, as x and width within a page area `width` DIPs wide, while the
 /// window shows a split. The browser's bar above the page is narrowed to them.
 pub(crate) fn split_columns(window: HWND, width: i32) -> Option<(i32, i32)> {
     split().filter(|split| split.window == window as isize && split.mode == Mode::Split)?;
-    grid_bounds(&grid_of(window as isize), [0, 0, width, 1], rail_of(window as isize))
-        .into_iter()
-        .find(|(slot, _)| *slot == 0)
-        .map(|(_, rect)| (rect[0], rect[2]))
+    grid_bounds(
+        &grid_of(window as isize),
+        [0, 0, width, 1],
+        rail_of(window as isize),
+    )
+    .into_iter()
+    .find(|(slot, _)| *slot == 0)
+    .map(|(_, rect)| (rect[0], rect[2]))
 }
 
 /// The first view below `root` that holds a page whose vtable is `page_vtable`, as the view and
@@ -542,14 +652,23 @@ pub(crate) unsafe fn page_under(root: usize, page_vtable: usize) -> Option<(usiz
             continue;
         }
         if view != root {
-            let page = (8..size).step_by(8).filter_map(|offset| word(view + offset)).find(|candidate| {
-                *candidate > 0x10000 && *candidate != view && word(*candidate) == Some(page_vtable)
-            });
+            let page = (8..size)
+                .step_by(8)
+                .filter_map(|offset| word(view + offset))
+                .find(|candidate| {
+                    *candidate > 0x10000
+                        && *candidate != view
+                        && word(*candidate) == Some(page_vtable)
+                });
             if let Some(page) = page {
                 return Some((view, page));
             }
         }
-        queue.extend(children_of(view).into_iter().map(|child| (child, depth + 1)));
+        queue.extend(
+            children_of(view)
+                .into_iter()
+                .map(|child| (child, depth + 1)),
+        );
     }
     None
 }
@@ -605,8 +724,12 @@ unsafe fn offset_in(view: usize, ancestor: usize) -> [i32; 2] {
 /// The page area `full` of the page view `main` over a small inset of its container, which
 /// otherwise shows as a band around the page.
 unsafe fn fitted(main: usize, full: [i32; 4]) -> [i32; 4] {
-    let container = word(main + offsets().0).filter(|parent| *parent != 0).map(|parent| bounds_of(parent));
-    container.map_or(full, |container| crate::features::page_fit::fill(full, [container[2], container[3]]))
+    let container = word(main + offsets().0)
+        .filter(|parent| *parent != 0)
+        .map(|parent| bounds_of(parent));
+    container.map_or(full, |container| {
+        crate::features::page_fit::fill(full, [container[2], container[3]])
+    })
 }
 
 /// The page area the pages are laid out in, in the page view's parent, below the bar row.
@@ -625,7 +748,9 @@ unsafe fn area_of(split: &Split) -> Option<[i32; 4]> {
 /// Puts every page where the mode and the grid say, from the page area the browser last gave the
 /// page view.
 unsafe fn place(split: &Split) -> bool {
-    let Some(full) = area_of(split) else { return false };
+    let Some(full) = area_of(split) else {
+        return false;
+    };
     let rail = rail_of(split.window);
     let window = split.window as HWND;
     let targets: Vec<(usize, [i32; 4])> = match split.mode {
@@ -649,7 +774,11 @@ unsafe fn place(split: &Split) -> bool {
             let moved = [rect[0] + dx, rect[1] + dy, rect[2], rect[3]];
             // A page on the top line rises over the browser's bars, which belong to the main page.
             let moved = if rect[1] == full[1] {
-                crate::features::pane_infobar::lift(split.mode, moved, crate::features::pane_infobar::bar_above(window))
+                crate::features::pane_infobar::lift(
+                    split.mode,
+                    moved,
+                    crate::features::pane_infobar::bar_above(window),
+                )
             } else {
                 moved
             };
@@ -691,16 +820,30 @@ pub(crate) unsafe fn relayout(window: HWND) -> bool {
     // layout and outside the appbar's paint.
     if split().is_none() && top_of(window as isize) > 0 {
         let opened = open_with(window, window, 0, Mode::Inset);
-        crate::trace::trace(&format!("second view: bar row {}: {opened}", top_of(window as isize)));
+        crate::trace::trace(&format!(
+            "second view: bar row {}: {opened}",
+            top_of(window as isize)
+        ));
         return opened;
     }
-    let Some(split) = split().filter(|split| split.window == window as isize) else { return false };
+    let Some(split) = split().filter(|split| split.window == window as isize) else {
+        return false;
+    };
     let moved = place(&split);
     if moved {
         let count = LAYOUTS.fetch_add(1, Ordering::Relaxed);
         if count < 12 || count % 25 == 0 {
-            let views: Vec<[i32; 4]> = split.extras.iter().filter(|extra| extra.view != 0).map(|extra| bounds_of(extra.view)).collect();
-            crate::trace::trace(&format!("second view: laid out, full {:?} page view {:?} views {views:?}", *FULL.lock().unwrap_or_else(|error| error.into_inner()), bounds_of(split.main)));
+            let views: Vec<[i32; 4]> = split
+                .extras
+                .iter()
+                .filter(|extra| extra.view != 0)
+                .map(|extra| bounds_of(extra.view))
+                .collect();
+            crate::trace::trace(&format!(
+                "second view: laid out, full {:?} page view {:?} views {views:?}",
+                *FULL.lock().unwrap_or_else(|error| error.into_inner()),
+                bounds_of(split.main)
+            ));
         }
     }
     moved
@@ -709,8 +852,9 @@ pub(crate) unsafe fn relayout(window: HWND) -> bool {
 /// The window's active page, or zero.
 unsafe fn active_page(window: HWND) -> usize {
     let Some(base) = base() else { return 0 };
-    crate::features::tabs::tab_model(base, window)
-        .map_or(0, |model| crate::features::tabs::contents_at(base, model, active_tab(window)) as usize)
+    crate::features::tabs::tab_model(base, window).map_or(0, |model| {
+        crate::features::tabs::contents_at(base, model, active_tab(window)) as usize
+    })
 }
 
 /// Keeps every page where it is when a click in an extra view made its page's tab active. The
@@ -719,7 +863,9 @@ unsafe fn active_page(window: HWND) -> usize {
 /// the tab list follow the clicked page. Only a page of the window's own tabs needs this, since a
 /// page of another window activates its tab in that window. Returns whether the pages moved.
 pub(crate) unsafe fn hold(window: HWND) -> bool {
-    let Some(state) = split().filter(|split| split.window == window as isize) else { return false };
+    let Some(state) = split().filter(|split| split.window == window as isize) else {
+        return false;
+    };
     let active = active_page(window);
     let pages: Vec<usize> = state.extras.iter().map(|extra| extra.page).collect();
     let decision = keep(active, state.active, &pages, state.shown);
@@ -753,16 +899,27 @@ pub(crate) unsafe fn hold(window: HWND) -> bool {
     }
     if moved {
         focus(window);
-        crate::trace::trace(&format!("second view: kept the clicked page in its view beside {:#x}", next.shown));
+        crate::trace::trace(&format!(
+            "second view: kept the clicked page in its view beside {:#x}",
+            next.shown
+        ));
     } else if decision != Keep::Nothing {
-        crate::trace::trace(&format!("second view: the window's page view shows {:#x}", next.shown));
+        crate::trace::trace(&format!(
+            "second view: the window's page view shows {:#x}",
+            next.shown
+        ));
     }
     moved
 }
 
 /// Whether a bounds change the hook sees needs a layout: not while Rivet moves views, not when the
 /// bounds did not change, and not when they are the bounds Rivet set last.
-pub(crate) fn needs_layout(placing: bool, previous: [i32; 4], now: [i32; 4], last: [i32; 4]) -> bool {
+pub(crate) fn needs_layout(
+    placing: bool,
+    previous: [i32; 4],
+    now: [i32; 4],
+    last: [i32; 4],
+) -> bool {
     !placing && previous != now && now != last
 }
 
@@ -773,12 +930,24 @@ pub(crate) fn in_layout_placement() -> bool {
 
 /// The page view's `OnBoundsChanged`: the browser's first, then the split's own bounds.
 unsafe extern "system" fn bounds_changed(this: usize, previous: *const [i32; 4]) {
-    let original: unsafe extern "system" fn(usize, *const [i32; 4]) = std::mem::transmute(ORIGINAL_BOUNDS_CHANGED.load(Ordering::Acquire));
+    let original: unsafe extern "system" fn(usize, *const [i32; 4]) =
+        std::mem::transmute(ORIGINAL_BOUNDS_CHANGED.load(Ordering::Acquire));
     original(this, previous);
-    let Some(split) = split().filter(|split| split.main == this) else { return };
+    let Some(split) = split().filter(|split| split.main == this) else {
+        return;
+    };
     let last = *LAST.lock().unwrap_or_else(|error| error.into_inner());
-    let previous = if previous.is_null() { [0; 4] } else { *previous };
-    if !needs_layout(PLACING.load(Ordering::Acquire), previous, bounds_of(this), last) {
+    let previous = if previous.is_null() {
+        [0; 4]
+    } else {
+        *previous
+    };
+    if !needs_layout(
+        PLACING.load(Ordering::Acquire),
+        previous,
+        bounds_of(this),
+        last,
+    ) {
         return;
     }
     // The browser's layout just gave the page view the whole page area. Rivet narrows it again
@@ -806,7 +975,7 @@ unsafe fn hook_main(main: usize) -> Option<usize> {
         *entry = word(vtable - 8 + index * 8)?;
     }
     ORIGINAL_BOUNDS_CHANGED.store(copy[slot + 1], Ordering::Release);
-    copy[slot + 1] = bounds_changed as usize;
+    copy[slot + 1] = bounds_changed as *const () as usize;
     let copy: &'static mut [usize] = Box::leak(copy.into_boxed_slice());
     *(main as *mut usize) = copy.as_ptr() as usize + 8;
     Some(vtable)
@@ -814,7 +983,13 @@ unsafe fn hook_main(main: usize) -> Option<usize> {
 
 /// The strip index of the window's active tab, or the first.
 unsafe fn active_tab(window: HWND) -> i32 {
-    crate::features::tabs::tabs(window).and_then(|tabs| tabs.iter().find(|tab| tab.active).map(|tab| tab.index as i32)).unwrap_or(0)
+    crate::features::tabs::tabs(window)
+        .and_then(|tabs| {
+            tabs.iter()
+                .find(|tab| tab.active)
+                .map(|tab| tab.index as i32)
+        })
+        .unwrap_or(0)
 }
 
 /// Opens a split in `window` with `page`, a page whose tab is in `owner`, another window, to the
@@ -838,7 +1013,9 @@ unsafe fn page_of_tab(window: HWND, index: usize) -> Option<usize> {
 /// Opens an extra view with the page of the window's own tab `index`, which is not the active
 /// one, laid out as `mode`. The tab keeps its page; closing the view shows it in the tab again.
 pub(crate) unsafe fn open_tab(window: HWND, index: usize, mode: Mode) -> bool {
-    let Some(page) = page_of_tab(window, index) else { return false };
+    let Some(page) = page_of_tab(window, index) else {
+        return false;
+    };
     let opened = open_with(window, window, page, mode);
     crate::trace::trace(&format!("second view: tab {index} {mode:?}: {opened}"));
     opened
@@ -846,9 +1023,13 @@ pub(crate) unsafe fn open_tab(window: HWND, index: usize, mode: Mode) -> bool {
 
 /// Shows the page of the window's own tab `index` on `side` of the page in `target`.
 pub(crate) unsafe fn add_tab(window: HWND, index: usize, target: usize, side: Side) -> bool {
-    let Some(page) = page_of_tab(window, index) else { return false };
+    let Some(page) = page_of_tab(window, index) else {
+        return false;
+    };
     let added = add_page(window, window, page, target, side);
-    crate::trace::trace(&format!("second view: tab {index} {side:?} of slot {target}: {added}"));
+    crate::trace::trace(&format!(
+        "second view: tab {index} {side:?} of slot {target}: {added}"
+    ));
     added
 }
 
@@ -856,7 +1037,13 @@ pub(crate) unsafe fn add_tab(window: HWND, index: usize, target: usize, side: Si
 /// split, which opens when the window has none. This is also where a page that left the split, such
 /// as a Mini Window, comes back. Returns false when the grid is full, the page is already shown,
 /// or the window shows a docked page.
-pub(crate) unsafe fn add_page(window: HWND, owner: HWND, page: usize, target: usize, side: Side) -> bool {
+pub(crate) unsafe fn add_page(
+    window: HWND,
+    owner: HWND,
+    page: usize,
+    target: usize,
+    side: Side,
+) -> bool {
     let state = split().filter(|split| split.window == window as isize);
     let Some(state) = state.filter(|state| state.mode == Mode::Split) else {
         if state.is_some_and(|state| state.mode != Mode::Inset) {
@@ -876,16 +1063,25 @@ pub(crate) unsafe fn add_page(window: HWND, owner: HWND, page: usize, target: us
         crate::trace::trace("second view: the grid is full");
         return false;
     };
-    if page == state.shown || state.extras.iter().any(|extra| extra.page == page) || !grid.contains(target) {
+    if page == state.shown
+        || state.extras.iter().any(|extra| extra.page == page)
+        || !grid.contains(target)
+    {
         return false;
     }
-    let Some(view) = new_view(window, state.parent, page) else { return false };
+    let Some(view) = new_view(window, state.parent, page) else {
+        return false;
+    };
     let owner_view = release_from_owner(owner, view, page, *(view as *const usize));
     set_page(view, page);
     grid.insert(target, slot, side);
     set_grid(window as isize, Some(grid));
     let mut next = state;
-    next.extras[slot - 1] = Extra { view, owner_view, page };
+    next.extras[slot - 1] = Extra {
+        view,
+        owner_view,
+        page,
+    };
     store(Some(next));
     place(&next);
     crate::frame::follow_second_view(window);
@@ -897,18 +1093,26 @@ pub(crate) unsafe fn add_page(window: HWND, owner: HWND, page: usize, target: us
 /// active page, and adds it to the browser view `parent`. Returns the view.
 unsafe fn new_view(window: HWND, parent: usize, source: usize) -> Option<usize> {
     let base = base()?;
-    let (Some(new), Some(ctor), Some(add)) = (recorded("new"), recorded("ctor"), recorded("add_child")) else {
+    let (Some(new), Some(ctor), Some(add)) =
+        (recorded("new"), recorded("ctor"), recorded("add_child"))
+    else {
         crate::trace::trace("second view: an address is missing for this build");
         return None;
     };
     let size = recorded("size").unwrap_or(0x528);
     // A view that only keeps the rail free has no page of its own and takes the active page's profile.
-    let source = if source != 0 { source } else { active_page(window) };
+    let source = if source != 0 {
+        source
+    } else {
+        active_page(window)
+    };
     if source == 0 {
         return None;
     }
     let context = if let Some(rva) = recorded("ctx") {
-        crate::features::tabs::function::<unsafe extern "system" fn(usize) -> usize>(base, rva)(source)
+        crate::features::tabs::function::<unsafe extern "system" fn(usize) -> usize>(base, rva)(
+            source,
+        )
     } else if let Some(offset) = recorded("ctxoff") {
         word(source + offset).unwrap_or(0)
     } else {
@@ -917,13 +1121,21 @@ unsafe fn new_view(window: HWND, parent: usize, source: usize) -> Option<usize> 
     if context == 0 {
         return None;
     }
-    let view = crate::features::tabs::function::<unsafe extern "system" fn(usize) -> usize>(base, new)(size);
-    crate::features::tabs::function::<unsafe extern "system" fn(usize, usize) -> usize>(base, ctor)(view, context);
+    let view = crate::features::tabs::function::<unsafe extern "system" fn(usize) -> usize>(
+        base, new,
+    )(size);
+    crate::features::tabs::function::<unsafe extern "system" fn(usize, usize) -> usize>(base, ctor)(
+        view, context,
+    );
     let children = children_of(parent).len();
-    crate::features::tabs::function::<unsafe extern "system" fn(usize, usize, usize) -> usize>(base, add)(parent, view, children);
+    crate::features::tabs::function::<unsafe extern "system" fn(usize, usize, usize) -> usize>(
+        base, add,
+    )(parent, view, children);
     if let Some(behaviour) = recorded("focus_behavior") {
         // `FocusBehavior::ALWAYS`: a click or `RequestFocus` may give this view the keyboard.
-        crate::features::tabs::function::<unsafe extern "system" fn(usize, i32)>(base, behaviour)(view, 1);
+        crate::features::tabs::function::<unsafe extern "system" fn(usize, i32)>(base, behaviour)(
+            view, 1,
+        );
     }
     Some(view)
 }
@@ -941,7 +1153,11 @@ pub(crate) unsafe fn open_with(window: HWND, owner: HWND, page: usize, mode: Mod
         let owner_view = release_from_owner(owner, view, page, *(view as *const usize));
         set_page(view, page);
         let mut next = Split { mode, ..state };
-        next.extras[0] = Extra { view, owner_view, page };
+        next.extras[0] = Extra {
+            view,
+            owner_view,
+            page,
+        };
         store(Some(next));
         place(&next);
         crate::frame::follow_second_view(window);
@@ -954,28 +1170,50 @@ pub(crate) unsafe fn open_with(window: HWND, owner: HWND, page: usize, mode: Mod
         crate::trace::trace("second view: the browser view was not found");
         return false;
     };
-    let Some(view) = new_view(window, parent, page) else { return false };
+    let Some(view) = new_view(window, parent, page) else {
+        return false;
+    };
     let vtable = *(view as *const usize);
     if let Some(rva) = recorded("find_slot") {
-        let slots: Vec<usize> = (0..0x200usize).filter(|slot| word(vtable + slot * 8) == Some(base + rva)).collect();
-        crate::trace::trace(&format!("second view: {rva:#x} is at vtable slots {slots:x?}"));
+        let slots: Vec<usize> = (0..0x200usize)
+            .filter(|slot| word(vtable + slot * 8) == Some(base + rva))
+            .collect();
+        crate::trace::trace(&format!(
+            "second view: {rva:#x} is at vtable slots {slots:x?}"
+        ));
     }
-    for slot in recorded("dump_slots").map(|slot| vec![slot, slot + 1, slot + 2]).unwrap_or_default() {
+    for slot in recorded("dump_slots")
+        .map(|slot| vec![slot, slot + 1, slot + 2])
+        .unwrap_or_default()
+    {
         let function = word(vtable + slot * 8).unwrap_or(0);
-        let bytes: Vec<String> = (0..3).map(|i| format!("{:016x}", word(function + i * 8).unwrap_or(0).swap_bytes())).collect();
-        crate::trace::trace(&format!("second view: slot {slot:#x} = {:#x}: {}", function.wrapping_sub(base), bytes.join("")));
+        let bytes: Vec<String> = (0..3)
+            .map(|i| format!("{:016x}", word(function + i * 8).unwrap_or(0).swap_bytes()))
+            .collect();
+        crate::trace::trace(&format!(
+            "second view: slot {slot:#x} = {:#x}: {}",
+            function.wrapping_sub(base),
+            bytes.join("")
+        ));
     }
     // The window's page view is the other `ContentsWebView` of its browser view.
     // DevTools has page views of the same class, so the page view is the one holding the active page.
     let own = active_page(window);
-    let Some(main) = views_with_vtable(parent, vtable).into_iter().find(|candidate| *candidate != view && own != 0 && holds(*candidate, own, size)) else {
+    let Some(main) = views_with_vtable(parent, vtable)
+        .into_iter()
+        .find(|candidate| *candidate != view && own != 0 && holds(*candidate, own, size))
+    else {
         crate::trace::trace("second view: the window's page view was not found");
         destroy_view(parent, view);
         return false;
     };
     // The owner window's page view lets go of the page first, as a tab move does. A tab of this
     // window that is not active is shown by no page view, so nothing lets go of it.
-    let owner_view = if page == 0 { 0 } else { release_from_owner(owner, view, page, vtable) };
+    let owner_view = if page == 0 {
+        0
+    } else {
+        release_from_owner(owner, view, page, vtable)
+    };
     if page != 0 {
         set_page(view, page);
     }
@@ -983,8 +1221,22 @@ pub(crate) unsafe fn open_with(window: HWND, owner: HWND, page: usize, mode: Mod
     *LAST.lock().unwrap_or_else(|error| error.into_inner()) = bounds_of(main);
     let main_vtable = hook_main(main).unwrap_or(0);
     let mut extras = [Extra::default(); MAX_PANES - 1];
-    extras[0] = Extra { view, owner_view, page };
-    let state = Split { mode, window: window as isize, parent, main, main_vtable, main_owner: 0, extras, shown: own, active: own };
+    extras[0] = Extra {
+        view,
+        owner_view,
+        page,
+    };
+    let state = Split {
+        mode,
+        window: window as isize,
+        parent,
+        main,
+        main_vtable,
+        main_owner: 0,
+        extras,
+        shown: own,
+        active: own,
+    };
     store(Some(state));
     place(&state);
     // The browser may lay its page view out once more after this, for example after a tab switch.
@@ -1034,12 +1286,16 @@ unsafe fn destroy_view(parent: usize, view: usize) {
     // `RemoveChildView` hands ownership back without deleting. Without it, a View's destructor
     // takes the view out of its parent itself.
     if let Some(remove) = recorded("remove_child") {
-        crate::features::tabs::function::<unsafe extern "system" fn(usize, usize)>(base, remove)(parent, view);
+        crate::features::tabs::function::<unsafe extern "system" fn(usize, usize)>(base, remove)(
+            parent, view,
+        );
     }
     match virtual_of(view, "dtor", "dtor_slot") {
         // The scalar deleting destructor; flag 1 frees the memory.
         Some(destroy) => {
-            std::mem::transmute::<usize, unsafe extern "system" fn(usize, u32) -> usize>(destroy)(view, 1);
+            std::mem::transmute::<usize, unsafe extern "system" fn(usize, u32) -> usize>(destroy)(
+                view, 1,
+            );
         }
         None => crate::trace::trace("second view: no destructor for this build; the view is kept"),
     }
@@ -1118,14 +1374,21 @@ pub(crate) unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
         if visited > 600 || depth > 8 {
             continue;
         }
-        if own != 0 && word(view).is_some_and(|vptr| vptr > base && vptr < end) && holds(view, own, size) {
+        if own != 0
+            && word(view).is_some_and(|vptr| vptr > base && vptr < end)
+            && holds(view, own, size)
+        {
             let [_, _, w, h] = bounds_of(view);
             let area = w as i64 * h as i64;
-            if w > 0 && h > 0 && best.map_or(true, |(most, _)| area > most) {
+            if w > 0 && h > 0 && best.is_none_or(|(most, _)| area > most) {
                 best = Some((area, view));
             }
         }
-        queue.extend(children_of(view).into_iter().map(|child| (child, depth + 1)));
+        queue.extend(
+            children_of(view)
+                .into_iter()
+                .map(|child| (child, depth + 1)),
+        );
     }
     let (_, main) = best?;
     let [x, y] = window_origin(main);
@@ -1158,14 +1421,20 @@ pub(crate) fn may_stop_following(open: bool, hooked: bool, idle: u32) -> bool {
 /// back to its tab, and the split ends when one page is left. Taking the window's own page out
 /// moves the page that takes over from it into the window's page view and makes its tab active.
 pub(crate) unsafe fn close_pane(window: HWND, slot: usize) -> bool {
-    let Some(state) = split().filter(|split| split.window == window as isize && split.mode == Mode::Split) else { return false };
+    let Some(state) =
+        split().filter(|split| split.window == window as isize && split.mode == Mode::Split)
+    else {
+        return false;
+    };
     let mut grid = grid_of(window as isize);
     if !grid.contains(slot) {
         return false;
     }
     let mut next = state;
     if slot == 0 {
-        let Some(heir) = grid.heir(0) else { return false };
+        let Some(heir) = grid.heir(0) else {
+            return false;
+        };
         let extra = state.extras[heir - 1];
         // The heir's view lets go, and the window's page view shows that page instead.
         set_page(extra.view, 0);
@@ -1213,7 +1482,9 @@ pub(crate) unsafe fn close_pane(window: HWND, slot: usize) -> bool {
     }
     let left = grid.leaves().len();
     set_grid(window as isize, Some(grid));
-    crate::trace::trace(&format!("second view: closed slot {slot}, {left} pages left"));
+    crate::trace::trace(&format!(
+        "second view: closed slot {slot}, {left} pages left"
+    ));
     if left < 2 {
         return close(window);
     }
@@ -1226,7 +1497,9 @@ pub(crate) unsafe fn close_pane(window: HWND, slot: usize) -> bool {
 /// full bounds back, the views are deleted, and each page returns to its owner window's page view.
 /// While the rail is shown, an empty view opens again and keeps the rail free.
 pub(crate) unsafe fn close(window: HWND) -> bool {
-    let Some(split) = split().filter(|split| split.window == window as isize) else { return false };
+    let Some(split) = split().filter(|split| split.window == window as isize) else {
+        return false;
+    };
     let reopen = after_close(split.mode, if keeps_inset(window as isize) { 1 } else { 0 });
     store(None);
     set_grid(window as isize, None);
@@ -1256,7 +1529,10 @@ pub(crate) unsafe fn close(window: HWND) -> bool {
             set_page(extra.owner_view, extra.page);
         }
     }
-    crate::trace::trace(&format!("second view: closed after {} layouts", LAYOUTS.swap(0, Ordering::Relaxed)));
+    crate::trace::trace(&format!(
+        "second view: closed after {} layouts",
+        LAYOUTS.swap(0, Ordering::Relaxed)
+    ));
     if reopen.is_some() {
         let inset = open_with(window, window, 0, Mode::Inset);
         crate::trace::trace(&format!("second view: closed to the rail inset: {inset}"));
@@ -1268,7 +1544,9 @@ pub(crate) unsafe fn close(window: HWND) -> bool {
 /// Drops the state of a window that is being destroyed, without calling into its views, which the
 /// browser deletes with the window.
 pub(crate) fn forget(window: HWND) {
-    TOPS.lock().unwrap_or_else(|error| error.into_inner()).retain(|(key, _)| *key != window as isize);
+    TOPS.lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|(key, _)| *key != window as isize);
     set_grid(window as isize, None);
     let mut split = SPLIT.lock().unwrap_or_else(|error| error.into_inner());
     if split.is_some_and(|split| split.window == window as isize) {
@@ -1278,12 +1556,16 @@ pub(crate) fn forget(window: HWND) {
 
 /// Gives the page view of `slot` the keyboard through `View::RequestFocus`.
 unsafe fn focus_slot(window: HWND, slot: usize) -> bool {
-    let Some(split) = split().filter(|split| split.window == window as isize) else { return false };
+    let Some(split) = split().filter(|split| split.window == window as isize) else {
+        return false;
+    };
     let view = view_of(&split, slot);
     if view == 0 {
         return false;
     }
-    let Some(function) = virtual_of(view, "request_focus", "focus_slot") else { return false };
+    let Some(function) = virtual_of(view, "request_focus", "focus_slot") else {
+        return false;
+    };
     std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(function)(view);
     true
 }
@@ -1291,9 +1573,15 @@ unsafe fn focus_slot(window: HWND, slot: usize) -> bool {
 /// Gives the focused extra view the keyboard, or the first extra view when the window's own page
 /// was focused.
 pub(crate) unsafe fn focus(window: HWND) -> bool {
-    let Some(split) = split().filter(|split| split.window == window as isize) else { return false };
+    let Some(split) = split().filter(|split| split.window == window as isize) else {
+        return false;
+    };
     let focused = FOCUSED.load(Ordering::Acquire);
-    let slot = if focused > 0 && view_of(&split, focused) != 0 { focused } else { 1 };
+    let slot = if focused > 0 && view_of(&split, focused) != 0 {
+        focused
+    } else {
+        1
+    };
     focus_slot(window, slot)
 }
 
@@ -1306,14 +1594,19 @@ pub(crate) unsafe fn focus_pane(window: HWND, slot: usize) -> bool {
 /// Sets the first page's share of the window's first divider, in thousandths, and lays the pages
 /// out again.
 pub(crate) unsafe fn set_share(window: HWND, share: u32) -> bool {
-    let Some(split) = split().filter(|split| split.window == window as isize) else { return false };
+    let Some(split) = split().filter(|split| split.window == window as isize) else {
+        return false;
+    };
     let mut grid = grid_of(window as isize);
     if !grid.set_root_share(share) {
         return false;
     }
     set_grid(window as isize, Some(grid));
     place(&split);
-    crate::trace::trace(&format!("second view: share {share}, full {:?}", *FULL.lock().unwrap_or_else(|error| error.into_inner())));
+    crate::trace::trace(&format!(
+        "second view: share {share}, full {:?}",
+        *FULL.lock().unwrap_or_else(|error| error.into_inner())
+    ));
     true
 }
 
@@ -1369,7 +1662,9 @@ pub(crate) unsafe fn open_from_other_window(window: HWND) -> bool {
         if other == window {
             continue;
         }
-        let Some(model) = crate::features::tabs::tab_model(base, other) else { continue };
+        let Some(model) = crate::features::tabs::tab_model(base, other) else {
+            continue;
+        };
         let page = crate::features::tabs::contents_at(base, model, 0) as usize;
         if page != 0 {
             return open(window, other, page);
@@ -1385,9 +1680,16 @@ static DRAGGING: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// What a mouse message means for the split, before the browser sees it. A press on a divider
 /// starts a drag that moves it and is not passed on. A press in an extra view goes to the browser
 /// first, then the view asks for the keyboard. Returns the result when the message is handled here.
-pub(crate) unsafe fn on_mouse(window: HWND, message: u32, lparam: isize, browser: &dyn Fn() -> isize) -> Option<isize> {
+pub(crate) unsafe fn on_mouse(
+    window: HWND,
+    message: u32,
+    lparam: isize,
+    browser: &dyn Fn() -> isize,
+) -> Option<isize> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    };
     if !is_open(window) {
         return None;
     }
@@ -1396,7 +1698,10 @@ pub(crate) unsafe fn on_mouse(window: HWND, message: u32, lparam: isize, browser
     let y = (((lparam >> 16) & 0xffff) as i16 as f32 / scale).floor() as i32;
     match message {
         WM_LBUTTONDOWN => {
-            if let Some(divider) = dividers(window).into_iter().find(|divider| inside(divider.rect, x, y)) {
+            if let Some(divider) = dividers(window)
+                .into_iter()
+                .find(|divider| inside(divider.rect, x, y))
+            {
                 DRAGGING.store(divider.node, Ordering::Release);
                 SetCapture(window);
                 return Some(0);
@@ -1421,12 +1726,20 @@ pub(crate) unsafe fn on_mouse(window: HWND, message: u32, lparam: isize, browser
         }
         WM_MOUSEMOVE if DRAGGING.load(Ordering::Acquire) != usize::MAX => {
             let node = DRAGGING.load(Ordering::Acquire);
-            if let Some(divider) = dividers(window).into_iter().find(|divider| divider.node == node) {
+            if let Some(divider) = dividers(window)
+                .into_iter()
+                .find(|divider| divider.node == node)
+            {
                 let position = match divider.dir {
                     crate::features::split_grid::Dir::Row => x,
                     crate::features::split_grid::Dir::Column => y,
                 };
-                let share = crate::features::split_grid::share_at(divider.span, divider.dir, position, METRICS);
+                let share = crate::features::split_grid::share_at(
+                    divider.span,
+                    divider.dir,
+                    position,
+                    METRICS,
+                );
                 let mut grid = grid_of(window as isize);
                 if grid.set_share(node, share) {
                     set_grid(window as isize, Some(grid));
@@ -1437,7 +1750,9 @@ pub(crate) unsafe fn on_mouse(window: HWND, message: u32, lparam: isize, browser
             }
             Some(0)
         }
-        WM_LBUTTONUP | WM_CAPTURECHANGED if DRAGGING.swap(usize::MAX, Ordering::AcqRel) != usize::MAX => {
+        WM_LBUTTONUP | WM_CAPTURECHANGED
+            if DRAGGING.swap(usize::MAX, Ordering::AcqRel) != usize::MAX =>
+        {
             if message == WM_LBUTTONUP {
                 ReleaseCapture();
             }
@@ -1565,7 +1880,10 @@ pub(crate) mod bare {
 
 #[cfg(test)]
 mod tests {
-    use super::{after_close, below_bar, grid_bounds, keep, layout, may_stop_following, needs_layout, page_after_close, upgrades, Keep, Mode, DIVIDER, MIN_PANE, SIDEBAR_WIDTH};
+    use super::{
+        after_close, below_bar, grid_bounds, keep, layout, may_stop_following, needs_layout,
+        page_after_close, upgrades, Keep, Mode, DIVIDER, MIN_PANE, SIDEBAR_WIDTH,
+    };
     use crate::features::split::Side;
     use crate::features::split_grid::Grid;
 
@@ -1586,12 +1904,20 @@ mod tests {
         let full = below_bar([0, 0, 1000, 700], 40);
         assert_eq!(full, [0, 40, 1000, 660]);
         let (page, view) = layout(full, Mode::Inset, 0);
-        assert_eq!(page, [0, 40, 1000, 660], "the page begins where the bar ends");
+        assert_eq!(
+            page,
+            [0, 40, 1000, 660],
+            "the page begins where the bar ends"
+        );
         assert_eq!(view[2], 0);
         let cells = grid_bounds(&pair(Side::Right), full, 0);
         assert_eq!((cells[0].1[1], cells[1].1[1]), (40, 40));
         let (page, _) = layout(full, Mode::Inset, 40);
-        assert_eq!(page, [0, 40, 960, 660], "the rail and the bar row both stay free");
+        assert_eq!(
+            page,
+            [0, 40, 960, 660],
+            "the rail and the bar row both stay free"
+        );
         // No row leaves the area as the browser gave it, and a tiny area keeps a page.
         assert_eq!(below_bar([0, 0, 1000, 700], 0), [0, 0, 1000, 700]);
         assert_eq!(below_bar([0, 0, 100, 20], 40)[3], 1);
@@ -1618,15 +1944,36 @@ mod tests {
     #[test]
     fn fr13_clicking_the_second_view_page_keeps_both_pages_where_they_are() {
         // The split page's tab became active, so the window's page view gets its page back.
-        assert_eq!(keep(SPLIT, MAIN, &[SPLIT, 0, 0], MAIN), Keep::Restore { main: MAIN, slot: 1 });
+        assert_eq!(
+            keep(SPLIT, MAIN, &[SPLIT, 0, 0], MAIN),
+            Keep::Restore {
+                main: MAIN,
+                slot: 1
+            }
+        );
     }
 
     #[test]
     fn fr13_clicking_any_extra_page_of_a_grid_keeps_every_page_where_it_is() {
-        assert_eq!(keep(THIRD, MAIN, &[SPLIT, OTHER, THIRD], MAIN), Keep::Restore { main: MAIN, slot: 3 });
-        assert_eq!(keep(OTHER, THIRD, &[SPLIT, OTHER, THIRD], MAIN), Keep::Restore { main: MAIN, slot: 2 });
+        assert_eq!(
+            keep(THIRD, MAIN, &[SPLIT, OTHER, THIRD], MAIN),
+            Keep::Restore {
+                main: MAIN,
+                slot: 3
+            }
+        );
+        assert_eq!(
+            keep(OTHER, THIRD, &[SPLIT, OTHER, THIRD], MAIN),
+            Keep::Restore {
+                main: MAIN,
+                slot: 2
+            }
+        );
         // An unused slot never matches.
-        assert_eq!(keep(OTHER, MAIN, &[SPLIT, 0, 0], MAIN), Keep::Follow { main: OTHER });
+        assert_eq!(
+            keep(OTHER, MAIN, &[SPLIT, 0, 0], MAIN),
+            Keep::Follow { main: OTHER }
+        );
     }
 
     #[test]
@@ -1636,14 +1983,26 @@ mod tests {
 
     #[test]
     fn fr13_clicking_the_window_page_again_leaves_both_pages_in_place() {
-        assert_eq!(keep(MAIN, SPLIT, &[SPLIT], MAIN), Keep::Follow { main: MAIN });
+        assert_eq!(
+            keep(MAIN, SPLIT, &[SPLIT], MAIN),
+            Keep::Follow { main: MAIN }
+        );
     }
 
     #[test]
     fn fr13_choosing_another_tab_shows_it_beside_the_split_page() {
-        assert_eq!(keep(OTHER, MAIN, &[SPLIT], MAIN), Keep::Follow { main: OTHER });
+        assert_eq!(
+            keep(OTHER, MAIN, &[SPLIT], MAIN),
+            Keep::Follow { main: OTHER }
+        );
         // A click on the split page after that keeps the chosen page in the window's page view.
-        assert_eq!(keep(SPLIT, OTHER, &[SPLIT], OTHER), Keep::Restore { main: OTHER, slot: 1 });
+        assert_eq!(
+            keep(SPLIT, OTHER, &[SPLIT], OTHER),
+            Keep::Restore {
+                main: OTHER,
+                slot: 1
+            }
+        );
     }
 
     #[test]
@@ -1686,10 +2045,22 @@ mod tests {
     #[test]
     fn fr10_a_sidebar_page_floats_over_the_right_of_the_page_which_keeps_its_width() {
         let full = [10, 50, 1000, 700];
-        let (main, view) = layout(full, Mode::Docked { width: SIDEBAR_WIDTH }, 0);
+        let (main, view) = layout(
+            full,
+            Mode::Docked {
+                width: SIDEBAR_WIDTH,
+            },
+            0,
+        );
         assert_eq!(main, full);
         assert_eq!(view, [10 + 1000 - SIDEBAR_WIDTH, 50, SIDEBAR_WIDTH, 700]);
-        let (_, narrow) = layout([0, 0, 200, 700], Mode::Docked { width: SIDEBAR_WIDTH }, 0);
+        let (_, narrow) = layout(
+            [0, 0, 200, 700],
+            Mode::Docked {
+                width: SIDEBAR_WIDTH,
+            },
+            0,
+        );
         assert_eq!(narrow, [0, 0, 200, 700]);
     }
 
@@ -1724,24 +2095,60 @@ mod tests {
         let (main, view) = layout(full, Mode::Inset, 40);
         assert_eq!(main, [0, 0, 960, 700]);
         assert_eq!(view[2], 0, "the rail inset shows no page");
-        let (main, view) = layout(full, Mode::Docked { width: SIDEBAR_WIDTH }, 40);
+        let (main, view) = layout(
+            full,
+            Mode::Docked {
+                width: SIDEBAR_WIDTH,
+            },
+            40,
+        );
         assert_eq!(main, [0, 0, 960, 700]);
         assert_eq!(view, [960 - SIDEBAR_WIDTH, 0, SIDEBAR_WIDTH, 700]);
     }
 
     #[test]
     fn fr10_an_undocked_page_leaves_the_rail_inset_while_the_rail_is_shown() {
-        assert_eq!(after_close(Mode::Docked { width: SIDEBAR_WIDTH }, 40), Some(Mode::Inset));
+        assert_eq!(
+            after_close(
+                Mode::Docked {
+                    width: SIDEBAR_WIDTH
+                },
+                40
+            ),
+            Some(Mode::Inset)
+        );
         assert_eq!(after_close(Mode::Split, 40), Some(Mode::Inset));
-        assert_eq!(after_close(Mode::Docked { width: SIDEBAR_WIDTH }, 0), None);
-        assert_eq!(after_close(Mode::Inset, 40), None, "closing the inset itself removes the view");
+        assert_eq!(
+            after_close(
+                Mode::Docked {
+                    width: SIDEBAR_WIDTH
+                },
+                0
+            ),
+            None
+        );
+        assert_eq!(
+            after_close(Mode::Inset, 40),
+            None,
+            "closing the inset itself removes the view"
+        );
     }
 
     #[test]
     fn fr9_a_split_or_dock_takes_the_rail_inset_view_but_not_an_open_page() {
         assert!(upgrades(Mode::Inset, Mode::Split));
-        assert!(upgrades(Mode::Inset, Mode::Docked { width: SIDEBAR_WIDTH }));
-        assert!(!upgrades(Mode::Split, Mode::Docked { width: SIDEBAR_WIDTH }));
+        assert!(upgrades(
+            Mode::Inset,
+            Mode::Docked {
+                width: SIDEBAR_WIDTH
+            }
+        ));
+        assert!(!upgrades(
+            Mode::Split,
+            Mode::Docked {
+                width: SIDEBAR_WIDTH
+            }
+        ));
         assert!(!upgrades(Mode::Inset, Mode::Inset));
     }
 
@@ -1763,7 +2170,14 @@ mod tests {
     fn fr9_a_split_row_stays_at_the_panel_top_above_a_browser_infobar() {
         use crate::features::split::ROW_HEIGHT;
         // The left page sits 57 DIP lower under a browser infobar; both rows keep the panel's top.
-        let panes = super::grid_panes(&[([276, 109, 600, 643], false, Some(0)), ([884, 52, 600, 700], true, Some(1))], 1484, Some(8));
+        let panes = super::grid_panes(
+            &[
+                ([276, 109, 600, 643], false, Some(0)),
+                ([884, 52, 600, 700], true, Some(1)),
+            ],
+            1484,
+            Some(8),
+        );
         let left = panes.iter().find(|pane| pane.x == 276).unwrap();
         let right = panes.iter().find(|pane| pane.x == 884).unwrap();
         assert_eq!((left.row_y, right.row_y), (8, 8));
@@ -1775,18 +2189,41 @@ mod tests {
     fn fr9_each_split_page_has_its_own_row_right_above_it_with_equal_tops() {
         use crate::features::split::{CAPTION_ROOM, ROW_HEIGHT};
         // The window's page on the left, the second view on the right, focused.
-        let panes = super::grid_panes(&[([276, 52, 600, 700], false, Some(0)), ([884, 52, 600, 700], true, Some(1))], 1484, None);
+        let panes = super::grid_panes(
+            &[
+                ([276, 52, 600, 700], false, Some(0)),
+                ([884, 52, 600, 700], true, Some(1)),
+            ],
+            1484,
+            None,
+        );
         assert_eq!(panes.len(), 2);
         let (left, right) = (panes[0], panes[1]);
         assert_eq!(left.y, right.y, "the pages start at the same top");
-        assert_eq!((left.row_y, right.row_y), (52 - ROW_HEIGHT, 52 - ROW_HEIGHT));
+        assert_eq!(
+            (left.row_y, right.row_y),
+            (52 - ROW_HEIGHT, 52 - ROW_HEIGHT)
+        );
         assert!(left.first && !left.last && right.last && !right.first);
-        assert!(!left.active && right.active, "only the focused page is highlighted");
+        assert!(
+            !left.active && right.active,
+            "only the focused page is highlighted"
+        );
         assert_eq!(left.caption, 0.0);
-        assert_eq!(right.caption, CAPTION_ROOM, "the top right page carries the window buttons");
+        assert_eq!(
+            right.caption, CAPTION_ROOM,
+            "the top right page carries the window buttons"
+        );
         assert_eq!((left.tab, right.tab), (Some(0), Some(1)));
         // A page shown left of the window's page comes first.
-        let panes = super::grid_panes(&[([884, 52, 600, 700], true, Some(2)), ([276, 52, 600, 700], false, None)], 1484, Some(8));
+        let panes = super::grid_panes(
+            &[
+                ([884, 52, 600, 700], true, Some(2)),
+                ([276, 52, 600, 700], false, None),
+            ],
+            1484,
+            Some(8),
+        );
         assert_eq!((panes[0].tab, panes[1].tab), (None, Some(2)));
         assert!(panes[1].active && panes[1].caption > 0.0 && panes[0].first);
     }
@@ -1794,18 +2231,31 @@ mod tests {
     #[test]
     fn fr9_in_a_four_page_grid_only_the_top_right_page_carries_the_window_buttons() {
         use crate::features::split::{CAPTION_ROOM, ROW_HEIGHT};
-        let top = [([276, 52, 600, 300], false, Some(0)), ([884, 52, 600, 300], false, Some(1))];
-        let low = [([276, 404, 600, 300], true, Some(2)), ([884, 404, 600, 300], false, Some(3))];
+        let top = [
+            ([276, 52, 600, 300], false, Some(0)),
+            ([884, 52, 600, 300], false, Some(1)),
+        ];
+        let low = [
+            ([276, 404, 600, 300], true, Some(2)),
+            ([884, 404, 600, 300], false, Some(3)),
+        ];
         let pages: Vec<_> = [low[1], top[1], low[0], top[0]].into_iter().collect();
         let panes = super::grid_panes(&pages, 1484, Some(8));
         let tabs: Vec<_> = panes.iter().map(|pane| pane.tab).collect();
         assert_eq!(tabs, [Some(0), Some(1), Some(2), Some(3)], "reading order");
         assert_eq!(panes.iter().filter(|pane| pane.caption > 0.0).count(), 1);
         assert_eq!(panes[1].caption, CAPTION_ROOM);
-        assert_eq!(panes.iter().filter(|pane| pane.first).count(), 1, "one page leaves room for the toggle");
+        assert_eq!(
+            panes.iter().filter(|pane| pane.first).count(),
+            1,
+            "one page leaves room for the toggle"
+        );
         assert!(panes[0].first && panes[1].last);
         // Lower rows sit right above their pages, not at the panel's top.
-        assert_eq!((panes[2].row_y, panes[3].row_y), (404 - ROW_HEIGHT, 404 - ROW_HEIGHT));
+        assert_eq!(
+            (panes[2].row_y, panes[3].row_y),
+            (404 - ROW_HEIGHT, 404 - ROW_HEIGHT)
+        );
         assert_eq!(panes[0].row_y, 8);
         assert!(panes[2].active && !panes[0].active);
     }

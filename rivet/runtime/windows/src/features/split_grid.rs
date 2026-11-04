@@ -18,7 +18,12 @@ pub(crate) enum Dir {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Node {
     Leaf(usize),
-    Split { dir: Dir, share: u32, a: Box<Node>, b: Box<Node> },
+    Split {
+        dir: Dir,
+        share: u32,
+        a: Box<Node>,
+        b: Box<Node>,
+    },
 }
 
 /// A divider between two parts of the grid. `node` names the split it belongs to in pre-order,
@@ -48,7 +53,9 @@ pub(crate) struct Grid {
 impl Grid {
     /// The window's own page alone.
     pub(crate) fn single() -> Self {
-        Grid { root: Node::Leaf(0) }
+        Grid {
+            root: Node::Leaf(0),
+        }
     }
 
     /// The slots in reading order: left to right, then top to bottom within each part.
@@ -95,7 +102,12 @@ impl Grid {
                     Side::Left | Side::Top => (Node::Leaf(slot), Node::Leaf(target)),
                     Side::Right | Side::Bottom => (Node::Leaf(target), Node::Leaf(slot)),
                 };
-                *node = Node::Split { dir, share: 500, a: Box::new(a), b: Box::new(b) };
+                *node = Node::Split {
+                    dir,
+                    share: 500,
+                    a: Box::new(a),
+                    b: Box::new(b),
+                };
             } else if let Node::Split { a, b, .. } = node {
                 put(a, target, slot, side);
                 put(b, target, slot, side);
@@ -116,7 +128,12 @@ impl Grid {
                 Node::Leaf(at) if at == slot => None,
                 Node::Leaf(at) => Some(Node::Leaf(at)),
                 Node::Split { dir, share, a, b } => match (take(*a, slot), take(*b, slot)) {
-                    (Some(a), Some(b)) => Some(Node::Split { dir, share, a: Box::new(a), b: Box::new(b) }),
+                    (Some(a), Some(b)) => Some(Node::Split {
+                        dir,
+                        share,
+                        a: Box::new(a),
+                        b: Box::new(b),
+                    }),
                     (one, two) => one.or(two),
                 },
             }
@@ -151,7 +168,9 @@ impl Grid {
             }
         }
         fn find(node: &Node, slot: usize) -> Option<usize> {
-            let Node::Split { a, b, .. } = node else { return None };
+            let Node::Split { a, b, .. } = node else {
+                return None;
+            };
             if **a == Node::Leaf(slot) {
                 return Some(first(b));
             }
@@ -186,7 +205,9 @@ impl Grid {
     /// Sets the share of the split `node`, numbered as `dividers` numbers them.
     pub(crate) fn set_share(&mut self, node: usize, value: u32) -> bool {
         fn walk(node: &mut Node, target: usize, next: &mut usize, value: u32) -> bool {
-            let Node::Split { share, a, b, .. } = node else { return false };
+            let Node::Split { share, a, b, .. } = node else {
+                return false;
+            };
             if *next == target {
                 *share = value.min(1000);
                 return true;
@@ -223,10 +244,23 @@ impl Grid {
 
     /// The dividers of the grid in `area`, in pre-order of their splits.
     pub(crate) fn dividers(&self, area: [i32; 4], metrics: Metrics) -> Vec<Divider> {
-        fn walk(node: &Node, area: [i32; 4], metrics: Metrics, next: &mut usize, out: &mut Vec<Divider>) {
-            let Node::Split { dir, share, a, b } = node else { return };
+        fn walk(
+            node: &Node,
+            area: [i32; 4],
+            metrics: Metrics,
+            next: &mut usize,
+            out: &mut Vec<Divider>,
+        ) {
+            let Node::Split { dir, share, a, b } = node else {
+                return;
+            };
             let (one, two, rect) = divide(area, *dir, *share, metrics);
-            out.push(Divider { node: *next, dir: *dir, rect, span: area });
+            out.push(Divider {
+                node: *next,
+                dir: *dir,
+                rect,
+                span: area,
+            });
             *next += 1;
             walk(a, one, metrics, next, out);
             walk(b, two, metrics, next, out);
@@ -239,7 +273,12 @@ impl Grid {
 }
 
 /// The two parts of `area` a split gives its children, and the divider strip between them.
-pub(crate) fn divide(area: [i32; 4], dir: Dir, share: u32, metrics: Metrics) -> ([i32; 4], [i32; 4], [i32; 4]) {
+pub(crate) fn divide(
+    area: [i32; 4],
+    dir: Dir,
+    share: u32,
+    metrics: Metrics,
+) -> ([i32; 4], [i32; 4], [i32; 4]) {
     let [x, y, w, h] = area;
     let Metrics { divider, row, min } = metrics;
     // A stacked page's row sits between the divider and its page, so the row is not room to share.
@@ -254,8 +293,16 @@ pub(crate) fn divide(area: [i32; 4], dir: Dir, share: u32, metrics: Metrics) -> 
     }
     let second = room - first;
     match dir {
-        Dir::Row => ([x, y, first, h], [x + first + divider, y, second, h], [x + first, y, divider, h]),
-        Dir::Column => ([x, y, w, first], [x, y + first + kept, w, second], [x, y + first, w, divider]),
+        Dir::Row => (
+            [x, y, first, h],
+            [x + first + divider, y, second, h],
+            [x + first, y, divider, h],
+        ),
+        Dir::Column => (
+            [x, y, w, first],
+            [x, y + first + kept, w, second],
+            [x, y + first, w, divider],
+        ),
     }
 }
 
@@ -276,11 +323,20 @@ mod tests {
     use super::{share_at, Dir, Grid, Metrics, MAX_PANES};
     use crate::features::split::Side;
 
-    const M: Metrics = Metrics { divider: 8, row: 44, min: 120 };
+    const M: Metrics = Metrics {
+        divider: 8,
+        row: 44,
+        min: 120,
+    };
 
     #[test]
     fn fr9_a_drop_on_each_edge_splits_the_page_in_that_direction() {
-        for (side, first) in [(Side::Left, 1), (Side::Right, 0), (Side::Top, 1), (Side::Bottom, 0)] {
+        for (side, first) in [
+            (Side::Left, 1),
+            (Side::Right, 0),
+            (Side::Top, 1),
+            (Side::Bottom, 0),
+        ] {
             let mut grid = Grid::single();
             assert!(grid.insert(0, 1, side));
             let cells = grid.cells([0, 0, 1008, 1052], M);
@@ -293,7 +349,11 @@ mod tests {
                 }
                 Side::Top | Side::Bottom => {
                     assert_eq!(a[0], b[0], "stacked in one column");
-                    assert_eq!(b[1], a[1] + a[3] + 8 + 44, "the lower page keeps room for its row");
+                    assert_eq!(
+                        b[1],
+                        a[1] + a[3] + 8 + 44,
+                        "the lower page keeps room for its row"
+                    );
                     assert_eq!((a[3], b[3]), (500, 500), "equal shares");
                 }
             }
@@ -340,7 +400,10 @@ mod tests {
         let cells = grid.cells([10, 20, 1200, 800], M);
         for (i, (_, a)) in cells.iter().enumerate() {
             for (_, b) in &cells[i + 1..] {
-                let apart = a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
+                let apart = a[0] + a[2] <= b[0]
+                    || b[0] + b[2] <= a[0]
+                    || a[1] + a[3] <= b[1]
+                    || b[1] + b[3] <= a[1];
                 assert!(apart, "{a:?} {b:?}");
             }
             assert!(a[0] >= 10 && a[1] >= 20 && a[0] + a[2] <= 1210 && a[1] + a[3] <= 820);
@@ -362,7 +425,10 @@ mod tests {
         assert!(grid.set_share(lower.node, share));
         let cells = grid.cells(area, M);
         let right_top = cells.iter().find(|cell| cell.0 == 1).unwrap().1;
-        assert_eq!(right_top[3], 120, "a page never gets smaller than the narrowest");
+        assert_eq!(
+            right_top[3], 120,
+            "a page never gets smaller than the narrowest"
+        );
         // Drag the row divider to 300 DIPs.
         let row = grid.dividers(area, M)[0];
         assert!(grid.set_share(row.node, share_at(row.span, row.dir, 304, M)));

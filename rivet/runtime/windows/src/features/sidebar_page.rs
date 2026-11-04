@@ -59,7 +59,11 @@ pub(crate) fn hosts(window: HWND) -> bool {
 /// The docked second view's bounds for a hosted page: below Rivet's header row, and right of the
 /// hairline that Rivet draws at the panel's left edge. Other second views keep `second`.
 pub(crate) fn fit(window: HWND, mode: Mode, second: [i32; 4]) -> [i32; 4] {
-    if hosts(window) { below_header(mode, second) } else { second }
+    if hosts(window) {
+        below_header(mode, second)
+    } else {
+        second
+    }
 }
 
 /// A docked panel's bounds below the header row and right of the hairline.
@@ -94,7 +98,12 @@ pub(crate) unsafe fn follow(window: HWND) {
         return;
     }
     let showing = showing_extension(window);
-    let hosted = HOSTED.with(|hosted| hosted.borrow().get(&(window as isize)).map(|entry| entry.key));
+    let hosted = HOSTED.with(|hosted| {
+        hosted
+            .borrow()
+            .get(&(window as isize))
+            .map(|entry| entry.key)
+    });
     match step(hosted.as_ref(), showing.as_ref()) {
         Step::Nothing => {}
         Step::Take => take(window, showing.expect("an entry shows")),
@@ -112,14 +121,24 @@ unsafe fn take(window: HWND, key: EntryKey) {
         crate::trace::trace("sidebar page: a split holds the second view");
         return;
     }
-    let Some(objects) = panel::objects(window).filter(|found| found.side_panel != 0) else { return };
-    let Some(active) = crate::features::navigation::active_contents(window) else { return };
+    let Some(objects) = panel::objects(window).filter(|found| found.side_panel != 0) else {
+        return;
+    };
+    let Some(active) = crate::features::navigation::active_contents(window) else {
+        return;
+    };
     let page_vtable = *(active as *const usize);
     // The entry's page may still be loading into its view; the next poll looks again.
-    let Some((holder, page)) = second_view::page_under(objects.side_panel, page_vtable) else { return };
+    let Some((holder, page)) = second_view::page_under(objects.side_panel, page_vtable) else {
+        return;
+    };
     // A page shows in one view at a time. The browser's view lets go of it first.
     second_view::hand_page(holder, 0);
-    HOSTED.with(|hosted| hosted.borrow_mut().insert(window as isize, Hosted { key, holder, page }));
+    HOSTED.with(|hosted| {
+        hosted
+            .borrow_mut()
+            .insert(window as isize, Hosted { key, holder, page })
+    });
     if !second_view::open_with(window, window, page, Mode::Docked { width: PANEL_WIDTH }) {
         HOSTED.with(|hosted| hosted.borrow_mut().remove(&(window as isize)));
         second_view::hand_page(holder, page);
@@ -127,18 +146,25 @@ unsafe fn take(window: HWND, key: EntryKey) {
         return;
     }
     crate::hooks::page_area::relayout(window);
-    crate::trace::trace(&format!("sidebar page: extension page {page:#x} from view {holder:#x} in the second view"));
+    crate::trace::trace(&format!(
+        "sidebar page: extension page {page:#x} from view {holder:#x} in the second view"
+    ));
 }
 
 /// Gives the hosted page back to the browser's side panel view and closes the docked view.
 pub(crate) unsafe fn give_back(window: HWND) {
-    let Some(entry) = HOSTED.with(|hosted| hosted.borrow_mut().remove(&(window as isize))) else { return };
+    let Some(entry) = HOSTED.with(|hosted| hosted.borrow_mut().remove(&(window as isize))) else {
+        return;
+    };
     if second_view::is_docked(window) {
         second_view::close(window);
     }
     second_view::hand_page(entry.holder, entry.page);
     crate::hooks::page_area::relayout(window);
-    crate::trace::trace(&format!("sidebar page: extension page {:#x} back to view {:#x}", entry.page, entry.holder));
+    crate::trace::trace(&format!(
+        "sidebar page: extension page {:#x} back to view {:#x}",
+        entry.page, entry.holder
+    ));
 }
 
 /// The page area step: while the second view shows the side panel's page, the browser's panel
@@ -149,9 +175,13 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
     }
     let row = &crate::builds::get().side_panel;
     let page = area.bounds(row.page_area).map(|bounds| *bounds);
-    let Some(page_right) = page.map(|page| page[0] + page[2]) else { return };
+    let Some(page_right) = page.map(|page| page[0] + page[2]) else {
+        return;
+    };
     for offset in [row.side_panel, row.side_panel_animation] {
-        let Some(side_panel) = area.bounds(offset) else { continue };
+        let Some(side_panel) = area.bounds(offset) else {
+            continue;
+        };
         if let Some(contents) = area.bounds(row.contents_container) {
             float_over(&mut *contents, &mut *side_panel, page_right);
         }
@@ -183,10 +213,19 @@ mod tests {
     #[test]
     fn fr10_the_extension_page_sits_below_the_header_right_of_the_hairline() {
         let docked = Mode::Docked { width: PANEL_WIDTH };
-        assert_eq!(below_header(docked, [884, 44, 240, 700]), [885, 84, 239, 660]);
+        assert_eq!(
+            below_header(docked, [884, 44, 240, 700]),
+            [885, 84, 239, 660]
+        );
         // A split pane and the empty rail view are not panels.
-        assert_eq!(below_header(Mode::Split, [884, 44, 240, 700]), [884, 44, 240, 700]);
-        assert_eq!(below_header(Mode::Inset, [1124, 44, 0, 700]), [1124, 44, 0, 700]);
+        assert_eq!(
+            below_header(Mode::Split, [884, 44, 240, 700]),
+            [884, 44, 240, 700]
+        );
+        assert_eq!(
+            below_header(Mode::Inset, [1124, 44, 0, 700]),
+            [1124, 44, 0, 700]
+        );
     }
 
     #[test]

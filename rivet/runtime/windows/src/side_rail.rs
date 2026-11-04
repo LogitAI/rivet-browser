@@ -1085,7 +1085,12 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
     ScreenToClient(window, &mut pointer);
     // An extension page may load into the browser's side panel after the click that opened it.
     crate::features::sidebar_page::follow(window);
-    let known = RAILS.with(|rails| rails.borrow().get(&(window as isize)).is_some_and(|rail| rail.geometry.is_some()));
+    let known = RAILS.with(|rails| {
+        rails
+            .borrow()
+            .get(&(window as isize))
+            .is_some_and(|rail| rail.geometry.is_some())
+    });
     if !known {
         // Not laid out since the layout hook went in. Lay out outside any layout of the browser's.
         crate::hooks::page_area::relayout(window);

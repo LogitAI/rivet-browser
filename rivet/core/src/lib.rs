@@ -289,9 +289,14 @@ mod tests {
         let mut input = request(DisplayMode::Visible);
         input.credentials = CredentialProvider::System;
         let plan = build_launch_plan(&input).unwrap();
-        assert!(plan.arguments.contains(&"--disable-features=WebAuthenticationEnclaveAuthenticator".into()));
+        assert!(plan
+            .arguments
+            .contains(&"--disable-features=WebAuthenticationEnclaveAuthenticator".into()));
         let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
-        assert!(!plan.arguments.iter().any(|argument| argument.starts_with("--disable-features")));
+        assert!(!plan
+            .arguments
+            .iter()
+            .any(|argument| argument.starts_with("--disable-features")));
     }
 
     #[test]

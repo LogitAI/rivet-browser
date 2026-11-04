@@ -381,7 +381,9 @@ pub unsafe fn pop_out_pane(window: HWND, index: usize) -> bool {
     // A split on Rivet's own page views keeps its other pages.
     if let Some(slot) = crate::features::second_view::slot_of_pane(window, &panes[index]) {
         let done = crate::features::split::pop_out(window, slot);
-        crate::trace::trace(&format!("mini window: pop out page {index} of the split: {done}"));
+        crate::trace::trace(&format!(
+            "mini window: pop out page {index} of the split: {done}"
+        ));
         return done;
     }
     if let Some(other) = panes
@@ -716,6 +718,10 @@ impl Surface {
         })
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one line of the frame is drawn from all of these at once"
+    )]
     unsafe fn text(
         &self,
         context: &ID2D1DeviceContext,

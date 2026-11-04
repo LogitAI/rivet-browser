@@ -41,7 +41,9 @@ impl CtrlT {
         }
     }
     pub fn from_key(key: &str) -> Option<Self> {
-        [Self::CommandBar, Self::NewTabPage].into_iter().find(|value| value.key() == key)
+        [Self::CommandBar, Self::NewTabPage]
+            .into_iter()
+            .find(|value| value.key() == key)
     }
 }
 
@@ -55,7 +57,10 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { archive_after: Some(DEFAULT_ARCHIVE_SECS), ctrl_t: CtrlT::CommandBar }
+        Self {
+            archive_after: Some(DEFAULT_ARCHIVE_SECS),
+            ctrl_t: CtrlT::CommandBar,
+        }
     }
 }
 
@@ -166,12 +171,17 @@ pub fn folder_of_key(key: &[u8; 16]) -> Option<u32> {
 /// the one just below it, else the one just above it.
 pub fn select_after_close(order: &[usize], closing: usize) -> Option<usize> {
     let at = order.iter().position(|id| *id == closing)?;
-    order.get(at + 1).or_else(|| at.checked_sub(1).and_then(|above| order.get(above))).copied()
+    order
+        .get(at + 1)
+        .or_else(|| at.checked_sub(1).and_then(|above| order.get(above)))
+        .copied()
 }
 
 impl TabList {
     fn position_of(&self, id: usize) -> Option<usize> {
-        (id != 0).then(|| self.entries.iter().position(|entry| entry.id == id)).flatten()
+        (id != 0)
+            .then(|| self.entries.iter().position(|entry| entry.id == id))
+            .flatten()
     }
 
     fn folder_exists(&self, id: u32) -> bool {
@@ -190,10 +200,22 @@ impl TabList {
                 let entry = self.entries.remove(index);
                 if let Some(at) = self.archiving.iter().position(|id| *id == entry.id) {
                     self.archiving.remove(at);
-                    self.archived.insert(0, Archived { url: entry.url, title: entry.title, at: now });
+                    self.archived.insert(
+                        0,
+                        Archived {
+                            url: entry.url,
+                            title: entry.title,
+                            at: now,
+                        },
+                    );
                     self.archived.truncate(MAX_ARCHIVED);
                 } else {
-                    self.remember_closed(Closed { url: entry.url, title: entry.title, place: entry.place, position: index });
+                    self.remember_closed(Closed {
+                        url: entry.url,
+                        title: entry.title,
+                        place: entry.place,
+                        position: index,
+                    });
                 }
                 continue;
             }
@@ -211,7 +233,8 @@ impl TabList {
                 entry.seen = now;
             }
         }
-        self.archiving.retain(|id| live.iter().any(|tab| tab.id == *id));
+        self.archiving
+            .retain(|id| live.iter().any(|tab| tab.id == *id));
     }
 
     fn place_new(&mut self, tab: &LiveTab, now: u64) -> usize {
@@ -221,14 +244,33 @@ impl TabList {
                 place => place,
             };
             let at = closed.position.min(self.entries.len());
-            self.entries.insert(at, Entry { id: tab.id, url: tab.url.clone(), title: closed.title, place, seen: now });
+            self.entries.insert(
+                at,
+                Entry {
+                    id: tab.id,
+                    url: tab.url.clone(),
+                    title: closed.title,
+                    place,
+                    seen: now,
+                },
+            );
             return at;
         }
-        if let Some(at) = self.entries.iter().position(|entry| entry.id == 0 && !tab.url.is_empty() && entry.url == tab.url) {
+        if let Some(at) = self
+            .entries
+            .iter()
+            .position(|entry| entry.id == 0 && !tab.url.is_empty() && entry.url == tab.url)
+        {
             self.entries[at].id = tab.id;
             return at;
         }
-        self.entries.push(Entry { id: tab.id, url: tab.url.clone(), title: tab.title.clone(), place: Place::Today, seen: now });
+        self.entries.push(Entry {
+            id: tab.id,
+            url: tab.url.clone(),
+            title: tab.title.clone(),
+            place: Place::Today,
+            seen: now,
+        });
         self.entries.len() - 1
     }
 
@@ -260,7 +302,12 @@ impl TabList {
 
     /// The pages of today's tabs that were not looked at for the archive period, other than the
     /// active one. They are marked as being archived.
-    pub fn due_for_archive(&mut self, settings: &Settings, now: u64, active: Option<usize>) -> Vec<usize> {
+    pub fn due_for_archive(
+        &mut self,
+        settings: &Settings,
+        now: u64,
+        active: Option<usize>,
+    ) -> Vec<usize> {
         let Some(period) = settings.archive_after else {
             return Vec::new();
         };
@@ -281,7 +328,9 @@ impl TabList {
     }
 
     pub fn set_pinned(&mut self, id: usize, pinned: bool) -> bool {
-        let Some(at) = self.position_of(id) else { return false };
+        let Some(at) = self.position_of(id) else {
+            return false;
+        };
         self.entries[at].place = if pinned { Place::Pinned } else { Place::Today };
         true
     }
@@ -289,9 +338,22 @@ impl TabList {
     /// Makes a folder that holds the tab `id`, and returns the folder's identity.
     pub fn new_folder(&mut self, id: usize, name: &str) -> Option<u32> {
         let at = self.position_of(id)?;
-        let folder = self.folders.iter().map(|folder| folder.id).max().map_or(1, |last| last + 1);
+        let folder = self
+            .folders
+            .iter()
+            .map(|folder| folder.id)
+            .max()
+            .map_or(1, |last| last + 1);
         let name: String = name.trim().chars().take(200).collect();
-        self.folders.push(Folder { id: folder, name: if name.is_empty() { "New folder".into() } else { name }, collapsed: false });
+        self.folders.push(Folder {
+            id: folder,
+            name: if name.is_empty() {
+                "New folder".into()
+            } else {
+                name
+            },
+            collapsed: false,
+        });
         self.entries[at].place = Place::Folder(folder);
         Some(folder)
     }
@@ -320,23 +382,39 @@ impl TabList {
 
     /// Moves the tab `id` to `target`. A folder left empty stays, as a named place to drop into.
     pub fn move_tab(&mut self, id: usize, target: Target) -> bool {
-        let Some(from) = self.position_of(id) else { return false };
+        let Some(from) = self.position_of(id) else {
+            return false;
+        };
         let (place, at) = match target {
             Target::Folder(folder) if self.folder_exists(folder) => {
-                let last = self.entries.iter().rposition(|entry| entry.place == Place::Folder(folder) && entry.id != id);
-                (Place::Folder(folder), last.map_or(self.entries.len(), |last| last + 1))
+                let last = self
+                    .entries
+                    .iter()
+                    .rposition(|entry| entry.place == Place::Folder(folder) && entry.id != id);
+                (
+                    Place::Folder(folder),
+                    last.map_or(self.entries.len(), |last| last + 1),
+                )
             }
             Target::Folder(_) => return false,
             Target::Before(other) | Target::After(other) => {
                 if other == id {
                     return true;
                 }
-                let Some(near) = self.position_of(other) else { return false };
+                let Some(near) = self.position_of(other) else {
+                    return false;
+                };
                 let after = matches!(target, Target::After(_));
-                (self.entries[near].place, if after { near + 1 } else { near })
+                (
+                    self.entries[near].place,
+                    if after { near + 1 } else { near },
+                )
             }
             Target::TodayStart => {
-                let first = self.entries.iter().position(|entry| entry.place == Place::Today && entry.id != id);
+                let first = self
+                    .entries
+                    .iter()
+                    .position(|entry| entry.place == Place::Today && entry.id != id);
                 (Place::Today, first.unwrap_or(self.entries.len()))
             }
         };
@@ -353,13 +431,29 @@ impl TabList {
     pub fn order(&self, live: &[LiveTab]) -> Vec<usize> {
         let mut order = Vec::new();
         let listed = |entry: &&Entry| entry.id != 0 && live.iter().any(|tab| tab.id == entry.id);
-        order.extend(self.entries.iter().filter(listed).filter(|entry| entry.place == Place::Pinned).map(|entry| entry.id));
+        order.extend(
+            self.entries
+                .iter()
+                .filter(listed)
+                .filter(|entry| entry.place == Place::Pinned)
+                .map(|entry| entry.id),
+        );
         for folder in &self.folders {
             order.extend(
-                self.entries.iter().filter(listed).filter(|entry| entry.place == Place::Folder(folder.id)).map(|entry| entry.id),
+                self.entries
+                    .iter()
+                    .filter(listed)
+                    .filter(|entry| entry.place == Place::Folder(folder.id))
+                    .map(|entry| entry.id),
             );
         }
-        order.extend(self.entries.iter().filter(listed).filter(|entry| entry.place == Place::Today).map(|entry| entry.id));
+        order.extend(
+            self.entries
+                .iter()
+                .filter(listed)
+                .filter(|entry| entry.place == Place::Today)
+                .map(|entry| entry.id),
+        );
         for tab in live {
             if !order.contains(&tab.id) {
                 order.push(tab.id);
@@ -382,12 +476,20 @@ impl TabList {
         let in_place = |place: Place| -> Vec<usize> {
             self.entries
                 .iter()
-                .filter(|entry| entry.place == place && entry.id != 0 && live.iter().any(|tab| tab.id == entry.id))
+                .filter(|entry| {
+                    entry.place == place
+                        && entry.id != 0
+                        && live.iter().any(|tab| tab.id == entry.id)
+                })
                 .map(|entry| entry.id)
                 .collect()
         };
         let mut rows = Vec::new();
-        rows.extend(in_place(Place::Pinned).into_iter().filter_map(|id| tab_row(id, false)));
+        rows.extend(
+            in_place(Place::Pinned)
+                .into_iter()
+                .filter_map(|id| tab_row(id, false)),
+        );
         for folder in &self.folders {
             let tabs = in_place(Place::Folder(folder.id));
             rows.push(Row::Group(Group {
@@ -402,11 +504,20 @@ impl TabList {
             }
         }
         rows.push(Row::NewTab);
-        rows.extend(in_place(Place::Today).into_iter().filter_map(|id| tab_row(id, false)));
+        rows.extend(
+            in_place(Place::Today)
+                .into_iter()
+                .filter_map(|id| tab_row(id, false)),
+        );
         // Pages the list has not taken in yet still show, last.
         for tab in live {
             if !self.entries.iter().any(|entry| entry.id == tab.id) {
-                rows.push(Row::Tab { index: tab.index, title: tab.title.clone(), active: tab.active, child: false });
+                rows.push(Row::Tab {
+                    index: tab.index,
+                    title: tab.title.clone(),
+                    active: tab.active,
+                    child: false,
+                });
             }
         }
         rows
@@ -416,6 +527,8 @@ impl TabList {
 /// Where the tab list's rows start in the appbar, how tall a row is and the extra gap before the
 /// new tab row when rows come before it. The appbar's drawing and hit test use the same numbers.
 pub const ROWS_TOP: f32 = 138.0;
+/// A tab row's height, as `tab_rows::height` gives it.
+#[cfg(test)]
 pub const ROW_HEIGHT: f32 = 34.0;
 pub const DIVIDER: f32 = 17.0;
 
@@ -436,7 +549,12 @@ pub fn row_at(rows: &[Row], y: f32) -> Option<(usize, bool)> {
 }
 
 /// Where a tab dropped on `row` goes, given the page each tab row stands for.
-pub fn drop_target(rows: &[Row], row: usize, lower: bool, page_of: impl Fn(usize) -> Option<usize>) -> Option<Target> {
+pub fn drop_target(
+    rows: &[Row],
+    row: usize,
+    lower: bool,
+    page_of: impl Fn(usize) -> Option<usize>,
+) -> Option<Target> {
     match rows.get(row)? {
         Row::Group(group) => folder_of_key(&group.id).map(Target::Folder),
         Row::NewTab => Some(Target::TodayStart),
@@ -444,7 +562,11 @@ pub fn drop_target(rows: &[Row], row: usize, lower: bool, page_of: impl Fn(usize
         Row::SplitTitle { .. } => None,
         Row::Tab { index, .. } => {
             let page = page_of(*index)?;
-            Some(if lower { Target::After(page) } else { Target::Before(page) })
+            Some(if lower {
+                Target::After(page)
+            } else {
+                Target::Before(page)
+            })
         }
     }
 }
@@ -520,7 +642,9 @@ impl Store {
             match value {
                 Value::String(word) if word == "pinned" => Some(Place::Pinned),
                 Value::String(word) if word == "today" => Some(Place::Today),
-                Value::Object(_) => Some(Place::Folder(u32::try_from(value.get("folder")?.as_u64()?).ok()?)),
+                Value::Object(_) => Some(Place::Folder(
+                    u32::try_from(value.get("folder")?.as_u64()?).ok()?,
+                )),
                 _ => None,
             }
         };
@@ -534,7 +658,12 @@ impl Store {
             value => settings.set_archive_after(Some(value.as_u64()?)),
         }
         let mut spaces = Vec::new();
-        for space in root.get("spaces")?.as_array()?.iter().take(crate::spaces::MAX_SPACES * 4) {
+        for space in root
+            .get("spaces")?
+            .as_array()?
+            .iter()
+            .take(crate::spaces::MAX_SPACES * 4)
+        {
             let name = text_of(space, "name")?;
             let mut list = TabList::default();
             for folder in space.get("folders")?.as_array()? {
@@ -566,7 +695,11 @@ impl Store {
                 });
             }
             for item in space.get("archived")?.as_array()?.iter().take(MAX_ARCHIVED) {
-                list.archived.push(Archived { url: text_of(item, "url")?, title: text_of(item, "title")?, at: item.get("at")?.as_u64()? });
+                list.archived.push(Archived {
+                    url: text_of(item, "url")?,
+                    title: text_of(item, "title")?,
+                    at: item.get("at")?.as_u64()?,
+                });
             }
             spaces.push((name, list));
         }
@@ -584,7 +717,13 @@ mod tests {
     use super::*;
 
     fn live(id: usize, url: &str, active: bool) -> LiveTab {
-        LiveTab { id, index: id - 1, url: url.into(), title: url.into(), active }
+        LiveTab {
+            id,
+            index: id - 1,
+            url: url.into(),
+            title: url.into(),
+            active,
+        }
     }
 
     fn three() -> (TabList, Vec<LiveTab>) {
@@ -600,7 +739,17 @@ mod tests {
         assert!(list.set_pinned(3, true));
         let folder = list.new_folder(2, "Launch Atlas").unwrap();
         let rows = list.rows(&tabs);
-        assert!(matches!(&rows[0], Row::Tab { index: 2, child: false, .. }), "pinned first: {rows:?}");
+        assert!(
+            matches!(
+                &rows[0],
+                Row::Tab {
+                    index: 2,
+                    child: false,
+                    ..
+                }
+            ),
+            "pinned first: {rows:?}"
+        );
         match &rows[1] {
             Row::Group(group) => {
                 assert_eq!(group.title, "Launch Atlas");
@@ -609,9 +758,26 @@ mod tests {
             }
             other => panic!("folder second, got {other:?}"),
         }
-        assert!(matches!(&rows[2], Row::Tab { index: 1, child: true, .. }));
+        assert!(matches!(
+            &rows[2],
+            Row::Tab {
+                index: 1,
+                child: true,
+                ..
+            }
+        ));
         assert_eq!(rows[3], Row::NewTab);
-        assert!(matches!(&rows[4], Row::Tab { index: 0, child: false, .. }), "today last");
+        assert!(
+            matches!(
+                &rows[4],
+                Row::Tab {
+                    index: 0,
+                    child: false,
+                    ..
+                }
+            ),
+            "today last"
+        );
     }
 
     #[test]
@@ -640,11 +806,25 @@ mod tests {
         assert_eq!(list.order(&tabs), vec![1, 3, 2]);
         assert!(list.move_tab(3, Target::TodayStart));
         assert_eq!(list.order(&tabs), vec![1, 3, 2]);
-        assert_eq!(list.entries.iter().find(|entry| entry.id == 3).unwrap().place, Place::Today);
+        assert_eq!(
+            list.entries
+                .iter()
+                .find(|entry| entry.id == 3)
+                .unwrap()
+                .place,
+            Place::Today
+        );
         assert_eq!(list.order(&tabs).len(), 3);
         // A drop on a tab of another section takes that tab's section.
         assert!(list.move_tab(2, Target::After(1)));
-        assert_eq!(list.entries.iter().find(|entry| entry.id == 2).unwrap().place, Place::Folder(folder));
+        assert_eq!(
+            list.entries
+                .iter()
+                .find(|entry| entry.id == 2)
+                .unwrap()
+                .place,
+            Place::Folder(folder)
+        );
     }
 
     #[test]
@@ -655,13 +835,19 @@ mod tests {
         let page = |index: usize| tabs.iter().find(|tab| tab.index == index).map(|tab| tab.id);
         let (row, lower) = row_at(&rows, ROWS_TOP + 5.0).unwrap();
         assert_eq!((row, lower), (0, false));
-        assert_eq!(drop_target(&rows, row, lower, page), Some(Target::Folder(folder)));
+        assert_eq!(
+            drop_target(&rows, row, lower, page),
+            Some(Target::Folder(folder))
+        );
         let (row, lower) = row_at(&rows, ROWS_TOP + ROW_HEIGHT + 30.0).unwrap();
         assert_eq!(drop_target(&rows, row, lower, page), Some(Target::After(1)));
         // The new tab row sits one divider lower.
         let (row, _) = row_at(&rows, ROWS_TOP + 2.0 * ROW_HEIGHT + DIVIDER + 2.0).unwrap();
         assert_eq!(rows[row], Row::NewTab);
-        assert_eq!(drop_target(&rows, row, false, page), Some(Target::TodayStart));
+        assert_eq!(
+            drop_target(&rows, row, false, page),
+            Some(Target::TodayStart)
+        );
     }
 
     #[test]
@@ -675,15 +861,41 @@ mod tests {
         store.settings.ctrl_t = CtrlT::NewTabPage;
         store.spaces.push(("Work".into(), list));
         let text = store.to_json(r"C:\profile");
-        assert!(text.contains(r#""user_data_dir": "C:\\profile""#), "prune reads the profile: {text}");
+        assert!(
+            text.contains(r#""user_data_dir": "C:\\profile""#),
+            "prune reads the profile: {text}"
+        );
         let mut back = Store::from_json(&text).unwrap();
         assert_eq!(back.settings, store.settings);
         let list = back.list("Work");
-        assert_eq!(list.folders, vec![Folder { id: folder, name: "Launch Atlas".into(), collapsed: true }]);
-        assert!(list.entries.iter().all(|entry| entry.id == 0), "pages are matched again after a restart");
-        list.sync(&[live(7, "b", false), live(8, "a", true), live(9, "c", false)], 200);
-        assert_eq!(list.order(&[live(7, "b", false), live(8, "a", true), live(9, "c", false)]), vec![8, 7, 9]);
-        assert_eq!(list.entries.iter().find(|entry| entry.id == 7).unwrap().place, Place::Folder(folder));
+        assert_eq!(
+            list.folders,
+            vec![Folder {
+                id: folder,
+                name: "Launch Atlas".into(),
+                collapsed: true
+            }]
+        );
+        assert!(
+            list.entries.iter().all(|entry| entry.id == 0),
+            "pages are matched again after a restart"
+        );
+        list.sync(
+            &[live(7, "b", false), live(8, "a", true), live(9, "c", false)],
+            200,
+        );
+        assert_eq!(
+            list.order(&[live(7, "b", false), live(8, "a", true), live(9, "c", false)]),
+            vec![8, 7, 9]
+        );
+        assert_eq!(
+            list.entries
+                .iter()
+                .find(|entry| entry.id == 7)
+                .unwrap()
+                .place,
+            Place::Folder(folder)
+        );
         let _ = tabs;
     }
 
@@ -706,12 +918,22 @@ mod tests {
         list.set_pinned(2, true);
         let now = 100 + 12 * 3600;
         assert!(list.due_for_archive(&settings, now - 1, Some(1)).is_empty());
-        assert_eq!(list.due_for_archive(&settings, now, Some(1)), vec![3], "pinned and active tabs stay");
-        assert!(list.due_for_archive(&settings, now, Some(1)).is_empty(), "asked once");
+        assert_eq!(
+            list.due_for_archive(&settings, now, Some(1)),
+            vec![3],
+            "pinned and active tabs stay"
+        );
+        assert!(
+            list.due_for_archive(&settings, now, Some(1)).is_empty(),
+            "asked once"
+        );
         list.sync(&tabs[..2], now);
         assert_eq!(list.archived.len(), 1);
         assert_eq!(list.archived[0].url, "c");
-        assert!(list.closed.is_empty(), "an archived tab is not a closed tab");
+        assert!(
+            list.closed.is_empty(),
+            "an archived tab is not a closed tab"
+        );
     }
 
     #[test]
@@ -719,7 +941,10 @@ mod tests {
         let mut settings = Settings::default();
         settings.set_archive_after(Some(2 * 3600));
         let (mut list, _) = three();
-        assert_eq!(list.due_for_archive(&settings, 100 + 2 * 3600, Some(1)), vec![2, 3]);
+        assert_eq!(
+            list.due_for_archive(&settings, 100 + 2 * 3600, Some(1)),
+            vec![2, 3]
+        );
         settings.set_archive_after(None);
         let (mut list, _) = three();
         assert!(list.due_for_archive(&settings, u64::MAX, None).is_empty());
@@ -744,11 +969,25 @@ mod tests {
         let (mut list, tabs) = three();
         let folder = list.new_folder(2, "F").unwrap();
         list.sync(&[tabs[0].clone(), tabs[2].clone()], 150);
-        assert_eq!(list.closed[0], Closed { url: "b".into(), title: "b".into(), place: Place::Folder(folder), position: 1 });
+        assert_eq!(
+            list.closed[0],
+            Closed {
+                url: "b".into(),
+                title: "b".into(),
+                place: Place::Folder(folder),
+                position: 1
+            }
+        );
         let closed = list.take_closed().unwrap();
         assert_eq!(closed.url, "b");
         // The new page starts empty and loads the address afterwards.
-        let reopened = LiveTab { id: 11, index: 2, url: String::new(), title: String::new(), active: true };
+        let reopened = LiveTab {
+            id: 11,
+            index: 2,
+            url: String::new(),
+            title: String::new(),
+            active: true,
+        };
         list.sync(&[tabs[0].clone(), tabs[2].clone(), reopened.clone()], 160);
         assert_eq!(list.entries[1].id, 11);
         assert_eq!(list.entries[1].place, Place::Folder(folder));
@@ -781,7 +1020,12 @@ mod tests {
 
     #[test]
     fn fr3_the_tab_list_file_sits_beside_the_spaces_file_where_prune_reads_it() {
-        let path = store_path(std::path::Path::new(r"C:\Local\Rivet\state\spaces\abcd.json"));
-        assert_eq!(path, std::path::Path::new(r"C:\Local\Rivet\state\spaces\abcd.tabs.json"));
+        let path = store_path(std::path::Path::new(
+            r"C:\Local\Rivet\state\spaces\abcd.json",
+        ));
+        assert_eq!(
+            path,
+            std::path::Path::new(r"C:\Local\Rivet\state\spaces\abcd.tabs.json")
+        );
     }
 }

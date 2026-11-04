@@ -46,7 +46,10 @@ const DISMISS_WIDTH: f32 = 40.0;
 pub(crate) fn chips(width: f32) -> [(Chip, f32, f32); 2] {
     let dismiss = width - CHIP_GAP - DISMISS_WIDTH;
     let open = dismiss - CHIP_GAP - OPEN_WIDTH;
-    [(Chip::OpenAsTab, open, OPEN_WIDTH), (Chip::Dismiss, dismiss, DISMISS_WIDTH)]
+    [
+        (Chip::OpenAsTab, open, OPEN_WIDTH),
+        (Chip::Dismiss, dismiss, DISMISS_WIDTH),
+    ]
 }
 
 /// The chip under a point of the header, in DIPs from its top left corner.
@@ -55,7 +58,10 @@ pub(crate) fn chip_at(width: f32, x: f32, y: f32) -> Option<Chip> {
     if y < top || y >= top + CHIP_HEIGHT {
         return None;
     }
-    chips(width).into_iter().find(|(_, left, w)| x >= *left && x < left + w).map(|(chip, _, _)| chip)
+    chips(width)
+        .into_iter()
+        .find(|(_, left, w)| x >= *left && x < left + w)
+        .map(|(chip, _, _)| chip)
 }
 
 /// What the header says: the study's `Link Preview · ember.thisisthepy.org/brief`.
@@ -123,11 +129,26 @@ unsafe fn open_over_split(window: HWND, index: usize) -> bool {
     if page == 0 || crate::features::split::shown_tabs(window).contains(&index) {
         return false;
     }
-    let Some([left, top, right, bottom]) = crate::features::split::page_area(window) else { return false };
+    let Some([left, top, right, bottom]) = crate::features::split::page_area(window) else {
+        return false;
+    };
     let rect = second_view::floating([left, top, right - left, bottom - top]);
-    let Some((view, parent)) = bare::new_view(window, page) else { return false };
+    let Some((view, parent)) = bare::new_view(window, page) else {
+        return false;
+    };
     bare::place(view, parent, rect);
-    OVER_SPLIT.with(|all| all.borrow_mut().insert(window as isize, Floating { view, parent, page, tab: index, rect }));
+    OVER_SPLIT.with(|all| {
+        all.borrow_mut().insert(
+            window as isize,
+            Floating {
+                view,
+                parent,
+                page,
+                tab: index,
+                rect,
+            },
+        )
+    });
     true
 }
 
@@ -141,7 +162,9 @@ unsafe fn shown(window: HWND) -> Option<(usize, usize)> {
 
 /// The preview's page in client pixels, as left, top, right and bottom.
 unsafe fn page_rect(window: HWND) -> Option<[i32; 4]> {
-    let Some(floating) = over_split(window) else { return second_view::floating_client_rect(window) };
+    let Some(floating) = over_split(window) else {
+        return second_view::floating_client_rect(window);
+    };
     let f = scale(window);
     let [x, y, w, h] = floating.rect;
     let px = |value: i32| (value as f32 * f).round() as i32;
@@ -159,7 +182,10 @@ pub(crate) unsafe fn press(window: HWND, index: usize) {
 
 /// The press ended or became a drag before it was long.
 pub(crate) unsafe fn cancel_hold(window: HWND) {
-    if HOLDS.with(|holds| holds.borrow_mut().remove(&(window as isize))).is_some() {
+    if HOLDS
+        .with(|holds| holds.borrow_mut().remove(&(window as isize)))
+        .is_some()
+    {
         KillTimer(window, HOLD_TIMER);
     }
 }
@@ -203,7 +229,9 @@ pub(crate) unsafe fn dismiss(window: HWND) -> bool {
 
 /// The previewed page becomes the active tab of this space.
 pub(crate) unsafe fn open_as_tab(window: HWND) -> bool {
-    let Some((tab, _)) = shown(window) else { return dismiss(window) };
+    let Some((tab, _)) = shown(window) else {
+        return dismiss(window);
+    };
     dismiss(window);
     let activated = crate::features::tabs::activate_tab(window, tab);
     crate::trace::trace(&format!("link preview: open as tab {tab}: {activated}"));
@@ -218,7 +246,12 @@ fn scale(window: HWND) -> f32 {
 unsafe fn header_rect(window: HWND) -> Option<[f32; 4]> {
     let page = page_rect(window)?;
     let header = PREVIEW_HEADER as f32 * scale(window);
-    Some([page[0] as f32, page[1] as f32 - header, page[2] as f32, page[1] as f32])
+    Some([
+        page[0] as f32,
+        page[1] as f32 - header,
+        page[2] as f32,
+        page[1] as f32,
+    ])
 }
 
 pub(crate) unsafe fn view(window: HWND) -> Option<View> {
@@ -230,7 +263,11 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
     let url = shown(window)
         .map(|(_, contents)| crate::features::tabs::page_address(contents as *mut _))
         .unwrap_or_default();
-    let hover = PREVIEWS.with(|all| all.borrow().get(&(window as isize)).and_then(|preview| preview.hover));
+    let hover = PREVIEWS.with(|all| {
+        all.borrow()
+            .get(&(window as isize))
+            .and_then(|preview| preview.hover)
+    });
     Some(View {
         x: left,
         y: top,
@@ -244,17 +281,25 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
 
 /// The chip under a client point, and whether the point is on the header at all.
 unsafe fn hit(window: HWND, point: POINT) -> (bool, Option<Chip>) {
-    let Some([left, top, right, bottom]) = header_rect(window) else { return (false, None) };
+    let Some([left, top, right, bottom]) = header_rect(window) else {
+        return (false, None);
+    };
     let (x, y) = (point.x as f32, point.y as f32);
     if x < left || x >= right || y < top || y >= bottom {
         return (false, None);
     }
     let f = scale(window);
-    (true, chip_at((right - left) / f, (x - left) / f, (y - top) / f))
+    (
+        true,
+        chip_at((right - left) / f, (x - left) / f, (y - top) / f),
+    )
 }
 
 fn point_of(lparam: LPARAM) -> POINT {
-    POINT { x: (lparam & 0xffff) as i16 as i32, y: ((lparam >> 16) & 0xffff) as i16 as i32 }
+    POINT {
+        x: (lparam & 0xffff) as i16 as i32,
+        y: ((lparam >> 16) & 0xffff) as i16 as i32,
+    }
 }
 
 const WM_KEYDOWN: u32 = 0x0100;
@@ -264,7 +309,12 @@ const WM_LBUTTONDOWN: u32 = 0x0201;
 const WM_LBUTTONUP: u32 = 0x0202;
 
 /// Handles a message of the browser window for the preview. `Some` means the preview used it.
-pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+pub(crate) unsafe fn message(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> Option<LRESULT> {
     if message == WM_TIMER && wparam == HOLD_TIMER {
         KillTimer(window, HOLD_TIMER);
         if let Some(index) = HOLDS.with(|holds| holds.borrow_mut().remove(&(window as isize))) {
@@ -305,7 +355,11 @@ pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam:
             Some(0)
         }
         WM_LBUTTONUP => {
-            let pressed = PREVIEWS.with(|all| all.borrow_mut().get_mut(&(window as isize)).and_then(|preview| preview.press.take()));
+            let pressed = PREVIEWS.with(|all| {
+                all.borrow_mut()
+                    .get_mut(&(window as isize))
+                    .and_then(|preview| preview.press.take())
+            });
             let (on, chip) = hit(window, point_of(lparam));
             match pressed.filter(|pressed| Some(*pressed) == chip) {
                 Some(Chip::OpenAsTab) => {
@@ -364,12 +418,19 @@ mod tests {
         assert_eq!(chip_at(1000.0, dismiss.1 + 1.0, 20.0), Some(Chip::Dismiss));
         assert_eq!(chip_at(1000.0, open.1 + 1.0, 20.0), Some(Chip::OpenAsTab));
         assert_eq!(chip_at(1000.0, 10.0, 20.0), None, "the title is no button");
-        assert_eq!(chip_at(1000.0, dismiss.1 + 1.0, 2.0), None, "above the chips");
+        assert_eq!(
+            chip_at(1000.0, dismiss.1 + 1.0, 2.0),
+            None,
+            "above the chips"
+        );
     }
 
     #[test]
     fn fr3_link_preview_header_names_the_page_without_its_scheme() {
-        assert_eq!(heading("https://ember.thisisthepy.org/brief"), "Link Preview \u{b7} ember.thisisthepy.org/brief");
+        assert_eq!(
+            heading("https://ember.thisisthepy.org/brief"),
+            "Link Preview \u{b7} ember.thisisthepy.org/brief"
+        );
         assert_eq!(heading(""), "Link Preview");
     }
 

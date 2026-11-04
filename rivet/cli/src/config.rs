@@ -42,10 +42,19 @@ pub fn to_json(saved: &Saved) -> String {
 
 pub fn from_json(text: &str) -> Result<Saved, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
-    let browser = value["browser"].as_str().filter(|path| !path.is_empty()).ok_or("the browser is missing")?;
-    let profile = value["profile"].as_str().map_or_else(|| DEFAULT_PROFILE.to_owned(), clean_profile);
+    let browser = value["browser"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .ok_or("the browser is missing")?;
+    let profile = value["profile"]
+        .as_str()
+        .map_or_else(|| DEFAULT_PROFILE.to_owned(), clean_profile);
     let credentials = rivet_core::credentials::from_setup(&value);
-    Ok(Saved { browser: PathBuf::from(browser), profile, credentials })
+    Ok(Saved {
+        browser: PathBuf::from(browser),
+        profile,
+        credentials,
+    })
 }
 
 /// The saved setup, `None` when nothing was saved, and an error when the file cannot be read.
@@ -146,7 +155,11 @@ pub fn finish(browser: &Browser, profile: &str) -> Result<Saved, String> {
     if !browser.status.can_open() {
         return Err(browser.status.sentence(&browser.name));
     }
-    Ok(Saved { browser: browser.path.clone(), profile: clean_profile(profile), credentials: Default::default() })
+    Ok(Saved {
+        browser: browser.path.clone(),
+        profile: clean_profile(profile),
+        credentials: Default::default(),
+    })
 }
 
 /// What a run does: open the saved setup, or ask first and say why.
@@ -200,7 +213,8 @@ mod tests {
             credentials: rivet_core::CredentialProvider::System,
         };
         assert_eq!(from_json(&to_json(&saved)), Ok(saved));
-        let old = from_json(r#"{"version":1,"browser":"C:\\B\\chrome.exe","profile":"Work"}"#).unwrap();
+        let old =
+            from_json(r#"{"version":1,"browser":"C:\\B\\chrome.exe","profile":"Work"}"#).unwrap();
         assert_eq!(old.credentials, rivet_core::CredentialProvider::Browser);
     }
 
@@ -208,7 +222,11 @@ mod tests {
     fn fr1_a_saved_setup_comes_back_as_it_was_saved() {
         let root = scratch("roundtrip");
         assert_eq!(load(&root), Ok(None));
-        let saved = Saved { browser: PathBuf::from(r"C:\B\chrome.exe"), profile: "한국어 작업".into(), credentials: Default::default() };
+        let saved = Saved {
+            browser: PathBuf::from(r"C:\B\chrome.exe"),
+            profile: "한국어 작업".into(),
+            credentials: Default::default(),
+        };
         save(&root, &saved).unwrap();
         assert_eq!(load(&root), Ok(Some(saved)));
         assert!(!setup_file(&root).with_extension("json.tmp").exists());
@@ -299,7 +317,11 @@ mod tests {
         let mut files = Memory::default();
         files.data(r"C:\B\chrome.exe");
         assert_eq!(start(&root, &files), Start::Setup { reason: None });
-        let saved = Saved { browser: PathBuf::from(r"C:\B\chrome.exe"), profile: "Work".into(), credentials: Default::default() };
+        let saved = Saved {
+            browser: PathBuf::from(r"C:\B\chrome.exe"),
+            profile: "Work".into(),
+            credentials: Default::default(),
+        };
         save(&root, &saved).unwrap();
         assert_eq!(start(&root, &files), Start::Open(saved.clone()));
         let nothing = Memory::default();

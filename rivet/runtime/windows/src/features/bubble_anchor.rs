@@ -29,7 +29,8 @@ pub(crate) struct AnchorRow {
 
 /// `push r15; push r14; push r13; push r12; push rsi; push rdi; push rbx; sub rsp, 0xD0`.
 const PROLOGUE_D0: &[u8] = &[
-    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xD0, 0x00, 0x00, 0x00,
+    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xD0, 0x00,
+    0x00, 0x00,
 ];
 
 /// The builds whose `GetAnchorRect` was found, each from that build's public symbols and checked
@@ -54,7 +55,8 @@ pub(crate) const ROWS: &[AnchorRow] = &[
 
 /// The row of a build, by its browser name and version.
 pub(crate) fn row_for(browser: &str, version: [u16; 4]) -> Option<&'static AnchorRow> {
-    ROWS.iter().find(|row| row.browser == browser && row.version == version)
+    ROWS.iter()
+        .find(|row| row.browser == browser && row.version == version)
 }
 
 /// A `gfx::Rect`: x, y, width and height in screen DIPs.
@@ -72,7 +74,13 @@ fn contains(outer: Rect, inner: Rect) -> bool {
 /// Where a bubble anchors. `page` is the area below the top row. The browser's own answer stays
 /// when it lies in the page, as for a bubble anchored to page content. Anything else, the monitor
 /// edge or the window's corner, becomes the security chip for page info and the address otherwise.
-pub(crate) fn choose(original: Rect, page: Rect, address: Rect, chip: Rect, page_info: bool) -> Rect {
+pub(crate) fn choose(
+    original: Rect,
+    page: Rect,
+    address: Rect,
+    chip: Rect,
+    page_info: bool,
+) -> Rect {
     if !page_info && contains(page, original) {
         return original;
     }
@@ -103,7 +111,12 @@ unsafe fn to_screen(window: HWND, [x, y, w, h]: [f32; 4]) -> Rect {
     let mut origin = POINT { x: 0, y: 0 };
     ClientToScreen(window, &mut origin);
     let (ox, oy) = (origin.x as f32 / factor, origin.y as f32 / factor);
-    [(ox + x).round() as i32, (oy + y).round() as i32, w.round() as i32, h.round() as i32]
+    [
+        (ox + x).round() as i32,
+        (oy + y).round() as i32,
+        w.round() as i32,
+        h.round() as i32,
+    ]
 }
 
 /// The page area, the address and the chip of a Rivet window, in screen DIPs.
@@ -113,11 +126,23 @@ unsafe fn targets(window: HWND) -> Option<(Rect, Rect, Rect)> {
     GetClientRect(window, &mut client);
     let factor = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
     let below = address[1] + address[3];
-    let page = [0.0, below, client.right as f32 / factor, client.bottom as f32 / factor - below];
-    Some((to_screen(window, page), to_screen(window, address), to_screen(window, chip)))
+    let page = [
+        0.0,
+        below,
+        client.right as f32 / factor,
+        client.bottom as f32 / factor - below,
+    ];
+    Some((
+        to_screen(window, page),
+        to_screen(window, address),
+        to_screen(window, chip),
+    ))
 }
 
-unsafe extern "system" fn get_anchor_rect(delegate: *const core::ffi::c_void, out: *mut Rect) -> *mut Rect {
+unsafe extern "system" fn get_anchor_rect(
+    delegate: *const core::ffi::c_void,
+    out: *mut Rect,
+) -> *mut Rect {
     let original: GetAnchorRect = std::mem::transmute(ORIGINAL.load(Ordering::Acquire));
     let result = original(delegate, out);
     // Bubbles are made on the browser's UI thread, where the window they belong to is active.
@@ -126,16 +151,28 @@ unsafe extern "system" fn get_anchor_rect(delegate: *const core::ffi::c_void, ou
         return result;
     }
     if let Some((page, address, chip)) = targets(window) {
-        *result = choose(*result, page, address, chip, PAGE_INFO.load(Ordering::Acquire));
+        *result = choose(
+            *result,
+            page,
+            address,
+            chip,
+            PAGE_INFO.load(Ordering::Acquire),
+        );
     }
     result
 }
 
 /// Wraps the build's `GetAnchorRect`. A build without a row, or whose bytes differ, is left alone.
 pub(crate) fn install() {
-    let Some(build) = crate::builds::current() else { return };
-    let Some(row) = row_for(build.browser, build.version) else { return };
-    let Some(image) = crate::chromium::image::recorded() else { return };
+    let Some(build) = crate::builds::current() else {
+        return;
+    };
+    let Some(row) = row_for(build.browser, build.version) else {
+        return;
+    };
+    let Some(image) = crate::chromium::image::recorded() else {
+        return;
+    };
     if unsafe { image.bytes(row.get_anchor_rect, row.prologue.len()) } != Some(row.prologue) {
         crate::trace::trace("bubble anchor: GetAnchorRect is not the recorded one");
         return;
@@ -145,7 +182,13 @@ pub(crate) fn install() {
     }
     let result = unsafe {
         crate::targets::transaction(|| {
-            crate::targets::detour(image.base, row.get_anchor_rect, row.prologue, get_anchor_rect as usize, &ORIGINAL)
+            crate::targets::detour(
+                image.base,
+                row.get_anchor_rect,
+                row.prologue,
+                get_anchor_rect as *const () as usize,
+                &ORIGINAL,
+            )
         })
     };
     crate::trace::trace(&format!("bubble anchor: hook {result:?}"));
@@ -168,7 +211,10 @@ mod tests {
 
     #[test]
     fn fr12_bubble_in_the_window_corner_moves_to_the_address_bar() {
-        assert_eq!(choose([100, 100, 20, 20], PAGE, ADDRESS, CHIP, false), ADDRESS);
+        assert_eq!(
+            choose([100, 100, 20, 20], PAGE, ADDRESS, CHIP, false),
+            ADDRESS
+        );
     }
 
     #[test]
@@ -191,11 +237,20 @@ mod tests {
         assert_eq!(chrome.get_anchor_rect, 0x0AA7_D550);
         let brave = row_for("Brave", [156, 1, 98, 63]).expect("Brave .63 has a row");
         assert_eq!(brave.get_anchor_rect, 0x0BED_C9D0);
-        assert!(ROWS.iter().all(|row| !row.verified && row.prologue.len() >= 14));
+        assert!(ROWS
+            .iter()
+            .all(|row| !row.verified && row.prologue.len() >= 14));
         assert!(row_for("Google Chrome", [156, 0, 8078, 80]).is_none());
         for row in ROWS {
-            let build = crate::builds::all().iter().find(|build| build.browser == row.browser && build.version == row.version);
-            assert!(build.is_some(), "{} {:?} is in the build table", row.browser, row.version);
+            let build = crate::builds::all()
+                .iter()
+                .find(|build| build.browser == row.browser && build.version == row.version);
+            assert!(
+                build.is_some(),
+                "{} {:?} is in the build table",
+                row.browser,
+                row.version
+            );
         }
     }
 }

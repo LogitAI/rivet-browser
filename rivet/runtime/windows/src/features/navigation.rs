@@ -146,7 +146,9 @@ unsafe fn open_in(base: usize, contents: *mut c_void, url: &str) -> bool {
 /// browser's own `OpenURL`, and returns the new tab's page or null. The tab's first page is `url`,
 /// so the browser's new tab page never loads in it.
 pub(crate) unsafe fn open_in_new_tab(contents: *mut c_void, url: &str) -> *mut c_void {
-    let Some(base) = base() else { return std::ptr::null_mut() };
+    let Some(base) = base() else {
+        return std::ptr::null_mut();
+    };
     open_as(base, contents, url, NEW_FOREGROUND_TAB)
 }
 

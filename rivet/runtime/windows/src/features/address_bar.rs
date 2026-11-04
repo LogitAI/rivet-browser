@@ -358,7 +358,10 @@ pub(crate) fn parts_of(width: f32, pane: bool) -> Vec<(Part, f32, f32)> {
 /// developer buttons of a page in developer mode sit.
 pub(crate) fn parts_reserving(width: f32, pane: bool, reserve: f32) -> Vec<(Part, f32, f32)> {
     let mut out = if pane {
-        vec![(Part::Chip, ADDRESS_PAD - 4.0, CHIP), (Part::Address, 0.0, width)]
+        vec![
+            (Part::Chip, ADDRESS_PAD - 4.0, CHIP),
+            (Part::Address, 0.0, width),
+        ]
     } else {
         parts(width, TOGGLE_OVER_BAR)
     };
@@ -604,14 +607,21 @@ pub(crate) unsafe fn anchors(window: HWND) -> Option<([f32; 4], [f32; 4])> {
     let [x, y, width] = place(window)?;
     let parts = parts_reserving(width, in_pane(window), dev_reserve(window));
     let top = y + (ROW_HEIGHT as f32 - ADDRESS_HEIGHT) / 2.0;
-    let find = |part: Part| parts.iter().find(|p| p.0 == part).map(|(_, left, w)| [x + left, top, *w, ADDRESS_HEIGHT]);
+    let find = |part: Part| {
+        parts
+            .iter()
+            .find(|p| p.0 == part)
+            .map(|(_, left, w)| [x + left, top, *w, ADDRESS_HEIGHT])
+    };
     let address = find(Part::Address)?;
     Some((address, find(Part::Chip).unwrap_or(address)))
 }
 
 unsafe fn field_rect(window: HWND) -> Option<RECT> {
     let [x, y, width] = place(window)?;
-    let (_, left, w) = parts_reserving(width, in_pane(window), dev_reserve(window)).into_iter().find(|p| p.0 == Part::Address)?;
+    let (_, left, w) = parts_reserving(width, in_pane(window), dev_reserve(window))
+        .into_iter()
+        .find(|p| p.0 == Part::Address)?;
     let f = factor(window);
     let top = y + (ROW_HEIGHT as f32 - ADDRESS_HEIGHT) / 2.0;
     let text_left = x + left + ADDRESS_PAD + CHIP + 4.0;
@@ -1302,13 +1312,23 @@ mod tests {
     fn fr11_developer_buttons_sit_between_the_address_and_the_caption_buttons() {
         let plain = super::parts_of(1000.0, false);
         let dev = super::parts_reserving(1000.0, false, 216.0);
-        let address = |parts: &[(Part, f32, f32)]| parts.iter().find(|p| p.0 == Part::Address).map(|p| p.1 + p.2);
+        let address = |parts: &[(Part, f32, f32)]| {
+            parts
+                .iter()
+                .find(|p| p.0 == Part::Address)
+                .map(|p| p.1 + p.2)
+        };
         assert_eq!(address(&dev).unwrap() + 216.0, address(&plain).unwrap());
         // Too narrow for both: the buttons keep their room and the address goes.
         let narrow = super::parts_reserving(330.0, false, 216.0);
-        assert!(narrow.iter().all(|p| p.0 != Part::Address && p.0 != Part::Chip));
+        assert!(narrow
+            .iter()
+            .all(|p| p.0 != Part::Address && p.0 != Part::Chip));
         // A split pane's address carries no developer buttons.
-        assert_eq!(super::parts_reserving(300.0, true, 216.0), super::parts_of(300.0, true));
+        assert_eq!(
+            super::parts_reserving(300.0, true, 216.0),
+            super::parts_of(300.0, true)
+        );
     }
 
     #[test]

@@ -137,7 +137,11 @@ pub(crate) fn results(text: &str, found: &[Found], tabs: &[Open]) -> Vec<Item> {
             let address = crate::features::address_bar::looks_like_address(text);
             out.push(Item {
                 glyph: if address { '\u{E774}' } else { '\u{E721}' },
-                title: if address { format!("Open {text}") } else { format!("Search the web for \"{text}\"") },
+                title: if address {
+                    format!("Open {text}")
+                } else {
+                    format!("Search the web for \"{text}\"")
+                },
                 key: "",
                 action: Action::Typed(text.to_owned()),
             });
@@ -160,20 +164,35 @@ pub(crate) fn results(text: &str, found: &[Found], tabs: &[Open]) -> Vec<Item> {
     let mut first_tab = true;
     for tab in tabs
         .iter()
-        .filter(|tab| !tab.active && (text.is_empty() || matches(text, tab.title) || matches(text, tab.url)))
+        .filter(|tab| {
+            !tab.active && (text.is_empty() || matches(text, tab.title) || matches(text, tab.url))
+        })
         .take(TABS_SHOWN)
     {
-        let title = if tab.title.trim().is_empty() { tab.url } else { tab.title };
+        let title = if tab.title.trim().is_empty() {
+            tab.url
+        } else {
+            tab.title
+        };
         out.push(Item {
             glyph: '\u{E737}',
             title: format!("Switch to tab: {title}"),
-            key: if std::mem::take(&mut first_tab) { "Tab" } else { "" },
+            key: if std::mem::take(&mut first_tab) {
+                "Tab"
+            } else {
+                ""
+            },
             action: Action::SwitchTab(tab.index),
         });
     }
     for command in Command::ALL {
         if text.is_empty() || matches(text, command.label()) {
-            out.push(Item { glyph: command.glyph(), title: command.label().to_owned(), key: "", action: Action::Run(command) });
+            out.push(Item {
+                glyph: command.glyph(),
+                title: command.label().to_owned(),
+                key: "",
+                action: Action::Run(command),
+            });
         }
     }
     out.truncate(ROWS_SHOWN);
@@ -200,7 +219,11 @@ const MAX_TEXT: u32 = 8192;
 /// The card of the bar in DIPs from the scrim's top left corner: left, top, width and height.
 pub(crate) fn card(width: f32, height: f32, rows: usize) -> [f32; 4] {
     let w = CARD_WIDTH.min(width * 0.9);
-    let list = if rows == 0 { 0.0 } else { LIST_PAD * 2.0 + ROW_HEIGHT * rows as f32 };
+    let list = if rows == 0 {
+        0.0
+    } else {
+        LIST_PAD * 2.0 + ROW_HEIGHT * rows as f32
+    };
     let h = FIELD_HEIGHT + list + FOOTER_HEIGHT;
     let top = CARD_TOP.min((height - h).max(0.0) / 2.0);
     [((width - w) / 2.0).max(0.0), top, w, h]
@@ -210,14 +233,22 @@ pub(crate) fn card(width: f32, height: f32, rows: usize) -> [f32; 4] {
 pub(crate) fn field_box(card: [f32; 4]) -> [f32; 4] {
     let [x, y, w, _] = card;
     let left = x + 18.0 + 16.0 + 10.0;
-    [left, y + 16.0, (x + w - 18.0 - left).max(0.0), FIELD_HEIGHT - 32.0]
+    [
+        left,
+        y + 16.0,
+        (x + w - 18.0 - left).max(0.0),
+        FIELD_HEIGHT - 32.0,
+    ]
 }
 
 /// The two choices of the footer as (choice, x, width) from the card's left edge.
 pub(crate) fn mode_buttons() -> [(CtrlT, f32, f32); 2] {
     // "Ctrl T opens" at 16 DIPs in, then the two buttons 6 apart.
     let first = 16.0 + 66.0 + 6.0;
-    [(CtrlT::CommandBar, first, 82.0), (CtrlT::NewTabPage, first + 82.0 + 6.0, 84.0)]
+    [
+        (CtrlT::CommandBar, first, 82.0),
+        (CtrlT::NewTabPage, first + 82.0 + 6.0, 84.0),
+    ]
 }
 
 /// What a point of the scrim is over.
@@ -240,7 +271,11 @@ pub(crate) fn hit(card: [f32; 4], rows: usize, x: f32, y: f32) -> Hit {
     if py < FIELD_HEIGHT {
         return Hit::Field;
     }
-    let list = if rows == 0 { 0.0 } else { LIST_PAD * 2.0 + ROW_HEIGHT * rows as f32 };
+    let list = if rows == 0 {
+        0.0
+    } else {
+        LIST_PAD * 2.0 + ROW_HEIGHT * rows as f32
+    };
     if py < FIELD_HEIGHT + list {
         let at = py - FIELD_HEIGHT - LIST_PAD;
         if at >= 0.0 && ((at / ROW_HEIGHT) as usize) < rows {
@@ -251,7 +286,10 @@ pub(crate) fn hit(card: [f32; 4], rows: usize, x: f32, y: f32) -> Hit {
     let top = (FOOTER_HEIGHT - 22.0) / 2.0;
     let fy = py - FIELD_HEIGHT - list;
     if fy >= top && fy < top + 22.0 {
-        if let Some((choice, _, _)) = mode_buttons().into_iter().find(|(_, left, bw)| px >= *left && px < left + bw) {
+        if let Some((choice, _, _)) = mode_buttons()
+            .into_iter()
+            .find(|(_, left, bw)| px >= *left && px < left + bw)
+        {
             return Hit::Mode(choice);
         }
     }
@@ -262,7 +300,8 @@ pub(crate) fn hit(card: [f32; 4], rows: usize, x: f32, y: f32) -> Hit {
 /// new fragment, so the same address is not taken as a second ask.
 pub(crate) fn asks_for_bar(url: &str) -> Option<&str> {
     let (_, fragment) = url.split_once('#')?;
-    (crate::features::address_bar::is_start_page(url) && fragment.starts_with("rivet-command")).then_some(fragment)
+    (crate::features::address_bar::is_start_page(url) && fragment.starts_with("rivet-command"))
+        .then_some(fragment)
 }
 
 /// What the appbar draws of the bar. Positions are client pixels.
@@ -324,7 +363,11 @@ fn with_bar<R>(window: HWND, work: impl FnOnce(&mut Bar) -> R) -> R {
 }
 
 pub(crate) fn is_open(window: HWND) -> bool {
-    BARS.with(|bars| bars.try_borrow().map(|bars| bars.get(&(window as isize)).is_some_and(|bar| bar.open)).unwrap_or(false))
+    BARS.with(|bars| {
+        bars.try_borrow()
+            .map(|bars| bars.get(&(window as isize)).is_some_and(|bar| bar.open))
+            .unwrap_or(false)
+    })
 }
 
 fn factor(window: HWND) -> f32 {
@@ -334,7 +377,12 @@ fn factor(window: HWND) -> f32 {
 /// The scrim in DIPs: the window's page panel.
 fn scrim(window: HWND) -> Option<[f32; 4]> {
     let panel = crate::features::frame_layout::panel_bounds(window)?;
-    Some([panel.x as f32, panel.y as f32, panel.width as f32, panel.height as f32])
+    Some([
+        panel.x as f32,
+        panel.y as f32,
+        panel.width as f32,
+        panel.height as f32,
+    ])
 }
 
 fn card_of(window: HWND, rows: usize) -> Option<[f32; 4]> {
@@ -355,7 +403,10 @@ unsafe fn field_rect(window: HWND, rows: usize) -> Option<RECT> {
 }
 
 /// Lets the appbar draw the field's pixels at their place, in client pixels.
-pub(crate) unsafe fn with_field_pixels<R>(window: HWND, work: impl FnOnce(RECT, &[u8], i32, i32, Option<RECT>) -> R) -> Option<R> {
+pub(crate) unsafe fn with_field_pixels<R>(
+    window: HWND,
+    work: impl FnOnce(RECT, &[u8], i32, i32, Option<RECT>) -> R,
+) -> Option<R> {
     with_bar(window, |bar| {
         if !bar.open {
             return None;
@@ -380,11 +431,18 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
             y: y * f,
             width: width * f,
             height: height * f,
-            rows: bar.items.iter().map(|item| (item.glyph, item.title.clone(), item.key)).collect(),
+            rows: bar
+                .items
+                .iter()
+                .map(|item| (item.glyph, item.title.clone(), item.key))
+                .collect(),
             selected: bar.selected,
             hover: bar.hover,
             ctrl_t: ctrl_t_opens(),
-            empty: bar.field.as_ref().map_or(true, |field| field.text().is_empty()),
+            empty: bar
+                .field
+                .as_ref()
+                .is_none_or(|field| field.text().is_empty()),
             generation: bar.generation,
         })
     })
@@ -453,7 +511,11 @@ pub(crate) unsafe fn close(window: HWND) {
 /// card grows with the rows.
 unsafe fn refresh(window: HWND) {
     let Some(text) = with_bar(window, |bar| {
-        let text = bar.field.as_ref().map(|field| field.text()).unwrap_or_default();
+        let text = bar
+            .field
+            .as_ref()
+            .map(|field| field.text())
+            .unwrap_or_default();
         (bar.open && bar.queried.as_deref() != Some(text.as_str())).then_some(text)
     }) else {
         return;
@@ -465,7 +527,11 @@ unsafe fn refresh(window: HWND) {
     };
     let found: Vec<Found> = suggestions
         .iter()
-        .map(|s| Found { contents: &s.contents, description: &s.description, destination: &s.destination })
+        .map(|s| Found {
+            contents: &s.contents,
+            description: &s.description,
+            destination: &s.destination,
+        })
         .collect();
     let rows = crate::features::tabs::tabs(window).unwrap_or_default();
     let saved = crate::features::tabs::open_tabs(window).unwrap_or_default();
@@ -474,7 +540,9 @@ unsafe fn refresh(window: HWND) {
         .map(|tab| Open {
             index: tab.index,
             title: &tab.title,
-            url: saved.get(tab.index).map_or("", |open| open.saved.url.as_str()),
+            url: saved
+                .get(tab.index)
+                .map_or("", |open| open.saved.url.as_str()),
             active: tab.active,
         })
         .collect();
@@ -493,18 +561,25 @@ unsafe fn refresh(window: HWND) {
 
 /// Runs a row: the bar closes first, then the row's action.
 unsafe fn run(window: HWND, index: usize) -> bool {
-    let Some(action) = with_bar(window, |bar| bar.items.get(index).map(|item| item.action.clone())) else {
+    let Some(action) = with_bar(window, |bar| {
+        bar.items.get(index).map(|item| item.action.clone())
+    }) else {
         return false;
     };
     close(window);
     let done = match &action {
-        Action::Open(url) => crate::features::tabs::new_tab(window) && crate::features::navigation::open(window, url),
+        Action::Open(url) => {
+            crate::features::tabs::new_tab(window) && crate::features::navigation::open(window, url)
+        }
         Action::Typed(text) => {
             crate::features::tabs::new_tab(window)
                 && match crate::features::omnibox::open_typed(window, text) {
                     Some(opened) => opened,
                     None if crate::features::address_bar::looks_like_address(text) => {
-                        crate::features::navigation::open(window, &crate::features::address_bar::address_for(text))
+                        crate::features::navigation::open(
+                            window,
+                            &crate::features::address_bar::address_for(text),
+                        )
                     }
                     // A build without the browser's classifier does not guess a search engine.
                     None => false,
@@ -524,9 +599,13 @@ unsafe fn run(window: HWND, index: usize) -> bool {
 /// Opens the bar when the active page is the start page asking for it. Called on the window's
 /// periodic tab check.
 pub(crate) unsafe fn tick(window: HWND) {
-    let Some(contents) = crate::features::navigation::active_contents(window) else { return };
+    let Some(contents) = crate::features::navigation::active_contents(window) else {
+        return;
+    };
     let url = crate::features::tabs::page_address(contents);
-    let Some(ask) = asks_for_bar(&url) else { return };
+    let Some(ask) = asks_for_bar(&url) else {
+        return;
+    };
     let new = with_bar(window, |bar| {
         let new = bar.asked != ask;
         bar.asked = ask.to_owned();
@@ -539,15 +618,22 @@ pub(crate) unsafe fn tick(window: HWND) {
 
 /// The hit under a client point, in the bar's own terms.
 unsafe fn hit_at(window: HWND, point: POINT) -> Hit {
-    let Some([sx, sy, _, _]) = scrim(window) else { return Hit::Outside };
+    let Some([sx, sy, _, _]) = scrim(window) else {
+        return Hit::Outside;
+    };
     let rows = with_bar(window, |bar| bar.items.len());
-    let Some(card) = card_of(window, rows) else { return Hit::Outside };
+    let Some(card) = card_of(window, rows) else {
+        return Hit::Outside;
+    };
     let f = factor(window);
     hit(card, rows, point.x as f32 / f - sx, point.y as f32 / f - sy)
 }
 
 fn point_of(lparam: LPARAM) -> POINT {
-    POINT { x: (lparam & 0xffff) as i16 as i32, y: ((lparam >> 16) & 0xffff) as i16 as i32 }
+    POINT {
+        x: (lparam & 0xffff) as i16 as i32,
+        y: ((lparam >> 16) & 0xffff) as i16 as i32,
+    }
 }
 
 const WM_SETFOCUS: u32 = 0x0007;
@@ -575,7 +661,12 @@ const WM_INPUTLANGCHANGE: u32 = 0x0051;
 /// Handles a message of the browser window for the bar. `Some` means the bar used it and the
 /// browser does not see it. While the bar is open it takes the keyboard and the pointer over the
 /// page, as the study's scrim does.
-pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+pub(crate) unsafe fn message(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> Option<LRESULT> {
     if busy() {
         return None;
     }
@@ -672,7 +763,11 @@ pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam:
             }
             // Tab switches to the first matching tab, as its row says.
             0x09 => {
-                let tab = with_bar(window, |bar| bar.items.iter().position(|item| matches!(item.action, Action::SwitchTab(_))));
+                let tab = with_bar(window, |bar| {
+                    bar.items
+                        .iter()
+                        .position(|item| matches!(item.action, Action::SwitchTab(_)))
+                });
                 if let Some(index) = tab {
                     run(window, index);
                 }
@@ -683,7 +778,11 @@ pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam:
                 with_bar(window, |bar| {
                     let count = bar.items.len();
                     if count > 0 {
-                        bar.selected = if down { (bar.selected + 1) % count } else { (bar.selected + count - 1) % count };
+                        bar.selected = if down {
+                            (bar.selected + 1) % count
+                        } else {
+                            (bar.selected + count - 1) % count
+                        };
                         bar.generation += 1;
                     }
                 });
@@ -706,8 +805,14 @@ pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam:
             crate::frame::update_appbar(window);
             used.or(Some(0))
         }
-        WM_KEYUP | WM_IME_STARTCOMPOSITION | WM_IME_COMPOSITION | WM_IME_ENDCOMPOSITION | WM_IME_NOTIFY
-        | WM_IME_CHAR | WM_IME_REQUEST | WM_INPUTLANGCHANGE => {
+        WM_KEYUP
+        | WM_IME_STARTCOMPOSITION
+        | WM_IME_COMPOSITION
+        | WM_IME_ENDCOMPOSITION
+        | WM_IME_NOTIFY
+        | WM_IME_CHAR
+        | WM_IME_REQUEST
+        | WM_INPUTLANGCHANGE => {
             let used = forward(window, message, wparam, lparam);
             if matches!(message, WM_IME_COMPOSITION | WM_IME_ENDCOMPOSITION) {
                 refresh(window);
@@ -752,7 +857,9 @@ unsafe fn forward(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) ->
         }
         Some((used, field.caret()))
     })?;
-    if let Some(caret) = caret.filter(|_| !matches!(message, WM_IME_NOTIFY | WM_IME_SETCONTEXT | WM_IME_REQUEST)) {
+    if let Some(caret) =
+        caret.filter(|_| !matches!(message, WM_IME_NOTIFY | WM_IME_SETCONTEXT | WM_IME_REQUEST))
+    {
         place_input_method(window, caret);
     }
     used
@@ -767,12 +874,18 @@ unsafe fn place_input_method(window: HWND, caret: RECT) {
     }
     let mut composition: COMPOSITIONFORM = std::mem::zeroed();
     composition.dwStyle = CFS_POINT;
-    composition.ptCurrentPos = POINT { x: caret.left, y: caret.top };
+    composition.ptCurrentPos = POINT {
+        x: caret.left,
+        y: caret.top,
+    };
     ImmSetCompositionWindow(context, &composition);
     let mut candidate: CANDIDATEFORM = std::mem::zeroed();
     candidate.dwIndex = 0;
     candidate.dwStyle = CFS_EXCLUDE;
-    candidate.ptCurrentPos = POINT { x: caret.left, y: caret.bottom };
+    candidate.ptCurrentPos = POINT {
+        x: caret.left,
+        y: caret.bottom,
+    };
     candidate.rcArea = caret;
     ImmSetCandidateWindow(context, &candidate);
     ImmReleaseContext(window, context);
@@ -784,9 +897,13 @@ pub(crate) unsafe fn type_for_test(window: HWND, text: &str) -> bool {
     if !is_open(window) {
         return false;
     }
-    with_bar(window, |bar| bar.field.as_ref().map(|field| field.set_text(text)));
+    with_bar(window, |bar| {
+        bar.field.as_ref().map(|field| field.set_text(text))
+    });
     refresh(window);
-    let rows: Vec<String> = with_bar(window, |bar| bar.items.iter().map(|item| item.title.clone()).collect());
+    let rows: Vec<String> = with_bar(window, |bar| {
+        bar.items.iter().map(|item| item.title.clone()).collect()
+    });
     crate::trace::trace(&format!("command bar rows {rows:?}"));
     crate::frame::update_appbar(window);
     true
@@ -807,13 +924,21 @@ mod tests {
     use super::*;
 
     fn tab<'a>(index: usize, title: &'a str, url: &'a str, active: bool) -> Open<'a> {
-        Open { index, title, url, active }
+        Open {
+            index,
+            title,
+            url,
+            active,
+        }
     }
 
     #[test]
     fn fr3_ctrl_t_is_ctrl_and_t_alone() {
         assert!(is_ctrl_t(0x54, true, false, false));
-        assert!(!is_ctrl_t(0x54, true, true, false), "Ctrl+Shift+T reopens a closed tab");
+        assert!(
+            !is_ctrl_t(0x54, true, true, false),
+            "Ctrl+Shift+T reopens a closed tab"
+        );
         assert!(!is_ctrl_t(0x54, false, false, false));
         assert!(!is_ctrl_t(0x54, true, false, true));
         assert!(!is_ctrl_t(0x4C, true, false, false));
@@ -821,7 +946,11 @@ mod tests {
 
     #[test]
     fn fr3_ctrl_t_setting_chooses_command_bar_or_new_tab_page() {
-        assert_eq!(ctrl_t_opens(), CtrlT::CommandBar, "the study starts on the command bar");
+        assert_eq!(
+            ctrl_t_opens(),
+            CtrlT::CommandBar,
+            "the study starts on the command bar"
+        );
         set_ctrl_t_opens(CtrlT::NewTabPage);
         assert_eq!(ctrl_t_opens(), CtrlT::NewTabPage);
         set_ctrl_t_opens(CtrlT::CommandBar);
@@ -831,15 +960,36 @@ mod tests {
     #[test]
     fn fr3_command_bar_lists_browser_suggestions_then_tabs_then_commands() {
         let found = [
-            Found { contents: "launch plan", description: "Google Search", destination: "https://www.google.com/search?q=launch+plan" },
-            Found { contents: "https://launch.example/", description: "", destination: "https://launch.example/" },
+            Found {
+                contents: "launch plan",
+                description: "Google Search",
+                destination: "https://www.google.com/search?q=launch+plan",
+            },
+            Found {
+                contents: "https://launch.example/",
+                description: "",
+                destination: "https://launch.example/",
+            },
         ];
-        let tabs = [tab(0, "Ember workspace", "https://ember.example/launch", false), tab(1, "Launch notes", "https://notes.example/", true)];
+        let tabs = [
+            tab(0, "Ember workspace", "https://ember.example/launch", false),
+            tab(1, "Launch notes", "https://notes.example/", true),
+        ];
         let rows = results("launch", &found, &tabs);
-        assert_eq!(rows[0].action, Action::Open("https://www.google.com/search?q=launch+plan".into()));
+        assert_eq!(
+            rows[0].action,
+            Action::Open("https://www.google.com/search?q=launch+plan".into())
+        );
         assert_eq!(rows[0].key, "Enter");
-        assert_eq!(rows[1].action, Action::Open("https://launch.example/".into()));
-        assert_eq!(rows[2].action, Action::SwitchTab(0), "the active tab is not offered");
+        assert_eq!(
+            rows[1].action,
+            Action::Open("https://launch.example/".into())
+        );
+        assert_eq!(
+            rows[2].action,
+            Action::SwitchTab(0),
+            "the active tab is not offered"
+        );
         assert_eq!(rows[2].key, "Tab");
         assert_eq!(rows[2].title, "Switch to tab: Ember workspace");
         assert_eq!(rows.len(), 3, "no command matches \"launch\"");
@@ -858,8 +1008,13 @@ mod tests {
     #[test]
     fn fr3_command_bar_finds_rivet_commands_and_lists_them_when_empty() {
         let rows = results("split", &[], &[]);
-        assert!(rows.iter().any(|row| row.action == Action::Run(Command::SplitView)));
-        let tabs = [tab(0, "A", "https://a.test/", true), tab(1, "B", "https://b.test/", false)];
+        assert!(rows
+            .iter()
+            .any(|row| row.action == Action::Run(Command::SplitView)));
+        let tabs = [
+            tab(0, "A", "https://a.test/", true),
+            tab(1, "B", "https://b.test/", false),
+        ];
         let rows = results("", &[], &tabs);
         assert_eq!(rows[0].action, Action::SwitchTab(1));
         assert_eq!(rows.len(), 1 + Command::ALL.len());
@@ -867,10 +1022,23 @@ mod tests {
 
     #[test]
     fn fr3_command_bar_shows_at_most_eight_rows() {
-        let found: Vec<Found> = (0..10).map(|_| Found { contents: "x", description: "", destination: "https://x.test/" }).collect();
+        let found: Vec<Found> = (0..10)
+            .map(|_| Found {
+                contents: "x",
+                description: "",
+                destination: "https://x.test/",
+            })
+            .collect();
         let titles: Vec<String> = (0..10).map(|i| format!("x {i}")).collect();
-        let tabs: Vec<Open> = titles.iter().enumerate().map(|(i, t)| tab(i, t, "", false)).collect();
-        assert_eq!(results("x", &found, &tabs).len(), SUGGESTIONS_SHOWN + TABS_SHOWN);
+        let tabs: Vec<Open> = titles
+            .iter()
+            .enumerate()
+            .map(|(i, t)| tab(i, t, "", false))
+            .collect();
+        assert_eq!(
+            results("x", &found, &tabs).len(),
+            SUGGESTIONS_SHOWN + TABS_SHOWN
+        );
         assert!(results("x", &found, &tabs).len() <= ROWS_SHOWN);
     }
 
@@ -878,7 +1046,10 @@ mod tests {
     fn fr3_command_bar_card_is_the_studys_580_wide_110_below_the_top() {
         let [x, y, w, h] = card(1200.0, 800.0, 4);
         assert_eq!((x, y, w), (310.0, 110.0, 580.0));
-        assert_eq!(h, FIELD_HEIGHT + LIST_PAD * 2.0 + ROW_HEIGHT * 4.0 + FOOTER_HEIGHT);
+        assert_eq!(
+            h,
+            FIELD_HEIGHT + LIST_PAD * 2.0 + ROW_HEIGHT * 4.0 + FOOTER_HEIGHT
+        );
         // A narrow page keeps 90% of its width.
         assert_eq!(card(400.0, 800.0, 0)[2], 360.0);
         // A short page keeps the card inside it.
@@ -894,8 +1065,14 @@ mod tests {
         assert_eq!(hit(c, 3, 600.0, row_y), Hit::Row(1));
         let footer_y = c[1] + c[3] - FOOTER_HEIGHT / 2.0;
         let [(_, left, _), (_, second, _)] = mode_buttons();
-        assert_eq!(hit(c, 3, c[0] + left + 1.0, footer_y), Hit::Mode(CtrlT::CommandBar));
-        assert_eq!(hit(c, 3, c[0] + second + 1.0, footer_y), Hit::Mode(CtrlT::NewTabPage));
+        assert_eq!(
+            hit(c, 3, c[0] + left + 1.0, footer_y),
+            Hit::Mode(CtrlT::CommandBar)
+        );
+        assert_eq!(
+            hit(c, 3, c[0] + second + 1.0, footer_y),
+            Hit::Mode(CtrlT::NewTabPage)
+        );
         assert_eq!(hit(c, 3, 10.0, 10.0), Hit::Outside);
         let field = field_box(c);
         assert!(field[0] > c[0] && field[0] + field[2] < c[0] + c[2]);
@@ -906,6 +1083,10 @@ mod tests {
         let start = "file:///C:/Rivet/start.html?space=Work#rivet-command-17";
         assert_eq!(asks_for_bar(start), Some("rivet-command-17"));
         assert_eq!(asks_for_bar("file:///C:/Rivet/start.html?space=Work"), None);
-        assert_eq!(asks_for_bar("https://example.test/#rivet-command"), None, "only the start page may ask");
+        assert_eq!(
+            asks_for_bar("https://example.test/#rivet-command"),
+            None,
+            "only the start page may ask"
+        );
     }
 }
