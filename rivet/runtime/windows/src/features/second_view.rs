@@ -478,6 +478,45 @@ unsafe fn virtual_of(view: usize, name: &str, slot_name: &str) -> Option<usize> 
         .or_else(|| recorded(slot_name).map(|slot| *((*(view as *const usize) + slot * 8) as *const usize)))
 }
 
+/// The main page's columns, as x and width within a page area `width` DIPs wide, while the
+/// window shows a split. The browser's bar above the page is narrowed to them.
+pub(crate) fn split_columns(window: HWND, width: i32) -> Option<(i32, i32)> {
+    split().filter(|split| split.window == window as isize && split.mode == Mode::Split)?;
+    grid_bounds(&grid_of(window as isize), [0, 0, width, 1], rail_of(window as isize))
+        .into_iter()
+        .find(|(slot, _)| *slot == 0)
+        .map(|(_, rect)| (rect[0], rect[2]))
+}
+
+/// The first view below `root` that holds a page whose vtable is `page_vtable`, as the view and
+/// the page. The Sidebar finds the extension page that the browser's side panel shows this way.
+pub(crate) unsafe fn page_under(root: usize, page_vtable: usize) -> Option<(usize, usize)> {
+    let size = recorded("size").unwrap_or(0x528);
+    let mut queue = vec![(root, 0usize)];
+    let mut visited = 0;
+    while let Some((view, depth)) = queue.pop() {
+        visited += 1;
+        if visited > 400 || depth > 10 {
+            continue;
+        }
+        if view != root {
+            let page = (8..size).step_by(8).filter_map(|offset| word(view + offset)).find(|candidate| {
+                *candidate > 0x10000 && *candidate != view && word(*candidate) == Some(page_vtable)
+            });
+            if let Some(page) = page {
+                return Some((view, page));
+            }
+        }
+        queue.extend(children_of(view).into_iter().map(|child| (child, depth + 1)));
+    }
+    None
+}
+
+/// Gives a page view `page`, or no page for zero, as `WebView::SetWebContents` does.
+pub(crate) unsafe fn hand_page(view: usize, page: usize) -> bool {
+    set_page(view, page)
+}
+
 /// The window's page view bounds and the docked view's, both in the page view's parent, for the
 /// full page area `full`. `rail` DIPs at the right of the area stay free for the Sidebar's rail.
 /// A grid lays its pages out with `grid_bounds`.
@@ -520,6 +559,13 @@ unsafe fn offset_in(view: usize, ancestor: usize) -> [i32; 2] {
     [x, y]
 }
 
+/// The page area `full` of the page view `main` over a small inset of its container, which
+/// otherwise shows as a band around the page.
+unsafe fn fitted(main: usize, full: [i32; 4]) -> [i32; 4] {
+    let container = word(main + offsets().0).filter(|parent| *parent != 0).map(|parent| bounds_of(parent));
+    container.map_or(full, |container| crate::features::page_fit::fill(full, [container[2], container[3]]))
+}
+
 /// The page area the pages are laid out in, in the page view's parent, below the bar row.
 unsafe fn area_of(split: &Split) -> Option<[i32; 4]> {
     // Bounds Rivet did not set came from the browser's layout and are the new page area.
@@ -529,6 +575,7 @@ unsafe fn area_of(split: &Split) -> Option<[i32; 4]> {
         *FULL.lock().unwrap_or_else(|error| error.into_inner()) = now;
     }
     let full = *FULL.lock().unwrap_or_else(|error| error.into_inner());
+    let full = fitted(split.main, full);
     (full[2] > 0).then(|| below_bar(full, top_inset(split, full)))
 }
 
@@ -537,6 +584,7 @@ unsafe fn area_of(split: &Split) -> Option<[i32; 4]> {
 unsafe fn place(split: &Split) -> bool {
     let Some(full) = area_of(split) else { return false };
     let rail = rail_of(split.window);
+    let window = split.window as HWND;
     let targets: Vec<(usize, [i32; 4])> = match split.mode {
         Mode::Split => grid_bounds(&grid_of(split.window), full, rail),
         _ => {
@@ -552,7 +600,18 @@ unsafe fn place(split: &Split) -> bool {
             continue;
         }
         // The extra views are children of the browser view, the page view sits deeper.
-        let rect = if slot == 0 { rect } else { [rect[0] + dx, rect[1] + dy, rect[2], rect[3]] };
+        let rect = if slot == 0 {
+            rect
+        } else {
+            let moved = [rect[0] + dx, rect[1] + dy, rect[2], rect[3]];
+            // A page on the top line rises over the browser's bars, which belong to the main page.
+            let moved = if rect[1] == full[1] {
+                crate::features::pane_infobar::lift(split.mode, moved, crate::features::pane_infobar::bar_above(window))
+            } else {
+                moved
+            };
+            crate::features::sidebar_page::fit(window, split.mode, moved)
+        };
         if slot == 0 {
             *LAST.lock().unwrap_or_else(|error| error.into_inner()) = rect;
         }
@@ -989,6 +1048,7 @@ unsafe fn window_area(state: &Split) -> [i32; 4] {
     let full = *FULL.lock().unwrap_or_else(|error| error.into_inner());
     let [ox, oy] = window_origin(state.main);
     let main = bounds_of(state.main);
+    let full = fitted(state.main, full);
     let full = below_bar(full, top_inset(state, full));
     let (x, y) = (ox - main[0] + full[0], oy - main[1] + full[1]);
     [x, y, full[2] - rail_of(state.window), full[3]]
@@ -1158,6 +1218,7 @@ pub(crate) unsafe fn close(window: HWND) -> bool {
         let inset = open_with(window, window, 0, Mode::Inset);
         crate::trace::trace(&format!("second view: closed to the rail inset: {inset}"));
     }
+    crate::features::pane_infobar::follow(window);
     true
 }
 

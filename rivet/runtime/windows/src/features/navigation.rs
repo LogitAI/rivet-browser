@@ -35,6 +35,8 @@ pub(crate) fn needs(build: &Build) -> Needs {
 
 const REFERRER_POLICY_DEFAULT: i32 = 1;
 const CURRENT_TAB: i32 = 1;
+/// `WindowOpenDisposition::NEW_FOREGROUND_TAB`.
+const NEW_FOREGROUND_TAB: i32 = 3;
 /// `ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR`.
 const TYPED_IN_ADDRESS_BAR: u32 = 0x0200_0001;
 
@@ -137,6 +139,18 @@ pub(crate) unsafe fn with_address<R>(
 }
 
 unsafe fn open_in(base: usize, contents: *mut c_void, url: &str) -> bool {
+    !open_as(base, contents, url, CURRENT_TAB).is_null()
+}
+
+/// Opens `url` in a new foreground tab of the window that holds the page `contents`, through the
+/// browser's own `OpenURL`, and returns the new tab's page or null. The tab's first page is `url`,
+/// so the browser's new tab page never loads in it.
+pub(crate) unsafe fn open_in_new_tab(contents: *mut c_void, url: &str) -> *mut c_void {
+    let Some(base) = base() else { return std::ptr::null_mut() };
+    open_as(base, contents, url, NEW_FOREGROUND_TAB)
+}
+
+unsafe fn open_as(base: usize, contents: *mut c_void, url: &str, disposition: i32) -> *mut c_void {
     let mut target = Raw::<GURL_SIZE>::zeroed();
     let wide: Vec<u16> = url.encode_utf16().collect();
     let text = if bv().gurl_wide {
@@ -154,7 +168,7 @@ unsafe fn open_in(base: usize, contents: *mut c_void, url: &str) -> bool {
         params.at(),
         target.at(),
         referrer.at(),
-        CURRENT_TAB,
+        disposition,
         TYPED_IN_ADDRESS_BAR,
         false,
     );
@@ -164,7 +178,7 @@ unsafe fn open_in(base: usize, contents: *mut c_void, url: &str) -> bool {
     function::<Construct>(base, bv().open_url_params_drop)(params.at());
     function::<Construct>(base, bv().gurl_drop)(referrer.at());
     function::<Construct>(base, bv().gurl_drop)(target.at());
-    !opened.is_null()
+    opened
 }
 
 /// The active page of `window`, for Chromium functions that act on a page.

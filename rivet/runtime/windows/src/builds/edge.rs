@@ -162,6 +162,7 @@ pub static EDGE: Build = Build {
         new_tab_address: None,
         new_tab_takes_address: false,
         new_tab_delay_ms: 0,
+        new_tab_by_open_url: None,
         new_tab: 0x0A2B68B0, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
         last_committed_url: 0x0115B9E0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
         visible_url: 0x01056C50,        // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ

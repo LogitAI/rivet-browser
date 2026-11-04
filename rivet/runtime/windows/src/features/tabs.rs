@@ -467,6 +467,9 @@ unsafe fn new_tab_scoped(browser: *mut c_void, kind: i32, url: *const c_void) ->
         if let Some(contents) = add_in_app_window(browser, window, url, wanted) {
             return contents;
         }
+        if let Some(contents) = open_first_page(window, wanted) {
+            return contents;
+        }
     }
     // Such a build can open the start page as the tab's first page, so the browser's own new tab page
     // is never loaded and is not left behind in the tab's history.
@@ -504,6 +507,26 @@ unsafe fn new_tab_scoped(browser: *mut c_void, kind: i32, url: *const c_void) ->
     }
     contents
 }
+/// The first page of a new tab in a Rivet window of a build whose new tab page must not load
+/// there: Rivet's start page, or a blank page when Rivet opens an address in the tab itself.
+pub(crate) fn first_page(by_open_url: bool, wanted: bool, own: bool, start: Option<String>) -> Option<String> {
+    if !by_open_url || !wanted {
+        return None;
+    }
+    Some(if own { "about:blank".to_owned() } else { start.unwrap_or_else(|| "about:blank".to_owned()) })
+}
+
+/// Opens the new tab with its first page through the browser's `OpenURL`, for a build whose own
+/// new tab page crashes beside Rivet's second view. None leaves the command to the browser.
+unsafe fn open_first_page(window: HWND, wanted: bool) -> Option<*mut c_void> {
+    let own = OWN_NEW_TAB.with(std::cell::Cell::get);
+    let page = first_page(bv().new_tab_by_open_url == Some(true), wanted, own, crate::frame::start_url_of(window))?;
+    let active = crate::features::navigation::active_contents(window)?;
+    let contents = crate::features::navigation::open_in_new_tab(active, &page);
+    crate::trace::trace(&format!("new tab in a Rivet window opens {page} through OpenURL: {}", !contents.is_null()));
+    (!contents.is_null()).then_some(contents)
+}
+
 /// `chrome::AddTabAt(browser, url, index, foreground, group, _, _)`.
 type AddTabAt = unsafe extern "system" fn(
     *mut c_void,
@@ -845,4 +868,22 @@ pub unsafe fn toggle_group(window: HWND, id: &[u8; 16]) -> bool {
     let color = *(visual.add(24) as *const i32);
     let collapsed = *visual.add(28) != 0;
     set_group_visuals(base, model, id, &title, color, !collapsed).is_some()
+}
+
+#[cfg(test)]
+mod first_page_tests {
+    use super::first_page;
+
+    #[test]
+    fn fr13_a_new_tab_beside_the_second_view_never_loads_the_browsers_new_tab_page() {
+        // Samsung Internet 30.0.4.29 stopped in its own new tab page beside the second view.
+        let start = || Some("rivet://start".to_owned());
+        assert_eq!(first_page(true, true, false, start()).as_deref(), Some("rivet://start"));
+        assert_eq!(first_page(true, true, false, None).as_deref(), Some("about:blank"));
+        // Rivet opens its own address in the tab next, so the tab starts blank.
+        assert_eq!(first_page(true, true, true, start()).as_deref(), Some("about:blank"));
+        // Other builds and commands that carry an address keep the browser's command.
+        assert_eq!(first_page(false, true, false, start()), None);
+        assert_eq!(first_page(true, false, false, start()), None);
+    }
 }
