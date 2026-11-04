@@ -189,6 +189,9 @@ fn menu_hit(
     (true, hit)
 }
 
+/// The appbar control a pointer is over, the one it went down on, and the tint of the space shown.
+type AppbarState = (Option<AppbarHit>, Option<AppbarHit>, u32);
+
 thread_local! {
     /// Appbars of the browser windows owned by this UI thread.
     static APPBARS: RefCell<HashMap<isize, Appbar>> = RefCell::new(HashMap::new());
@@ -198,7 +201,7 @@ thread_local! {
     static SPACES: RefCell<HashMap<isize, Spaces>> = RefCell::new(HashMap::new());
     /// The controls of each window that are being pressed or springing back.
     static PRESSES: RefCell<HashMap<isize, Presses<AppbarHit>>> = RefCell::new(HashMap::new());
-    static APPBAR_STATE: RefCell<HashMap<isize, (Option<AppbarHit>, Option<AppbarHit>, u32)>> = RefCell::new(HashMap::new());
+    static APPBAR_STATE: RefCell<HashMap<isize, AppbarState>> = RefCell::new(HashMap::new());
     static KEYBOARD_HOOK: RefCell<isize> = const { RefCell::new(0) };
     /// The width and the hidden or peeking state of each window's appbar. It lives as long as the
     /// window does.
@@ -451,9 +454,15 @@ thread_local! {
     static ROW_PRESS: RefCell<HashMap<isize, RowHit>> = RefCell::new(HashMap::new());
 }
 
+/// The caption button a pointer is over, and the one it went down on.
+type CaptionState = (
+    Option<crate::features::address_bar::Caption>,
+    Option<crate::features::address_bar::Caption>,
+);
+
 thread_local! {
     /// The caption button each window's pointer is over, and the one it went down on.
-    static CAPTION_STATE: RefCell<HashMap<isize, (Option<crate::features::address_bar::Caption>, Option<crate::features::address_bar::Caption>)>> =
+    static CAPTION_STATE: RefCell<HashMap<isize, CaptionState>> =
         RefCell::new(HashMap::new());
 }
 
@@ -494,7 +503,7 @@ unsafe fn row_hit(window: HWND, point: POINT) -> Option<RowHit> {
         let local = x - pane.x as f32;
         let button = row_buttons(pane.width as f32, pane.first, pane.caption)
             .into_iter()
-            .find(|(button, left, width)| local >= *left && local < left + width)
+            .find(|(_button, left, width)| local >= *left && local < left + width)
             .map(|(button, _, _)| button);
         return match (button, pane.active) {
             (Some(button), _) => Some((index, button)),
@@ -1708,10 +1717,14 @@ const DRAG_TIMER: usize = 0x5249_5653 + 1;
 /// The shortest time between two layouts of the width drag, one displayed frame.
 const DRAG_FRAME_MS: f32 = 16.0;
 
+/// The pointer x of a pending width drag, when the browser was last laid out for it, and whether
+/// its timer is running.
+type DragPending = (Option<i32>, f32, bool);
+
 thread_local! {
     /// The latest pointer x of a width drag that has not been laid out yet, and when the browser
     /// was last laid out for the drag.
-    static DRAG_PENDING: RefCell<HashMap<isize, (Option<i32>, f32, bool)>> = RefCell::new(HashMap::new());
+    static DRAG_PENDING: RefCell<HashMap<isize, DragPending>> = RefCell::new(HashMap::new());
 }
 
 /// Follows a drag of the resizer: the appbar's right edge goes to the pointer and the browser lays
@@ -2601,10 +2614,11 @@ unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
     let x = point.x as f32 / factor;
     let y = (point.y - top_border(window)) as f32 / factor;
     let side = layout.side as f32;
-    if strip == StripHit::Caption && x >= side - 36.0 && x < side - 8.0 && (12.0..40.0).contains(&y)
-    {
-        StripHit::Appbar
-    } else if strip == StripHit::Resizer {
+    let on_caption_button = strip == StripHit::Caption
+        && x >= side - 36.0
+        && x < side - 8.0
+        && (12.0..40.0).contains(&y);
+    if on_caption_button || strip == StripHit::Resizer {
         StripHit::Appbar
     } else {
         strip

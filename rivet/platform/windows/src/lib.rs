@@ -12,7 +12,9 @@ pub mod signed_table;
 pub mod textservices;
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 /// A top-level browser window and the browser process that owns it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -776,6 +778,7 @@ fn remote_export_address(
 ///
 /// `read(offset, buffer)` fills `buffer` from `offset` bytes after the image base and reports
 /// whether it succeeded. Forwarded exports are rejected because they do not point into the image.
+#[cfg(any(windows, test))]
 fn find_export_rva(read: &mut dyn FnMut(usize, &mut [u8]) -> bool, export: &str) -> Option<u32> {
     fn u16_at(read: &mut dyn FnMut(usize, &mut [u8]) -> bool, offset: usize) -> Option<u16> {
         let mut bytes = [0u8; 2];

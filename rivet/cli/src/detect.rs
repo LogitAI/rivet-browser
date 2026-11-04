@@ -90,7 +90,7 @@ fn version_folders(files: &dyn Files, folder: &Path) -> Vec<String> {
         .filter(|(_, is_folder)| *is_folder)
         .filter_map(|(name, _)| Some((hold::parse_version(&name)?, name)))
         .collect();
-    versions.sort_by(|left, right| right.0.cmp(&left.0));
+    versions.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
     versions.into_iter().map(|(_, name)| name).collect()
 }
 

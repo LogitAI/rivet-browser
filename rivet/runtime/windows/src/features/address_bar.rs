@@ -125,11 +125,8 @@ impl Security {
         let lower = url.to_ascii_lowercase();
         if lower.starts_with("https://") || lower.starts_with("wss://") {
             Security::Secure
-        } else if lower.starts_with("http://") {
-            let host = lower["http://".len()..]
-                .split(['/', ':'])
-                .next()
-                .unwrap_or("");
+        } else if let Some(rest) = lower.strip_prefix("http://") {
+            let host = rest.split(['/', ':']).next().unwrap_or("");
             if matches!(host, "localhost" | "127.0.0.1" | "[") || lower.starts_with("http://[::1]")
             {
                 Security::Local
@@ -403,6 +400,9 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
     contents[3] = (contents[3] - ROW_HEIGHT).max(1);
 }
 
+/// The top row, the page and the views that moved with them.
+pub(crate) type TopRowMove = ([i32; 4], [i32; 4], Vec<[i32; 4]>);
+
 /// The top row, the page and the other views after the page takes the place of a top row above
 /// it. The row keeps its place with no height. Views between the row and the page, such as an
 /// infobar, move up with the page, and the page grows up by the row's height.
@@ -410,7 +410,7 @@ pub(crate) fn page_over_top_row(
     top: [i32; 4],
     contents: [i32; 4],
     views: &[[i32; 4]],
-) -> Option<([i32; 4], [i32; 4], Vec<[i32; 4]>)> {
+) -> Option<TopRowMove> {
     let bottom = top[1] + top[3];
     let across = |v: [i32; 4]| v[0] < contents[0] + contents[2] && v[0] + v[2] > contents[0];
     if top[3] <= 0 || bottom > contents[1] || !across(top) {
@@ -1094,6 +1094,54 @@ pub(crate) fn forget(window: HWND) {
     BARS.with(|bars| bars.borrow_mut().remove(&(window as isize)));
 }
 
+/// Types `text` as a composition of the Korean input method, as a person typing on its keyboard
+/// would, and traces where the input method placed its windows. Tests cannot press keys without
+/// taking the focus, so the input method is asked for the composition directly.
+pub(crate) unsafe fn compose_for_test(window: HWND, text: &str) -> bool {
+    use windows_sys::Win32::UI::Input::Ime::*;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        ActivateKeyboardLayout, LoadKeyboardLayoutW, KLF_ACTIVATE,
+    };
+    let layout: Vec<u16> = "00000412\0".encode_utf16().collect();
+    let korean = LoadKeyboardLayoutW(layout.as_ptr(), KLF_ACTIVATE);
+    ActivateKeyboardLayout(korean, 0);
+    let context = ImmGetContext(window);
+    let open = ImmSetOpenStatus(context, 1);
+    ImmSetConversionStatus(context, IME_CMODE_NATIVE, IME_SMODE_NONE);
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    let set = ImmSetCompositionStringW(
+        context,
+        SCS_SETSTR,
+        wide.as_ptr().cast(),
+        (wide.len() * 2) as u32,
+        std::ptr::null(),
+        0,
+    );
+    let mut form: COMPOSITIONFORM = std::mem::zeroed();
+    let placed = ImmGetCompositionWindow(context, &mut form);
+    let mut candidate: CANDIDATEFORM = std::mem::zeroed();
+    let candidate_placed = ImmGetCandidateWindow(context, 0, &mut candidate);
+    crate::trace::trace(&format!(
+        "address bar ime: layout {korean:?} context {context:?} open {open} set {set} composition window {placed} at {},{} style {:#x}, candidate {candidate_placed} at {},{} style {:#x}, caret {:?}",
+        form.ptCurrentPos.x, form.ptCurrentPos.y, form.dwStyle,
+        candidate.ptCurrentPos.x, candidate.ptCurrentPos.y, candidate.dwStyle,
+        with_bar(window, |bar| bar.field.as_ref().and_then(|field| field.caret())).map(|caret| (caret.left, caret.top, caret.bottom)),
+    ));
+    ImmReleaseContext(window, context);
+    crate::frame::update_appbar(window);
+    set != 0
+}
+
+/// Ends a composition the way the input method does when a person presses Enter on it.
+pub(crate) unsafe fn finish_composition_for_test(window: HWND) -> bool {
+    use windows_sys::Win32::UI::Input::Ime::*;
+    let context = ImmGetContext(window);
+    let done = ImmNotifyIME(context, NI_COMPOSITIONSTR, CPS_COMPLETE, 0);
+    ImmReleaseContext(window, context);
+    crate::frame::update_appbar(window);
+    done != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1310,52 +1358,4 @@ mod tests {
         assert_eq!(address_for("localhost:3000"), "http://localhost:3000");
         assert_eq!(address_for("file:///C:/x"), "file:///C:/x");
     }
-}
-
-/// Types `text` as a composition of the Korean input method, as a person typing on its keyboard
-/// would, and traces where the input method placed its windows. Tests cannot press keys without
-/// taking the focus, so the input method is asked for the composition directly.
-pub(crate) unsafe fn compose_for_test(window: HWND, text: &str) -> bool {
-    use windows_sys::Win32::UI::Input::Ime::*;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        ActivateKeyboardLayout, LoadKeyboardLayoutW, KLF_ACTIVATE,
-    };
-    let layout: Vec<u16> = "00000412\0".encode_utf16().collect();
-    let korean = LoadKeyboardLayoutW(layout.as_ptr(), KLF_ACTIVATE);
-    ActivateKeyboardLayout(korean, 0);
-    let context = ImmGetContext(window);
-    let open = ImmSetOpenStatus(context, 1);
-    ImmSetConversionStatus(context, IME_CMODE_NATIVE, IME_SMODE_NONE);
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let set = ImmSetCompositionStringW(
-        context,
-        SCS_SETSTR,
-        wide.as_ptr().cast(),
-        (wide.len() * 2) as u32,
-        std::ptr::null(),
-        0,
-    );
-    let mut form: COMPOSITIONFORM = std::mem::zeroed();
-    let placed = ImmGetCompositionWindow(context, &mut form);
-    let mut candidate: CANDIDATEFORM = std::mem::zeroed();
-    let candidate_placed = ImmGetCandidateWindow(context, 0, &mut candidate);
-    crate::trace::trace(&format!(
-        "address bar ime: layout {korean:?} context {context:?} open {open} set {set} composition window {placed} at {},{} style {:#x}, candidate {candidate_placed} at {},{} style {:#x}, caret {:?}",
-        form.ptCurrentPos.x, form.ptCurrentPos.y, form.dwStyle,
-        candidate.ptCurrentPos.x, candidate.ptCurrentPos.y, candidate.dwStyle,
-        with_bar(window, |bar| bar.field.as_ref().and_then(|field| field.caret())).map(|caret| (caret.left, caret.top, caret.bottom)),
-    ));
-    ImmReleaseContext(window, context);
-    crate::frame::update_appbar(window);
-    set != 0
-}
-
-/// Ends a composition the way the input method does when a person presses Enter on it.
-pub(crate) unsafe fn finish_composition_for_test(window: HWND) -> bool {
-    use windows_sys::Win32::UI::Input::Ime::*;
-    let context = ImmGetContext(window);
-    let done = ImmNotifyIME(context, NI_COMPOSITIONSTR, CPS_COMPLETE, 0);
-    ImmReleaseContext(window, context);
-    crate::frame::update_appbar(window);
-    done != 0
 }

@@ -33,11 +33,6 @@ pub struct PageGeometry {
     pub bottom: i32,
 }
 
-/// The host view of the browser's layout of this window, the `views::View` of its browser view.
-pub fn host_view(window: HWND) -> Option<usize> {
-    HOST_VIEWS.with(|views| views.borrow().get(&(window as isize)).copied())
-}
-
 /// The top of a window's page area in the browser view, as the layout recorded it.
 pub fn area_top(window: HWND) -> Option<i32> {
     AREAS.with(|areas| areas.borrow().get(&(window as isize)).map(|area| area.0))
@@ -248,7 +243,7 @@ pub(crate) unsafe fn relayout(window: HWND) {
     if let Some(host) = host.filter(|_| {
         prologue_is(
             base + row().layout_immediately,
-            &row().layout_immediately_prologue,
+            row().layout_immediately_prologue,
         )
     }) {
         let layout: unsafe extern "system" fn(*mut c_void) =

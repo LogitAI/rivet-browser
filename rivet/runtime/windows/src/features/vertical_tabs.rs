@@ -56,8 +56,8 @@ pub(crate) fn needs(build: &Build) -> Needs {
     )
 }
 
-/// The vtable slot of the controller's scalar deleting destructor, two words before
-/// `ShouldDisplayVerticalTabs`, and the function it holds.
+// The vtable slot of the controller's scalar deleting destructor sits two words before
+// `ShouldDisplayVerticalTabs`.
 
 type ShouldDisplay = unsafe extern "system" fn(*const c_void) -> bool;
 type ViewForBrowser = unsafe extern "system" fn(*const c_void) -> *const c_void;
@@ -122,11 +122,9 @@ unsafe extern "system" fn should_display(controller: *const c_void) -> bool {
     let Some(Ok(hook)) = HOOK.get() else {
         unreachable!("the vtable is only patched after the hook is stored");
     };
-    if *controller.cast::<u8>().add(bv().mode_offset) == 0 {
-        if note_report(controller as usize) {
-            trace(&format!("reported controller={controller:?}"));
-            (hook.report)(controller as usize);
-        }
+    if *controller.cast::<u8>().add(bv().mode_offset) == 0 && note_report(controller as usize) {
+        trace(&format!("reported controller={controller:?}"));
+        (hook.report)(controller as usize);
     }
     (hook.original)(controller)
 }
@@ -242,7 +240,7 @@ unsafe fn patch(report: Report) -> Result<Hook, String> {
         return Err("this browser build has no recorded vertical-tab controller".into());
     }
     if !image.points_to(bv().slot - 16, bv().destructor)
-        || !image.has(bv().destructor, &bv().destructor_prologue)
+        || !image.has(bv().destructor, bv().destructor_prologue)
     {
         return Err("this browser build has no recorded vertical-tab controller destructor".into());
     }
@@ -324,7 +322,7 @@ pub unsafe fn invalidate_strip(window: HWND) {
     let Some(image) = image::recorded() else {
         return;
     };
-    if !image.has(bv().invalidate_layout, &bv().invalidate_layout_prologue) {
+    if !image.has(bv().invalidate_layout, bv().invalidate_layout_prologue) {
         return;
     }
     let invalidate: unsafe extern "system" fn(*mut c_void, i32) =
@@ -387,7 +385,7 @@ unsafe fn patch_region_minimum(image: &image::Image) -> Result<(), String> {
         VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
     };
     let length = bv().region_minimum_prologue.len();
-    if !image.has(bv().region_minimum_size, &bv().region_minimum_prologue) {
+    if !image.has(bv().region_minimum_size, bv().region_minimum_prologue) {
         return Err("the region view's minimum size is not the recorded function".into());
     }
     let function = image
@@ -464,7 +462,7 @@ pub unsafe fn hide_tab_strip_everywhere() -> Result<(), String> {
     let image = image::recorded().ok_or("this browser build has no recorded tab strip")?;
     if !image.has(
         bv().should_draw_tab_strip,
-        &bv().should_draw_tab_strip_prologue,
+        bv().should_draw_tab_strip_prologue,
     ) {
         return Err("ShouldDrawTabStrip is not the recorded function".into());
     }

@@ -21,6 +21,10 @@ struct Edit {
 /// The views one run of the layout touched. The boxes keep the bounds where a step's pointer to
 /// them stays valid while more views are added.
 #[derive(Default)]
+#[allow(
+    clippy::vec_box,
+    reason = "each edit must keep its address while more are added"
+)]
 struct Views {
     edits: Vec<Box<Edit>>,
 }

@@ -70,8 +70,6 @@ pub(crate) trait SplitBackend: Sync {
     unsafe fn page_area(&self, window: HWND) -> Option<[i32; 4]>;
     /// What the page area layout does for a split.
     unsafe fn on_page_area(&self, _area: &mut crate::hooks::page_area::PageArea) {}
-    /// Puts the address back to the focused page once the toolbar is laid out.
-    unsafe fn place_address(&self, _toolbar: *mut std::ffi::c_void) {}
     /// Whether the browser's own address follows the focused page.
     fn address_follows_page(&self) -> bool;
     /// The title and address of a page of the split that is no tab of the strip.

@@ -704,7 +704,7 @@ unsafe fn hook_main(main: usize) -> Option<usize> {
         *entry = word(vtable - 8 + index * 8)?;
     }
     ORIGINAL_BOUNDS_CHANGED.store(copy[slot + 1], Ordering::Release);
-    copy[slot + 1] = bounds_changed as usize;
+    copy[slot + 1] = bounds_changed as *const () as usize;
     let copy: &'static mut [usize] = Box::leak(copy.into_boxed_slice());
     *(main as *mut usize) = copy.as_ptr() as usize + 8;
     Some(vtable)
@@ -993,7 +993,7 @@ pub(crate) unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
         {
             let [_, _, w, h] = bounds_of(view);
             let area = w as i64 * h as i64;
-            if w > 0 && h > 0 && best.map_or(true, |(most, _)| area > most) {
+            if w > 0 && h > 0 && best.is_none_or(|(most, _)| area > most) {
                 best = Some((area, view));
             }
         }

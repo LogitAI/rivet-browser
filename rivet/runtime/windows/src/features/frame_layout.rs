@@ -324,7 +324,7 @@ unsafe fn frame_slots(provider: *const u8) -> Vec<(*mut u32, u32)> {
         return Vec::new();
     }
     let get_color = (crate::builds::get().toolbar.get_color != crate::builds::ABSENT)
-        .then(|| image::recorded())
+        .then(image::recorded)
         .flatten()
         .map(|image| {
             std::mem::transmute::<usize, unsafe extern "system" fn(*const u8, i32) -> u32>(
@@ -1012,7 +1012,7 @@ pub unsafe fn relayout(window: HWND) -> bool {
             // `views::View::DeprecatedLayoutImmediately` does the bookkeeping around a layout
             // and then runs the view's own `Layout`, which is this hook. The wanted bytes are
             // its first instructions in this build.
-            if !image.has(bv().layout_immediately, &bv().layout_immediately_prologue) {
+            if !image.has(bv().layout_immediately, bv().layout_immediately_prologue) {
                 return false;
             }
             let layout_immediately: unsafe extern "system" fn(*mut c_void) =
@@ -1135,7 +1135,8 @@ mod provider_guard_tests {
             let reject_nodes = |address: usize, _: usize| address != &root as *const Node as usize;
             assert!(find_slot(provider.as_ptr() as *const u8, 5, &reject_nodes).is_none());
             // A node pointing at itself is cut off.
-            root.right = &mut root;
+            let root_node = provider[3] as *mut Node;
+            (*root_node).right = root_node;
             assert!(find_slot(provider.as_ptr() as *const u8, 9, &any).is_none());
         }
     }

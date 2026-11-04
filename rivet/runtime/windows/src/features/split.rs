@@ -4,7 +4,7 @@
 use crate::builds::Build;
 use crate::feature::Needs;
 use crate::features::frame_layout::Rect;
-use std::ffi::c_void;
+
 use windows_sys::Win32::Foundation::HWND;
 
 fn backend() -> &'static dyn crate::browsers::SplitBackend {
@@ -30,12 +30,6 @@ pub unsafe fn install_panels() -> Result<(), String> {
 /// the Sidebar left, and the toolbar follows the active page.
 pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) {
     backend().on_page_area(area)
-}
-
-/// A browser's toolbar can move the address after the layout placed it, so once the toolbar is done,
-/// the address of a split goes back to the focused page.
-pub unsafe fn place_address(toolbar: *mut c_void) {
-    backend().place_address(toolbar)
 }
 
 /// Whether the browser's address can follow the focused page. A toolbar that places it by hand keeps

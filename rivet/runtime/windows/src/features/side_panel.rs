@@ -91,7 +91,6 @@ fn chrome_base() -> usize {
 /// The objects of one browser window that the Sidebar works with.
 #[derive(Debug, Clone, Copy)]
 pub struct Objects {
-    pub browser_view: usize,
     pub coordinator: usize,
     pub side_panel: usize,
     /// The `views::View` part of `BrowserView`, which the browser's layout manager works on.
@@ -155,7 +154,6 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
         })
         .unwrap_or(0);
     Some(Objects {
-        browser_view,
         coordinator,
         side_panel,
         view,
@@ -248,7 +246,7 @@ fn manifest_icon(manifest: &str) -> Option<String> {
         let distance = |size: u32| (size < 32, size.abs_diff(32));
         if best
             .as_ref()
-            .map_or(true, |(other, _)| distance(size) < distance(*other))
+            .is_none_or(|(other, _)| distance(size) < distance(*other))
         {
             best = Some((size, path));
         }
@@ -374,7 +372,7 @@ pub unsafe fn listed_entries(window: HWND) -> Vec<EntryKey> {
     let Some(found) = objects(window).filter(|found| found.coordinator != 0) else {
         return Vec::new();
     };
-    if !prologue_is(base + bv().registry_from, &bv().registry_from_prologue) {
+    if !prologue_is(base + bv().registry_from, bv().registry_from_prologue) {
         return Vec::new();
     }
     let browser = *((found.coordinator + 8) as *const usize);
@@ -405,7 +403,7 @@ pub unsafe fn entry_showing(window: HWND, key: &EntryKey) -> bool {
     let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else {
         return false;
     };
-    if !prologue_is(base + bv().entry_showing, &bv().entry_showing_prologue) {
+    if !prologue_is(base + bv().entry_showing, bv().entry_showing_prologue) {
         return false;
     }
     let showing: unsafe extern "system" fn(*mut c_void, *const u8) -> bool =
@@ -419,7 +417,7 @@ pub unsafe fn toggle_entry(window: HWND, key: &EntryKey) -> bool {
     let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else {
         return false;
     };
-    if !prologue_is(base + bv().toggle, &bv().toggle_prologue) {
+    if !prologue_is(base + bv().toggle, bv().toggle_prologue) {
         return false;
     }
     let toggle: unsafe extern "system" fn(*mut c_void, *const u8, u32) =
@@ -433,7 +431,7 @@ pub unsafe fn open_entry(window: HWND, entry: u32) -> bool {
     let (Some(objects), base) = (objects(window), chrome_base()) else {
         return false;
     };
-    if objects.coordinator == 0 || !prologue_is(base + bv().show, &bv().show_prologue) {
+    if objects.coordinator == 0 || !prologue_is(base + bv().show, bv().show_prologue) {
         return false;
     }
     // Chrome checks that the window registered the entry and crashes the browser when it did not.
@@ -454,7 +452,7 @@ unsafe fn entry_names() -> Vec<String> {
     let base = chrome_base();
     if !prologue_is(
         base + bv().entry_id_to_string,
-        &bv().entry_id_to_string_prologue,
+        bv().entry_id_to_string_prologue,
     ) {
         return Vec::new();
     }

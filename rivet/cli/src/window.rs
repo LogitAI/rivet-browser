@@ -1387,12 +1387,12 @@ fn show(model: Model) -> Result<(), String> {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         for font in FONTS {
-            let mut count = 0u32;
+            let count = 0u32;
             AddFontMemResourceEx(
                 font.as_ptr().cast(),
                 font.len() as u32,
                 std::ptr::null(),
-                &mut count,
+                &count,
             );
         }
         let instance = GetModuleHandleW(std::ptr::null());
@@ -1431,9 +1431,8 @@ fn show(model: Model) -> Result<(), String> {
             available,
             model.reason.is_some(),
         );
-        let field = Field::new(window, "Manrope", INK).map_err(|error| {
+        let field = Field::new(window, "Manrope", INK).inspect_err(|_error| {
             DestroyWindow(window);
-            error
         })?;
         let gfx = Gfx::new().map_err(|error| {
             DestroyWindow(window);

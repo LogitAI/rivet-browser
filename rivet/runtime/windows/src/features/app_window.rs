@@ -611,7 +611,7 @@ pub(crate) fn install_features() {
                 image.base,
                 rva,
                 prologue,
-                feature_hook as usize,
+                feature_hook as *const () as usize,
                 &ORIGINAL_FEATURE,
             )
         })

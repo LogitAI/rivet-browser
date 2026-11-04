@@ -366,7 +366,9 @@ mod tests {
         );
     }
 
-    fn all_needs() -> [(Feature, fn(&Build) -> Needs); 7] {
+    type NeedsOf = fn(&Build) -> Needs;
+
+    fn all_needs() -> [(Feature, NeedsOf); 7] {
         use crate::features::{frame_layout, split, tab_strip};
         [
             (Feature::FrameLayout, frame_layout::needs_layout),
@@ -462,13 +464,19 @@ mod tests {
             step(
                 Feature::FrameLayout,
                 nothing,
-                |ran| Ok(ran.push("layout")),
+                |ran| {
+                    let _: () = ran.push("layout");
+                    Ok(())
+                },
                 OnFailure::Abort,
             ),
             step(
                 Feature::CaptionHeight,
                 left_out,
-                |ran| Ok(ran.push("caption")),
+                |ran| {
+                    let _: () = ran.push("caption");
+                    Ok(())
+                },
                 OnFailure::Abort,
             ),
             step(
@@ -485,7 +493,10 @@ mod tests {
             step(
                 Feature::TopInset,
                 nothing,
-                |ran| Ok(ran.push("inset")),
+                |ran| {
+                    let _: () = ran.push("inset");
+                    Ok(())
+                },
                 OnFailure::Continue,
             ),
         ];
@@ -517,7 +528,10 @@ mod tests {
             step(
                 Feature::CaptionHeight,
                 nothing,
-                |ran| Ok(ran.push("caption")),
+                |ran| {
+                    let _: () = ran.push("caption");
+                    Ok(())
+                },
                 OnFailure::Abort,
             ),
         ];

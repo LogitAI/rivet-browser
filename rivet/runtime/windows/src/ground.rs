@@ -12,15 +12,13 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    CLSID_D2D1Shadow, ID2D1DeviceContext, ID2D1Factory, ID2D1Geometry, ID2D1Image, ID2D1Layer,
-    ID2D1RenderTarget, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2,
+    CLSID_D2D1Shadow, ID2D1DeviceContext, ID2D1Geometry, ID2D1Image, ID2D1Layer, ID2D1RenderTarget,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2,
     D2D1_INTERPOLATION_MODE_LINEAR, D2D1_LAYER_OPTIONS1_NONE, D2D1_LAYER_PARAMETERS1,
     D2D1_PROPERTY_TYPE_UNKNOWN, D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES, D2D1_ROUNDED_RECT,
 };
 use windows_numerics::{Matrix3x2, Vector2};
 
-/// The paper of a page that has not painted yet.
-pub const PAPER: u32 = 0xfbfaf7;
 /// The radius of a page panel, in device-independent pixels.
 pub const RADIUS: f32 = 12.0;
 

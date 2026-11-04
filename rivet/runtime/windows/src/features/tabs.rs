@@ -285,28 +285,6 @@ unsafe fn narrow_string(value: *const u8) -> Option<String> {
     Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, size)).into_owned())
 }
 
-/// The title and the address of a page that is no tab of the strip, such as the page of Rivet's
-/// second page view. Empty when the build records no way to read them.
-pub(crate) unsafe fn page_summary(contents: *mut c_void) -> Option<(String, String)> {
-    let base = base()?;
-    if contents.is_null() {
-        return None;
-    }
-    let title = chromium_string(function::<Pointer>(base, bv().title)(contents).cast::<u8>())
-        .unwrap_or_default();
-    let mut url = String::new();
-    for rva in [bv().last_committed_url, bv().visible_url] {
-        let gurl = function::<Pointer>(base, rva)(contents).cast::<u8>();
-        if !gurl.is_null() {
-            url = narrow_string(gurl).unwrap_or_default();
-        }
-        if !url.is_empty() {
-            break;
-        }
-    }
-    Some((title, url))
-}
-
 /// The address a page shows: the visible one while a navigation is pending, which is what an
 /// address bar shows, or the last committed one. Empty when the build records neither.
 pub(crate) unsafe fn page_address(contents: *mut c_void) -> String {
@@ -441,7 +419,7 @@ pub(crate) unsafe fn install_new_tab(skip: &str) -> Result<(), String> {
                     image.base,
                     tabs.new_tab,
                     tabs.new_tab_prologue,
-                    new_tab_hook as usize,
+                    new_tab_hook as *const () as usize,
                     &ORIGINAL_NEW_TAB,
                 )
             })

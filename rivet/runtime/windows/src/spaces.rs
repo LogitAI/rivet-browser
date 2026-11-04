@@ -94,6 +94,7 @@ pub struct SpaceInfo {
 }
 
 impl SpaceInfo {
+    #[cfg(test)]
     /// The badge text, such as `Edge · Lab`.
     pub fn badge(&self) -> String {
         self.badge_in(None)
@@ -108,11 +109,13 @@ impl SpaceInfo {
         )
     }
 
+    #[cfg(test)]
     /// The colour of the window's ground in this space.
     pub fn frame(&self) -> u32 {
         rivet_core::space_frame(self.tint)
     }
 
+    #[cfg(test)]
     /// The strong colour of marks and active controls in this space.
     pub fn accent(&self) -> u32 {
         rivet_core::space_accent(self.tint)

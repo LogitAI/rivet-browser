@@ -562,8 +562,8 @@ pub fn address_follows_page() -> bool {
 /// `views::FlexLayout::CalculateProposedLayout`, which lays out the children of the browser's top
 /// row. It is a method of a layout manager that keeps its host view at +0x38.
 static ORIGINAL_FLEX: AtomicUsize = AtomicUsize::new(0);
-/// The primary vtable of `LocationBarView`, which tells the top row's container among all hosts.
-/// The size of a view is two ints at +0x1d0.
+// The primary vtable of `LocationBarView` tells the top row's container among all hosts.
+// The size of a view is two ints at +0x1d0.
 
 /// The windows whose top row currently only holds the address of the focused page, with where that
 /// address starts in the row and how wide it is.
@@ -625,41 +625,6 @@ unsafe extern "system" fn flex_layout(
 
 /// The address view the top row's layout last placed.
 static LOCATION: AtomicUsize = AtomicUsize::new(0);
-
-/// A browser's toolbar can move the address after the flex layout placed it, so once the toolbar is
-/// done, the address of a split goes back to the focused page.
-pub unsafe fn place_address(toolbar: *mut c_void) {
-    let location = LOCATION.load(Ordering::Relaxed);
-    let layout = &crate::builds::get().layout;
-    let Some(base) = base() else { return };
-    if location == 0
-        || !std::slice::from_raw_parts(
-            (base + layout.set_bounds_rect) as *const u8,
-            layout.set_bounds_rect_prologue.len(),
-        )
-        .eq(layout.set_bounds_rect_prologue)
-    {
-        return;
-    }
-    let Some(window) = crate::features::frame_layout::hwnd_of_view(toolbar) else {
-        return;
-    };
-    let address = ADDRESS_ONLY
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .iter()
-        .find(|(key, _)| *key == window as isize)
-        .map(|(_, address)| *address);
-    let Some((left, width)) = address else { return };
-    let mut bounds = *((location + layout.view_bounds_offset) as *const [i32; 4]);
-    if (bounds[0], bounds[2]) != (left, width) {
-        bounds[0] = left;
-        bounds[2] = width;
-        function::<unsafe extern "system" fn(usize, *const [i32; 4])>(base, layout.set_bounds_rect)(
-            location, &bounds,
-        );
-    }
-}
 
 /// `views::View::SchedulePaint(this)`. The background only paints again when it is told to, so a
 /// change of the pages or of the focused one must tell it.
@@ -908,21 +873,21 @@ pub unsafe fn install_panels() -> Result<(), String> {
     detour(
         base,
         bv().calculate_layout,
-        &bv().calculate_layout_prologue,
+        bv().calculate_layout_prologue,
         calculate_layout as *const () as usize,
         &ORIGINAL_LAYOUT,
     )?;
     detour(
         base,
         bv().container_layout,
-        &bv().calculate_layout_prologue,
+        bv().calculate_layout_prologue,
         container_layout as *const () as usize,
         &ORIGINAL_CONTAINER_LAYOUT,
     )?;
     detour(
         base,
         bv().web_contents_focused,
-        &bv().web_contents_focused_prologue,
+        bv().web_contents_focused_prologue,
         web_contents_focused as *const () as usize,
         &ORIGINAL_FOCUSED,
     )?;
@@ -930,7 +895,7 @@ pub unsafe fn install_panels() -> Result<(), String> {
         detour(
             base,
             bv().flex_layout,
-            &bv().calculate_layout_prologue,
+            bv().calculate_layout_prologue,
             flex_layout as *const () as usize,
             &ORIGINAL_FLEX,
         )?;
@@ -938,7 +903,7 @@ pub unsafe fn install_panels() -> Result<(), String> {
     detour(
         base,
         bv().update_border,
-        &bv().update_border_prologue,
+        bv().update_border_prologue,
         update_border as *const () as usize,
         &ORIGINAL_BORDER,
     )
@@ -991,10 +956,6 @@ impl crate::browsers::SplitBackend for TabModelSplit {
 
     unsafe fn on_page_area(&self, area: &mut crate::hooks::page_area::PageArea) {
         on_page_area(area)
-    }
-
-    unsafe fn place_address(&self, toolbar: *mut c_void) {
-        place_address(toolbar)
     }
 
     fn address_follows_page(&self) -> bool {

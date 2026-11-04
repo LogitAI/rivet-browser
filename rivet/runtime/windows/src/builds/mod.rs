@@ -25,9 +25,6 @@ pub use edge::EDGE;
 pub use samsung::SAMSUNG;
 pub use whale::{WHALE, WHALE_ADD_TAB_AT};
 
-#[allow(unused_imports)]
-use crate::features::look::{ACCENT_TINT, FOCUS_RING, HAIRLINE, INK, PAPER, SELECTION, SOFT_INK};
-
 /// An address the build does not have. Every check against it fails, so the feature that needs it
 /// stays off.
 pub(crate) const ABSENT: usize = 0x7FFF_0000;
@@ -883,7 +880,7 @@ static CURRENT: OnceLock<Option<&'static Build>> = OnceLock::new();
 
 /// The row for the browser module loaded in this process, if any row matches its version.
 pub fn current() -> Option<&'static Build> {
-    *CURRENT.get_or_init(|| crate::chromium::image::recorded_build())
+    *CURRENT.get_or_init(crate::chromium::image::recorded_build)
 }
 
 /// The row of the verified build. Only code that already holds a recorded image calls this.

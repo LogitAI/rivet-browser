@@ -17,40 +17,53 @@ pub extern "C" fn rivet_runtime_abi_version() -> u32 {
 }
 
 /// The default appbar width in device-independent pixels.
+#[cfg(any(windows, test))]
 const APPBAR_WIDTH: i32 = 268;
 
 /// The range the appbar width can be dragged between, in device-independent pixels.
+#[cfg(any(windows, test))]
 const APPBAR_MIN_WIDTH: i32 = 200;
+#[cfg(any(windows, test))]
 const APPBAR_MAX_WIDTH: i32 = 420;
 
 /// Width of the grab area on the appbar's right edge. Only the half inside the appbar is taken,
 /// because the page beside it belongs to the browser.
+#[cfg(any(windows, test))]
 const RESIZER_WIDTH: i32 = 6;
 
 /// The strip along the window's left edge that shows a hidden appbar when the pointer reaches it.
+#[cfg(any(windows, test))]
 const EDGE_WIDTH: i32 = 10;
 
 /// The gap between the window edge and the page of a hidden appbar, and between the window edge
 /// and the floating appbar.
+#[cfg(any(windows, test))]
 const FLOAT_INSET: i32 = 8;
 
 /// The empty leading space of the toolbar row, and the toggle button drawn in it.
+#[cfg(any(windows, test))]
 const TOGGLE_SIZE: i32 = 28;
 /// The toggle's distance from the page panel's leading edge, and the size of its glyph.
+#[cfg(any(windows, test))]
 const TOGGLE_LEFT: i32 = 8;
+#[cfg(any(windows, test))]
+#[cfg_attr(not(windows), allow(dead_code))]
 const TOGGLE_GLYPH: f32 = 16.0;
 /// Where the toggle sits, from the window's top edge in device-independent pixels: centred in the
 /// bar, which is the panel's 44 DIP top row one 8 DIP gap below the edge.
+#[cfg(any(windows, test))]
 const TOGGLE_TOP: i32 = 16;
 
 /// The appbar of one window: how wide it is, and whether it is docked, hidden or peeking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(windows, test))]
 struct AppbarLayout {
     side: i32,
     collapsed: bool,
     peek: bool,
 }
 
+#[cfg(any(windows, test))]
 impl AppbarLayout {
     const fn new() -> Self {
         Self {
@@ -116,32 +129,38 @@ impl AppbarLayout {
 /// What to reserve left of the client view so the page begins at `leading`, when the browser lays
 /// its own strip out at the view's leading edge with `strip` DIPs. The reservation is never
 /// negative, because the browser does not lay out a view that starts left of its window.
+#[cfg(any(windows, test))]
 fn reserved_for_strip(leading: i32, strip: i32) -> i32 {
     (leading - strip).max(0)
 }
 
 /// The toggle button's rectangle as (x, y, width, height) in device-independent pixels of the
 /// window's client area, for a page panel that begins at `leading`.
+#[cfg(any(windows, test))]
 fn toggle_rect(leading: i32) -> (i32, i32, i32, i32) {
     (leading + TOGGLE_LEFT, TOGGLE_TOP, TOGGLE_SIZE, TOGGLE_SIZE)
 }
 
 /// Height of the appbar band that drags the window, matched to Chromium's app title bar.
+#[cfg(any(windows, test))]
 const CAPTION_HEIGHT: i32 = 32;
 
 /// Converts a device-independent length to physical pixels for a DPI.
+#[cfg(any(windows, test))]
 fn scale(value: i32, dpi: u32) -> i32 {
     (value * dpi as i32 + 48) / 96
 }
 
 /// The DPI that maps a browser layout width in device-independent pixels onto its client width
 /// in physical pixels.
+#[cfg(any(windows, test))]
 fn layout_scale_dpi(client_pixels: i32, layout_width: i32) -> u32 {
     ((client_pixels as i64 * 96 + layout_width as i64 / 2) / layout_width.max(1) as i64) as u32
 }
 
 /// The scale a window keeps after a DPI change: the one the browser laid the window out at during
 /// the change, or the new DPI Windows gave when no layout ran, so nothing keeps the old monitor's.
+#[cfg(any(windows, test))]
 fn dpi_after_change(laid_during_change: Option<u32>, new_dpi: u32) -> u32 {
     laid_during_change.unwrap_or(new_dpi).max(96)
 }
@@ -149,12 +168,14 @@ fn dpi_after_change(laid_during_change: Option<u32>, new_dpi: u32) -> u32 {
 /// The first row of the browser's title bar in a restored window, in physical pixels. The browser
 /// keeps one device-independent pixel, rounded up, for the top edge. The window's own border can
 /// be thicker and then covers it.
+#[cfg(any(windows, test))]
 fn title_bar_top(window_border: i32, dpi: u32) -> i32 {
     window_border.max(dpi.div_ceil(96) as i32)
 }
 
 /// What a point in the reserved strip does, given client coordinates of the browser window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(windows, test))]
 enum StripHit {
     /// The point belongs to the browser, not to the strip.
     Browser,
@@ -169,13 +190,17 @@ enum StripHit {
     /// Belongs to the appbar's own content.
     Appbar,
     /// The caption buttons, which Windows needs by name for Snap Layouts.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Minimize,
+    #[cfg_attr(not(windows), allow(dead_code))]
     Maximize,
+    #[cfg_attr(not(windows), allow(dead_code))]
     Close,
 }
 
 /// Classifies a point against a docked appbar `side` DIPs wide, which is zero while the appbar is
 /// hidden. `resize_border` is zero when the window is maximized.
+#[cfg(any(windows, test))]
 fn strip_hit(x: i32, y: i32, dpi: u32, resize_border: i32, side: i32) -> StripHit {
     if x < 0 || x >= scale(side, dpi) {
         return StripHit::Browser;
@@ -336,11 +361,13 @@ mod ground;
 mod hooks;
 #[cfg(windows)]
 mod installed_browsers;
+#[cfg(any(windows, test))]
 mod press;
 #[cfg(windows)]
 mod row_data;
 #[cfg(windows)]
 mod side_rail;
+#[cfg(any(windows, test))]
 mod spaces;
 #[cfg(windows)]
 mod targets;

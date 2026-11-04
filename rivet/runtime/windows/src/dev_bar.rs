@@ -32,11 +32,14 @@ thread_local! {
     static PRESS: RefCell<HashMap<isize, usize>> = RefCell::new(HashMap::new());
 }
 
+/// Where the button sits, the whole top row, and the actions of the bar.
+type Placement = ([f32; 4], [f32; 4], Vec<(Action, u32)>);
+
 /// The bar of `window` as left, top, width and height in DIPs with its buttons, or none while the
 /// page is not in developer mode, the build has no button to show, or the window shows a split,
 /// whose rows are Rivet's own. The second rectangle is the whole top row, which the visual covers
 /// to lay the stripes of developer mode over it.
-unsafe fn place(window: HWND) -> Option<([f32; 4], [f32; 4], Vec<(Action, u32)>)> {
+unsafe fn place(window: HWND) -> Option<Placement> {
     if !crate::features::dev_page::window_in_dev_mode(window)
         || !crate::features::split::panes(window).is_empty()
     {

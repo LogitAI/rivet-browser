@@ -496,6 +496,11 @@ fn wide(value: &str) -> Vec<u16> {
 
 impl Field {
     /// Starts the engine for `window`. `face` is the family GDI knows, and `rgb` the text colour.
+    ///
+    /// # Safety
+    ///
+    /// `window` must be a live window owned by the calling thread. The field must then be used
+    /// only on that thread, while the window exists.
     pub unsafe fn new(window: HWND, face: &str, rgb: u32) -> Result<Self, String> {
         let create: CreateTextServices = ["msftedit.dll", "riched20.dll"]
             .iter()
@@ -596,6 +601,10 @@ impl Field {
     }
 
     /// Puts the field at `client`, in the window's client pixels, with text of `size_dip` at `dpi`.
+    ///
+    /// # Safety
+    ///
+    /// Must be called on the thread that created the field, while its window is alive.
     pub unsafe fn place(&mut self, client: RECT, size_dip: f32, dpi: u32) {
         let host = &*self.host;
         let changed = {
@@ -627,6 +636,10 @@ impl Field {
     }
 
     /// Makes the field live: the engine starts showing the caret and selection.
+    ///
+    /// # Safety
+    ///
+    /// Must be called on the thread that created the field, while its window is alive.
     pub unsafe fn activate(&mut self) {
         let client = (*self.host).client.get();
         (self.table().in_place_activate)(self.services.cast(), &client);
@@ -735,15 +748,21 @@ impl Field {
     }
 
     /// Draws the field over `ground` (a colour as 0xRRGGBB) and returns its pixels.
+    ///
+    /// # Safety
+    ///
+    /// Must be called on the thread that created the field, while its window is alive.
     pub unsafe fn render(&mut self, ground: u32) -> Option<Pixels<'_>> {
         let client = (*self.host).client.get();
         let (width, height) = (client.right - client.left, client.bottom - client.top);
         if width <= 0 || height <= 0 {
             return None;
         }
-        if self.surface.as_ref().map_or(true, |surface| {
-            surface.width != width || surface.height != height
-        }) {
+        if self
+            .surface
+            .as_ref()
+            .is_none_or(|surface| surface.width != width || surface.height != height)
+        {
             if let Some(old) = self.surface.take() {
                 Self::free_surface(old);
             }

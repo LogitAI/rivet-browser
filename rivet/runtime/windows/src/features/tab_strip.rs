@@ -128,10 +128,9 @@ unsafe extern "system" fn supports_feature(
         && browsers()
             .iter()
             .any(|(_, known)| *known == browser as usize)
+        && asked_by_layout(vertical.window_feature_callers, caller)
     {
-        if asked_by_layout(vertical.window_feature_callers, caller) {
-            return false;
-        }
+        return false;
     }
     let original: SupportsFeature = std::mem::transmute(FEATURE_ORIGINAL.load(Ordering::Acquire));
     original(browser, feature, check)
@@ -166,22 +165,6 @@ unsafe fn word(address: usize) -> Option<usize> {
 unsafe fn bounds_of(view: usize) -> Option<[i32; 4]> {
     let mut value = [0i32; 4];
     read(view + BOUNDS, 16, value.as_mut_ptr().cast()).then_some(value)
-}
-
-/// Gives a view that has just been told to take no room a size of nothing, which also repaints the
-/// place it left. Without it the toolbar keeps the pixels the view drew there, since nothing else
-/// invalidates them. A build that records no `SetBoundsRect` leaves the view as it is.
-pub unsafe fn collapse(view: usize) {
-    let original = BOUNDS_ORIGINAL.load(Ordering::Acquire);
-    if original == 0 {
-        return;
-    }
-    if let Some([x, y, width, height]) = bounds_of(view) {
-        if width != 0 || height != 0 {
-            let original: SetBounds = std::mem::transmute(original);
-            original(view as *mut c_void, &[x, y, 0, 0]);
-        }
-    }
 }
 
 /// The left edge, in the frame's coordinates, of the caption buttons: the right-aligned short row

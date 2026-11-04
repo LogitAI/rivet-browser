@@ -8,7 +8,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use windows::core::{Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{GENERIC_READ, POINT};
@@ -309,7 +309,6 @@ struct Rail {
     near: bool,
     over: bool,
     opacity: f32,
-    opening: bool,
     /// The geometry of the last update, for hit testing in physical pixels.
     scale: f32,
     geometry: Option<PageGeometry>,
@@ -353,7 +352,6 @@ impl Rail {
             near: false,
             over: false,
             opacity: 0.0,
-            opening: false,
             scale: 1.0,
             geometry: None,
         })
@@ -784,9 +782,9 @@ pub unsafe fn update(window: HWND, appbar: &Appbar, visible: bool, dpi: u32) {
     let geometry = rail_geometry(window).filter(|_| visible);
     RAILS.with(|rails| {
         let mut rails = rails.borrow_mut();
-        if !rails.contains_key(&(window as isize)) {
+        if let std::collections::hash_map::Entry::Vacant(e) = rails.entry(window as isize) {
             let Ok(rail) = Rail::new(appbar) else { return };
-            rails.insert(window as isize, rail);
+            e.insert(rail);
             // The page area is known once the browser has laid out with the patched layout.
             if let Err(error) = crate::hooks::page_area::install() {
                 crate::trace::trace(&format!("side rail: {error}"));
@@ -1004,7 +1002,7 @@ unsafe fn refresh_tip(
 }
 
 /// Decodes an icon file into pixels Direct2D can draw.
-unsafe fn load_picture(path: &PathBuf) -> Option<IWICBitmapSource> {
+unsafe fn load_picture(path: &Path) -> Option<IWICBitmapSource> {
     let factory: IWICImagingFactory =
         CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
     let name = HSTRING::from(path.to_string_lossy().as_ref());
@@ -1069,10 +1067,8 @@ enum Target {
 fn target_at(rail: &Rail, unfolded: bool, x: f32, y: f32) -> Option<Target> {
     let geometry = rail.geometry?;
     if unfolded {
-        if rail.shown.is_some() {
-            if on_header(geometry, x, y).1 {
-                return Some(Target::PanelClose);
-            }
+        if rail.shown.is_some() && on_header(geometry, x, y).1 {
+            return Some(Target::PanelClose);
         }
         let (left, top, height) = rail_rect(geometry);
         return rail_hit(x - left, y - top, height, rail.entries.len()).map(Target::Rail);

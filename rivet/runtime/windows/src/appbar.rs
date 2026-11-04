@@ -2365,6 +2365,10 @@ impl Canvas<'_> {
         self.tab_row_text(left, inner, top, item, item.title, hovered, effect, false)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one row of the tab list is drawn from all of these at once"
+    )]
     unsafe fn tab_row_text(
         &self,
         left: f32,
@@ -2456,7 +2460,7 @@ unsafe fn elide(
     let chars: Vec<char> = value.chars().collect();
     let (mut low, mut high) = (0usize, chars.len());
     while low < high {
-        let middle = (low + high + 1) / 2;
+        let middle = (low + high).div_ceil(2);
         let candidate: String = chars[..middle].iter().collect::<String>() + "\u{2026}";
         if measure(dwrite, fonts, style, &candidate)? <= room {
             low = middle;
@@ -2473,12 +2477,12 @@ pub(crate) fn make_fonts_known_to_gdi() {
     static DONE: std::sync::Once = std::sync::Once::new();
     DONE.call_once(|| unsafe {
         for font in FONTS {
-            let mut count = 0u32;
+            let count = 0u32;
             windows_sys::Win32::Graphics::Gdi::AddFontMemResourceEx(
                 font.as_ptr().cast(),
                 font.len() as u32,
                 std::ptr::null(),
-                &mut count,
+                &count,
             );
         }
     });
