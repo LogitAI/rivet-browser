@@ -991,7 +991,7 @@ $urlLink = & {
   $path = Join-Path $pageDir 'page-link.html'
   $hexA = '#{0:X6}' -f $script:ColourA
   [IO.File]::WriteAllText($path, "<!doctype html><meta charset=utf-8><title>page-link</title><style>html,body{margin:0;height:100%;background:$hexA}</style><a href=`"page-c.html`" onclick=`"window.open(this.href,'_blank','left=9000,top=1000,width=800,height=600');return false`" style=`"display:block;width:100%;height:100%`"></a>")
-  'file:///' + ($path -replace '\', '/')
+  'file:///' + ($path -replace '\\', '/')
 }
 
 Add-Type -TypeDefinition @'
