@@ -98,6 +98,8 @@ impl Modes {
 /// A button of the developer bar, in the order it is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    /// Rivet's own: the page floats as the Mini Window. It runs no browser command.
+    MiniWindow,
     Inspect,
     Console,
 }
@@ -106,6 +108,7 @@ impl Action {
     /// The Segoe Fluent Icons glyph and the label of the button.
     pub fn look(self) -> (char, &'static str) {
         match self {
+            Action::MiniWindow => ('\u{E8A7}', "Open in Mini Window"),
             Action::Inspect => ('\u{E7C9}', "Inspect element"),
             Action::Console => ('\u{E756}', "Console"),
         }
@@ -120,6 +123,14 @@ pub fn buttons(known: &[(Action, u32)]) -> Vec<(Action, u32)> {
         .filter(|(_, command)| *command != 0)
         .copied()
         .collect()
+}
+
+/// The bar's buttons: Rivet's own Mini Window button first, then the browser commands the build
+/// knows. Rivet's button carries no command.
+pub fn bar_buttons(known: &[(Action, u32)]) -> Vec<(Action, u32)> {
+    let mut all = vec![(Action::MiniWindow, 0)];
+    all.extend(buttons(known));
+    all
 }
 
 /// The size of the bar's buttons and the gap before the caption buttons, in DIPs.
@@ -221,6 +232,13 @@ mod tests {
         assert_eq!(buttons(&known), vec![(Action::Console, 40005)]);
         assert!(buttons(&[(Action::Inspect, 0)]).is_empty());
         assert_eq!(bar_width(0), 0.0);
+    }
+
+    #[test]
+    fn fr11_bar_offers_open_in_mini_window_before_the_browser_commands() {
+        let known = [(Action::Inspect, 0), (Action::Console, 40005)];
+        assert_eq!(bar_buttons(&known), vec![(Action::MiniWindow, 0), (Action::Console, 40005)]);
+        assert_eq!(bar_buttons(&[]), vec![(Action::MiniWindow, 0)]);
     }
 
     #[test]

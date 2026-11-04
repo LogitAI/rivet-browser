@@ -14,8 +14,9 @@ use rivet_core::{build_launch_plan, profile_allows_rivet, DisplayMode, LaunchReq
 use rivet_platform_windows::hold::{self, Launch};
 use rivet_platform_windows::signed_table;
 use rivet_platform_windows::{
-    browser_windows, close_browser_window, inject_runtime, launch_clock, process_tree_is_alive,
-    process_was_launched, resolve_browser_executable, wait_for_new_browser_window, BrowserWindow,
+    browser_windows, close_browser_window, post_window_command, inject_runtime, launch_clock, process_tree_is_alive,
+    process_was_launched, resolve_browser_executable, wait_for_new_browser_window,
+    BrowserWindow,
 };
 
 const USAGE: &str = "\
@@ -25,6 +26,8 @@ Usage:
       [--display visible|hidden|auto] [--runtime <path>] [--state <path>] [--hold <path>] [--json]
   rivet session list [--state <path>] [--json]
   rivet session close --id <id> [--state <path>] [--json]
+  rivet session mini-window --id <id> [--state <path>] \\
+      pop-out | close | return left|right|top|bottom | move <x> <y> | resize <width> <height>
   rivet hold refresh --browser <path> [--hold <path>]
 
 The browser executable is always explicit in this first release. Rivet does not guess a browser
@@ -75,10 +78,11 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
         Some(command) if command == ["session", "start"] => run_start(parse_start(arguments)?),
         Some(command) if command == ["session", "list"] => run_list(parse_query(arguments)?),
         Some(command) if command == ["session", "close"] => run_close(parse_close(arguments)?),
+        Some(command) if command == ["session", "mini-window"] => run_mini_window(parse_mini_window(arguments)?),
         Some(command) if command == ["builds", "update"] => run_builds_update(&arguments[2..]),
         Some(command) if command == ["builds", "apply"] => run_builds_apply(&arguments[2..]),
         Some(command) if command == ["hold", "refresh"] => run_hold_refresh(arguments),
-        _ => Err("expected `setup`, `session start`, `session list`, `session close`, `builds update`, `builds apply` or `hold refresh`".into()),
+        _ => Err("expected `setup`, `session start`, `session list`, `session close`, `session mini-window`, `builds update`, `builds apply` or `hold refresh`".into()),
     }
 }
 
@@ -535,6 +539,55 @@ fn run_list(options: QueryOptions) -> Result<(), String> {
     Ok(())
 }
 
+/// What `rivet session mini-window` was asked to do.
+#[derive(Debug, PartialEq, Eq)]
+struct MiniWindowOptions {
+    id: String,
+    state: Option<PathBuf>,
+    command: rivet_protocol::window::MiniWindowCommand,
+}
+
+fn parse_mini_window(arguments: Vec<String>) -> Result<MiniWindowOptions, String> {
+    let mut id = None;
+    let mut state = None;
+    let mut words = Vec::new();
+    let mut index = 2;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--id" => id = Some(next_value(&arguments, &mut index, "--id")?),
+            "--state" => state = Some(PathBuf::from(next_value(&arguments, &mut index, "--state")?)),
+            option if option.starts_with("--") => return Err(format!("unknown option {option:?}")),
+            word => words.push(word.to_owned()),
+        }
+        index += 1;
+    }
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    Ok(MiniWindowOptions {
+        id: id.ok_or_else(|| "--id is required".to_owned())?,
+        state,
+        command: rivet_protocol::window::MiniWindowCommand::parse(&words)?,
+    })
+}
+
+/// Sends a Mini Window command to the window of one Rivet session, the same command the window's
+/// own buttons run.
+fn run_mini_window(options: MiniWindowOptions) -> Result<(), String> {
+    let registry = SessionRegistry::load(&state_path(options.state.as_deref())?).map_err(|error| error.to_string())?;
+    let session = registry
+        .list()
+        .find(|session| session.id == options.id)
+        .ok_or_else(|| format!("Rivet session {:?} does not exist", options.id))?;
+    let (wparam, lparam) = options.command.encode();
+    post_window_command(
+        &session.browser,
+        BrowserWindow { handle: session.window_handle, process_id: session.process_id },
+        rivet_protocol::window::MINI_WINDOW_MESSAGE,
+        wparam,
+        lparam,
+    )
+    .map_err(|error| error.to_string())
+}
+
 fn run_close(options: CloseOptions) -> Result<(), String> {
     let state = state_path(options.state.as_deref())?;
     let mut registry = SessionRegistry::load(&state).map_err(|error| error.to_string())?;
@@ -670,6 +723,22 @@ fn close_json(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr9_cli_names_a_session_and_a_mini_window_command() {
+        use rivet_protocol::window::{Edge, MiniWindowCommand};
+        let words = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_mini_window(words(&["session", "mini-window", "--id", "s1", "return", "left"])),
+            Ok(MiniWindowOptions { id: "s1".into(), state: None, command: MiniWindowCommand::Return(Edge::Left) })
+        );
+        assert_eq!(
+            parse_mini_window(words(&["session", "mini-window", "pop-out", "--id", "s2"])).map(|options| options.command),
+            Ok(MiniWindowCommand::PopOut)
+        );
+        assert!(parse_mini_window(words(&["session", "mini-window", "close"])).is_err(), "the session is required");
+        assert!(parse_mini_window(words(&["session", "mini-window", "--id", "s1"])).is_err(), "a command is required");
+    }
 
     #[test]
     fn fr1_setup_without_options_opens_the_window() {

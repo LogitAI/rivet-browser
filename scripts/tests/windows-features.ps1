@@ -13,7 +13,7 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'bar-layout'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close'),
   [string]$OutDir,
   [switch]$NoBuild
 )
@@ -823,6 +823,108 @@ function Invoke-BarLayout($Name, $shots) {
   } finally { Stop-Scene $ctx }
 }
 
+# A Mini Window command, posted the way `rivet session mini-window` posts it. The codes are the
+# protocol's: 1 pop out, 2 move (x | y << 16 in DIPs), 4 return (0 left, 1 right, 2 top, 3 bottom), 5 close.
+function Send-MiniCommand($ctx, [int]$Code, [int]$Low = 0, [int]$High = 0) {
+  $l = [IntPtr](($High -shl 16) -bor ($Low -band 0xffff))
+  [FeatureWin]::PostMessage($ctx.Hwnd, [FeatureWin]::RegisterWindowMessage('Rivet.MiniWindow'), [IntPtr]$Code, $l) | Out-Null
+}
+
+# Whether page B floats as a Mini Window over page A: B is a smaller rectangle that page A's region
+# surrounds, so A still fills the page area around it.
+function Test-MiniShown($capture) {
+  # The focused pane pops out. A posted click may not move the focus, so either page may float.
+  $one = Test-MiniOver $capture $script:ColourA $script:ColourB
+  if ($one.Verdict -eq 'PASS') { return $one }
+  $two = Test-MiniOver $capture $script:ColourB $script:ColourA
+  if ($two.Verdict -eq 'PASS') { $two.Reason = "page A floats, not the focused page B; $($two.Reason)"; return $two }
+  $one
+}
+
+# Whether the page of colour $Float floats over the page of colour $Behind. A and B in the result
+# are the behind and floating regions.
+function Test-MiniOver($capture, [int]$Behind, [int]$Float) {
+  $a = Get-PageRegion $capture $Behind
+  $b = Get-PageRegion $capture $Float
+  if ($b.Area -le 0) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'page B is not shown'; A = $a; B = $b } }
+  if ($a.Area -le 0) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'page A is not shown behind the Mini Window'; A = $a; B = $b } }
+  $inside = $b.X0 -gt $a.X0 -and $b.X1 -lt $a.X1 -and $b.Y0 -gt $a.Y0 -and $b.Y1 -lt $a.Y1
+  if (-not $inside) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = "page B ($($b.X0),$($b.Y0))-($($b.X1),$($b.Y1)) does not float inside page A ($($a.X0),$($a.Y0))-($($a.X1),$($a.Y1))"; A = $a; B = $b } }
+  if ($b.Area * 4 -gt $a.Area) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'page B is too large for a Mini Window'; A = $a; B = $b } }
+  [pscustomobject]@{ Verdict = 'PASS'; Reason = "page B floats at ($($b.X0),$($b.Y0)) $($b.Width)x$($b.Height) over page A"; A = $a; B = $b }
+}
+
+# The Mini Window from a split: pop out, then one of move, return or close.
+function Invoke-Mini($Name, $shots, [string]$Step) {
+  $ctx, $state = Start-Scene $Name "mini-$Step" $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if (-not (Open-SecondPage $ctx $urlB)) { return @('NOT_DRIVEN', $null, 'the second page did not open as a tab of the app window alone') }
+    Send-RivetMessage $ctx 'Rivet.ToggleSplit'
+    Start-Sleep 6
+    $split = Get-Capture $ctx (Join-Path $shots "mini-$Step-1-split.png")
+    $on = Test-TwoPages $split $script:ColourA $script:ColourB
+    if ($on.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $split.Path, "no split to pop out of: $($on.Reason)") }
+    # The checker must reject a split: both pages side by side are no Mini Window.
+    if ((Test-MiniShown $split).Verdict -ne 'FAIL') { return @('NOT_DRIVEN', $split.Path, 'the Mini Window check did not fail on a split') }
+    # Page B is the second pane, so it is focused first and then popped out.
+    $before = @(Read-Log).Count
+    $b = Get-PageRegion $split $script:ColourB
+    $p = New-Object FeatureWin+P; $p.X = [int](($b.X0 + $b.X1) / 2); $p.Y = [int](($b.Y0 + $b.Y1) / 2)
+    Send-ClientMouse $ctx 0x201 $p.X $p.Y 1
+    Send-ClientMouse $ctx 0x202 $p.X $p.Y 0
+    Start-Sleep 2
+    Send-MiniCommand $ctx 1
+    Start-Sleep 4
+    $mini = Get-Capture $ctx (Join-Path $shots "mini-$Step-2-popped.png")
+    $log = @(Read-Log | Select-Object -Skip $before)
+    if (-not ($log | Where-Object { $_ -match '^mini window: open tab' })) { return @('FAIL', $mini.Path, 'the runtime did not open a Mini Window for the pop-out command') }
+    $shown = Test-MiniShown $mini
+    if ($shown.Verdict -ne 'PASS') { return @('FAIL', $mini.Path, "pop out: $($shown.Reason)") }
+    if ($Step -eq 'pop-out') { return @('PASS', $mini.Path, $shown.Reason) }
+    $s = $ctx.Dpi / 96.0
+    switch ($Step) {
+      'move' {
+        $x = [int]($shown.A.X0 / $s) + 40; $y = [int]($shown.A.Y0 / $s) + 40
+        Send-MiniCommand $ctx 2 $x $y
+        Start-Sleep 3
+        $moved = Get-Capture $ctx (Join-Path $shots 'mini-move-3-moved.png')
+        $after = Test-MiniShown $moved
+        if ($after.Verdict -ne 'PASS') { return @('FAIL', $moved.Path, "after the move: $($after.Reason)") }
+        if ([Math]::Abs($after.B.X0 - $shown.B.X0) -lt 20 * $s -or $after.B.X0 -gt $shown.B.X0) { return @('FAIL', $moved.Path, "the Mini Window did not move to the upper left (from $($shown.B.X0),$($shown.B.Y0) to $($after.B.X0),$($after.B.Y0))") }
+        return @('PASS', $moved.Path, "moved from ($($shown.B.X0),$($shown.B.Y0)) to ($($after.B.X0),$($after.B.Y0))")
+      }
+      'return' {
+        Send-MiniCommand $ctx 4 0
+        Start-Sleep 6
+        $back = Get-Capture $ctx (Join-Path $shots 'mini-return-3-split.png')
+        $two = Test-TwoPages $back $script:ColourA $script:ColourB
+        if ($two.Verdict -ne 'PASS') { return @('FAIL', $back.Path, "after the return: $($two.Reason)") }
+        $floated, $stayed = if ($shown.Reason -match '^page A floats') { $script:ColourA, $script:ColourB } else { $script:ColourB, $script:ColourA }
+        $a = Get-PageRegion $back $stayed; $bb = Get-PageRegion $back $floated
+        if ($bb.X0 -ge $a.X0) { return @('FAIL', $back.Path, 'the floating page came back as a split, but not on the left edge') }
+        if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $back.Path, 'the runtime did not take the tab list command') }
+        $count = (Get-TabUrls).Count
+        if ($count -ne 2) { return @('FAIL', $back.Path, "the window has $count tabs after the return, not the same two") }
+        return @('PASS', $back.Path, "page B is back on the left as a split of the same tab; $($two.Reason)")
+      }
+      'close' {
+        Send-MiniCommand $ctx 5
+        Start-Sleep 3
+        $closed = Get-Capture $ctx (Join-Path $shots 'mini-close-3-closed.png')
+        $one = if ($shown.Reason -match '^page A floats') { Test-OnePage $closed $script:ColourB $script:ColourA } else { Test-OnePage $closed $script:ColourA $script:ColourB }
+        if ($one.Verdict -ne 'PASS') { return @('FAIL', $closed.Path, "after the close: $($one.Reason)") }
+        if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $closed.Path, 'the runtime did not take the tab list command') }
+        $count = (Get-TabUrls).Count
+        if ($count -ne 2) { return @('FAIL', $closed.Path, "the window has $count tabs after the close; the page should stay in its tab") }
+        return @('PASS', $closed.Path, 'the Mini Window closed and page B stays in its tab')
+      }
+    }
+  } finally { Stop-Scene $ctx }
+}
+
 # --- Run ---------------------------------------------------------------------------------
 foreach ($name in $Browsers) {
   $exePath, $exeName = $table[$name]
@@ -850,6 +952,10 @@ foreach ($name in $Browsers) {
         'split-click' { Invoke-SplitPath $name $shots 'split-click' 'message' 'colour' -ThenClick }
         'split-rows' { Invoke-SplitRows $name $shots }
         'bar-layout' { Invoke-BarLayout $name $shots }
+        'mini-pop-out' { Invoke-Mini $name $shots 'pop-out' }
+        'mini-move' { Invoke-Mini $name $shots 'move' }
+        'mini-return' { Invoke-Mini $name $shots 'return' }
+        'mini-close' { Invoke-Mini $name $shots 'close' }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason
