@@ -6,8 +6,8 @@
 //! messages. Nothing here is a window of its own.
 //!
 //! The row moves it, its edges resize it, and its buttons open its page in the window or
-//! close it. Dropped near an edge of the pages it splits the page there, and dropped elsewhere
-//! over the pages it opens there, as a dragged tab does.
+//! close it. Dragged by its grip, like a split pane's, it drops into the pages: near an edge it
+//! splits the page there and elsewhere over the pages it opens there, as a dragged tab does.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -47,6 +47,9 @@ const GRAB: f32 = 6.0;
 /// The buttons of the row, and the room they take at its right end.
 const BUTTON: f32 = 28.0;
 const BUTTON_PAD: f32 = 4.0;
+/// Where the grip starts in the row, just past the left edge's resize band.
+pub const GRIP_X: f32 = GRAB;
+const GRIP_GLYPH: char = '\u{E7C2}';
 /// The frame's corner radius and the room around it for its shadow.
 const RADIUS: f32 = 10.0;
 const SHADOW: f32 = 24.0;
@@ -71,8 +74,11 @@ pub struct Edges {
 /// What a point of the Mini Window is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
-    /// The row outside its buttons, which moves the window.
+    /// The row outside its buttons, which only moves the window.
     Row,
+    /// The grip at the row's left end. A drag by it moves the window and drops it into the pages
+    /// as a split pane's grip does: on an edge it splits there, in the middle it opens there.
+    Grip,
     /// The button that opens the page in the window, in place of the page shown there.
     Return,
     Close,
@@ -129,7 +135,9 @@ pub fn hit(rect: [i32; 4], x: f32, y: f32) -> Option<Hit> {
     if y < top + ROW as f32 {
         let (back, close) = row_buttons(width);
         let local = x - left;
-        return Some(if local >= close {
+        return Some(if local < GRIP_X + BUTTON {
+            Hit::Grip
+        } else if local >= close {
             Hit::Close
         } else if local >= back {
             Hit::Return
@@ -516,7 +524,7 @@ pub unsafe fn on_mouse(window: HWND, message: u32, lparam: isize) -> Option<isiz
             };
             let (dx, dy) = ((x - drag.start[0]).round() as i32, (y - drag.start[1]).round() as i32);
             let next = match drag.hit {
-                Hit::Row => Some([drag.rect[0] + dx, drag.rect[1] + dy, drag.rect[2], drag.rect[3]]),
+                Hit::Row | Hit::Grip => Some([drag.rect[0] + dx, drag.rect[1] + dy, drag.rect[2], drag.rect[3]]),
                 Hit::Resize(edges) => Some(resized(drag.rect, edges, dx, dy)),
                 _ => None,
             };
@@ -528,10 +536,18 @@ pub unsafe fn on_mouse(window: HWND, message: u32, lparam: isize) -> Option<isiz
                 });
                 set_rect(window, |_| next);
             }
+            if drag.hit == Hit::Grip {
+                // The grip drops into the pages, so where it would land is highlighted.
+                let point = windows_sys::Win32::Foundation::POINT { x: (x * factor) as i32, y: (y * factor) as i32 };
+                crate::frame::show_drop_zone(window, Some(point));
+            }
             Some(0)
         }
         WM_LBUTTONUP | WM_CAPTURECHANGED => {
             let drag = with(window, |mini| mini.drag.take()).flatten()?;
+            if drag.hit == Hit::Grip {
+                crate::frame::show_drop_zone(window, None);
+            }
             if message == WM_LBUTTONUP {
                 ReleaseCapture();
             } else {
@@ -545,7 +561,8 @@ pub unsafe fn on_mouse(window: HWND, message: u32, lparam: isize) -> Option<isiz
                     // The button opens the page in the window, as the demo's "Open in space".
                     open_here(window);
                 }
-                Hit::Row if drag.moved => match area(window).and_then(|area| drop_target(area, x, y)) {
+                // The row only moves the window. The grip drops it into the pages.
+                Hit::Grip if drag.moved => match area(window).and_then(|area| drop_target(area, x, y)) {
                     Some(Some(edge)) => {
                         return_to(window, edge);
                     }
@@ -634,8 +651,8 @@ impl Surface {
         // The row: the page's address, then the return and close buttons.
         let row = ROW as f32;
         let (back, close) = row_buttons(width);
-        self.text(context, &key.title, "Segoe UI Variable Text", 12.0, 600, area_rect(left + 12.0, top, back - 16.0, row), rgb(INK, 1.0), false)?;
-        for (hit, x, glyph) in [(Hit::Return, back, RETURN_GLYPH), (Hit::Close, close, CLOSE_GLYPH)] {
+        self.text(context, &key.title, "Segoe UI Variable Text", 12.0, 600, area_rect(left + GRIP_X + BUTTON + 4.0, top, back - GRIP_X - BUTTON - 8.0, row), rgb(INK, 1.0), false)?;
+        for (hit, x, glyph) in [(Hit::Grip, GRIP_X, GRIP_GLYPH), (Hit::Return, back, RETURN_GLYPH), (Hit::Close, close, CLOSE_GLYPH)] {
             let button = area_rect(left + x, top + (row - BUTTON) / 2.0, BUTTON, BUTTON);
             if key.hover == Some(hit) {
                 self.rounded(context, button, 6.0, rgb(INK, 0.07))?;
@@ -752,7 +769,9 @@ mod tests {
     #[test]
     fn fr9_the_row_moves_the_window_and_its_buttons_return_or_close_it() {
         let rect = [100, 100, 360, 270];
-        assert_eq!(hit(rect, 150.0, 115.0), Some(Hit::Row));
+        assert_eq!(hit(rect, 150.0, 115.0), Some(Hit::Row), "the row only moves the window");
+        assert_eq!(hit(rect, 100.0 + GRIP_X + 2.0, 115.0), Some(Hit::Grip), "the grip at the left end drops it into the pages");
+        assert_eq!(hit(rect, 100.0 + GRIP_X + BUTTON + 1.0, 115.0), Some(Hit::Row));
         let (back, close) = row_buttons(360.0);
         assert_eq!(hit(rect, 100.0 + back + 4.0, 115.0), Some(Hit::Return));
         assert_eq!(hit(rect, 100.0 + close + 4.0, 115.0), Some(Hit::Close));

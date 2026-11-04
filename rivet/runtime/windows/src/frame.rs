@@ -301,6 +301,20 @@ unsafe fn drop_at(window: HWND, point: POINT) -> Option<Drop> {
     })
 }
 
+/// Highlights where something dragged to client pixel `point` would land, as a tab drag does, or
+/// clears the highlight for none. The Mini Window's grip drag uses it.
+pub(crate) unsafe fn show_drop_zone(window: HWND, point: Option<POINT>) {
+    let dpi = layout_dpi(window);
+    let zone = point.and_then(|point| drop_at(window, point)).map(|drop| drop.view);
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.update_drag(zone.as_ref(), None, dpi) {
+                log(&format!("rivet: could not draw the drop target: {error}"));
+            }
+        }
+    });
+}
+
 unsafe fn show_tab_drag(window: HWND, point: Option<POINT>) {
     let dpi = layout_dpi(window);
     let factor = dpi as f32 / 96.0;
