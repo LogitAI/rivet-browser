@@ -283,7 +283,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
     fn nfr8_launch_carries_the_chosen_provider_switches() {
         let mut input = request(DisplayMode::Visible);
@@ -299,6 +298,7 @@ mod tests {
             .any(|argument| argument.starts_with("--disable-features")));
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr1_rivet_never_enters_the_persons_own_profile() {
         let allowed = |path: &str| profile_allows_rivet(Some(std::path::Path::new(path)));
