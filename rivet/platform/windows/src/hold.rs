@@ -53,7 +53,10 @@ pub fn module_of(executable: &str) -> Option<&'static str> {
 /// table Rivet applied since. A build the signed table adds needs no hold, and can be held once it is old.
 pub fn supported_versions(executable: &str) -> Vec<Version> {
     let mut versions = built_in_versions(executable);
-    if let (Some(store), Some(key)) = (crate::signed_table::default_store(), crate::signed_table::RELEASE_KEY) {
+    if let (Some(store), Some(key)) = (
+        crate::signed_table::default_store(),
+        crate::signed_table::RELEASE_KEY,
+    ) {
         if let Ok(Some(table)) = crate::signed_table::read_store(&store, key) {
             versions.extend(table_versions(&table, executable));
         }
@@ -63,7 +66,11 @@ pub fn supported_versions(executable: &str) -> Vec<Version> {
 
 fn built_in_versions(executable: &str) -> Vec<Version> {
     let executable = executable.to_ascii_lowercase();
-    VERIFIED.iter().filter(|(name, _)| *name == executable).map(|(_, version)| *version).collect()
+    VERIFIED
+        .iter()
+        .filter(|(name, _)| *name == executable)
+        .map(|(_, version)| *version)
+        .collect()
 }
 
 /// The versions a table has rows for, for the browser that `executable` starts.
@@ -80,11 +87,17 @@ pub fn table_versions(table: &serde_json::Value, executable: &str) -> Vec<Versio
 }
 
 pub fn format_version(version: Version) -> String {
-    format!("{}.{}.{}.{}", version[0], version[1], version[2], version[3])
+    format!(
+        "{}.{}.{}.{}",
+        version[0], version[1], version[2], version[3]
+    )
 }
 
 pub fn parse_version(text: &str) -> Option<Version> {
-    let parts = text.split('.').map(|part| part.parse().ok()).collect::<Option<Vec<u16>>>()?;
+    let parts = text
+        .split('.')
+        .map(|part| part.parse().ok())
+        .collect::<Option<Vec<u16>>>()?;
     parts.try_into().ok()
 }
 
@@ -111,7 +124,11 @@ pub enum Refusal {
     /// The installed build is unsupported and Rivet never kept a verified one.
     NoHeldBuild { browser: String, installed: Version },
     /// The held build was used for the whole limit.
-    Expired { browser: String, installed: Version, held: Option<Version> },
+    Expired {
+        browser: String,
+        installed: Version,
+        held: Option<Version>,
+    },
     /// The limit cannot be enforced without its saved clock.
     Unwritable { browser: String, reason: String },
 }
@@ -144,7 +161,10 @@ impl std::fmt::Display for Refusal {
 pub enum Decision {
     /// The installed browser is supported, or Rivet does not integrate with this executable.
     Installed,
-    Held { version: Version, clock: Clock },
+    Held {
+        version: Version,
+        clock: Clock,
+    },
     Refused(Refusal),
 }
 
@@ -164,13 +184,21 @@ pub fn decide(
         return Decision::Installed;
     }
     let browser = display_name(executable).to_owned();
-    let newest = held.iter().copied().filter(|version| supported.contains(version)).max();
+    let newest = held
+        .iter()
+        .copied()
+        .filter(|version| supported.contains(version))
+        .max();
     let first_detected = match saved {
         SavedClock::None => now,
         // A newer unsupported build must not restart the limit. Only a supported one ends it.
         SavedClock::Running(clock) => clock.first_detected,
         SavedClock::Unreadable => {
-            return Decision::Refused(Refusal::Expired { browser, installed, held: newest });
+            return Decision::Refused(Refusal::Expired {
+                browser,
+                installed,
+                held: newest,
+            });
         }
     };
     let Some(version) = newest else {
@@ -178,9 +206,16 @@ pub fn decide(
     };
     // A clock that went backwards cannot prove the limit still holds.
     if now < first_detected || now - first_detected >= LIMIT_SECONDS {
-        return Decision::Refused(Refusal::Expired { browser, installed, held: Some(version) });
+        return Decision::Refused(Refusal::Expired {
+            browser,
+            installed,
+            held: Some(version),
+        });
     }
-    let clock = Clock { first_detected, installed: format_version(installed) };
+    let clock = Clock {
+        first_detected,
+        installed: format_version(installed),
+    };
     Decision::Held { version, clock }
 }
 
@@ -197,7 +232,10 @@ fn display_name(executable: &str) -> &str {
 
 /// `chrome`, `msedge` and so on, the name of a browser's folders below Rivet's own.
 pub fn browser_key(executable: &str) -> String {
-    executable.to_ascii_lowercase().trim_end_matches(".exe").to_owned()
+    executable
+        .to_ascii_lowercase()
+        .trim_end_matches(".exe")
+        .to_owned()
 }
 
 /// The warning a window opened from a held build shows.
@@ -238,7 +276,9 @@ fn read_clock_file(path: &Path) -> SavedClock {
     match std::fs::read(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => SavedClock::None,
         Err(_) => SavedClock::Unreadable,
-        Ok(bytes) => serde_json::from_slice(&bytes).map_or(SavedClock::Unreadable, SavedClock::Running),
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).map_or(SavedClock::Unreadable, SavedClock::Running)
+        }
     }
 }
 
@@ -247,7 +287,10 @@ fn write_clock(root: &Path, executable: &str, clock: &Clock) -> std::io::Result<
     let folder = browser_folder(root, executable);
     std::fs::create_dir_all(&folder)?;
     let temporary = folder.join(format!("{STATE}.tmp"));
-    std::fs::write(&temporary, serde_json::to_vec(clock).map_err(std::io::Error::other)?)?;
+    std::fs::write(
+        &temporary,
+        serde_json::to_vec(clock).map_err(std::io::Error::other)?,
+    )?;
     std::fs::rename(temporary, folder.join(STATE))
 }
 
@@ -257,25 +300,41 @@ fn clear_clock(root: &Path, executable: &str) {
 
 /// The executable inside a hold.
 pub fn held_executable(root: &Path, executable: &str, version: Version) -> PathBuf {
-    browser_folder(root, executable).join(format_version(version)).join(executable)
+    browser_folder(root, executable)
+        .join(format_version(version))
+        .join(executable)
 }
 
 /// What a launch uses after the policy and its saved state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launch {
     /// Open the path the caller gave. `keep` asks for a hold of that build once it is open.
-    Installed { keep: bool },
-    Held { program: PathBuf, version: Version },
+    Installed {
+        keep: bool,
+    },
+    Held {
+        program: PathBuf,
+        version: Version,
+    },
 }
 
 /// Applies the policy for one browser path and saves the clock.
 pub fn plan(browser: &Path, root: &Path, now: u64) -> Result<Launch, Refusal> {
-    let supported = browser.file_name().and_then(|name| name.to_str()).map(supported_versions).unwrap_or_default();
+    let supported = browser
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(supported_versions)
+        .unwrap_or_default();
     plan_with(browser, root, now, &supported)
 }
 
 /// `plan` with the builds that have a usable row given by the caller.
-pub fn plan_with(browser: &Path, root: &Path, now: u64, supported: &[Version]) -> Result<Launch, Refusal> {
+pub fn plan_with(
+    browser: &Path,
+    root: &Path,
+    now: u64,
+    supported: &[Version],
+) -> Result<Launch, Refusal> {
     let Some(executable) = browser.file_name().and_then(|name| name.to_str()) else {
         return Ok(Launch::Installed { keep: false });
     };
@@ -285,7 +344,14 @@ pub fn plan_with(browser: &Path, root: &Path, now: u64, supported: &[Version]) -
     }
     let installed = installed_version(browser);
     let held = held_versions(root, executable);
-    match decide(executable, installed, supported, &held, &read_clock(root, executable), now) {
+    match decide(
+        executable,
+        installed,
+        supported,
+        &held,
+        &read_clock(root, executable),
+        now,
+    ) {
         Decision::Installed => {
             let keep = installed.is_some_and(|version| !held.contains(&version));
             if installed.is_some() {
@@ -298,14 +364,20 @@ pub fn plan_with(browser: &Path, root: &Path, now: u64, supported: &[Version]) -
                 browser: display_name(executable).to_owned(),
                 reason: error.to_string(),
             })?;
-            Ok(Launch::Held { program: held_executable(root, executable, version), version })
+            Ok(Launch::Held {
+                program: held_executable(root, executable, version),
+                version,
+            })
         }
         Decision::Refused(refusal) => {
             // The clock starts at the first sight even when nothing can be opened yet.
             if let (Refusal::NoHeldBuild { installed, .. }, SavedClock::None) =
                 (&refusal, read_clock(root, executable))
             {
-                let clock = Clock { first_detected: now, installed: format_version(*installed) };
+                let clock = Clock {
+                    first_detected: now,
+                    installed: format_version(*installed),
+                };
                 let _ = write_clock(root, executable, &clock);
             }
             Err(refusal)
@@ -316,11 +388,18 @@ pub fn plan_with(browser: &Path, root: &Path, now: u64, supported: &[Version]) -
 /// The status a runtime reads about the process it lives in: the unsupported build and when Rivet
 /// first saw it, if `executable` belongs to a hold.
 pub fn held_status(executable: &Path) -> Option<Clock> {
-    let version_folder = executable.ancestors().skip(1).take(2).find(|folder| folder.join(MARKER).is_file())?;
+    let version_folder = executable
+        .ancestors()
+        .skip(1)
+        .take(2)
+        .find(|folder| folder.join(MARKER).is_file())?;
     match read_clock_file(&version_folder.parent()?.join(STATE)) {
         SavedClock::Running(clock) => Some(clock),
         // A held build always warns, even if its clock cannot be read.
-        _ => Some(Clock { first_detected: 0, installed: "the installed build".to_owned() }),
+        _ => Some(Clock {
+            first_detected: 0,
+            installed: "the installed build".to_owned(),
+        }),
     }
 }
 
@@ -353,13 +432,23 @@ fn version_folder(browser: &Path, module: &str, version: Version) -> Option<Path
 /// the one version folder are program files of this build. The copy gets its final name only when
 /// it is complete, so a hold is never half a browser.
 pub fn refresh(browser: &Path, root: &Path) -> Result<Option<Version>, String> {
-    let executable = browser.file_name().and_then(|name| name.to_str()).ok_or("the browser path has no file name")?;
+    let executable = browser
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("the browser path has no file name")?;
     refresh_with(browser, root, &supported_versions(executable))
 }
 
 /// `refresh` with the builds that have a usable row given by the caller.
-pub fn refresh_with(browser: &Path, root: &Path, supported: &[Version]) -> Result<Option<Version>, String> {
-    let executable = browser.file_name().and_then(|name| name.to_str()).ok_or("the browser path has no file name")?;
+pub fn refresh_with(
+    browser: &Path,
+    root: &Path,
+    supported: &[Version],
+) -> Result<Option<Version>, String> {
+    let executable = browser
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("the browser path has no file name")?;
     let module = module_of(executable).ok_or("Rivet does not integrate with this browser")?;
     let version = installed_version(browser).ok_or("the browser's version could not be read")?;
     if !supported.contains(&version) {
@@ -371,8 +460,13 @@ pub fn refresh_with(browser: &Path, root: &Path, supported: &[Version]) -> Resul
         return Ok(None);
     }
     let source = browser.parent().ok_or("the browser path has no folder")?;
-    let inner = version_folder(browser, module, version).ok_or("the browser's version folder is missing")?;
-    let partial = folder.join(format!("{}.partial-{}", format_version(version), std::process::id()));
+    let inner = version_folder(browser, module, version)
+        .ok_or("the browser's version folder is missing")?;
+    let partial = folder.join(format!(
+        "{}.partial-{}",
+        format_version(version),
+        std::process::id()
+    ));
     let fail = |error: std::io::Error| format!("could not copy {}: {error}", browser.display());
     std::fs::create_dir_all(&partial).map_err(fail)?;
     allow_sandboxed_reads(&partial);
@@ -385,7 +479,11 @@ pub fn refresh_with(browser: &Path, root: &Path, supported: &[Version]) -> Resul
         std::fs::rename(&partial, &finished)
     }) {
         let _ = std::fs::remove_dir_all(&partial);
-        return if finished.join(MARKER).is_file() { Ok(None) } else { Err(fail(error)) };
+        return if finished.join(MARKER).is_file() {
+            Ok(None)
+        } else {
+            Err(fail(error))
+        };
     }
     prune(root, executable);
     Ok(Some(version))
@@ -409,9 +507,14 @@ fn copy_build(source: &Path, inner: &Path, target: &Path, version: &str) -> std:
             std::fs::copy(entry.path(), target.join(entry.file_name()))?;
         }
     }
-    let name = inner.file_name().ok_or_else(|| std::io::Error::other("no folder name"))?;
+    let name = inner
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("no folder name"))?;
     copy_tree(inner, &target.join(name))?;
-    std::fs::write(target.join(MARKER), format!("{{\"version\":\"{version}\"}}"))
+    std::fs::write(
+        target.join(MARKER),
+        format!("{{\"version\":\"{version}\"}}"),
+    )
 }
 
 fn copy_tree(source: &Path, target: &Path) -> std::io::Result<()> {
@@ -437,14 +540,17 @@ fn prune(root: &Path, executable: &str) {
     versions.sort_unstable();
     let extra = versions.len().saturating_sub(KEPT_HOLDS);
     for version in versions.into_iter().take(extra) {
-        let _ = std::fs::remove_dir_all(browser_folder(root, executable).join(format_version(version)));
+        let _ =
+            std::fs::remove_dir_all(browser_folder(root, executable).join(format_version(version)));
     }
     remove_stale_partials(&browser_folder(root, executable), PARTIAL_KEEP_SECONDS);
 }
 
 /// A copy that a stopped process left unfinished is never used, so it goes once it is older than `keep`.
 fn remove_stale_partials(folder: &Path, keep: u64) {
-    let Ok(entries) = std::fs::read_dir(folder) else { return };
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
     for entry in entries.flatten() {
         let stale = entry
             .metadata()
@@ -512,32 +618,68 @@ mod tests {
     const DAY: u64 = 24 * 60 * 60;
 
     fn running(first_detected: u64) -> SavedClock {
-        SavedClock::Running(Clock { first_detected, installed: format_version(NEW) })
+        SavedClock::Running(Clock {
+            first_detected,
+            installed: format_version(NEW),
+        })
     }
 
     #[test]
     fn nfr6_a_supported_build_opens_as_installed() {
-        assert_eq!(decide("chrome.exe", Some(HELD), &SUPPORTED, &[], &SavedClock::None, 10), Decision::Installed);
+        assert_eq!(
+            decide(
+                "chrome.exe",
+                Some(HELD),
+                &SUPPORTED,
+                &[],
+                &SavedClock::None,
+                10
+            ),
+            Decision::Installed
+        );
     }
 
     #[test]
     fn nfr6_a_browser_rivet_does_not_integrate_with_keeps_its_path() {
-        assert_eq!(decide("other.exe", None, &SUPPORTED, &[], &SavedClock::None, 10), Decision::Installed);
+        assert_eq!(
+            decide("other.exe", None, &SUPPORTED, &[], &SavedClock::None, 10),
+            Decision::Installed
+        );
     }
 
     #[test]
     fn nfr6_an_unsupported_build_opens_the_held_build_and_starts_the_clock() {
         let expected = Decision::Held {
             version: HELD,
-            clock: Clock { first_detected: 1000, installed: format_version(NEW) },
+            clock: Clock {
+                first_detected: 1000,
+                installed: format_version(NEW),
+            },
         };
-        assert_eq!(decide("chrome.exe", Some(NEW), &SUPPORTED, &[HELD], &SavedClock::None, 1000), expected);
+        assert_eq!(
+            decide(
+                "chrome.exe",
+                Some(NEW),
+                &SUPPORTED,
+                &[HELD],
+                &SavedClock::None,
+                1000
+            ),
+            expected
+        );
     }
 
     #[test]
     fn nfr6_the_newest_verified_hold_wins_and_an_unverified_folder_is_ignored() {
         let held = [[156, 0, 8078, 48], HELD, [157, 0, 0, 1]];
-        let Decision::Held { version, .. } = decide("chrome.exe", Some(NEW), &SUPPORTED, &held, &SavedClock::None, 1) else {
+        let Decision::Held { version, .. } = decide(
+            "chrome.exe",
+            Some(NEW),
+            &SUPPORTED,
+            &held,
+            &SavedClock::None,
+            1,
+        ) else {
             panic!("a verified hold exists");
         };
         assert_eq!(version, HELD);
@@ -546,7 +688,14 @@ mod tests {
     #[test]
     fn nfr6_without_a_hold_nothing_opens_rather_than_a_plain_browser() {
         assert!(matches!(
-            decide("chrome.exe", Some(NEW), &SUPPORTED, &[], &SavedClock::None, 1),
+            decide(
+                "chrome.exe",
+                Some(NEW),
+                &SUPPORTED,
+                &[],
+                &SavedClock::None,
+                1
+            ),
             Decision::Refused(Refusal::NoHeldBuild { .. })
         ));
     }
@@ -554,36 +703,83 @@ mod tests {
     #[test]
     fn nfr6_a_held_build_opens_windows_for_seven_days_and_not_after() {
         let start = 1_000_000;
-        let open = |now| decide("chrome.exe", Some(NEW), &SUPPORTED, &[HELD], &running(start), now);
+        let open = |now| {
+            decide(
+                "chrome.exe",
+                Some(NEW),
+                &SUPPORTED,
+                &[HELD],
+                &running(start),
+                now,
+            )
+        };
         assert!(matches!(open(start + 7 * DAY - 1), Decision::Held { .. }));
-        assert!(matches!(open(start + 7 * DAY), Decision::Refused(Refusal::Expired { .. })));
-        assert!(matches!(open(start + 30 * DAY), Decision::Refused(Refusal::Expired { .. })));
+        assert!(matches!(
+            open(start + 7 * DAY),
+            Decision::Refused(Refusal::Expired { .. })
+        ));
+        assert!(matches!(
+            open(start + 30 * DAY),
+            Decision::Refused(Refusal::Expired { .. })
+        ));
     }
 
     #[test]
     fn nfr6_a_second_unsupported_build_does_not_restart_the_limit() {
         let later: Version = [156, 0, 8078, 120];
-        let decision = decide("chrome.exe", Some(later), &SUPPORTED, &[HELD], &running(500), 500 + DAY);
-        let Decision::Held { clock, .. } = decision else { panic!("still inside the limit") };
+        let decision = decide(
+            "chrome.exe",
+            Some(later),
+            &SUPPORTED,
+            &[HELD],
+            &running(500),
+            500 + DAY,
+        );
+        let Decision::Held { clock, .. } = decision else {
+            panic!("still inside the limit")
+        };
         assert_eq!(clock.first_detected, 500);
     }
 
     #[test]
     fn nfr6_a_lost_clock_or_a_clock_set_back_does_not_extend_the_limit() {
         assert!(matches!(
-            decide("chrome.exe", Some(NEW), &SUPPORTED, &[HELD], &SavedClock::Unreadable, 1),
+            decide(
+                "chrome.exe",
+                Some(NEW),
+                &SUPPORTED,
+                &[HELD],
+                &SavedClock::Unreadable,
+                1
+            ),
             Decision::Refused(Refusal::Expired { .. })
         ));
         assert!(matches!(
-            decide("chrome.exe", Some(NEW), &SUPPORTED, &[HELD], &running(1000), 999),
+            decide(
+                "chrome.exe",
+                Some(NEW),
+                &SUPPORTED,
+                &[HELD],
+                &running(1000),
+                999
+            ),
             Decision::Refused(Refusal::Expired { .. })
         ));
     }
 
     #[test]
     fn nfr6_the_refusal_says_why() {
-        let text = Refusal::Expired { browser: "Google Chrome".into(), installed: NEW, held: Some(HELD) }.to_string();
-        assert!(text.contains("156.0.8078.99") && text.contains("156.0.8078.74") && text.contains("7 days"));
+        let text = Refusal::Expired {
+            browser: "Google Chrome".into(),
+            installed: NEW,
+            held: Some(HELD),
+        }
+        .to_string();
+        assert!(
+            text.contains("156.0.8078.99")
+                && text.contains("156.0.8078.74")
+                && text.contains("7 days")
+        );
         assert!(text.contains("security fixes"));
     }
 
@@ -605,7 +801,10 @@ mod tests {
         std::fs::create_dir_all(folder.join("156.0.8078.48.partial-1")).unwrap();
         std::fs::create_dir_all(folder.join("156.0.8078.74")).unwrap();
         remove_stale_partials(&folder, PARTIAL_KEEP_SECONDS);
-        assert!(folder.join("156.0.8078.48.partial-1").is_dir(), "a fresh copy may still be running");
+        assert!(
+            folder.join("156.0.8078.48.partial-1").is_dir(),
+            "a fresh copy may still be running"
+        );
         remove_stale_partials(&folder, 0);
         assert!(!folder.join("156.0.8078.48.partial-1").exists());
         assert!(folder.join("156.0.8078.74").is_dir());
@@ -631,10 +830,23 @@ mod tests {
         std::fs::create_dir_all(&inner).unwrap();
         std::fs::write(version.join(MARKER), "{}").unwrap();
         // The launcher stub's process and the inner browser process are both inside the hold.
-        assert_eq!(held_status(&inner.join("whale.exe")).unwrap().first_detected, 0);
-        assert_eq!(held_status(&version.join("whale.exe")).unwrap().first_detected, 0);
+        assert_eq!(
+            held_status(&inner.join("whale.exe"))
+                .unwrap()
+                .first_detected,
+            0
+        );
+        assert_eq!(
+            held_status(&version.join("whale.exe"))
+                .unwrap()
+                .first_detected,
+            0
+        );
         assert!(held_status(&root.join("elsewhere").join("whale.exe")).is_none());
-        let clock = Clock { first_detected: 77, installed: "5.40.0.0".into() };
+        let clock = Clock {
+            first_detected: 77,
+            installed: "5.40.0.0".into(),
+        };
         write_clock(&root, "whale.exe", &clock).unwrap();
         assert_eq!(held_status(&inner.join("whale.exe")), Some(clock));
         std::fs::remove_dir_all(root).unwrap();
@@ -650,7 +862,11 @@ mod tests {
         let root = scratch("flat");
         let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap();
         // A module with a version resource beside the executable counts too.
-        std::fs::copy(system.join("System32").join("kernel32.dll"), root.join("chrome.dll")).unwrap();
+        std::fs::copy(
+            system.join("System32").join("kernel32.dll"),
+            root.join("chrome.dll"),
+        )
+        .unwrap();
         assert!(installed_version(&root.join("chrome.exe")).is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -660,7 +876,10 @@ mod tests {
         let root = scratch("acl");
         allow_sandboxed_reads(&root);
         std::fs::write(root.join("file"), "x").unwrap();
-        let listed = std::process::Command::new("icacls").arg(root.join("file")).output().unwrap();
+        let listed = std::process::Command::new("icacls")
+            .arg(root.join("file"))
+            .output()
+            .unwrap();
         let text = String::from_utf8_lossy(&listed.stdout);
         // The first name is the same in every language, the second one is translated.
         assert!(text.contains("ALL APPLICATION PACKAGES"), "{text}");
@@ -684,7 +903,11 @@ mod tests {
         std::fs::create_dir_all(&inner).unwrap();
         std::fs::write(app.join("chrome.exe"), "stub").unwrap();
         let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap();
-        std::fs::copy(system.join("System32").join("kernel32.dll"), inner.join("chrome.dll")).unwrap();
+        std::fs::copy(
+            system.join("System32").join("kernel32.dll"),
+            inner.join("chrome.dll"),
+        )
+        .unwrap();
         std::fs::write(inner.join("resources.pak"), "program").unwrap();
         let browser = app.join("chrome.exe");
         let version = installed_version(&browser).expect("the stub module has a version");
@@ -702,9 +925,16 @@ mod tests {
             std::fs::write(app.join(private).join("Login Data"), "secret").unwrap();
         }
         std::fs::create_dir_all(app.join("10.0.0.1").join("Installer")).unwrap();
-        std::fs::write(app.join("10.0.0.1").join("Installer").join("setup.exe"), "setup").unwrap();
+        std::fs::write(
+            app.join("10.0.0.1").join("Installer").join("setup.exe"),
+            "setup",
+        )
+        .unwrap();
         let hold = root.join("browsers");
-        assert_eq!(refresh_with(&browser, &hold, &[version]).unwrap(), Some(version));
+        assert_eq!(
+            refresh_with(&browser, &hold, &[version]).unwrap(),
+            Some(version)
+        );
         let kept = hold.join("chrome").join(format_version(version));
         assert!(kept.join(MARKER).is_file() && kept.join("chrome.exe").is_file());
         assert!(kept.join("10.0.0.1").join("chrome.dll").is_file());
@@ -723,8 +953,17 @@ mod tests {
                 }
             }
         }
-        for private in ["login data", "cookies", "local state", "web data", "history"] {
-            assert!(!names.iter().any(|name| name == private), "{private} was copied");
+        for private in [
+            "login data",
+            "cookies",
+            "local state",
+            "web data",
+            "history",
+        ] {
+            assert!(
+                !names.iter().any(|name| name == private),
+                "{private} was copied"
+            );
         }
         // A second request finds the finished copy and does nothing.
         assert_eq!(refresh_with(&browser, &hold, &[version]).unwrap(), None);
@@ -751,12 +990,16 @@ mod tests {
         std::fs::write(held.join(MARKER), "{}").unwrap();
         let supported = [HELD];
         let first = 5_000_000;
-        let Launch::Held { program, version } = plan_with(&browser, &hold, first, &supported).unwrap() else {
+        let Launch::Held { program, version } =
+            plan_with(&browser, &hold, first, &supported).unwrap()
+        else {
             panic!("the held copy opens");
         };
         assert_eq!((program, version), (held.join("chrome.exe"), HELD));
         // The clock is on disk now, so the next launch counts from the first one.
-        let Launch::Held { .. } = plan_with(&browser, &hold, first + 7 * DAY - 1, &supported).unwrap() else {
+        let Launch::Held { .. } =
+            plan_with(&browser, &hold, first + 7 * DAY - 1, &supported).unwrap()
+        else {
             panic!("still inside the limit");
         };
         let refusal = plan_with(&browser, &hold, first + 7 * DAY, &supported).unwrap_err();
@@ -770,8 +1013,19 @@ mod tests {
         let root = scratch("supported");
         let (browser, version) = fake_install(&root);
         let hold = root.join("browsers");
-        write_clock(&hold, "chrome.exe", &Clock { first_detected: 1, installed: "1.2.3.4".into() }).unwrap();
-        assert_eq!(plan_with(&browser, &hold, 9, &[version]).unwrap(), Launch::Installed { keep: true });
+        write_clock(
+            &hold,
+            "chrome.exe",
+            &Clock {
+                first_detected: 1,
+                installed: "1.2.3.4".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            plan_with(&browser, &hold, 9, &[version]).unwrap(),
+            Launch::Installed { keep: true }
+        );
         assert_eq!(read_clock(&hold, "chrome.exe"), SavedClock::None);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -788,6 +1042,16 @@ mod tests {
         assert_eq!(table_versions(&table, "brave.exe"), vec![[157, 1, 1, 1]]);
         assert!(table_versions(&table, "whale.exe").is_empty());
         let supported = table_versions(&table, "msedge.exe");
-        assert_eq!(decide("msedge.exe", Some([157, 0, 1, 2]), &supported, &[], &SavedClock::None, 1), Decision::Installed);
+        assert_eq!(
+            decide(
+                "msedge.exe",
+                Some([157, 0, 1, 2]),
+                &supported,
+                &[],
+                &SavedClock::None,
+                1
+            ),
+            Decision::Installed
+        );
     }
 }

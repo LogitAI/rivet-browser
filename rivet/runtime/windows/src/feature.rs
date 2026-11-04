@@ -284,7 +284,9 @@ mod tests {
                 b.navigation.supported
             }),
             ("tabs", crate::features::tabs::needs, |b| b.tabs.supported),
-            ("split", crate::features::split::needs, |b| b.split.supported),
+            ("split", crate::features::split::needs, |b| {
+                b.split.supported
+            }),
             ("sidebar", crate::features::side_panel::needs, |b| {
                 b.side_panel.supported
             }),
@@ -341,12 +343,27 @@ mod tests {
     /// build was not checked or has no panel to show.
     #[test]
     fn fr10_the_sidebar_is_offered_on_chrome_only() {
-        let offered = |build: &Build| crate::features::side_panel::needs(build).unavailable().is_none();
+        let offered = |build: &Build| {
+            crate::features::side_panel::needs(build)
+                .unavailable()
+                .is_none()
+        };
         assert!(offered(&builds::CHROME) && offered(&builds::CHROME_156_74));
-        assert!(!offered(&builds::BRAVE_63), "the Sidebar of this build has no Chromium row");
-        assert!(!offered(&builds::EDGE), "Edge's only entry cannot be opened");
-        assert!(!offered(&builds::BRAVE), "Brave .62 is not installed, so no byte of its row was compared");
-        assert!(!offered(&builds::WHALE) && !offered(&builds::SAMSUNG) && !offered(&builds::CHROME_150));
+        assert!(
+            !offered(&builds::BRAVE_63),
+            "the Sidebar of this build has no Chromium row"
+        );
+        assert!(
+            !offered(&builds::EDGE),
+            "Edge's only entry cannot be opened"
+        );
+        assert!(
+            !offered(&builds::BRAVE),
+            "Brave .62 is not installed, so no byte of its row was compared"
+        );
+        assert!(
+            !offered(&builds::WHALE) && !offered(&builds::SAMSUNG) && !offered(&builds::CHROME_150)
+        );
     }
 
     fn all_needs() -> [(Feature, fn(&Build) -> Needs); 7] {
@@ -384,7 +401,15 @@ mod tests {
             names(&builds::CHROME),
             [&chromium[..], &["vertical_tabs"]].concat()
         );
-        assert_eq!(names(&builds::BRAVE), ["frame_layout", "caption_paint", "caption_layout", "vertical_tabs"]);
+        assert_eq!(
+            names(&builds::BRAVE),
+            [
+                "frame_layout",
+                "caption_paint",
+                "caption_layout",
+                "vertical_tabs"
+            ]
+        );
         assert_eq!(names(&builds::EDGE), chromium);
         assert_eq!(
             names(&builds::CHROME_150),
@@ -395,7 +420,10 @@ mod tests {
                 "caption_layout"
             ]
         );
-        assert_eq!(names(&builds::WHALE), ["frame_layout", "frame_colour", "tab_strip"]);
+        assert_eq!(
+            names(&builds::WHALE),
+            ["frame_layout", "frame_colour", "tab_strip"]
+        );
         assert_eq!(names(&builds::SAMSUNG), ["frame_layout", "tab_strip"]);
     }
 

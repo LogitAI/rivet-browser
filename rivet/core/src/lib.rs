@@ -34,10 +34,10 @@ pub fn space_frame(tint: u32) -> u32 {
 
 /// The strong colour of marks and active controls in a space of this tint.
 pub fn space_accent(tint: u32) -> u32 {
-    DESIGNED
-        .iter()
-        .find(|row| row.0 == tint)
-        .map_or_else(|| channels(tint, |channel| channel.saturating_sub(0x30)), |row| row.2)
+    DESIGNED.iter().find(|row| row.0 == tint).map_or_else(
+        || channels(tint, |channel| channel.saturating_sub(0x30)),
+        |row| row.2,
+    )
 }
 
 /// The short name of the browser a program path is, or `None` for a program Rivet does not know.
@@ -281,9 +281,15 @@ mod tests {
         let allowed = |path: &str| profile_allows_rivet(Some(std::path::Path::new(path)));
         assert!(!profile_allows_rivet(None));
         assert!(!allowed(""));
-        assert!(!allowed(r"C:\Users\me\AppData\Local\Naver\Naver Whale\User Data"));
-        assert!(!allowed(r"C:\Users\me\AppData\Local\Google\Chrome\user data\Default"));
-        assert!(allowed(r"C:\Users\me\AppData\Local\Rivet\profiles\whale\Personal"));
+        assert!(!allowed(
+            r"C:\Users\me\AppData\Local\Naver\Naver Whale\User Data"
+        ));
+        assert!(!allowed(
+            r"C:\Users\me\AppData\Local\Google\Chrome\user data\Default"
+        ));
+        assert!(allowed(
+            r"C:\Users\me\AppData\Local\Rivet\profiles\whale\Personal"
+        ));
     }
 
     #[test]
@@ -325,7 +331,10 @@ mod tests {
     #[test]
     fn fr3_browser_label_names_all_five_browsers() {
         for (program, label) in [
-            (r"C:\Program Files\Google\Chrome\Application\chrome.exe", Some("Chrome")),
+            (
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                Some("Chrome"),
+            ),
             (r"C:\Edge\MSEDGE.EXE", Some("Edge")),
             (r"C:\Naver\whale.exe", Some("Whale")),
             (r"C:\Brave\brave.exe", Some("Brave")),
@@ -339,7 +348,9 @@ mod tests {
     #[test]
     fn fr12_visible_opens_an_app_window_without_a_debugging_port() {
         let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
-        assert!(plan.arguments.contains(&"--app=https://example.test/".into()));
+        assert!(plan
+            .arguments
+            .contains(&"--app=https://example.test/".into()));
         assert!(!plan
             .arguments
             .iter()

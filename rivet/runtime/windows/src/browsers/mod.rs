@@ -79,12 +79,22 @@ pub(crate) trait SplitBackend: Sync {
         None
     }
     /// What a button of the row of a page that is no tab does. Returns whether it did anything.
-    unsafe fn pane_action(&self, _window: HWND, _pane: &Pane, _button: crate::features::split::RowButton) -> bool {
+    unsafe fn pane_action(
+        &self,
+        _window: HWND,
+        _pane: &Pane,
+        _button: crate::features::split::RowButton,
+    ) -> bool {
         false
     }
     /// Whether a button of the row of a page that is no tab can act now. A button that cannot is drawn
     /// faded and does not react.
-    unsafe fn pane_can(&self, _window: HWND, _pane: &Pane, _button: crate::features::split::RowButton) -> bool {
+    unsafe fn pane_can(
+        &self,
+        _window: HWND,
+        _pane: &Pane,
+        _button: crate::features::split::RowButton,
+    ) -> bool {
         true
     }
 }

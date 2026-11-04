@@ -56,7 +56,10 @@ pub fn without_scheme(address: &[u16]) -> &[u16] {
     for scheme in ["https://", "http://"] {
         let scheme = units(scheme);
         if address.len() >= scheme.len()
-            && address.iter().zip(&scheme).all(|(unit, expected)| lower(*unit) == *expected)
+            && address
+                .iter()
+                .zip(&scheme)
+                .all(|(unit, expected)| lower(*unit) == *expected)
         {
             return &address[scheme.len()..];
         }
@@ -66,8 +69,14 @@ pub fn without_scheme(address: &[u16]) -> &[u16] {
 
 fn trimmed(text: &[u16]) -> &[u16] {
     let is_space = |unit: &u16| matches!(*unit, 0x20 | 0x09 | 0x0A | 0x0D);
-    let start = text.iter().position(|unit| !is_space(unit)).unwrap_or(text.len());
-    let end = text.iter().rposition(|unit| !is_space(unit)).map_or(start, |last| last + 1);
+    let start = text
+        .iter()
+        .position(|unit| !is_space(unit))
+        .unwrap_or(text.len());
+    let end = text
+        .iter()
+        .rposition(|unit| !is_space(unit))
+        .map_or(start, |last| last + 1);
     &text[start..end]
 }
 
@@ -82,18 +91,27 @@ pub fn compose(title: &[u16], full_address: &[u16], start_page: bool) -> Display
     let (title, address) = if start_page {
         (units(START_PAGE_TITLE), units(START_PAGE_ADDRESS))
     } else {
-        (trimmed(title).to_vec(), without_scheme(full_address).to_vec())
+        (
+            trimmed(title).to_vec(),
+            without_scheme(full_address).to_vec(),
+        )
     };
     if title.is_empty()
         || bare(&title) == bare(&address)
         || bare(without_scheme(&title)) == bare(&address)
     {
-        return Display { text: address, title_len: 0 };
+        return Display {
+            text: address,
+            title_len: 0,
+        };
     }
     let mut text = title.clone();
     text.extend(units(SEPARATOR));
     text.extend(address);
-    Display { text, title_len: title.len() as u32 }
+    Display {
+        text,
+        title_len: title.len() as u32,
+    }
 }
 
 /// The capacity in UTF-16 units, null included, that Chrome's `std::u16string` allocates for a
@@ -137,16 +155,34 @@ mod tests {
     #[test]
     fn fr12_readable_address_drops_the_scheme_and_an_empty_path() {
         assert_eq!(readable_address("https://example.com/"), u("example.com"));
-        assert_eq!(readable_address("https://example.com/a/"), u("example.com/a/"));
-        assert_eq!(readable_address("file:///D:/a.html"), u("file:///D:/a.html"));
+        assert_eq!(
+            readable_address("https://example.com/a/"),
+            u("example.com/a/")
+        );
+        assert_eq!(
+            readable_address("file:///D:/a.html"),
+            u("file:///D:/a.html")
+        );
     }
 
     #[test]
     fn fr12_page_without_a_title_shows_the_address_alone() {
         let shown = compose(&u("example.com/a"), &u("https://example.com/a"), false);
-        assert_eq!(shown, Display { text: u("example.com/a"), title_len: 0 });
-        assert_eq!(compose(&u(""), &u("https://example.com"), false).title_len, 0);
-        assert_eq!(compose(&u("  "), &u("https://example.com"), false).text, u("example.com"));
+        assert_eq!(
+            shown,
+            Display {
+                text: u("example.com/a"),
+                title_len: 0
+            }
+        );
+        assert_eq!(
+            compose(&u(""), &u("https://example.com"), false).title_len,
+            0
+        );
+        assert_eq!(
+            compose(&u("  "), &u("https://example.com"), false).text,
+            u("example.com")
+        );
     }
 
     #[test]

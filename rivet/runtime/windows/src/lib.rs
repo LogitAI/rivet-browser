@@ -123,12 +123,7 @@ fn reserved_for_strip(leading: i32, strip: i32) -> i32 {
 /// The toggle button's rectangle as (x, y, width, height) in device-independent pixels of the
 /// window's client area, for a page panel that begins at `leading`.
 fn toggle_rect(leading: i32) -> (i32, i32, i32, i32) {
-    (
-        leading + TOGGLE_LEFT,
-        TOGGLE_TOP,
-        TOGGLE_SIZE,
-        TOGGLE_SIZE,
-    )
+    (leading + TOGGLE_LEFT, TOGGLE_TOP, TOGGLE_SIZE, TOGGLE_SIZE)
 }
 
 /// Height of the appbar band that drags the window, matched to Chromium's app title bar.
@@ -213,10 +208,10 @@ fn caption_of(hit: u32) -> Option<features::address_bar::Caption> {
 fn caption_command(button: features::address_bar::Caption, zoomed: bool) -> u32 {
     use features::address_bar::Caption;
     match button {
-        Caption::Minimize => 0xF020,            // SC_MINIMIZE
-        Caption::Maximize if zoomed => 0xF120,  // SC_RESTORE
-        Caption::Maximize => 0xF030,            // SC_MAXIMIZE
-        Caption::Close => 0xF060,               // SC_CLOSE
+        Caption::Minimize => 0xF020,           // SC_MINIMIZE
+        Caption::Maximize if zoomed => 0xF120, // SC_RESTORE
+        Caption::Maximize => 0xF030,           // SC_MAXIMIZE
+        Caption::Close => 0xF060,              // SC_CLOSE
     }
 }
 
@@ -224,7 +219,14 @@ fn caption_command(button: features::address_bar::Caption, zoomed: bool) -> u32 
 /// visible frame. The row runs from the panel's gap down 44 DIPs. Its caption buttons fill that whole
 /// height, its controls fill the 28 DIPs in the middle, and the rest of it moves the window.
 #[cfg(windows)]
-fn title_row_hit(x: f32, y: f32, width: f32, resizing: bool, leading: f32, zoomed: bool) -> StripHit {
+fn title_row_hit(
+    x: f32,
+    y: f32,
+    width: f32,
+    resizing: bool,
+    leading: f32,
+    zoomed: bool,
+) -> StripHit {
     const BUTTON: f32 = 46.0;
     /// The design's space between the field and the caption buttons.
     const FIELD_GAP: f32 = 10.0;
@@ -235,7 +237,11 @@ fn title_row_hit(x: f32, y: f32, width: f32, resizing: bool, leading: f32, zoome
         return StripHit::Browser;
     }
     if resizing {
-        return if x >= right { StripHit::Browser } else { StripHit::Top };
+        return if x >= right {
+            StripHit::Browser
+        } else {
+            StripHit::Top
+        };
     }
     if y >= gap + row || (x >= right && !zoomed) {
         return StripHit::Browser;
@@ -262,12 +268,15 @@ fn title_row_hit(x: f32, y: f32, width: f32, resizing: bool, leading: f32, zoome
 #[cfg(windows)]
 pub fn compiled_rows() -> Vec<serde_json::Value> {
     use row_data::RowValue;
-    let frames = rivet_platform_windows::chrome_build::builds(rivet_platform_windows::chrome_build::TABLE);
+    let frames =
+        rivet_platform_windows::chrome_build::builds(rivet_platform_windows::chrome_build::TABLE);
     builds::compiled()
         .iter()
         .map(|build| {
             let version = build.version.map(|part| part.to_string()).join(".");
-            let frame = frames.iter().find(|frame| frame.module == build.module && frame.version == version);
+            let frame = frames
+                .iter()
+                .find(|frame| frame.module == build.module && frame.version == version);
             serde_json::json!({ "frame": frame, "build": build.to_row() })
         })
         .collect()
@@ -306,39 +315,39 @@ mod address_display;
 #[cfg(windows)]
 mod appbar;
 #[cfg(windows)]
-mod installed_browsers;
-#[cfg(windows)]
 mod browsers;
 #[cfg(windows)]
-mod features;
+mod builds;
+#[cfg(windows)]
+mod chromium;
 #[cfg(windows)]
 mod dev_bar;
 #[cfg(windows)]
 mod dev_mode;
 #[cfg(windows)]
-mod builds;
+mod feature;
 #[cfg(windows)]
-mod hooks;
-#[cfg(windows)]
-mod chromium;
-#[cfg(windows)]
-mod row_data;
-#[cfg(windows)]
-mod side_rail;
+mod features;
 #[cfg(windows)]
 mod frame;
 #[cfg(windows)]
 mod ground;
-mod press;
-mod spaces;
 #[cfg(windows)]
-mod feature;
+mod hooks;
+#[cfg(windows)]
+mod installed_browsers;
+mod press;
+#[cfg(windows)]
+mod row_data;
+#[cfg(windows)]
+mod side_rail;
+mod spaces;
 #[cfg(windows)]
 mod targets;
 #[cfg(windows)]
-mod trace;
-#[cfg(windows)]
 mod taskbar;
+#[cfg(windows)]
+mod trace;
 
 #[cfg(test)]
 mod tests {
@@ -362,7 +371,10 @@ mod tests {
         let before = layout_scale_dpi(2400, 1200);
         assert_eq!(before, 192);
         // Moved to a 125% monitor, the browser lays the same 1200 DIPs out in 1500 pixels.
-        assert_eq!(dpi_after_change(Some(layout_scale_dpi(1500, 1200)), 120), 120);
+        assert_eq!(
+            dpi_after_change(Some(layout_scale_dpi(1500, 1200)), 120),
+            120
+        );
         // Without a layout during the change, the new DPI is taken, never the old monitor's.
         assert_eq!(dpi_after_change(None, 120), 120);
         // The bar's row starts at the page panel's top at either scale, so it stays at the top.
@@ -504,7 +516,13 @@ mod tests {
     fn fr12_title_row_moves_the_window_outside_its_controls() {
         let hit = |x, y| title_row_hit(x, y, 800.0, false, 268.0, false);
         // Above and below the controls, the gap above the row, and beside the controls.
-        for (x, y) in [(400.0, 2.0), (400.0, 12.0), (400.0, 48.0), (272.0, 30.0), (650.0, 30.0)] {
+        for (x, y) in [
+            (400.0, 2.0),
+            (400.0, 12.0),
+            (400.0, 48.0),
+            (272.0, 30.0),
+            (650.0, 30.0),
+        ] {
             assert_eq!(hit(x, y), StripHit::Caption, "{x},{y}");
         }
         // A button or the field, and anything over the appbar.
@@ -515,9 +533,15 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn fr12_top_edge_resizes_over_the_caption_buttons_too() {
-        assert_eq!(title_row_hit(780.0, 3.0, 800.0, true, 268.0, false), StripHit::Top);
+        assert_eq!(
+            title_row_hit(780.0, 3.0, 800.0, true, 268.0, false),
+            StripHit::Top
+        );
         // The window's corner stays with the browser.
-        assert_eq!(title_row_hit(797.0, 3.0, 800.0, true, 268.0, false), StripHit::Browser);
+        assert_eq!(
+            title_row_hit(797.0, 3.0, 800.0, true, 268.0, false),
+            StripHit::Browser
+        );
     }
 
     #[test]
@@ -550,14 +574,23 @@ mod tests {
             assert_eq!(hit, expected);
         }
         // Empty bar space between the address and the buttons still drags the window.
-        assert_eq!(title_row_hit(bar_right - 138.0 - 2.0, 30.0, client, false, 268.0, false), StripHit::Caption);
+        assert_eq!(
+            title_row_hit(bar_right - 138.0 - 2.0, 30.0, client, false, 268.0, false),
+            StripHit::Caption
+        );
     }
 
     #[test]
     #[cfg(windows)]
     fn fr12_maximized_corner_stays_the_close_button() {
-        assert_eq!(title_row_hit(799.0, 0.0, 800.0, false, 268.0, true), StripHit::Close);
-        assert_eq!(title_row_hit(720.0, 0.0, 800.0, false, 268.0, true), StripHit::Maximize);
+        assert_eq!(
+            title_row_hit(799.0, 0.0, 800.0, false, 268.0, true),
+            StripHit::Close
+        );
+        assert_eq!(
+            title_row_hit(720.0, 0.0, 800.0, false, 268.0, true),
+            StripHit::Maximize
+        );
     }
 
     #[test]

@@ -28,7 +28,10 @@ struct Views {
 impl Views {
     /// The views a step moved. A view left as the browser had it is not set again.
     fn changed(&self) -> impl Iterator<Item = &Edit> {
-        self.edits.iter().map(|edit| &**edit).filter(|edit| edit.wanted != edit.before)
+        self.edits
+            .iter()
+            .map(|edit| &**edit)
+            .filter(|edit| edit.wanted != edit.before)
     }
 }
 
@@ -42,13 +45,22 @@ impl LayoutBounds for Views {
             return Some(&mut edit.wanted);
         }
         let bounds = *(at as *const [i32; 4]);
-        self.edits.push(Box::new(Edit { view, before: bounds, wanted: bounds }));
-        self.edits.last_mut().map(|edit| &mut edit.wanted as *mut [i32; 4])
+        self.edits.push(Box::new(Edit {
+            view,
+            before: bounds,
+            wanted: bounds,
+        }));
+        self.edits
+            .last_mut()
+            .map(|edit| &mut edit.wanted as *mut [i32; 4])
     }
 
     unsafe fn commit(&mut self) {
-        let Some(image) = image::recorded() else { return };
-        let set: SetBoundsRect = std::mem::transmute(image.base + crate::builds::get().layout.set_bounds_rect);
+        let Some(image) = image::recorded() else {
+            return;
+        };
+        let set: SetBoundsRect =
+            std::mem::transmute(image.base + crate::builds::get().layout.set_bounds_rect);
         for edit in self.changed() {
             set(edit.view as *mut c_void, &edit.wanted);
         }
@@ -69,7 +81,10 @@ impl LayoutBounds for Views {
             }
             let bounds = *((view + offset) as *const [i32; 4]);
             let parent = *((view + crate::chromium::view::View::PARENT) as *const usize);
-            trace(&format!("layout view {view:x} vt {:x} field {field:#x} bounds {bounds:?} parent {parent:x}", vtable - base));
+            trace(&format!(
+                "layout view {view:x} vt {:x} field {field:#x} bounds {bounds:?} parent {parent:x}",
+                vtable - base
+            ));
         }
     }
 }
@@ -112,7 +127,10 @@ mod tests {
             assert_eq!(*views.of(panel_at).unwrap(), [0, 0, 0, 0]);
             assert_eq!(views.edits.len(), 2);
         }
-        let moved: Vec<_> = views.changed().map(|edit| (edit.view, edit.wanted)).collect();
+        let moved: Vec<_> = views
+            .changed()
+            .map(|edit| (edit.view, edit.wanted))
+            .collect();
         assert_eq!(moved, [(page_at, [0, 44, 1124, 793])]);
     }
 

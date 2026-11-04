@@ -12,8 +12,8 @@ use windows_sys::Win32::System::Registry::{
     RegGetValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_NOEXPAND, RRF_RT_REG_SZ,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowExW, GetClassNameW, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindowVisible, SetForegroundWindow, ShowWindow, GW_OWNER, HWND_MESSAGE, SW_RESTORE,
+    EnumWindows, FindWindowExW, GetClassNameW, GetWindow, GetWindowTextW, GetWindowThreadProcessId,
+    IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow, GW_OWNER, HWND_MESSAGE, SW_RESTORE,
 };
 
 fn wide(value: &str) -> Vec<u16> {
@@ -23,18 +23,36 @@ fn wide(value: &str) -> Vec<u16> {
 /// The default value of an App Paths key, which is where an installer registers its browser.
 /// Nothing is guessed when the key is absent or points at a missing file.
 fn registered(root: HKEY, name: &str) -> Option<PathBuf> {
-    let key = wide(&format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{name}"));
+    let key = wide(&format!(
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{name}"
+    ));
     let flags = RRF_RT_REG_SZ | RRF_NOEXPAND;
     let mut bytes = 0u32;
     let status = unsafe {
-        RegGetValueW(root, key.as_ptr(), std::ptr::null(), flags, std::ptr::null_mut(), std::ptr::null_mut(), &mut bytes)
+        RegGetValueW(
+            root,
+            key.as_ptr(),
+            std::ptr::null(),
+            flags,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut bytes,
+        )
     };
     if status != 0 || bytes < 2 {
         return None;
     }
     let mut value = vec![0u16; bytes as usize / 2 + 1];
     let status = unsafe {
-        RegGetValueW(root, key.as_ptr(), std::ptr::null(), flags, std::ptr::null_mut(), value.as_mut_ptr().cast(), &mut bytes)
+        RegGetValueW(
+            root,
+            key.as_ptr(),
+            std::ptr::null(),
+            flags,
+            std::ptr::null_mut(),
+            value.as_mut_ptr().cast(),
+            &mut bytes,
+        )
     };
     if status != 0 {
         return None;
@@ -64,7 +82,10 @@ pub(crate) fn sole_label() -> Option<&'static str> {
     static LABEL: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
     *LABEL.get_or_init(|| {
         let program = std::env::current_exe().ok()?;
-        current().is_none().then(|| rivet_core::browser_label(&program)).flatten()
+        current()
+            .is_none()
+            .then(|| rivet_core::browser_label(&program))
+            .flatten()
     })
 }
 
@@ -76,14 +97,20 @@ fn profile_process(directory: &std::path::Path) -> Option<u32> {
     let wanted = directory.to_string_lossy();
     let mut previous: HWND = std::ptr::null_mut();
     loop {
-        let found = unsafe { FindWindowExW(HWND_MESSAGE, previous, class.as_ptr(), std::ptr::null()) };
+        let found =
+            unsafe { FindWindowExW(HWND_MESSAGE, previous, class.as_ptr(), std::ptr::null()) };
         if found.is_null() {
             return None;
         }
         previous = found;
         let mut name = [0u16; 1024];
         let length = unsafe { GetWindowTextW(found, name.as_mut_ptr(), name.len() as i32) };
-        if length > 0 && crate::spaces::same_directory(&String::from_utf16_lossy(&name[..length as usize]), &wanted) {
+        if length > 0
+            && crate::spaces::same_directory(
+                &String::from_utf16_lossy(&name[..length as usize]),
+                &wanted,
+            )
+        {
             let mut process = 0u32;
             unsafe { GetWindowThreadProcessId(found, &mut process) };
             return Some(process).filter(|process| *process != 0);
@@ -106,7 +133,9 @@ fn windows_of(process: u32) -> Vec<crate::spaces::Candidate> {
         }
         let mut class = [0u16; 64];
         let length = GetClassNameW(window, class.as_mut_ptr(), class.len() as i32);
-        if length <= 0 || String::from_utf16_lossy(&class[..length as usize]) != "Chrome_WidgetWin_1" {
+        if length <= 0
+            || String::from_utf16_lossy(&class[..length as usize]) != "Chrome_WidgetWin_1"
+        {
             return 1;
         }
         search.found.push(crate::spaces::Candidate {
@@ -116,7 +145,10 @@ fn windows_of(process: u32) -> Vec<crate::spaces::Candidate> {
         });
         1
     }
-    let mut search = Search { process, found: Vec::new() };
+    let mut search = Search {
+        process,
+        found: Vec::new(),
+    };
     unsafe { EnumWindows(Some(visit), &mut search as *mut Search as isize) };
     search.found
 }
@@ -159,14 +191,22 @@ pub(crate) fn start(hand_over: HandOver, url: String, directory: PathBuf) {
                 return Err(format!("the launcher {} is missing", launcher.display()));
             }
             let runtime = directory.join("rivet_runtime_windows.dll");
-            let arguments =
-                crate::spaces::start_arguments(&hand_over, &program, runtime.is_file().then_some(runtime.as_path()), &url);
+            let arguments = crate::spaces::start_arguments(
+                &hand_over,
+                &program,
+                runtime.is_file().then_some(runtime.as_path()),
+                &url,
+            );
             // The launcher's error goes to a file, not a pipe: the browser it starts inherits the
             // launcher's handles, and a pipe would stay open until that browser exits.
-            let scratch = rivet_core::paths::Layout::current().ok_or("the local application data folder is unknown")?.scratch();
-            std::fs::create_dir_all(&scratch).map_err(|error| format!("could not make {}: {error}", scratch.display()))?;
+            let scratch = rivet_core::paths::Layout::current()
+                .ok_or("the local application data folder is unknown")?
+                .scratch();
+            std::fs::create_dir_all(&scratch)
+                .map_err(|error| format!("could not make {}: {error}", scratch.display()))?;
             let report = scratch.join(format!("handover-{}.txt", std::process::id()));
-            let file = std::fs::File::create(&report).map_err(|error| format!("could not make {}: {error}", report.display()))?;
+            let file = std::fs::File::create(&report)
+                .map_err(|error| format!("could not make {}: {error}", report.display()))?;
             let status = std::process::Command::new(&launcher)
                 .args(arguments)
                 .stdin(std::process::Stdio::null())
@@ -184,7 +224,10 @@ pub(crate) fn start(hand_over: HandOver, url: String, directory: PathBuf) {
             }
         })();
         if let Err(error) = outcome {
-            let message = format!("rivet: could not hand over to {}: {error}", hand_over.browser.label());
+            let message = format!(
+                "rivet: could not hand over to {}: {error}",
+                hand_over.browser.label()
+            );
             crate::frame::log(&message);
             crate::trace::trace(&message);
         }

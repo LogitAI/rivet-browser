@@ -37,7 +37,9 @@ thread_local! {
 /// whose rows are Rivet's own. The second rectangle is the whole top row, which the visual covers
 /// to lay the stripes of developer mode over it.
 unsafe fn place(window: HWND) -> Option<([f32; 4], [f32; 4], Vec<(Action, u32)>)> {
-    if !crate::features::dev_page::window_in_dev_mode(window) || !crate::features::split::panes(window).is_empty() {
+    if !crate::features::dev_page::window_in_dev_mode(window)
+        || !crate::features::split::panes(window).is_empty()
+    {
         return None;
     }
     let actions = crate::features::dev_page::dev_actions();
@@ -124,11 +126,15 @@ pub(crate) fn pressed(window: HWND) -> bool {
 /// The button comes up: the browser's command runs when the pointer is still on the button it went
 /// down on.
 pub(crate) unsafe fn release(window: HWND, point: POINT) {
-    let Some(down) = PRESS.with(|all| all.borrow_mut().remove(&(window as isize))) else { return };
+    let Some(down) = PRESS.with(|all| all.borrow_mut().remove(&(window as isize))) else {
+        return;
+    };
     if hit(window, point) != Some(down) {
         return;
     }
-    let Some((_, _, actions)) = place(window) else { return };
+    let Some((_, _, actions)) = place(window) else {
+        return;
+    };
     if let Some((_, command)) = actions.get(down) {
         // The browser's own command, as its keyboard shortcut sends it.
         PostMessageW(window, WM_COMMAND, *command as usize, 0);

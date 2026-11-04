@@ -117,7 +117,10 @@ impl PageArea<'_> {
     /// The bounds the layout gave every view it placed, where the source can list them.
     pub(crate) unsafe fn all_bounds(&mut self) -> Vec<(usize, *mut [i32; 4])> {
         let views = self.bounds.views();
-        views.into_iter().filter_map(|view| self.bounds.of(view).map(|bounds| (view, bounds))).collect()
+        views
+            .into_iter()
+            .filter_map(|view| self.bounds.of(view).map(|bounds| (view, bounds)))
+            .collect()
     }
 }
 
@@ -148,7 +151,12 @@ pub(crate) fn original() -> usize {
 static ORIGINAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Runs the steps of the page area after the browser laid `host` out. `this` is the layout object.
-pub(crate) unsafe fn run(this: *mut c_void, host: usize, window: HWND, bounds: &mut dyn LayoutBounds) {
+pub(crate) unsafe fn run(
+    this: *mut c_void,
+    host: usize,
+    window: HWND,
+    bounds: &mut dyn LayoutBounds,
+) {
     HOST_VIEWS.with(|views| views.borrow_mut().insert(window as isize, host));
     if DUMP_LAYOUT.swap(false, std::sync::atomic::Ordering::Relaxed) {
         trace("layout dump");
@@ -184,7 +192,9 @@ pub(crate) unsafe fn install() -> Result<(), String> {
         return Ok(());
     }
     if !crate::browsers::split_reads_page_area() && !row().supported {
-        return Err("the Sidebar is off in this build, and nothing else reads its page area".into());
+        return Err(
+            "the Sidebar is off in this build, and nothing else reads its page area".into(),
+        );
     }
     let Some(image) = image::recorded() else {
         return Err(MISSING.into());
@@ -217,7 +227,9 @@ pub(crate) unsafe fn install() -> Result<(), String> {
 unsafe fn host_of(window: HWND) -> Option<usize> {
     let frame = frame_layout::frame_view(window)?;
     let at = frame + crate::builds::get().layout.frame_browser_window_offset;
-    readable(at, 8).then(|| *(at as *const usize)).filter(|view| *view != 0)
+    readable(at, 8)
+        .then(|| *(at as *const usize))
+        .filter(|view| *view != 0)
 }
 
 /// Lays the browser view out again, which runs the patched layout. A window the layout has not run
@@ -301,7 +313,10 @@ mod tests {
 
     impl LayoutBounds for Listed {
         unsafe fn of(&mut self, view: usize) -> Option<*mut [i32; 4]> {
-            self.0.iter_mut().find(|(key, _)| *key == view).map(|(_, bounds)| bounds as *mut _)
+            self.0
+                .iter_mut()
+                .find(|(key, _)| *key == view)
+                .map(|(_, bounds)| bounds as *mut _)
         }
     }
 
@@ -310,7 +325,12 @@ mod tests {
         // A layout object whose first word is a pointer a lookup would otherwise take for a view.
         let object = [0x1234_5678usize; 4];
         let mut bounds = Listed(vec![(0x1234_5678, [1, 2, 3, 4])]);
-        let mut area = PageArea { this: object.as_ptr() as *mut c_void, bounds: &mut bounds, window: 0 as HWND, rail: 0 };
+        let mut area = PageArea {
+            this: object.as_ptr() as *mut c_void,
+            bounds: &mut bounds,
+            window: 0 as HWND,
+            rail: 0,
+        };
         unsafe {
             assert_eq!(area.field(0), 0x1234_5678);
             assert_eq!(area.field(crate::builds::ABSENT), 0);

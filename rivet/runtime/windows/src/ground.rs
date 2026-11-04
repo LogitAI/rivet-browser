@@ -12,8 +12,8 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    CLSID_D2D1Shadow, ID2D1DeviceContext, ID2D1Factory, ID2D1Geometry, ID2D1Image, ID2D1Layer, ID2D1RenderTarget,
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2,
+    CLSID_D2D1Shadow, ID2D1DeviceContext, ID2D1Factory, ID2D1Geometry, ID2D1Image, ID2D1Layer,
+    ID2D1RenderTarget, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2,
     D2D1_INTERPOLATION_MODE_LINEAR, D2D1_LAYER_OPTIONS1_NONE, D2D1_LAYER_PARAMETERS1,
     D2D1_PROPERTY_TYPE_UNKNOWN, D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES, D2D1_ROUNDED_RECT,
 };
@@ -53,11 +53,20 @@ struct Look {
 const fn look(raise: Raise) -> Look {
     match raise {
         // 0 0 0 1px rgba(0,0,0,.05), 0 1px 3px rgba(0,0,0,.05), 0 12px 32px rgba(40,28,30,.08)
-        Raise::Page => Look { ring: 0.05, soft: &[(1.0, 3.0, 0x00_00_00, 0.05), (12.0, 32.0, 0x28_1c_1e, 0.08)] },
+        Raise::Page => Look {
+            ring: 0.05,
+            soft: &[(1.0, 3.0, 0x00_00_00, 0.05), (12.0, 32.0, 0x28_1c_1e, 0.08)],
+        },
         // 0 0 0 1px rgba(0,0,0,.07), 0 2px 6px rgba(0,0,0,.06), 0 18px 44px rgba(40,28,30,.16)
-        Raise::Focused => Look { ring: 0.07, soft: &[(2.0, 6.0, 0x00_00_00, 0.06), (18.0, 44.0, 0x28_1c_1e, 0.16)] },
+        Raise::Focused => Look {
+            ring: 0.07,
+            soft: &[(2.0, 6.0, 0x00_00_00, 0.06), (18.0, 44.0, 0x28_1c_1e, 0.16)],
+        },
         // 0 0 0 1px rgba(0,0,0,.04), 0 6px 18px rgba(40,28,30,.05)
-        Raise::Other => Look { ring: 0.04, soft: &[(6.0, 18.0, 0x28_1c_1e, 0.05)] },
+        Raise::Other => Look {
+            ring: 0.04,
+            soft: &[(6.0, 18.0, 0x28_1c_1e, 0.05)],
+        },
     }
 }
 
@@ -71,14 +80,24 @@ fn rgba(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
 }
 
 fn rect(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
-    D2D_RECT_F { left, top, right, bottom }
+    D2D_RECT_F {
+        left,
+        top,
+        right,
+        bottom,
+    }
 }
 
 /// A hole in whole pixels of a window laid out at `scale` device pixels per DIP. Both edges are
 /// rounded, so a hole is as wide as the layer the browser snaps the page to.
 pub fn hole_pixels(hole: Rect, scale: f32) -> D2D_RECT_F {
     let edge = |value: i32| (value as f32 * scale).round();
-    rect(edge(hole.x), edge(hole.y), edge(hole.x + hole.width), edge(hole.y + hole.height))
+    rect(
+        edge(hole.x),
+        edge(hole.y),
+        edge(hole.x + hole.width),
+        edge(hole.y + hole.height),
+    )
 }
 
 /// The holes of a window's pages, with the page being worked in last so its deeper shadow is not
@@ -95,8 +114,17 @@ pub fn split_holes(pages: &[Rect], active: usize, row: i32) -> Vec<Hole> {
         .iter()
         .enumerate()
         .map(|(index, page)| Hole {
-            rect: Rect { x: page.x, y: page.y - row, width: page.width, height: page.height + row },
-            raise: if index == active { Raise::Focused } else { Raise::Other },
+            rect: Rect {
+                x: page.x,
+                y: page.y - row,
+                width: page.width,
+                height: page.height + row,
+            },
+            raise: if index == active {
+                Raise::Focused
+            } else {
+                Raise::Other
+            },
         })
         .collect()
 }
@@ -115,18 +143,30 @@ unsafe fn background(
     let (width, height) = window;
     let target: &ID2D1RenderTarget = context;
     let frame = rivet_core::space_frame(tint);
-    context.FillRectangle(&area, &context.CreateSolidColorBrush(&rgba(frame, 1.0), None)?);
+    context.FillRectangle(
+        &area,
+        &context.CreateSolidColorBrush(&rgba(frame, 1.0), None)?,
+    );
     let fade = |colour: u32, peak: f32| -> Result<_> {
         let stops = [
-            D2D1_GRADIENT_STOP { position: 0.0, color: rgba(colour, peak) },
-            D2D1_GRADIENT_STOP { position: 0.7, color: rgba(colour, 0.0) },
+            D2D1_GRADIENT_STOP {
+                position: 0.0,
+                color: rgba(colour, peak),
+            },
+            D2D1_GRADIENT_STOP {
+                position: 0.7,
+                color: rgba(colour, 0.0),
+            },
         ];
         target.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)
     };
     let radial = |x: f32, y: f32, rx: f32, ry: f32, stops| {
         context.CreateRadialGradientBrush(
             &D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
-                center: Vector2 { X: x - origin.0, Y: y - origin.1 },
+                center: Vector2 {
+                    X: x - origin.0,
+                    Y: y - origin.1,
+                },
                 gradientOriginOffset: Vector2 { X: 0.0, Y: 0.0 },
                 radiusX: rx,
                 radiusY: ry,
@@ -159,20 +199,37 @@ pub unsafe fn paint(
     let factory = context.GetFactory()?;
     let radius = RADIUS * scale;
     let shape = |area: D2D_RECT_F, grow: f32| D2D1_ROUNDED_RECT {
-        rect: rect(area.left - grow, area.top - grow, area.right + grow, area.bottom + grow),
+        rect: rect(
+            area.left - grow,
+            area.top - grow,
+            area.right + grow,
+            area.bottom + grow,
+        ),
         radiusX: radius + grow,
         radiusY: radius + grow,
     };
     let stacked = stacked(holes);
-    let areas: Vec<D2D_RECT_F> = stacked.iter().map(|hole| hole_pixels(hole.rect, scale)).collect();
+    let areas: Vec<D2D_RECT_F> = stacked
+        .iter()
+        .map(|hole| hole_pixels(hole.rect, scale))
+        .collect();
 
     // Everything but the pages: the outer rectangle with the pages cut out of it.
-    let mut parts: Vec<Option<ID2D1Geometry>> =
-        vec![Some(factory.CreateRectangleGeometry(&rect(-1.0, -1.0, width + 1.0, height + 1.0))?.cast()?)];
+    let mut parts: Vec<Option<ID2D1Geometry>> = vec![Some(
+        factory
+            .CreateRectangleGeometry(&rect(-1.0, -1.0, width + 1.0, height + 1.0))?
+            .cast()?,
+    )];
     for area in &areas {
-        parts.push(Some(factory.CreateRoundedRectangleGeometry(&shape(*area, 0.0))?.cast()?));
+        parts.push(Some(
+            factory
+                .CreateRoundedRectangleGeometry(&shape(*area, 0.0))?
+                .cast()?,
+        ));
     }
-    let ground: ID2D1Geometry = factory.CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE, &parts)?.cast()?;
+    let ground: ID2D1Geometry = factory
+        .CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE, &parts)?
+        .cast()?;
     let mut layer = D2D1_LAYER_PARAMETERS1 {
         contentBounds: rect(-1.0e6, -1.0e6, 1.0e6, 1.0e6),
         geometricMask: ManuallyDrop::new(Some(ground)),
@@ -185,13 +242,26 @@ pub unsafe fn paint(
     context.PushLayer(&layer, None::<&ID2D1Layer>);
     ManuallyDrop::drop(&mut layer.geometricMask);
     let result = (|| -> Result<()> {
-        background(context, rect(0.0, 0.0, width, height), (0.0, 0.0), (width, height), tint)?;
+        background(
+            context,
+            rect(0.0, 0.0, width, height),
+            (0.0, 0.0),
+            (width, height),
+            tint,
+        )?;
         for (hole, area) in stacked.iter().zip(&areas) {
             let page = look(hole.raise);
             let outline = context.CreateSolidColorBrush(&rgba(0, page.ring), None)?;
             context.DrawRoundedRectangle(&shape(*area, 0.5 * scale), &outline, scale, None);
             for &(offset, blur, colour, peak) in page.soft {
-                soft_shadow(context, &shape(*area, 0.0), offset * scale, blur * scale, colour, peak)?;
+                soft_shadow(
+                    context,
+                    &shape(*area, 0.0),
+                    offset * scale,
+                    blur * scale,
+                    colour,
+                    peak,
+                )?;
             }
         }
         Ok(())
@@ -243,12 +313,28 @@ unsafe fn soft_shadow(
 mod tests {
     use super::*;
 
-    const PAGE: Rect = Rect { x: 268, y: 8, width: 960, height: 760 };
+    const PAGE: Rect = Rect {
+        x: 268,
+        y: 8,
+        width: 960,
+        height: 760,
+    };
 
     #[test]
     fn fr12_hole_edges_are_whole_pixels_at_a_fractional_scale() {
-        let area = hole_pixels(Rect { x: 267, y: 7, width: 101, height: 33 }, 1.25);
-        assert_eq!((area.left, area.top, area.right, area.bottom), (334.0, 9.0, 460.0, 50.0));
+        let area = hole_pixels(
+            Rect {
+                x: 267,
+                y: 7,
+                width: 101,
+                height: 33,
+            },
+            1.25,
+        );
+        assert_eq!(
+            (area.left, area.top, area.right, area.bottom),
+            (334.0, 9.0, 460.0, 50.0)
+        );
     }
 
     #[test]
@@ -256,22 +342,48 @@ mod tests {
         let pages = [PAGE, Rect { x: 1236, ..PAGE }];
         let holes = split_holes(&pages, 1, 44);
         assert_eq!(holes.len(), 2);
-        assert_eq!(holes[0].rect, Rect { x: 268, y: -36, width: 960, height: 804 });
-        assert_eq!((holes[0].raise, holes[1].raise), (Raise::Other, Raise::Focused));
+        assert_eq!(
+            holes[0].rect,
+            Rect {
+                x: 268,
+                y: -36,
+                width: 960,
+                height: 804
+            }
+        );
+        assert_eq!(
+            (holes[0].raise, holes[1].raise),
+            (Raise::Other, Raise::Focused)
+        );
     }
 
     #[test]
     fn fr12_the_raised_page_is_painted_last() {
         let holes = [
-            Hole { rect: PAGE, raise: Raise::Focused },
-            Hole { rect: Rect { x: 0, ..PAGE }, raise: Raise::Other },
+            Hole {
+                rect: PAGE,
+                raise: Raise::Focused,
+            },
+            Hole {
+                rect: Rect { x: 0, ..PAGE },
+                raise: Raise::Other,
+            },
         ];
-        assert_eq!(stacked(&holes).last().map(|hole| hole.raise), Some(Raise::Focused));
+        assert_eq!(
+            stacked(&holes).last().map(|hole| hole.raise),
+            Some(Raise::Focused)
+        );
     }
 
     #[test]
     fn fr12_a_page_is_deeper_than_the_pages_behind_it() {
-        let reach = |raise| look(raise).soft.iter().map(|(offset, blur, _, _)| offset + blur).fold(0.0, f32::max);
+        let reach = |raise| {
+            look(raise)
+                .soft
+                .iter()
+                .map(|(offset, blur, _, _)| offset + blur)
+                .fold(0.0, f32::max)
+        };
         assert!(reach(Raise::Focused) > reach(Raise::Page));
         assert!(reach(Raise::Page) > reach(Raise::Other));
     }

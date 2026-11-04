@@ -10,14 +10,15 @@ use std::cell::{Cell, UnsafeCell};
 use std::ffi::c_void;
 use windows_sys::core::GUID;
 use windows_sys::Win32::Foundation::{HWND, POINT, RECT, SIZE};
+use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetDeviceCaps, GetSysColor, ReleaseDC,
-    SelectObject, SetViewportOrgEx, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, LOGPIXELSY,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetDeviceCaps,
+    GetSysColor, ReleaseDC, SelectObject, SetViewportOrgEx, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DIB_RGB_COLORS, HDC, LOGPIXELSY,
 };
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::UI::Input::Ime::{ImmGetContext, ImmReleaseContext, HIMC};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
-use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
 const S_OK: i32 = 0;
@@ -60,11 +61,19 @@ const COLOR_HIGHLIGHT: i32 = 13;
 const COLOR_HIGHLIGHTTEXT: i32 = 14;
 
 fn guid(data1: u32, data2: u16, data3: u16, data4: [u8; 8]) -> GUID {
-    GUID { data1, data2, data3, data4 }
+    GUID {
+        data1,
+        data2,
+        data3,
+        data4,
+    }
 }
 
 fn same(left: &GUID, right: &GUID) -> bool {
-    left.data1 == right.data1 && left.data2 == right.data2 && left.data3 == right.data3 && left.data4 == right.data4
+    left.data1 == right.data1
+        && left.data2 == right.data2
+        && left.data3 == right.data3
+        && left.data4 == right.data4
 }
 
 #[repr(C)]
@@ -115,7 +124,16 @@ struct HostVtbl {
     set_caret_pos: unsafe extern "system" fn(*mut Host, i32, i32) -> i32,
     set_timer: unsafe extern "system" fn(*mut Host, u32, u32) -> i32,
     kill_timer: unsafe extern "system" fn(*mut Host, u32),
-    scroll_window_ex: unsafe extern "system" fn(*mut Host, i32, i32, *const RECT, *const RECT, Unused, *mut RECT, u32),
+    scroll_window_ex: unsafe extern "system" fn(
+        *mut Host,
+        i32,
+        i32,
+        *const RECT,
+        *const RECT,
+        Unused,
+        *mut RECT,
+        u32,
+    ),
     set_capture: unsafe extern "system" fn(*mut Host, i32),
     set_focus: unsafe extern "system" fn(*mut Host),
     set_cursor: unsafe extern "system" fn(*mut Host, Unused, i32),
@@ -159,9 +177,18 @@ struct Host {
     max_length: Cell<u32>,
 }
 
-unsafe extern "system" fn host_query(this: *mut Host, id: *const GUID, out: *mut *mut c_void) -> i32 {
+unsafe extern "system" fn host_query(
+    this: *mut Host,
+    id: *const GUID,
+    out: *mut *mut c_void,
+) -> i32 {
     let unknown = guid(0, 0, 0, [0xC0, 0, 0, 0, 0, 0, 0, 0x46]);
-    let text_host = guid(0x13E6_70F4, 0x1A5A, 0x11cf, [0xAB, 0xEB, 0x00, 0xAA, 0x00, 0xB6, 0x5E, 0xA1]);
+    let text_host = guid(
+        0x13E6_70F4,
+        0x1A5A,
+        0x11cf,
+        [0xAB, 0xEB, 0x00, 0xAA, 0x00, 0xB6, 0x5E, 0xA1],
+    );
     if same(&*id, &unknown) || same(&*id, &text_host) {
         (*this).refs.set((*this).refs.get() + 1);
         *out = this.cast();
@@ -201,7 +228,12 @@ unsafe extern "system" fn host_invalidate(this: *mut Host, _: *const RECT, _: i3
 unsafe extern "system" fn host_view_change(this: *mut Host, _: i32) {
     (*this).changed.set(true);
 }
-unsafe extern "system" fn host_create_caret(this: *mut Host, _: Unused, width: i32, height: i32) -> i32 {
+unsafe extern "system" fn host_create_caret(
+    this: *mut Host,
+    _: Unused,
+    width: i32,
+    height: i32,
+) -> i32 {
     let (x, y, _, _) = (*this).caret.get();
     (*this).caret.set((x, y, width, height));
     1
@@ -218,13 +250,28 @@ unsafe extern "system" fn host_set_caret_pos(this: *mut Host, x: i32, y: i32) ->
     1
 }
 unsafe extern "system" fn host_set_timer(this: *mut Host, id: u32, timeout: u32) -> i32 {
-    SetTimer((*this).window, TIMER_BASE + (id as usize & 0xff), timeout, None);
+    SetTimer(
+        (*this).window,
+        TIMER_BASE + (id as usize & 0xff),
+        timeout,
+        None,
+    );
     1
 }
 unsafe extern "system" fn host_kill_timer(this: *mut Host, id: u32) {
     KillTimer((*this).window, TIMER_BASE + (id as usize & 0xff));
 }
-unsafe extern "system" fn host_scroll(_: *mut Host, _: i32, _: i32, _: *const RECT, _: *const RECT, _: Unused, _: *mut RECT, _: u32) {}
+unsafe extern "system" fn host_scroll(
+    _: *mut Host,
+    _: i32,
+    _: i32,
+    _: *const RECT,
+    _: *const RECT,
+    _: Unused,
+    _: *mut RECT,
+    _: u32,
+) {
+}
 unsafe extern "system" fn host_set_capture(this: *mut Host, capture: i32) {
     if capture != 0 {
         SetCapture((*this).window);
@@ -254,7 +301,12 @@ unsafe extern "system" fn host_client_rect(this: *mut Host, out: *mut RECT) -> i
     S_OK
 }
 unsafe extern "system" fn host_view_inset(_: *mut Host, out: *mut RECT) -> i32 {
-    *out = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    *out = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     S_OK
 }
 unsafe extern "system" fn host_char_format(this: *mut Host, out: *mut *const CharFormat) -> i32 {
@@ -435,7 +487,8 @@ pub struct Field {
     surface: Option<Surface>,
 }
 
-type CreateTextServices = unsafe extern "system" fn(*mut c_void, *mut Host, *mut *mut c_void) -> i32;
+type CreateTextServices =
+    unsafe extern "system" fn(*mut c_void, *mut Host, *mut *mut c_void) -> i32;
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
@@ -452,7 +505,10 @@ impl Field {
                     return None;
                 }
                 let found = GetProcAddress(module, c"CreateTextServices".as_ptr().cast())?;
-                Some(std::mem::transmute::<unsafe extern "system" fn() -> isize, CreateTextServices>(found))
+                Some(std::mem::transmute::<
+                    unsafe extern "system" fn() -> isize,
+                    CreateTextServices,
+                >(found))
             })
             .ok_or("the Windows text engine is not available")?;
         let mut name = [0u16; 32];
@@ -463,10 +519,22 @@ impl Field {
             vtbl: &HOST_VTBL,
             window,
             refs: Cell::new(1),
-            client: Cell::new(RECT { left: 0, top: 0, right: 0, bottom: 0 }),
+            client: Cell::new(RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            }),
             format: UnsafeCell::new(CharFormat {
                 size: std::mem::size_of::<CharFormat>() as u32,
-                mask: CFM_SIZE | CFM_COLOR | CFM_FACE | CFM_CHARSET | CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_STRIKEOUT,
+                mask: CFM_SIZE
+                    | CFM_COLOR
+                    | CFM_FACE
+                    | CFM_CHARSET
+                    | CFM_BOLD
+                    | CFM_ITALIC
+                    | CFM_UNDERLINE
+                    | CFM_STRIKEOUT,
                 effects: 0,
                 height: 200,
                 offset: 0,
@@ -496,18 +564,31 @@ impl Field {
         let status = create(std::ptr::null_mut(), host, &mut unknown);
         if status < 0 || unknown.is_null() {
             drop(Box::from_raw(host));
-            return Err(format!("the Windows text engine did not start ({status:#x})"));
+            return Err(format!(
+                "the Windows text engine did not start ({status:#x})"
+            ));
         }
-        let id = guid(0x8d33_f740, 0xcf58, 0x11ce, [0xa8, 0x9d, 0x00, 0xaa, 0x00, 0x6c, 0xad, 0xc5]);
+        let id = guid(
+            0x8d33_f740,
+            0xcf58,
+            0x11ce,
+            [0xa8, 0x9d, 0x00, 0xaa, 0x00, 0x6c, 0xad, 0xc5],
+        );
         let unknown_table = *(unknown as *mut *const ServicesVtbl);
         let mut services: *mut c_void = std::ptr::null_mut();
         let status = ((*unknown_table).query_interface)(unknown, &id, &mut services);
         ((*unknown_table).release)(unknown);
         if status < 0 || services.is_null() {
             drop(Box::from_raw(host));
-            return Err(format!("the Windows text engine has no text services ({status:#x})"));
+            return Err(format!(
+                "the Windows text engine has no text services ({status:#x})"
+            ));
         }
-        Ok(Self { host, services: services.cast(), surface: None })
+        Ok(Self {
+            host,
+            services: services.cast(),
+            surface: None,
+        })
     }
 
     fn table(&self) -> &ServicesVtbl {
@@ -519,7 +600,10 @@ impl Field {
         let host = &*self.host;
         let changed = {
             let old = host.client.get();
-            old.left != client.left || old.top != client.top || old.right != client.right || old.bottom != client.bottom
+            old.left != client.left
+                || old.top != client.top
+                || old.right != client.right
+                || old.bottom != client.bottom
         };
         host.client.set(client);
         // Twips are device independent, but the engine turns them into pixels with the logical
@@ -554,14 +638,19 @@ impl Field {
     /// window should treat the message as usual.
     pub fn send(&self, message: u32, wparam: usize, lparam: isize) -> Option<isize> {
         let mut result = 0isize;
-        let status = unsafe { (self.table().send_message)(self.services.cast(), message, wparam, lparam, &mut result) };
+        let status = unsafe {
+            (self.table().send_message)(self.services.cast(), message, wparam, lparam, &mut result)
+        };
         (status != S_MSG_KEY_IGNORED).then_some(result)
     }
 
     pub fn text(&self) -> String {
         let length = self.send(WM_GETTEXTLENGTH, 0, 0).unwrap_or(0).max(0) as usize;
         let mut buffer = vec![0u16; length + 2];
-        let copied = self.send(WM_GETTEXT, buffer.len(), buffer.as_mut_ptr() as isize).unwrap_or(0).max(0) as usize;
+        let copied = self
+            .send(WM_GETTEXT, buffer.len(), buffer.as_mut_ptr() as isize)
+            .unwrap_or(0)
+            .max(0) as usize;
         String::from_utf16_lossy(&buffer[..copied.min(buffer.len())])
     }
 
@@ -574,7 +663,13 @@ impl Field {
     pub fn set_max_length(&self, length: u32) {
         unsafe { (*self.host).max_length.set(length) };
         const TXTBIT_MAXLENGTHCHANGE: u32 = 0x8000;
-        unsafe { (self.table().property_bits_change)(self.services.cast(), TXTBIT_MAXLENGTHCHANGE, TXTBIT_MAXLENGTHCHANGE) };
+        unsafe {
+            (self.table().property_bits_change)(
+                self.services.cast(),
+                TXTBIT_MAXLENGTHCHANGE,
+                TXTBIT_MAXLENGTHCHANGE,
+            )
+        };
     }
 
     pub fn select_all(&self) {
@@ -590,14 +685,21 @@ impl Field {
     pub fn caret(&self) -> Option<RECT> {
         let host = unsafe { &*self.host };
         let (x, y, width, height) = host.caret.get();
-        host.caret_shown.get().then_some(RECT { left: x, top: y, right: x + width.max(1), bottom: y + height })
+        host.caret_shown.get().then_some(RECT {
+            left: x,
+            top: y,
+            right: x + width.max(1),
+            bottom: y + height,
+        })
     }
 
     unsafe fn surface_dc(&mut self) -> HDC {
         if self.surface.is_none() {
             self.surface = Some(Self::make_surface(1, 1));
         }
-        self.surface.as_ref().map_or(std::ptr::null_mut(), |surface| surface.dc)
+        self.surface
+            .as_ref()
+            .map_or(std::ptr::null_mut(), |surface| surface.dc)
     }
 
     unsafe fn make_surface(width: i32, height: i32) -> Surface {
@@ -613,9 +715,23 @@ impl Field {
             ..std::mem::zeroed()
         };
         let mut bits: *mut c_void = std::ptr::null_mut();
-        let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+        let bitmap = CreateDIBSection(
+            dc,
+            &info,
+            DIB_RGB_COLORS,
+            &mut bits,
+            std::ptr::null_mut(),
+            0,
+        );
         let previous = SelectObject(dc, bitmap);
-        Surface { dc, bitmap, previous, bits: bits.cast(), width, height }
+        Surface {
+            dc,
+            bitmap,
+            previous,
+            bits: bits.cast(),
+            width,
+            height,
+        }
     }
 
     /// Draws the field over `ground` (a colour as 0xRRGGBB) and returns its pixels.
@@ -625,7 +741,9 @@ impl Field {
         if width <= 0 || height <= 0 {
             return None;
         }
-        if self.surface.as_ref().map_or(true, |surface| surface.width != width || surface.height != height) {
+        if self.surface.as_ref().map_or(true, |surface| {
+            surface.width != width || surface.height != height
+        }) {
             if let Some(old) = self.surface.take() {
                 Self::free_surface(old);
             }
@@ -657,7 +775,11 @@ impl Field {
         for pixel in pixels.iter_mut() {
             *pixel |= 0xff00_0000;
         }
-        Some(Pixels { width, height, bytes: std::slice::from_raw_parts(surface.bits, count * 4) })
+        Some(Pixels {
+            width,
+            height,
+            bytes: std::slice::from_raw_parts(surface.bits, count * 4),
+        })
     }
 
     unsafe fn free_surface(surface: Surface) {
@@ -707,8 +829,18 @@ mod tests {
     fn nfr5_the_windows_text_engine_edits_korean_text_without_rivet_editing_keys() {
         unsafe {
             let window = hidden_window();
-            let mut field = Field::new(window, "Segoe UI", 0x1f2024).expect("the text engine starts");
-            field.place(RECT { left: 0, top: 0, right: 200, bottom: 24 }, 14.0, 96);
+            let mut field =
+                Field::new(window, "Segoe UI", 0x1f2024).expect("the text engine starts");
+            field.place(
+                RECT {
+                    left: 0,
+                    top: 0,
+                    right: 200,
+                    bottom: 24,
+                },
+                14.0,
+                96,
+            );
             field.activate();
             field.set_text("Default");
             assert_eq!(field.text(), "Default");
@@ -723,7 +855,13 @@ mod tests {
             assert_eq!(field.text(), "작업 Wor");
             let pixels = field.render(0xffffff).expect("the field draws");
             assert_eq!((pixels.width, pixels.height), (200, 24));
-            assert!(pixels.bytes.chunks_exact(4).any(|pixel| pixel[..3] != [0xff, 0xff, 0xff]), "the text is drawn");
+            assert!(
+                pixels
+                    .bytes
+                    .chunks_exact(4)
+                    .any(|pixel| pixel[..3] != [0xff, 0xff, 0xff]),
+                "the text is drawn"
+            );
             drop(field);
             DestroyWindow(window);
         }

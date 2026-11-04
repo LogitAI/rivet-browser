@@ -1,14 +1,17 @@
 //! Chromium's split view on the browser UI thread. Two tabs shown side by side in one window are
 //! Chromium's own split tabs, so Rivet starts and ends them through the tab strip model and lets the
 //! browser lay out, focus and restore them. Calls are gated by code signatures.
+use crate::builds::Build;
+use crate::feature::{available_here, Needs};
+use crate::features::frame_layout::Rect;
+use crate::features::split::{
+    caption_over, client_right, fill_area, in_a_line, row_buttons, row_top, Pane, RowButton,
+    RELAYOUT_MESSAGE, ROW_HEIGHT,
+};
+use crate::targets::Target;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
-use crate::features::frame_layout::Rect;
-use crate::builds::Build;
-use crate::feature::{available_here, Needs};
-use crate::features::split::{caption_over, client_right, fill_area, in_a_line, row_buttons, row_top, Pane, RowButton, RELAYOUT_MESSAGE, ROW_HEIGHT};
-use crate::targets::Target;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::Memory::{
     VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
@@ -25,28 +28,63 @@ fn bv() -> &'static crate::builds::Split {
 pub(crate) fn needs(build: &Build) -> Needs {
     let row = &build.split;
     let mut targets = vec![
-        Target::new("split calculate layout", row.calculate_layout, row.calculate_layout_prologue),
-        Target::new("split container layout", row.container_layout, row.calculate_layout_prologue),
-        Target::new("web contents focused", row.web_contents_focused, row.web_contents_focused_prologue),
-        Target::new("update border", row.update_border, row.update_border_prologue),
+        Target::new(
+            "split calculate layout",
+            row.calculate_layout,
+            row.calculate_layout_prologue,
+        ),
+        Target::new(
+            "split container layout",
+            row.container_layout,
+            row.calculate_layout_prologue,
+        ),
+        Target::new(
+            "web contents focused",
+            row.web_contents_focused,
+            row.web_contents_focused_prologue,
+        ),
+        Target::new(
+            "update border",
+            row.update_border,
+            row.update_border_prologue,
+        ),
     ];
     // A browser whose top row does not follow the focused page has no use for the flex layout, and
     // one that builds the page corners without a setter keeps the corners it has.
     if row.flex_layout != crate::builds::ABSENT {
-        targets.push(Target::new("split flex layout", row.flex_layout, row.calculate_layout_prologue));
+        targets.push(Target::new(
+            "split flex layout",
+            row.flex_layout,
+            row.calculate_layout_prologue,
+        ));
     }
     if row.set_rounded_corners != crate::builds::ABSENT {
-        targets.push(Target::new("set rounded corners", row.set_rounded_corners, row.set_rounded_corners_prologue));
+        targets.push(Target::new(
+            "set rounded corners",
+            row.set_rounded_corners,
+            row.set_rounded_corners_prologue,
+        ));
     }
-    targets.extend(row.signatures.iter().map(|(rva, bytes)| Target::new("split function", *rva, bytes)));
-    Needs::checked(row.supported, crate::builds::unchecked_reason(build, "split view"), targets)
+    targets.extend(
+        row.signatures
+            .iter()
+            .map(|(rva, bytes)| Target::new("split function", *rva, bytes)),
+    );
+    Needs::checked(
+        row.supported,
+        crate::builds::unchecked_reason(build, "split view"),
+        targets,
+    )
 }
 
 /// The part of the page area layout that belongs to split view: the pages of a split fill the area
 /// the Sidebar left, and the toolbar follows the active page.
 pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) {
     let row = &crate::builds::get().side_panel;
-    if let (Some(toolbar), Some(contents)) = (area.bounds(row.toolbar), area.bounds(row.contents_container)) {
+    if let (Some(toolbar), Some(contents)) = (
+        area.bounds(row.toolbar),
+        area.bounds(row.contents_container),
+    ) {
         if area.rail == 0 && active_is_split(area.window) {
             if let Some(page) = area.bounds(row.page_area) {
                 fill_area(&mut *contents, &*page);
@@ -56,13 +94,11 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
     }
 }
 
-
 /// Whether the loaded build's row has split view.
 fn checked() -> bool {
     static CHECKED: OnceLock<bool> = OnceLock::new();
     *CHECKED.get_or_init(|| available_here(needs))
 }
-
 
 /// `AddToNewSplit(this, out id, indices, visual data, created source)`.
 type AddToNewSplit = unsafe extern "system" fn(
@@ -116,9 +152,15 @@ unsafe fn split_of(base: usize, model: *mut c_void, index: usize) -> Option<[u8;
 }
 /// Whether the active tab of the window is shown in a split.
 unsafe fn active_is_split(window: HWND) -> bool {
-    let Some(base) = checked_base() else { return false };
-    let Some(model) = tab_model(base, window) else { return false };
-    let Some(tabs) = crate::features::tabs::tabs(window) else { return false };
+    let Some(base) = checked_base() else {
+        return false;
+    };
+    let Some(model) = tab_model(base, window) else {
+        return false;
+    };
+    let Some(tabs) = crate::features::tabs::tabs(window) else {
+        return false;
+    };
     tabs.iter()
         .find(|tab| tab.active)
         .is_some_and(|tab| split_of(base, model, tab.index).is_some())
@@ -126,7 +168,12 @@ unsafe fn active_is_split(window: HWND) -> bool {
 
 /// The tab indices `AddToNewSplit` is given. A build that adds the active tab by itself wants only the
 /// other tab, and any other wants both, in strip order.
-fn tab_indices(first: usize, second: usize, active: Option<usize>, adds_active: bool) -> Vec<usize> {
+fn tab_indices(
+    first: usize,
+    second: usize,
+    active: Option<usize>,
+    adds_active: bool,
+) -> Vec<usize> {
     if adds_active {
         vec![if Some(first) == active { second } else { first }]
     } else {
@@ -147,8 +194,12 @@ fn index_vector(data: usize, count: usize, ends_by_pointer: bool) -> [usize; 3] 
 
 /// Makes a split of two tabs. The first one is shown first, which is on the left or on top.
 unsafe fn split_pair(window: HWND, first: usize, second: usize, layout: u32) -> bool {
-    let Some(base) = checked_base() else { return false };
-    let Some(model) = tab_model(base, window) else { return false };
+    let Some(base) = checked_base() else {
+        return false;
+    };
+    let Some(model) = tab_model(base, window) else {
+        return false;
+    };
     if split_of(base, model, first).is_some() || split_of(base, model, second).is_some() {
         return false;
     }
@@ -162,7 +213,11 @@ unsafe fn split_pair(window: HWND, first: usize, second: usize, layout: u32) -> 
     for (at, index) in listed.iter().enumerate() {
         indices.add(at).write(*index as i32);
     }
-    let span = index_vector(indices as usize, listed.len(), bv().split_vector_ends_by_pointer);
+    let span = index_vector(
+        indices as usize,
+        listed.len(),
+        bv().split_vector_ends_by_pointer,
+    );
     let mut visual = [0u8; 16];
     visual[..4].copy_from_slice(&layout.to_le_bytes());
     visual[8..16].copy_from_slice(&EVEN_RATIO.to_le_bytes());
@@ -180,20 +235,27 @@ unsafe fn split_pair(window: HWND, first: usize, second: usize, layout: u32) -> 
 
 /// Ends the split of the active tab. Both tabs stay open.
 pub unsafe fn unsplit_active(window: HWND) -> bool {
-    let Some(base) = checked_base() else { return false };
-    let Some(model) = tab_model(base, window) else { return false };
-    let Some(tabs) = crate::features::tabs::tabs(window) else { return false };
+    let Some(base) = checked_base() else {
+        return false;
+    };
+    let Some(model) = tab_model(base, window) else {
+        return false;
+    };
+    let Some(tabs) = crate::features::tabs::tabs(window) else {
+        return false;
+    };
     let Some(active) = tabs.iter().find(|tab| tab.active).map(|tab| tab.index) else {
         return false;
     };
-    let Some(id) = split_of(base, model, active) else { return false };
+    let Some(id) = split_of(base, model, active) else {
+        return false;
+    };
     function::<RemoveSplit>(base, bv().remove_split)(model, &id);
     true
 }
 
 /// The corner radius of a page panel in a split, in device-independent pixels.
 const PANEL_RADIUS: f32 = 12.0;
-
 
 type SetRoundedCorners = unsafe extern "system" fn(*mut c_void, *const [f32; 4]);
 static ORIGINAL_CORNERS: AtomicUsize = AtomicUsize::new(0);
@@ -215,7 +277,13 @@ unsafe extern "system" fn set_rounded_corners(view: *mut c_void, corners: *const
 
 unsafe fn write_code(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
     let mut previous = 0;
-    if VirtualProtect(target.cast(), bytes.len(), PAGE_EXECUTE_READWRITE, &mut previous) == 0 {
+    if VirtualProtect(
+        target.cast(),
+        bytes.len(),
+        PAGE_EXECUTE_READWRITE,
+        &mut previous,
+    ) == 0
+    {
         return Err("could not unprotect browser code".into());
     }
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
@@ -288,7 +356,6 @@ pub unsafe fn install() -> Result<(), String> {
 type UpdateBorder = unsafe extern "system" fn(*mut c_void, u32, u32, u32);
 static ORIGINAL_BORDER: AtomicUsize = AtomicUsize::new(0);
 
-
 unsafe fn virtual_slot<T: Copy>(view: *mut c_void, slot: usize) -> T {
     let table = *(view as *const *const usize);
     std::mem::transmute_copy(&*table.add(slot))
@@ -302,10 +369,10 @@ unsafe extern "system" fn update_border(view: *mut c_void, show: u32, a: u32, b:
     }
     // Chrome has just laid its outline and the space inside it out. The mini toolbar stays.
     let no_border: usize = 0;
-    virtual_slot::<unsafe extern "system" fn(*mut c_void, *const usize)>(view, bv().set_border_slot)(
+    virtual_slot::<unsafe extern "system" fn(*mut c_void, *const usize)>(
         view,
-        &no_border,
-    );
+        bv().set_border_slot,
+    )(view, &no_border);
     let child = *((view as usize + bv().outline_member) as *const *mut c_void);
     if !child.is_null() {
         virtual_slot::<unsafe extern "system" fn(*mut c_void, u32)>(child, bv().set_visible_slot)(
@@ -324,7 +391,12 @@ unsafe fn detour(
     store: &AtomicUsize,
 ) -> Result<(), String> {
     use crate::targets::{detour_styled, Cookie, Style};
-    let style = Style { cookie: Cookie::None, once: true, journaled: false, ..Style::JOURNALED };
+    let style = Style {
+        cookie: Cookie::None,
+        once: true,
+        journaled: false,
+        ..Style::JOURNALED
+    };
     detour_styled(base, rva, prologue, hook, Some(store), style).map(|_| ())
 }
 
@@ -351,7 +423,11 @@ static SPLITS: Mutex<Vec<(usize, SplitPanes)>> = Mutex::new(Vec::new());
 /// Each starts with the view, then a visible flag at 8 and the bounds at 0xc.
 unsafe fn layout_children(out: *mut u8) -> (*mut u8, usize) {
     let size = *(out.add(8) as *const usize);
-    let data = if size & 1 == 1 { *(out.add(0x10) as *const *mut u8) } else { out.add(0x10) };
+    let data = if size & 1 == 1 {
+        *(out.add(0x10) as *const *mut u8)
+    } else {
+        out.add(0x10)
+    };
     (data, size >> 1)
 }
 
@@ -397,7 +473,10 @@ unsafe extern "system" fn calculate_layout(
     let panes: Vec<*mut u8> = (0..total.min(4))
         .filter_map(|index| {
             let container = *containers.add(index);
-            shown.iter().copied().find(|child| *(*child as *const usize) == container)
+            shown
+                .iter()
+                .copied()
+                .find(|child| *(*child as *const usize) == container)
         })
         .collect();
     let mut splits = SPLITS.lock().unwrap_or_else(|error| error.into_inner());
@@ -424,7 +503,11 @@ unsafe extern "system" fn calculate_layout(
         });
         if let Some(between) = between {
             gap = *(between as *const usize);
-            narrow_gap(&mut *child_bounds(first), &mut *child_bounds(between), &mut *child_bounds(second));
+            narrow_gap(
+                &mut *child_bounds(first),
+                &mut *child_bounds(between),
+                &mut *child_bounds(second),
+            );
         }
         // Pages stacked on top of each other: the lower page's top row goes into the space the
         // resize area leaves, so the upper page ends higher.
@@ -445,7 +528,12 @@ unsafe extern "system" fn calculate_layout(
         .iter()
         .map(|child| {
             let [x, y, width, height] = *child_bounds(*child);
-            Rect { x, y, width, height }
+            Rect {
+                x,
+                y,
+                width,
+                height,
+            }
         })
         .collect();
     let changed = previous.as_ref().is_none_or(|before| before.rects != rects);
@@ -455,7 +543,14 @@ unsafe extern "system" fn calculate_layout(
     if let Some(window) = crate::features::frame_layout::hwnd_of_view(view) {
         crate::hooks::page_area::remember_own_area(window, view as usize);
     }
-    splits.push((widget, SplitPanes { view: view as usize, gap, rects }));
+    splits.push((
+        widget,
+        SplitPanes {
+            view: view as usize,
+            gap,
+            rects,
+        },
+    ));
     result
 }
 /// Whether the browser's address can follow the focused page. A toolbar that places it by hand keeps
@@ -477,29 +572,44 @@ static ADDRESS_ONLY: Mutex<Vec<(isize, (i32, i32))>> = Mutex::new(Vec::new());
 /// In a split the top row of the browser shrinks to the focused page's address, so its other
 /// children (back, forward, reload, the split button) are hidden by the layout, which restores them
 /// as soon as the window leaves the split. The address fills the row.
-unsafe extern "system" fn flex_layout(layout: *mut c_void, out: *mut u8, bounds: *const c_void) -> *mut u8 {
+unsafe extern "system" fn flex_layout(
+    layout: *mut c_void,
+    out: *mut u8,
+    bounds: *const c_void,
+) -> *mut u8 {
     let original: CalculateLayout = std::mem::transmute(ORIGINAL_FLEX.load(Ordering::Acquire));
     let result = original(layout, out, bounds);
-    if ADDRESS_ONLY.lock().unwrap_or_else(|error| error.into_inner()).is_empty() {
+    if ADDRESS_ONLY
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_empty()
+    {
         return result;
     }
     let Some(base) = base() else { return result };
     let (data, count) = layout_children(out);
-    let location = (0..count).map(|index| data.add(index * 0x30)).find(|child| {
-        let view = *(*child as *const usize);
-        view != 0 && *(view as *const usize) == base + bv().location_bar_vtable
-    });
-    let Some(location) = location else { return result };
+    let location = (0..count)
+        .map(|index| data.add(index * 0x30))
+        .find(|child| {
+            let view = *(*child as *const usize);
+            view != 0 && *(view as *const usize) == base + bv().location_bar_vtable
+        });
+    let Some(location) = location else {
+        return result;
+    };
     let host = *((layout as usize + bv().flex_layout_host) as *const usize);
-    let address = crate::features::frame_layout::hwnd_of_view(host as *const c_void).and_then(|window| {
-        ADDRESS_ONLY
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .iter()
-            .find(|(key, _)| *key == window as isize)
-            .map(|(_, address)| *address)
-    });
-    let Some((left, width)) = address else { return result };
+    let address =
+        crate::features::frame_layout::hwnd_of_view(host as *const c_void).and_then(|window| {
+            ADDRESS_ONLY
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .iter()
+                .find(|(key, _)| *key == window as isize)
+                .map(|(_, address)| *address)
+        });
+    let Some((left, width)) = address else {
+        return result;
+    };
     for index in 0..count {
         let child = data.add(index * 0x30);
         if child != location {
@@ -522,10 +632,18 @@ pub unsafe fn place_address(toolbar: *mut c_void) {
     let location = LOCATION.load(Ordering::Relaxed);
     let layout = &crate::builds::get().layout;
     let Some(base) = base() else { return };
-    if location == 0 || !std::slice::from_raw_parts((base + layout.set_bounds_rect) as *const u8, layout.set_bounds_rect_prologue.len()).eq(layout.set_bounds_rect_prologue) {
+    if location == 0
+        || !std::slice::from_raw_parts(
+            (base + layout.set_bounds_rect) as *const u8,
+            layout.set_bounds_rect_prologue.len(),
+        )
+        .eq(layout.set_bounds_rect_prologue)
+    {
         return;
     }
-    let Some(window) = crate::features::frame_layout::hwnd_of_view(toolbar) else { return };
+    let Some(window) = crate::features::frame_layout::hwnd_of_view(toolbar) else {
+        return;
+    };
     let address = ADDRESS_ONLY
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -537,7 +655,9 @@ pub unsafe fn place_address(toolbar: *mut c_void) {
     if (bounds[0], bounds[2]) != (left, width) {
         bounds[0] = left;
         bounds[2] = width;
-        function::<unsafe extern "system" fn(usize, *const [i32; 4])>(base, layout.set_bounds_rect)(location, &bounds);
+        function::<unsafe extern "system" fn(usize, *const [i32; 4])>(base, layout.set_bounds_rect)(
+            location, &bounds,
+        );
     }
 }
 
@@ -587,7 +707,8 @@ unsafe extern "system" fn container_layout(
     out: *mut u8,
     bounds: *const c_void,
 ) -> *mut u8 {
-    let original: CalculateLayout = std::mem::transmute(ORIGINAL_CONTAINER_LAYOUT.load(Ordering::Acquire));
+    let original: CalculateLayout =
+        std::mem::transmute(ORIGINAL_CONTAINER_LAYOUT.load(Ordering::Acquire));
     let result = original(delegate, out, bounds);
     let view = (delegate as usize - bv().container_delegate_offset) as *mut c_void;
     if crate::browsers::rivet_owner(view).is_some() {
@@ -603,9 +724,12 @@ unsafe extern "system" fn container_layout(
     result
 }
 unsafe fn request_relayout(view: usize) {
-    let Some(window) = crate::features::frame_layout::hwnd_of_view(view as *const c_void) else { return };
+    let Some(window) = crate::features::frame_layout::hwnd_of_view(view as *const c_void) else {
+        return;
+    };
     let name: Vec<u16> = RELAYOUT_MESSAGE.encode_utf16().chain(Some(0)).collect();
-    let message = windows_sys::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW(name.as_ptr());
+    let message =
+        windows_sys::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW(name.as_ptr());
     windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(window as _, message, 0, 0);
 }
 
@@ -616,7 +740,9 @@ static CONTENTS: Mutex<Vec<(isize, [i32; 4])>> = Mutex::new(Vec::new());
 
 /// The page area of a window as left, top, right and bottom in device-independent pixels.
 pub unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
-    let Some(geometry) = crate::hooks::page_area::page_geometry(window) else { return crate::hooks::page_area::own_area(window) };
+    let Some(geometry) = crate::hooks::page_area::page_geometry(window) else {
+        return crate::hooks::page_area::own_area(window);
+    };
     let contents = CONTENTS
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -629,11 +755,21 @@ pub unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
 
 /// The tabs of the split the active tab is in, in strip order, which is the order of its pages.
 unsafe fn split_tabs(window: HWND) -> Vec<usize> {
-    let Some(base) = checked_base() else { return Vec::new() };
-    let Some(model) = tab_model(base, window) else { return Vec::new() };
-    let Some(tabs) = crate::features::tabs::tabs(window) else { return Vec::new() };
-    let Some(active) = tabs.iter().find(|tab| tab.active) else { return Vec::new() };
-    let Some(id) = split_of(base, model, active.index) else { return Vec::new() };
+    let Some(base) = checked_base() else {
+        return Vec::new();
+    };
+    let Some(model) = tab_model(base, window) else {
+        return Vec::new();
+    };
+    let Some(tabs) = crate::features::tabs::tabs(window) else {
+        return Vec::new();
+    };
+    let Some(active) = tabs.iter().find(|tab| tab.active) else {
+        return Vec::new();
+    };
+    let Some(id) = split_of(base, model, active.index) else {
+        return Vec::new();
+    };
     tabs.iter()
         .filter(|tab| split_of(base, model, tab.index) == Some(id))
         .map(|tab| tab.index)
@@ -643,7 +779,8 @@ unsafe fn split_tabs(window: HWND) -> Vec<usize> {
 pub unsafe fn panes(window: HWND) -> Vec<Pane> {
     let (area, view_top) = match (
         page_area(window),
-        crate::hooks::page_area::page_geometry(window).zip(crate::hooks::page_area::area_top(window)),
+        crate::hooks::page_area::page_geometry(window)
+            .zip(crate::hooks::page_area::area_top(window)),
     ) {
         (Some(area), Some((geometry, top))) => (area, geometry.top - top),
         _ => match crate::hooks::page_area::own_area(window) {
@@ -703,7 +840,10 @@ pub unsafe fn fit_toolbar(window: HWND, toolbar: &mut [i32; 4], contents: &[i32;
         }
     }
     let leave = || {
-        ADDRESS_ONLY.lock().unwrap_or_else(|error| error.into_inner()).retain(|(key, _)| *key != window as isize);
+        ADDRESS_ONLY
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(key, _)| *key != window as isize);
     };
     let splits = SPLITS.lock().unwrap_or_else(|error| error.into_inner());
     let Some((_, split)) = splits.iter().find(|(_, split)| {
@@ -716,16 +856,31 @@ pub unsafe fn fit_toolbar(window: HWND, toolbar: &mut [i32; 4], contents: &[i32;
         return leave();
     }
     let active = (*((split.view + bv().active_member) as *const i32)).max(0) as usize;
-    let Some(pane) = split.rects.get(active) else { return leave() };
+    let Some(pane) = split.rects.get(active) else {
+        return leave();
+    };
     let window_right = client_right(window);
     let on_top = pane.y == split.rects[0].y;
-    let caption = if on_top { caption_over(window_right, contents[0] + pane.x + pane.width) } else { 0.0 };
+    let caption = if on_top {
+        caption_over(window_right, contents[0] + pane.x + pane.width)
+    } else {
+        0.0
+    };
     let buttons = row_buttons(pane.width as f32, active == 0, caption);
     // The browser clips its top row to the strip above the pages, so only a page whose row is that
     // strip can show the browser's address bar. The row of a lower page draws its address itself.
-    let address = buttons.iter().find(|button| button.0 == RowButton::Address).filter(|_| on_top);
-    let place = address_in_row(toolbar[0], contents[0] + pane.x, address.map(|(_, x, width)| (*x, *width)));
-    let mut all = ADDRESS_ONLY.lock().unwrap_or_else(|error| error.into_inner());
+    let address = buttons
+        .iter()
+        .find(|button| button.0 == RowButton::Address)
+        .filter(|_| on_top);
+    let place = address_in_row(
+        toolbar[0],
+        contents[0] + pane.x,
+        address.map(|(_, x, width)| (*x, *width)),
+    );
+    let mut all = ADDRESS_ONLY
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     match all.iter_mut().find(|(key, _)| *key == window as isize) {
         Some(entry) => entry.1 = place,
         None => all.push((window as isize, place)),
@@ -810,7 +965,16 @@ impl crate::browsers::SplitBackend for TabModelSplit {
     }
 
     unsafe fn split_pair(&self, window: HWND, first: usize, second: usize, stacked: bool) -> bool {
-        split_pair(window, first, second, if stacked { LAYOUT_STACKED } else { LAYOUT_SIDE_BY_SIDE })
+        split_pair(
+            window,
+            first,
+            second,
+            if stacked {
+                LAYOUT_STACKED
+            } else {
+                LAYOUT_SIDE_BY_SIDE
+            },
+        )
     }
 
     unsafe fn unsplit_active(&self, window: HWND) -> bool {
@@ -877,7 +1041,8 @@ mod tests {
 
     #[test]
     fn fr9_split_gap_is_eight_dips() {
-        let (mut left, mut middle, mut right) = ([8, 0, 399, 683], [407, 0, 10, 683], [417, 0, 399, 683]);
+        let (mut left, mut middle, mut right) =
+            ([8, 0, 399, 683], [407, 0, 10, 683], [417, 0, 399, 683]);
         assert!(narrow_gap(&mut left, &mut middle, &mut right));
         assert_eq!(left[0] + left[2], 408);
         assert_eq!(middle, [408, 0, 8, 683]);
@@ -887,7 +1052,8 @@ mod tests {
 
     #[test]
     fn fr9_split_gap_leaves_other_layouts_alone() {
-        let (mut left, mut middle, mut right) = ([8, 0, 399, 683], [407, 0, 6, 683], [413, 0, 399, 683]);
+        let (mut left, mut middle, mut right) =
+            ([8, 0, 399, 683], [407, 0, 6, 683], [413, 0, 399, 683]);
         assert!(!narrow_gap(&mut left, &mut middle, &mut right));
         assert_eq!(middle, [407, 0, 6, 683]);
     }

@@ -32,7 +32,9 @@ pub struct Disk;
 
 impl Files for Disk {
     fn children(&self, folder: &Path) -> Vec<(String, bool)> {
-        let Ok(entries) = std::fs::read_dir(folder) else { return Vec::new() };
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return Vec::new();
+        };
         entries
             .filter_map(Result::ok)
             .filter_map(|entry| {
@@ -67,9 +69,15 @@ impl std::fmt::Display for Rejection {
         match self {
             Self::Missing => write!(f, "that file does not exist"),
             Self::NotAProgram => write!(f, "that file is not a Windows program"),
-            Self::NoChromiumModule => write!(f, "that program does not load a Chromium module (a *_elf.dll)"),
+            Self::NoChromiumModule => write!(
+                f,
+                "that program does not load a Chromium module (a *_elf.dll)"
+            ),
             Self::ModuleMissing(module) => write!(f, "{module} is missing beside that program"),
-            Self::NotChromium(module) => write!(f, "{module} does not export what every Chromium build exports"),
+            Self::NotChromium(module) => write!(
+                f,
+                "{module} does not export what every Chromium build exports"
+            ),
         }
     }
 }
@@ -97,30 +105,54 @@ pub fn chromium_proof(files: &dyn Files, program: &Path) -> Result<PathBuf, Reje
     // A launcher stub may carry no import of its own, so the same-named program in a version
     // folder is looked at too.
     let programs = std::iter::once(program.to_path_buf())
-        .chain(versions.iter().map(|version| folder.join(version).join(name)))
+        .chain(
+            versions
+                .iter()
+                .map(|version| folder.join(version).join(name)),
+        )
         .filter(|candidate| files.is_file(candidate));
     let mut readable = false;
     let mut rejection = Rejection::NoChromiumModule;
     for candidate in programs {
-        let Some(found) = files.names(&candidate) else { continue };
+        let Some(found) = files.names(&candidate) else {
+            continue;
+        };
         readable = true;
         let home = candidate.parent().unwrap_or(folder);
-        for module in found.imports.iter().filter(|import| import.to_ascii_lowercase().ends_with("_elf.dll")) {
+        for module in found
+            .imports
+            .iter()
+            .filter(|import| import.to_ascii_lowercase().ends_with("_elf.dll"))
+        {
             let places = std::iter::once(home.join(module))
                 .chain(std::iter::once(folder.join(module)))
-                .chain(versions.iter().map(|version| folder.join(version).join(module)));
+                .chain(
+                    versions
+                        .iter()
+                        .map(|version| folder.join(version).join(module)),
+                );
             let Some(place) = places.into_iter().find(|place| files.is_file(place)) else {
                 rejection = Rejection::ModuleMissing(module.clone());
                 continue;
             };
-            let exports = files.names(&place).map(|names| names.exports).unwrap_or_default();
-            if CHROMIUM_EXPORTS.iter().any(|marker| exports.iter().any(|export| export == marker)) {
+            let exports = files
+                .names(&place)
+                .map(|names| names.exports)
+                .unwrap_or_default();
+            if CHROMIUM_EXPORTS
+                .iter()
+                .any(|marker| exports.iter().any(|export| export == marker))
+            {
                 return Ok(place);
             }
             rejection = Rejection::NotChromium(module.clone());
         }
     }
-    Err(if readable { rejection } else { Rejection::NotAProgram })
+    Err(if readable {
+        rejection
+    } else {
+        Rejection::NotAProgram
+    })
 }
 
 /// Whether Rivet can apply to a browser build.
@@ -155,9 +187,16 @@ impl Status {
 
 /// The status of a program from its file name, its installed version, the versions with a verified
 /// row and the versions Rivet has kept.
-pub fn status(file_name: &str, installed: Option<Version>, supported: &[Version], kept: &[Version]) -> Status {
+pub fn status(
+    file_name: &str,
+    installed: Option<Version>,
+    supported: &[Version],
+    kept: &[Version],
+) -> Status {
     if hold::module_of(file_name).is_none() {
-        return Status::NotYet("Rivet has no verified build of this browser yet, so it cannot apply to it.".to_owned());
+        return Status::NotYet(
+            "Rivet has no verified build of this browser yet, so it cannot apply to it.".to_owned(),
+        );
     }
     let Some(installed) = installed else {
         return Status::NotYet("Rivet could not read the version of this browser.".to_owned());
@@ -165,7 +204,12 @@ pub fn status(file_name: &str, installed: Option<Version>, supported: &[Version]
     if supported.contains(&installed) {
         return Status::Ready;
     }
-    match kept.iter().copied().filter(|version| supported.contains(version)).max() {
+    match kept
+        .iter()
+        .copied()
+        .filter(|version| supported.contains(version))
+        .max()
+    {
         Some(kept) => Status::Kept { installed, kept },
         None => Status::NotYet(format!(
             "Rivet has not verified {} yet and has no earlier build of it to open.",
@@ -193,14 +237,32 @@ pub struct Product {
 }
 
 impl Browser {
-    pub fn new(path: PathBuf, proof: PathBuf, product: Product, status: Status, installed: Option<Version>) -> Self {
+    pub fn new(
+        path: PathBuf,
+        proof: PathBuf,
+        product: Product,
+        status: Status,
+        installed: Option<Version>,
+    ) -> Self {
         let name = product
             .name
             .filter(|name| !name.trim().is_empty())
-            .or_else(|| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
+            .or_else(|| {
+                path.file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+            })
             .unwrap_or_else(|| "Browser".to_owned());
-        let version = installed.map(hold::format_version).or(product.version).unwrap_or_default();
-        Self { path, name, version, proof, status }
+        let version = installed
+            .map(hold::format_version)
+            .or(product.version)
+            .unwrap_or_default();
+        Self {
+            path,
+            name,
+            version,
+            proof,
+            status,
+        }
     }
 }
 
@@ -220,7 +282,10 @@ impl Roots {
                 }
             }
         }
-        Self { programs, local: rivet_core::paths::local_app_data() }
+        Self {
+            programs,
+            local: rivet_core::paths::local_app_data(),
+        }
     }
 }
 
@@ -251,7 +316,11 @@ fn programs_in(files: &dyn Files, folder: &Path, found: &mut Vec<PathBuf>) {
 /// `<root>\<vendor>\Application`, below Program Files and the user's local application data.
 pub fn installed_programs(files: &dyn Files, roots: &Roots) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    let mut places: Vec<(PathBuf, bool)> = roots.programs.iter().map(|root| (root.clone(), false)).collect();
+    let mut places: Vec<(PathBuf, bool)> = roots
+        .programs
+        .iter()
+        .map(|root| (root.clone(), false))
+        .collect();
     if let Some(local) = &roots.local {
         places.push((local.clone(), false));
         places.push((local.join("Programs"), true));
@@ -274,7 +343,9 @@ pub fn installed_programs(files: &dyn Files, roots: &Roots) -> Vec<PathBuf> {
                     programs_in(files, &vendor.join(&product), &mut found);
                 } else {
                     let product = vendor.join(product);
-                    if files.children(&product).iter().any(|(name, is_folder)| *is_folder && name.eq_ignore_ascii_case("Application")) {
+                    if files.children(&product).iter().any(|(name, is_folder)| {
+                        *is_folder && name.eq_ignore_ascii_case("Application")
+                    }) {
                         programs_in(files, &product.join("Application"), &mut found);
                     }
                 }
@@ -285,15 +356,24 @@ pub fn installed_programs(files: &dyn Files, roots: &Roots) -> Vec<PathBuf> {
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
-    left.to_string_lossy().replace('/', "\\").eq_ignore_ascii_case(&right.to_string_lossy().replace('/', "\\"))
+    left.to_string_lossy()
+        .replace('/', "\\")
+        .eq_ignore_ascii_case(&right.to_string_lossy().replace('/', "\\"))
 }
 
 /// The paths that proved to be Chromium browsers, from the registered programs and the places
 /// browsers install to, each once.
-pub fn chromium_programs(files: &dyn Files, roots: &Roots, registered: Vec<PathBuf>) -> Vec<(PathBuf, PathBuf)> {
+pub fn chromium_programs(
+    files: &dyn Files,
+    roots: &Roots,
+    registered: Vec<PathBuf>,
+) -> Vec<(PathBuf, PathBuf)> {
     let mut seen: Vec<PathBuf> = Vec::new();
     let mut found = Vec::new();
-    for path in registered.into_iter().chain(installed_programs(files, roots)) {
+    for path in registered
+        .into_iter()
+        .chain(installed_programs(files, roots))
+    {
         if seen.iter().any(|known| same_path(known, &path)) {
             continue;
         }
@@ -328,7 +408,9 @@ pub(crate) mod fake {
     }
 
     fn key(path: &Path) -> String {
-        path.to_string_lossy().replace('/', "\\").to_ascii_lowercase()
+        path.to_string_lossy()
+            .replace('/', "\\")
+            .to_ascii_lowercase()
     }
 
     impl Memory {
@@ -337,11 +419,13 @@ pub(crate) mod fake {
                 imports: imports.iter().map(|name| (*name).to_owned()).collect(),
                 exports: exports.iter().map(|name| (*name).to_owned()).collect(),
             };
-            self.files.insert(key(Path::new(path)), (path.to_owned(), Some(names)));
+            self.files
+                .insert(key(Path::new(path)), (path.to_owned(), Some(names)));
         }
 
         pub fn data(&mut self, path: &str) {
-            self.files.insert(key(Path::new(path)), (path.to_owned(), None));
+            self.files
+                .insert(key(Path::new(path)), (path.to_owned(), None));
         }
     }
 
@@ -367,10 +451,14 @@ pub(crate) mod fake {
         }
 
         fn names(&self, file: &Path) -> Option<pe::Names> {
-            self.files.get(&key(file))?.1.as_ref().map(|names| pe::Names {
-                imports: names.imports.clone(),
-                exports: names.exports.clone(),
-            })
+            self.files
+                .get(&key(file))?
+                .1
+                .as_ref()
+                .map(|names| pe::Names {
+                    imports: names.imports.clone(),
+                    exports: names.exports.clone(),
+                })
         }
 
         fn is_file(&self, path: &Path) -> bool {
@@ -399,23 +487,42 @@ mod tests {
     #[test]
     fn fr1_a_browser_is_known_by_its_chromium_module_not_by_its_name() {
         let mut disk = Memory::default();
-        chrome_like(&mut disk, r"C:\Apps\Odd Browser\Application", "oddity.exe", "oddity_elf.dll");
-        let proof = chromium_proof(&disk, Path::new(r"C:\Apps\Odd Browser\Application\oddity.exe")).unwrap();
-        assert_eq!(proof, Path::new(r"C:\Apps\Odd Browser\Application\1.2.3.4\oddity_elf.dll"));
+        chrome_like(
+            &mut disk,
+            r"C:\Apps\Odd Browser\Application",
+            "oddity.exe",
+            "oddity_elf.dll",
+        );
+        let proof = chromium_proof(
+            &disk,
+            Path::new(r"C:\Apps\Odd Browser\Application\oddity.exe"),
+        )
+        .unwrap();
+        assert_eq!(
+            proof,
+            Path::new(r"C:\Apps\Odd Browser\Application\1.2.3.4\oddity_elf.dll")
+        );
     }
 
     #[test]
     fn fr1_a_program_named_chrome_without_the_module_is_not_a_browser() {
         let mut disk = Memory::default();
         disk.program(r"C:\Fake\chrome.exe", &["KERNEL32.dll"], &[]);
-        assert_eq!(chromium_proof(&disk, Path::new(r"C:\Fake\chrome.exe")), Err(Rejection::NoChromiumModule));
+        assert_eq!(
+            chromium_proof(&disk, Path::new(r"C:\Fake\chrome.exe")),
+            Err(Rejection::NoChromiumModule)
+        );
     }
 
     #[test]
     fn fr1_a_helper_beside_the_browser_is_not_a_browser() {
         let mut disk = Memory::default();
         chrome_like(&mut disk, CHROME, "chrome.exe", "chrome_elf.dll");
-        disk.program(&format!(r"{CHROME}\chrome_proxy.exe"), &["KERNEL32.dll"], &[]);
+        disk.program(
+            &format!(r"{CHROME}\chrome_proxy.exe"),
+            &["KERNEL32.dll"],
+            &[],
+        );
         assert!(chromium_proof(&disk, Path::new(&format!(r"{CHROME}\chrome.exe"))).is_ok());
         assert_eq!(
             chromium_proof(&disk, Path::new(&format!(r"{CHROME}\chrome_proxy.exe"))),
@@ -443,8 +550,14 @@ mod tests {
     fn fr1_a_missing_or_unreadable_file_says_so() {
         let mut disk = Memory::default();
         disk.data(r"C:\Docs\notes.exe");
-        assert_eq!(chromium_proof(&disk, Path::new(r"C:\Nowhere\x.exe")), Err(Rejection::Missing));
-        assert_eq!(chromium_proof(&disk, Path::new(r"C:\Docs\notes.exe")), Err(Rejection::NotAProgram));
+        assert_eq!(
+            chromium_proof(&disk, Path::new(r"C:\Nowhere\x.exe")),
+            Err(Rejection::Missing)
+        );
+        assert_eq!(
+            chromium_proof(&disk, Path::new(r"C:\Docs\notes.exe")),
+            Err(Rejection::NotAProgram)
+        );
     }
 
     #[test]
@@ -452,7 +565,11 @@ mod tests {
         let mut disk = Memory::default();
         disk.program(r"C:\B\Application\stub.exe", &["KERNEL32.dll"], &[]);
         disk.program(r"C:\B\Application\9.9.9.9\stub.exe", &["real_elf.dll"], &[]);
-        disk.program(r"C:\B\Application\9.9.9.9\real_elf.dll", &[], &["IsBrowserProcess"]);
+        disk.program(
+            r"C:\B\Application\9.9.9.9\real_elf.dll",
+            &[],
+            &["IsBrowserProcess"],
+        );
         assert!(chromium_proof(&disk, Path::new(r"C:\B\Application\stub.exe")).is_ok());
     }
 
@@ -460,8 +577,18 @@ mod tests {
     fn fr1_detection_reads_registered_and_installed_programs_once_each() {
         let mut disk = Memory::default();
         chrome_like(&mut disk, CHROME, "chrome.exe", "chrome_elf.dll");
-        chrome_like(&mut disk, r"C:\Users\me\AppData\Local\Vivaldi\Application", "vivaldi.exe", "vivaldi_elf.dll");
-        chrome_like(&mut disk, r"C:\Program Files\Solo\Application", "solo.exe", "solo_elf.dll");
+        chrome_like(
+            &mut disk,
+            r"C:\Users\me\AppData\Local\Vivaldi\Application",
+            "vivaldi.exe",
+            "vivaldi_elf.dll",
+        );
+        chrome_like(
+            &mut disk,
+            r"C:\Program Files\Solo\Application",
+            "solo.exe",
+            "solo_elf.dll",
+        );
         disk.program(r"C:\Program Files\7-Zip\7zFM.exe", &["KERNEL32.dll"], &[]);
         disk.program(r"C:\Program Files\Editor\Code.exe", &["KERNEL32.dll"], &[]);
         disk.data(r"C:\Program Files\Editor\resources.pak");
@@ -474,26 +601,52 @@ mod tests {
             PathBuf::from(r"C:\Program Files\7-Zip\7zFM.exe"),
             PathBuf::from(r"c:\program files\google\chrome\application\CHROME.EXE"),
         ];
-        let found: Vec<_> = chromium_programs(&disk, &roots, registered).into_iter().map(|(path, _)| path).collect();
+        let found: Vec<_> = chromium_programs(&disk, &roots, registered)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
         assert_eq!(found.len(), 3, "{found:?}");
-        assert!(found.contains(&PathBuf::from(r"C:\Program Files\Google\Chrome\Application\chrome.exe")));
-        assert!(found.contains(&PathBuf::from(r"C:\Users\me\AppData\Local\Vivaldi\Application\vivaldi.exe")));
-        assert!(found.contains(&PathBuf::from(r"C:\Program Files\Solo\Application\solo.exe")));
+        assert!(found.contains(&PathBuf::from(
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        )));
+        assert!(found.contains(&PathBuf::from(
+            r"C:\Users\me\AppData\Local\Vivaldi\Application\vivaldi.exe"
+        )));
+        assert!(found.contains(&PathBuf::from(
+            r"C:\Program Files\Solo\Application\solo.exe"
+        )));
     }
 
     #[test]
     fn fr1_status_says_plainly_when_rivet_cannot_apply_yet() {
         let supported = [[156, 0, 8078, 74]];
-        assert_eq!(status("chrome.exe", Some([156, 0, 8078, 74]), &supported, &[]), Status::Ready);
+        assert_eq!(
+            status("chrome.exe", Some([156, 0, 8078, 74]), &supported, &[]),
+            Status::Ready
+        );
         assert!(matches!(
-            status("chrome.exe", Some([157, 0, 1, 1]), &supported, &[[156, 0, 8078, 74]]),
-            Status::Kept { kept: [156, 0, 8078, 74], .. }
+            status(
+                "chrome.exe",
+                Some([157, 0, 1, 1]),
+                &supported,
+                &[[156, 0, 8078, 74]]
+            ),
+            Status::Kept {
+                kept: [156, 0, 8078, 74],
+                ..
+            }
         ));
         let behind = status("chrome.exe", Some([157, 0, 1, 1]), &supported, &[]);
         assert!(matches!(behind, Status::NotYet(_)) && !behind.can_open());
         assert!(behind.sentence("Chrome").contains("157.0.1.1"));
-        assert!(matches!(status("aside.exe", Some([1, 0, 1022, 1]), &supported, &[]), Status::NotYet(_)));
-        assert!(matches!(status("chrome.exe", None, &supported, &[]), Status::NotYet(_)));
+        assert!(matches!(
+            status("aside.exe", Some([1, 0, 1022, 1]), &supported, &[]),
+            Status::NotYet(_)
+        ));
+        assert!(matches!(
+            status("chrome.exe", None, &supported, &[]),
+            Status::NotYet(_)
+        ));
     }
 
     #[test]
@@ -509,7 +662,13 @@ mod tests {
             make("Zed", Status::Ready),
             make("Aside", Status::NotYet(String::new())),
             make("Brave", Status::Ready),
-            make("Chrome", Status::Kept { installed: [2, 0, 0, 0], kept: [1, 0, 0, 0] }),
+            make(
+                "Chrome",
+                Status::Kept {
+                    installed: [2, 0, 0, 0],
+                    kept: [1, 0, 0, 0],
+                },
+            ),
         ];
         order(&mut list);
         let names: Vec<_> = list.iter().map(|browser| browser.name.as_str()).collect();
@@ -521,12 +680,27 @@ mod tests {
         let named = Browser::new(
             PathBuf::from(r"C:\B\odd.exe"),
             PathBuf::new(),
-            Product { name: Some("Odd Browser".into()), version: Some("3.1".into()) },
+            Product {
+                name: Some("Odd Browser".into()),
+                version: Some("3.1".into()),
+            },
             Status::Ready,
             None,
         );
-        assert_eq!((named.name.as_str(), named.version.as_str()), ("Odd Browser", "3.1"));
-        let bare = Browser::new(PathBuf::from(r"C:\B\odd.exe"), PathBuf::new(), Product::default(), Status::Ready, Some([1, 2, 3, 4]));
-        assert_eq!((bare.name.as_str(), bare.version.as_str()), ("odd", "1.2.3.4"));
+        assert_eq!(
+            (named.name.as_str(), named.version.as_str()),
+            ("Odd Browser", "3.1")
+        );
+        let bare = Browser::new(
+            PathBuf::from(r"C:\B\odd.exe"),
+            PathBuf::new(),
+            Product::default(),
+            Status::Ready,
+            Some([1, 2, 3, 4]),
+        );
+        assert_eq!(
+            (bare.name.as_str(), bare.version.as_str()),
+            ("odd", "1.2.3.4")
+        );
     }
 }

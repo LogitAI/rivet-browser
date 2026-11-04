@@ -11,8 +11,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use windows_sys::Win32::Foundation::HWND;
 
-use crate::chromium::image;
 use crate::builds::Build;
+use crate::chromium::image;
 use crate::feature::Needs;
 use crate::targets::Target;
 
@@ -53,14 +53,30 @@ pub(crate) fn needs(build: &Build) -> Needs {
     let row = &build.vertical;
     let mut targets = Vec::new();
     if row.window_feature != crate::builds::ABSENT {
-        targets.push(Target::new("supports window feature", row.window_feature, row.window_feature_prologue));
+        targets.push(Target::new(
+            "supports window feature",
+            row.window_feature,
+            row.window_feature_prologue,
+        ));
         if row.set_bounds_rect != crate::builds::ABSENT {
-            targets.push(Target::new("set bounds rect", row.set_bounds_rect, row.set_bounds_rect_prologue));
+            targets.push(Target::new(
+                "set bounds rect",
+                row.set_bounds_rect,
+                row.set_bounds_rect_prologue,
+            ));
         }
     } else {
-        targets.push(Target::new("should draw tab strip", row.should_draw_tab_strip, row.should_draw_tab_strip_prologue));
+        targets.push(Target::new(
+            "should draw tab strip",
+            row.should_draw_tab_strip,
+            row.should_draw_tab_strip_prologue,
+        ));
     }
-    Needs::checked(supported_in(row), "this build does not record a tab strip detour", targets)
+    Needs::checked(
+        supported_in(row),
+        "this build does not record a tab strip detour",
+        targets,
+    )
 }
 
 /// The shortest prologue the short detour replaces: `mov rax, imm64; jmp rax` is 12 bytes.
@@ -78,7 +94,9 @@ unsafe fn asked_by_layout(callers: (usize, usize), caller: usize) -> bool {
     if callers == (0, 0) {
         return true;
     }
-    let Some(image) = image::recorded() else { return false };
+    let Some(image) = image::recorded() else {
+        return false;
+    };
     let address = caller.wrapping_sub(image.base);
     address >= callers.0 && address < callers.1
 }
@@ -107,7 +125,9 @@ unsafe extern "system" fn supports_feature(
 ) -> bool {
     let vertical = &crate::builds::get().vertical;
     if feature == vertical.window_feature_tab_strip
-        && browsers().iter().any(|(_, known)| *known == browser as usize)
+        && browsers()
+            .iter()
+            .any(|(_, known)| *known == browser as usize)
     {
         if asked_by_layout(vertical.window_feature_callers, caller) {
             return false;
@@ -176,9 +196,16 @@ unsafe fn caption_left(frame: usize) -> Option<i32> {
     let mut found = None;
     for slot in (begin..end).step_by(8) {
         let Some(child) = word(slot) else { continue };
-        let Some([x, y, width, height]) = bounds_of(child) else { continue };
+        let Some([x, y, width, height]) = bounds_of(child) else {
+            continue;
+        };
         // The browser lays the client view out before the caption row, which has no height yet.
-        if width > 0 && height <= 100 && y <= 20 && x + width >= frame_width - 20 && x > frame_width / 2 {
+        if width > 0
+            && height <= 100
+            && y <= 20
+            && x + width >= frame_width - 20
+            && x > frame_width / 2
+        {
             found = Some(found.map_or(x, |known: i32| known.min(x)));
         }
     }
@@ -191,17 +218,17 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
     let original: SetBounds = std::mem::transmute(BOUNDS_ORIGINAL.load(Ordering::Acquire));
     let vertical = &crate::builds::get().vertical;
     let mut moved = *rect;
-    let known = locked().iter().any(|browser_view| {
-        word(browser_view + vertical.toolbar_in_view) == Some(view as usize)
-    });
+    let known = locked()
+        .iter()
+        .any(|browser_view| word(browser_view + vertical.toolbar_in_view) == Some(view as usize));
     if known {
         // The toggle button of the appbar sits over the toolbar's first button unless the toolbar
         // starts after it.
         let lead = vertical.toolbar_leading.min(moved[2]).max(0);
         moved[0] += lead;
         moved[2] -= lead;
-        let frame_vtable = image::recorded()
-            .map(|image| image.base + crate::builds::get().layout.frame_vtable);
+        let frame_vtable =
+            image::recorded().map(|image| image.base + crate::builds::get().layout.frame_vtable);
         let mut at = word(view as usize + PARENT);
         let mut left = 0;
         for _ in 0..8 {
@@ -212,7 +239,9 @@ unsafe extern "system" fn set_bounds_rect(view: *mut c_void, rect: *const [i32; 
                 }
                 break;
             }
-            let Some(bounds) = bounds_of(ancestor) else { break };
+            let Some(bounds) = bounds_of(ancestor) else {
+                break;
+            };
             left += bounds[0];
             at = word(ancestor + PARENT);
         }
@@ -230,9 +259,7 @@ unsafe extern "system" fn should_draw(view: *const c_void) -> bool {
 
 /// Detours the function once for the whole process. Nothing changes for a window until `hide`.
 pub unsafe fn install() -> Result<(), String> {
-    INSTALLED
-        .get_or_init(|| patch())
-        .clone()
+    INSTALLED.get_or_init(|| patch()).clone()
 }
 
 unsafe fn patch() -> Result<(), String> {
@@ -243,7 +270,10 @@ unsafe fn patch() -> Result<(), String> {
     // In an app window the same window feature function is answered by the app window, which
     // already leaves the tab strip out of the layout. Two detours on one prologue would refuse
     // each other, whichever came first.
-    if answered_by_app_window(vertical.window_feature, crate::features::app_window::recorded("feature_impl")) {
+    if answered_by_app_window(
+        vertical.window_feature,
+        crate::features::app_window::recorded("feature_impl"),
+    ) {
         return Ok(());
     }
     let image = image::recorded().ok_or("no recorded browser image")?;
@@ -298,7 +328,12 @@ unsafe fn detour(
     if !image.has(rva, prologue) {
         return Err(format!("{rva:#x} is not the recorded function"));
     }
-    let style = Style { cookie: Cookie::None, journaled: false, absolute_if_room: true, ..Style::JOURNALED };
+    let style = Style {
+        cookie: Cookie::None,
+        journaled: false,
+        absolute_if_room: true,
+        ..Style::JOURNALED
+    };
     detour_styled(image.base, rva, prologue, hook, Some(original), style).map(|_| ())
 }
 
@@ -312,10 +347,16 @@ pub unsafe fn hide(window: HWND) -> bool {
     if install().is_err() {
         return false;
     }
-    let Some(view) = view_of(window) else { return false };
+    let Some(view) = view_of(window) else {
+        return false;
+    };
     if crate::builds::get().vertical.window_feature != crate::builds::ABSENT {
-        let Some(base) = image::recorded().map(|image| image.base) else { return false };
-        let Some(browser) = crate::features::tabs::browser(base, window) else { return false };
+        let Some(base) = image::recorded().map(|image| image.base) else {
+            return false;
+        };
+        let Some(browser) = crate::features::tabs::browser(base, window) else {
+            return false;
+        };
         let mut known = browsers();
         known.retain(|(owner, _)| *owner != window as isize);
         known.push((window as isize, browser as usize));
@@ -342,7 +383,10 @@ mod tests {
     #[test]
     fn fr13_samsung_window_feature_is_detoured_once_by_the_app_window() {
         let vertical = &crate::builds::SAMSUNG.vertical;
-        let app = crate::builds::SAMSUNG.app_window.as_ref().and_then(|row| row.feature_impl);
+        let app = crate::builds::SAMSUNG
+            .app_window
+            .as_ref()
+            .and_then(|row| row.feature_impl);
         assert!(answered_by_app_window(vertical.window_feature, app));
         // A build whose app window does not answer the feature keeps the tab strip detour.
         assert!(!answered_by_app_window(vertical.window_feature, None));

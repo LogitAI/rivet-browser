@@ -56,7 +56,11 @@ pub(crate) unsafe fn dump_colours(provider: *const u8) {
         }
         unsafe {
             walk(*(node as *const *const u8), out, depth + 1);
-            out.push(format!("{}={:08x}", *(node.add(0x20) as *const i32), *(node.add(0x24) as *const u32)));
+            out.push(format!(
+                "{}={:08x}",
+                *(node.add(0x20) as *const i32),
+                *(node.add(0x24) as *const u32)
+            ));
             walk(*(node.add(8) as *const *const u8), out, depth + 1);
         }
     }

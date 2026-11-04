@@ -39,9 +39,17 @@ pub fn to_json(saved: &Saved) -> String {
 
 pub fn from_json(text: &str) -> Result<Saved, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
-    let browser = value["browser"].as_str().filter(|path| !path.is_empty()).ok_or("the browser is missing")?;
-    let profile = value["profile"].as_str().map_or_else(|| DEFAULT_PROFILE.to_owned(), clean_profile);
-    Ok(Saved { browser: PathBuf::from(browser), profile })
+    let browser = value["browser"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .ok_or("the browser is missing")?;
+    let profile = value["profile"]
+        .as_str()
+        .map_or_else(|| DEFAULT_PROFILE.to_owned(), clean_profile);
+    Ok(Saved {
+        browser: PathBuf::from(browser),
+        profile,
+    })
 }
 
 /// The saved setup, `None` when nothing was saved, and an error when the file cannot be read.
@@ -50,7 +58,9 @@ pub fn load(root: &Path) -> Result<Option<Saved>, String> {
     match std::fs::read_to_string(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("could not read {}: {error}", path.display())),
-        Ok(text) => from_json(&text).map(Some).map_err(|error| format!("{} is not a valid setup: {error}", path.display())),
+        Ok(text) => from_json(&text)
+            .map(Some)
+            .map_err(|error| format!("{} is not a valid setup: {error}", path.display())),
     }
 }
 
@@ -58,10 +68,13 @@ pub fn load(root: &Path) -> Result<Option<Saved>, String> {
 pub fn save(root: &Path, saved: &Saved) -> Result<(), String> {
     let path = setup_file(root);
     let folder = path.parent().ok_or("the setup file has no folder")?;
-    std::fs::create_dir_all(folder).map_err(|error| format!("could not make {}: {error}", folder.display()))?;
+    std::fs::create_dir_all(folder)
+        .map_err(|error| format!("could not make {}: {error}", folder.display()))?;
     let temporary = folder.join("setup.json.tmp");
-    std::fs::write(&temporary, to_json(saved)).map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
-    std::fs::rename(&temporary, &path).map_err(|error| format!("could not save {}: {error}", path.display()))
+    std::fs::write(&temporary, to_json(saved))
+        .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
+    std::fs::rename(&temporary, &path)
+        .map_err(|error| format!("could not save {}: {error}", path.display()))
 }
 
 /// A profile name as a folder name: letters, digits, space, dash and underscore stay, anything
@@ -69,7 +82,13 @@ pub fn save(root: &Path, saved: &Saved) -> Result<(), String> {
 pub fn clean_profile(text: &str) -> String {
     let name: String = text
         .chars()
-        .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(LONGEST_PROFILE)
         .collect();
     let name = name.trim();
@@ -77,7 +96,10 @@ pub fn clean_profile(text: &str) -> String {
         return DEFAULT_PROFILE.to_owned();
     }
     const RESERVED: [&str; 8] = ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "LPT1", "LPT2"];
-    if RESERVED.iter().any(|reserved| reserved.eq_ignore_ascii_case(name)) {
+    if RESERVED
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(name))
+    {
         return format!("{name}_");
     }
     name.to_owned()
@@ -86,7 +108,9 @@ pub fn clean_profile(text: &str) -> String {
 /// The name of a browser's folder below Rivet's profiles: its file name without `.exe`. Edge and
 /// Samsung Internet keep the short names the runtime already uses for their spaces.
 pub fn profile_key(browser: &Path) -> String {
-    let stem = browser.file_stem().map_or_else(String::new, |stem| stem.to_string_lossy().to_ascii_lowercase());
+    let stem = browser.file_stem().map_or_else(String::new, |stem| {
+        stem.to_string_lossy().to_ascii_lowercase()
+    });
     match stem.as_str() {
         "msedge" => "edge".to_owned(),
         "samsunginternet" => "samsung".to_owned(),
@@ -97,7 +121,9 @@ pub fn profile_key(browser: &Path) -> String {
 
 /// The folder of all Rivet profiles of one browser, below `root`.
 pub fn profiles_folder(root: &Path, browser: &Path) -> PathBuf {
-    rivet_core::paths::Layout::under(root).profiles().join(profile_key(browser))
+    rivet_core::paths::Layout::under(root)
+        .profiles()
+        .join(profile_key(browser))
 }
 
 /// The user data folder Rivet gives the browser for a profile.
@@ -107,7 +133,9 @@ pub fn profile_dir(root: &Path, browser: &Path, profile: &str) -> PathBuf {
 
 /// The Rivet profiles that already exist for a browser, by name.
 pub fn existing_profiles(root: &Path, browser: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(profiles_folder(root, browser)) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(profiles_folder(root, browser)) else {
+        return Vec::new();
+    };
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
@@ -122,7 +150,10 @@ pub fn finish(browser: &Browser, profile: &str) -> Result<Saved, String> {
     if !browser.status.can_open() {
         return Err(browser.status.sentence(&browser.name));
     }
-    Ok(Saved { browser: browser.path.clone(), profile: clean_profile(profile) })
+    Ok(Saved {
+        browser: browser.path.clone(),
+        profile: clean_profile(profile),
+    })
 }
 
 /// What a run does: open the saved setup, or ask first and say why.
@@ -135,9 +166,14 @@ pub enum Start {
 pub fn start(root: &Path, files: &dyn Files) -> Start {
     match load(root) {
         Ok(None) => Start::Setup { reason: None },
-        Err(error) => Start::Setup { reason: Some(error) },
+        Err(error) => Start::Setup {
+            reason: Some(error),
+        },
         Ok(Some(saved)) if !files.is_file(&saved.browser) => Start::Setup {
-            reason: Some(format!("The browser you chose is not at {} any more. Choose it again.", saved.browser.display())),
+            reason: Some(format!(
+                "The browser you chose is not at {} any more. Choose it again.",
+                saved.browser.display()
+            )),
         },
         Ok(Some(saved)) => Start::Open(saved),
     }
@@ -167,7 +203,10 @@ mod tests {
     fn fr1_a_saved_setup_comes_back_as_it_was_saved() {
         let root = scratch("roundtrip");
         assert_eq!(load(&root), Ok(None));
-        let saved = Saved { browser: PathBuf::from(r"C:\B\chrome.exe"), profile: "한국어 작업".into() };
+        let saved = Saved {
+            browser: PathBuf::from(r"C:\B\chrome.exe"),
+            profile: "한국어 작업".into(),
+        };
         save(&root, &saved).unwrap();
         assert_eq!(load(&root), Ok(Some(saved)));
         assert!(!setup_file(&root).with_extension("json.tmp").exists());
@@ -181,7 +220,10 @@ mod tests {
         std::fs::write(setup_file(&root), "{ nope").unwrap();
         assert!(load(&root).unwrap_err().contains("setup.json"));
         let files = Memory::default();
-        assert!(matches!(start(&root, &files), Start::Setup { reason: Some(_) }));
+        assert!(matches!(
+            start(&root, &files),
+            Start::Setup { reason: Some(_) }
+        ));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -200,14 +242,22 @@ mod tests {
     fn fr1_profiles_live_below_rivets_own_folder_by_browser() {
         let root = Path::new(r"C:\Data");
         let chrome = Path::new(r"C:\B\Chrome.exe");
-        assert_eq!(profile_dir(root, chrome, "Work"), Path::new(r"C:\Data\Rivet\profiles\chrome\Work"));
+        assert_eq!(
+            profile_dir(root, chrome, "Work"),
+            Path::new(r"C:\Data\Rivet\profiles\chrome\Work")
+        );
         assert_eq!(
             profile_dir(root, Path::new(r"C:\E\msedge.exe"), "Lab"),
             Path::new(r"C:\Data\Rivet\profiles\edge\Lab")
         );
         let dir = profile_dir(root, chrome, r"..\..\Google\Chrome\User Data");
         assert!(dir.starts_with(r"C:\Data\Rivet\profiles\chrome"));
-        assert_eq!(dir.components().count(), Path::new(r"C:\Data\Rivet\profiles\chrome\x").components().count());
+        assert_eq!(
+            dir.components().count(),
+            Path::new(r"C:\Data\Rivet\profiles\chrome\x")
+                .components()
+                .count()
+        );
     }
 
     #[test]
@@ -219,7 +269,10 @@ mod tests {
             std::fs::create_dir_all(profiles_folder(&root, chrome).join(name)).unwrap();
         }
         std::fs::write(profiles_folder(&root, chrome).join("notes.txt"), "x").unwrap();
-        std::fs::create_dir_all(profiles_folder(&root, Path::new(r"C:\E\msedge.exe")).join("Other")).unwrap();
+        std::fs::create_dir_all(
+            profiles_folder(&root, Path::new(r"C:\E\msedge.exe")).join("Other"),
+        )
+        .unwrap();
         assert_eq!(existing_profiles(&root, chrome), ["Lab", "Work"]);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -228,7 +281,11 @@ mod tests {
     fn fr1_finishing_needs_a_browser_rivet_can_open() {
         let ready = finish(&browser(Status::Ready), "").unwrap();
         assert_eq!(ready.profile, "Default");
-        let refused = finish(&browser(Status::NotYet("Rivet has not verified 9.0.0.0 yet.".into())), "Work").unwrap_err();
+        let refused = finish(
+            &browser(Status::NotYet("Rivet has not verified 9.0.0.0 yet.".into())),
+            "Work",
+        )
+        .unwrap_err();
         assert!(refused.contains("9.0.0.0"));
     }
 
@@ -238,11 +295,19 @@ mod tests {
         let mut files = Memory::default();
         files.data(r"C:\B\chrome.exe");
         assert_eq!(start(&root, &files), Start::Setup { reason: None });
-        let saved = Saved { browser: PathBuf::from(r"C:\B\chrome.exe"), profile: "Work".into() };
+        let saved = Saved {
+            browser: PathBuf::from(r"C:\B\chrome.exe"),
+            profile: "Work".into(),
+        };
         save(&root, &saved).unwrap();
         assert_eq!(start(&root, &files), Start::Open(saved.clone()));
         let nothing = Memory::default();
-        let Start::Setup { reason: Some(reason) } = start(&root, &nothing) else { panic!("a missing browser must ask again") };
+        let Start::Setup {
+            reason: Some(reason),
+        } = start(&root, &nothing)
+        else {
+            panic!("a missing browser must ask again")
+        };
         assert!(reason.contains(r"C:\B\chrome.exe"));
         let _ = std::fs::remove_dir_all(&root);
     }
