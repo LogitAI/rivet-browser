@@ -825,13 +825,26 @@ function Invoke-BarLayout($Name, $shots) {
 
 # --- FR-3 tab list ------------------------------------------------------------------------
 $urlC = New-TestPage 'page-c' $script:ColourC
-# A page that is one link opening `page-c` in a new window, as `target=_blank` asks.
+# A page that is one link opening `page-c` in a new window. The window is asked for at the test
+# window's off-screen spot, so it never shows on a monitor even before Rivet takes its tab.
 $urlLink = & {
   $path = Join-Path $pageDir 'page-link.html'
   $hexA = '#{0:X6}' -f $script:ColourA
-  [IO.File]::WriteAllText($path, "<!doctype html><meta charset=utf-8><title>page-link</title><style>html,body{margin:0;height:100%;background:$hexA}</style><a href=`"page-c.html`" target=`"_blank`" style=`"display:block;width:100%;height:100%`"></a>")
+  [IO.File]::WriteAllText($path, "<!doctype html><meta charset=utf-8><title>page-link</title><style>html,body{margin:0;height:100%;background:$hexA}</style><a href=`"page-c.html`" onclick=`"window.open(this.href,'_blank','left=9000,top=1000,width=800,height=600');return false`" style=`"display:block;width:100%;height:100%`"></a>")
   'file:///' + ($path -replace '\', '/')
 }
+
+Add-Type -TypeDefinition @'
+using System;using System.Runtime.InteropServices;
+public static class FeatureMonitor{
+ [StructLayout(LayoutKind.Sequential)] public struct R{public int L,T,Ri,B;}
+ [DllImport("user32.dll")] static extern IntPtr MonitorFromRect(ref R r,uint f);
+ [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out R r);
+ // Whether any part of the window lies on a monitor. MONITOR_DEFAULTTONULL answers none for a
+ // rectangle that touches no monitor.
+ public static bool OnMonitor(IntPtr h){R r;if(!GetWindowRect(h,out r))return false;return MonitorFromRect(ref r,0)!=IntPtr.Zero;}
+}
+'@
 
 # The last `tab sections` trace, split into its parts.
 function Get-Sections {
@@ -964,15 +977,21 @@ function Invoke-LinkNewTab($Name, $shots) {
     $target = if ($page -ne [IntPtr]::Zero) { $page } else { $ctx.Hwnd }
     [FeatureWin]::PostMessage($target, 0x201, [IntPtr]1, $l) | Out-Null
     [FeatureWin]::PostMessage($target, 0x202, [IntPtr]0, $l) | Out-Null
-    # A window the link opened must not stay on screen: it is moved off at once if it shows.
-    $extraSeen = $false
-    foreach ($i in 1..120) {
-      Start-Sleep -Milliseconds 50
-      foreach ($t in @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ })) {
-        $extraSeen = $true
-        [FeatureWin]::SetWindowPos($t, [IntPtr]::Zero, -3000, -3000, 1600, 1000, 0x14) | Out-Null
+    # No window of the test may touch a visible monitor at any time. The popup is asked for
+    # off-screen; if any window still lands on a monitor the check fails, and the window is closed.
+    $extraSeen = $false; $onMonitor = $false
+    foreach ($i in 1..600) {
+      Start-Sleep -Milliseconds 10
+      foreach ($t in @(Get-MyTops $ctx)) {
+        if ($t -ne $ctx.Hwnd -and $before -notcontains $t) { $extraSeen = $true }
+        if ([FeatureMonitor]::OnMonitor($t)) {
+          $onMonitor = $true
+          [FeatureWin]::SetWindowPos($t, [IntPtr]::Zero, 9000, 1000, 800, 600, 0x14) | Out-Null
+          if ($t -ne $ctx.Hwnd) { [FeatureWin]::PostMessage($t, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
+        }
       }
     }
+    if ($onMonitor) { $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png'); return @('FAIL', $shot.Path, 'a window of the test appeared on a visible monitor') }
     Start-Sleep 3
     $left = @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ })
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
