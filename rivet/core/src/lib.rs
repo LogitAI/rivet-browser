@@ -276,6 +276,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr1_rivet_never_enters_the_persons_own_profile() {
         let allowed = |path: &str| profile_allows_rivet(Some(std::path::Path::new(path)));
@@ -292,6 +293,7 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr1_rivet_reads_the_profile_from_the_process_arguments() {
         assert!(!process_allows_rivet(["whale.exe"]));
@@ -328,6 +330,7 @@ mod tests {
         assert_ne!(space_frame(0x6a9f58), space_frame(0x8a6fc4));
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr3_browser_label_names_all_five_browsers() {
         for (program, label) in [

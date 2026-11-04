@@ -305,6 +305,7 @@ impl Drop for TestDir {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn nfr7_every_kind_of_file_has_one_folder_below_one_root() {
         let layout = Layout::under(Path::new(r"C:\Local"));

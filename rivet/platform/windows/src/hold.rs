@@ -852,6 +852,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn nfr6_the_installed_build_is_read_from_the_module_of_any_layout() {
         // Only checks on this machine's browsers, which tests do not change.
@@ -871,6 +872,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn nfr6_sandboxed_processes_can_read_a_hold() {
         let root = scratch("acl");
@@ -897,6 +899,7 @@ mod tests {
 
     /// A browser folder with a stub launcher and a version folder whose module is a system file, so that its
     /// version resource is real. Returns the browser path and the version it reads as.
+    #[cfg(windows)]
     fn fake_install(root: &Path) -> (PathBuf, Version) {
         let app = root.join("Application");
         let inner = app.join("10.0.0.1");
@@ -914,6 +917,7 @@ mod tests {
         (browser, version)
     }
 
+    #[cfg(windows)]
     #[test]
     fn nfr6_keeping_a_build_copies_program_files_and_never_a_profile() {
         let root = scratch("keep");
@@ -970,6 +974,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn nfr6_a_build_without_a_usable_row_is_not_kept() {
         let root = scratch("keep-unsupported");
@@ -980,6 +985,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn nfr6_a_launch_of_an_unsupported_install_opens_the_held_copy_then_stops_after_seven_days() {
         let root = scratch("plan");
@@ -1008,6 +1014,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn nfr6_a_supported_install_clears_the_clock_and_asks_to_be_kept() {
         let root = scratch("supported");

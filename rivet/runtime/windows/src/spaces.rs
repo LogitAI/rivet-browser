@@ -63,6 +63,7 @@ impl BrowserKind {
     }
 
     /// The App Paths name the browser's installer registers.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn executable(self) -> &'static str {
         match self {
             Self::Chrome => "chrome.exe",
@@ -77,6 +78,7 @@ impl BrowserKind {
     }
 
     /// The browser a program path is, or `None` for one a space cannot be based on.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn from_program(path: &str) -> Option<Self> {
         let name = path.rsplit(['\\', '/']).next()?.to_ascii_lowercase();
         Self::ALL.into_iter().find(|kind| kind.executable() == name)
@@ -614,6 +616,7 @@ fn quote(out: &mut String, value: &str) {
 
 /// Where the file of a browser profile lives: `<key>.json` in the layout's spaces folder, with the
 /// key made from the profile's `--user-data-dir`, or `default` when the browser has none.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn store_path(root: &std::path::Path, user_data_dir: Option<&str>) -> std::path::PathBuf {
     let key = match user_data_dir {
         Some(dir) => {
@@ -635,6 +638,7 @@ pub fn store_path(root: &std::path::Path, user_data_dir: Option<&str>) -> std::p
 }
 
 /// The `--user-data-dir` among a process's arguments.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn user_data_dir_of(args: impl IntoIterator<Item = String>) -> Option<String> {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -1312,6 +1316,7 @@ mod tests {
         assert_eq!(loaded.spaces.to_json(&[], 268, false, "d"), text);
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr3_programs_map_to_their_browser() {
         let kind = |path| BrowserKind::from_program(path);
@@ -1481,6 +1486,7 @@ mod tests {
         assert!(Spaces::from_json(&text.replace("\\ude00", "\\u0041")).is_none());
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr3_store_is_keyed_by_the_profile_directory() {
         let root = std::path::Path::new("C:\\Local");
