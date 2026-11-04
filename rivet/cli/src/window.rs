@@ -572,6 +572,18 @@ impl App {
         }
         canvas.text(PREVIEW, layout.preview, &self.model.preview(), MUTED, Align::Left, false);
 
+        canvas.text(LABEL, layout.credentials_label, "PASSWORDS AND PASSKEYS", MUTED, Align::Left, false);
+        for (index, provider) in rivet_core::CredentialProvider::ALL.iter().enumerate() {
+            let option = layout.credentials[index];
+            let current = self.model.credentials == *provider;
+            let hot = self.hover == Hit::Credentials(index);
+            press(render, option, self.pressed == Hit::Credentials(index) && hot);
+            canvas.fill(option, 10.0, if current { mix(PAPER, TINT, 0.2) } else { WHITE }, if current { 1.0 } else if hot { 0.9 } else { 0.5 });
+            canvas.ring(option, 10.0, if current { ACCENT } else { INK }, if current { 0.5 } else { 0.08 }, 1.0);
+            canvas.text(CHIP, option, provider.label(), if current { ACCENT } else { SOFT_INK }, Align::Center, false);
+            unpress(render);
+        }
+
         let message = self.model.error.clone().unwrap_or_default();
         canvas.text(MESSAGE, layout.message, &message, BERRY, Align::Left, true);
         let finish = layout.finish;
@@ -740,6 +752,12 @@ impl App {
                     self.relayout();
                 }
             }
+            Hit::Credentials(index) => {
+                if let Some(provider) = rivet_core::CredentialProvider::ALL.get(index) {
+                    self.model.credentials = *provider;
+                    self.repaint();
+                }
+            }
             Hit::Finish => self.finish(),
             Hit::Field | Hit::Caption | Hit::None => {}
         }
@@ -804,7 +822,7 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
             let (x, y) = (app.to_dip(point.x), app.to_dip(point.y));
             let cursor = match model::hit(&app.layout, x, y) {
                 Hit::Field => IDC_IBEAM,
-                Hit::Row(_) | Hit::Manual | Hit::Chip(_) | Hit::Close => IDC_HAND,
+                Hit::Row(_) | Hit::Manual | Hit::Chip(_) | Hit::Credentials(_) | Hit::Close => IDC_HAND,
                 Hit::Finish if app.model.can_finish() => IDC_HAND,
                 _ => IDC_ARROW,
             };
