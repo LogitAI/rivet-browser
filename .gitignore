@@ -1,0 +1,26 @@
+# Build outputs
+target/
+build/
+out/
+
+# Rust
+**/*.rs.bk
+*.pdb
+
+# Windows installer outputs
+*.msi
+*.cab
+*.exe
+
+# macOS
+.DS_Store
+
+# Agent worktrees and experiments
+.claude/
+.scratch/
+
+# Untracked source copied from the DSA bootstrap. Rivet's implementation belongs in rivet/.
+/dsa/
+
+# Machine-local cargo settings
+.cargo/config.toml

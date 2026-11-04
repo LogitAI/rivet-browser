@@ -1,0 +1,806 @@
+//! Chrome 156 tab operations on the browser UI thread. Calls are gated by code signatures.
+use std::ffi::c_void;
+use std::sync::OnceLock;
+use windows_sys::Win32::Foundation::HWND;
+use crate::chromium::image;
+use crate::builds::Build;
+use crate::feature::{available_here, Needs};
+use crate::targets::Target;
+
+/// The values of the loaded browser build.
+fn bv() -> &'static crate::builds::Tabs {
+    &crate::builds::get().tabs
+}
+
+/// What tab control needs from the browser.
+pub(crate) fn needs(build: &Build) -> Needs {
+    let row = &build.tabs;
+    Needs::checked(
+        row.supported,
+        crate::builds::unchecked_reason(build, "tab control"),
+        row.signatures.iter().map(|(rva, bytes)| Target::new("tab function", *rva, bytes)).collect(),
+    )
+}
+
+/// Whether the loaded build's row has tab control.
+pub(crate) fn checked() -> bool {
+    static CHECKED: OnceLock<bool> = OnceLock::new();
+    *CHECKED.get_or_init(|| available_here(needs))
+}
+type Pointer = unsafe extern "system" fn(*const c_void) -> *mut c_void;
+type Count = unsafe extern "system" fn(*mut c_void) -> i32;
+type TabAt = unsafe extern "system" fn(*mut c_void, i32) -> *mut c_void;
+type Activate = unsafe extern "system" fn(*mut c_void, i32, *const [u8; 16]);
+type Close = unsafe extern "system" fn(*mut c_void, i32, u32);
+type NewTab = unsafe extern "system" fn(*mut c_void, i32);
+
+type GetGroup = unsafe extern "system" fn(*mut c_void, *mut [u8; 24], i32) -> *mut [u8; 24];
+type HasGroup = unsafe extern "system" fn(*mut c_void, *const u8) -> bool;
+type LookupGroup = unsafe extern "system" fn(*mut c_void, *const u8) -> *mut u8;
+type ChangeGroup = unsafe extern "system" fn(*mut c_void, *const u8, *const u8, bool);
+
+static BASE: OnceLock<Option<usize>> = OnceLock::new();
+pub(crate) fn base() -> Option<usize> {
+    *BASE.get_or_init(|| unsafe {
+        let image = image::recorded()?;
+        match crate::feature::needs_here(needs).verify(&image) {
+            Ok(()) => Some(image.base),
+            Err(reason) => {
+                if checked() {
+                    crate::trace::trace(&format!("tabs: {reason}"));
+                }
+                None
+            }
+        }
+    })
+}
+pub(crate) unsafe fn function<T: Copy>(base: usize, rva: usize) -> T {
+    std::mem::transmute_copy(&(base + rva))
+}
+/// The web contents at `index`, or null. A build without `GetWebContentsAt` reads it from the tab
+/// object the tab collection answers.
+pub(crate) unsafe fn contents_at(base: usize, model: *mut c_void, index: i32) -> *mut c_void {
+    if bv().tab_at != crate::builds::ABSENT {
+        return function::<TabAt>(base, bv().tab_at)(model, index);
+    }
+    if bv().tab_object == crate::builds::ABSENT || index < 0 || index >= function::<Count>(base, bv().tab_count)(model) {
+        return std::ptr::null_mut();
+    }
+    let collection = *(model.cast::<u8>().add(bv().tab_collection) as *const *mut c_void);
+    if collection.is_null() {
+        return std::ptr::null_mut();
+    }
+    let tab = function::<TabAt>(base, bv().tab_object)(collection, index);
+    if tab.is_null() {
+        return std::ptr::null_mut();
+    }
+    *(tab.cast::<u8>().add(bv().tab_contents) as *const *mut c_void)
+}
+unsafe fn web_contents(base: usize, window: HWND) -> Option<*mut c_void> {
+    let content = function::<Pointer>(base, bv().content_window_for_hwnd)(window);
+    if content.is_null() {
+        return None;
+    }
+    let view = function::<Pointer>(base, bv().browser_view_for_window)(content);
+    if view.is_null() {
+        return None;
+    }
+    let result = function::<Pointer>(base, bv().active_web_contents)(view);
+    (!result.is_null()).then_some(result)
+}
+/// The browser view of a window, which also answers for the layout's own questions.
+pub(crate) unsafe fn browser_view(window: HWND) -> Option<*mut c_void> {
+    let base = crate::chromium::image::recorded()?.base;
+    let tabs = &crate::builds::get().tabs;
+    if !checked() {
+        return None;
+    }
+    let content = function::<Pointer>(base, tabs.content_window_for_hwnd)(window as *const c_void);
+    if content.is_null() {
+        return None;
+    }
+    let view = function::<Pointer>(base, tabs.browser_view_for_window)(content);
+    (!view.is_null()).then_some(view)
+}
+pub(crate) unsafe fn browser(base: usize, window: HWND) -> Option<*mut c_void> {
+    let content = function::<Pointer>(base, bv().content_window_for_hwnd)(window);
+    if content.is_null() {
+        return None;
+    }
+    let view = function::<Pointer>(base, bv().browser_view_for_window)(content);
+    if view.is_null() {
+        return None;
+    }
+    let holder = *(view.add(bv().browser_in_view) as *const *mut u8);
+    if holder.is_null() {
+        return None;
+    }
+    if crate::trace::tracing() && crate::feature::debug_switch("scan") {
+        scan_holder(holder.cast());
+    }
+    Some(holder.cast())
+}
+
+/// Trace-only: lists the words of the browser object that point at something shaped like a tab
+/// strip model, so a new build's offset can be found without guessing.
+unsafe fn scan_holder(holder: *mut u8) {
+    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    unsafe fn read<T: Copy + Default>(address: usize) -> Option<T> {
+        let mut value = T::default();
+        let mut done = 0usize;
+        let ok = ReadProcessMemory(
+            GetCurrentProcess(),
+            address as *const c_void,
+            (&mut value as *mut T).cast(),
+            std::mem::size_of::<T>(),
+            &mut done,
+        );
+        (ok != 0 && done == std::mem::size_of::<T>()).then_some(value)
+    }
+    thread_local!(static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    if DONE.with(|done| done.replace(true)) {
+        return;
+    }
+    for offset in (0..0x400usize).step_by(8) {
+        let Some(model) = read::<usize>(holder as usize + offset) else { continue };
+        let Some(collection) = read::<usize>(model) else { continue };
+        let Some(count) = read::<i32>(collection + 0x18) else { continue };
+        if (1..=4).contains(&count) {
+            crate::trace::trace(&format!("scan: holder+{offset:#x} -> {model:#x} -> {collection:#x}, count word {count}"));
+        }
+    }
+}
+
+pub(crate) unsafe fn tab_model(base: usize, window: HWND) -> Option<*mut c_void> {
+    let browser = browser(base, window)?;
+    let model = function::<Pointer>(base, bv().get_tab_model)(browser);
+    (!model.is_null()).then_some(model)
+}
+
+fn chromium_string(value: *const u8) -> Option<String> {
+    unsafe {
+        let last = *value.add(23);
+        let (data, size) = if last & 0x80 != 0 {
+            let words = value as *const usize;
+            (*words as *const u16, *words.add(1))
+        } else {
+            (value as *const u16, last as usize)
+        };
+        if size > 1 << 16 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(std::slice::from_raw_parts(
+            data, size,
+        )))
+    }
+}
+
+/// Returns the browser's current tab titles and active index.
+pub unsafe fn tabs(window: HWND) -> Option<Vec<crate::tab_rows::Tab>> {
+    let base = base()?;
+    let model = tab_model(base, window)?;
+    let count = function::<Count>(base, bv().tab_count)(model);
+    if !(0..=128).contains(&count) {
+        return None;
+    }
+    let mut titles = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let contents = contents_at(base, model, index);
+        if contents.is_null() {
+            titles.push(String::from("New tab"));
+            continue;
+        }
+        let title = function::<Pointer>(base, bv().title)(contents).cast::<u8>();
+        titles.push(chromium_string(title).unwrap_or_else(|| String::from("New tab")));
+    }
+    let active = web_contents(base, window).unwrap_or(std::ptr::null_mut());
+    let active_index = (0..count)
+        .find(|index| contents_at(base, model, *index) == active)
+        .unwrap_or(0) as usize;
+    let group_model: *mut c_void = if bv().groups {
+        *(model.cast::<u8>().add(8) as *const *mut c_void)
+    } else {
+        std::ptr::null_mut()
+    };
+    let mut tabs = Vec::with_capacity(titles.len());
+    for (index, title) in titles.into_iter().enumerate() {
+        let mut optional = [0u8; 24];
+        function::<GetGroup>(base, bv().get_group)(model, &mut optional, index as i32);
+        let group = if optional[16] != 0 && !group_model.is_null() {
+            let mut id = [0; 16];
+            id.copy_from_slice(&optional[..16]);
+            let present = function::<HasGroup>(base, bv().has_group)(group_model, id.as_ptr());
+            if present {
+                let ptr = function::<LookupGroup>(base, bv().lookup_group)(group_model, id.as_ptr());
+                let visual = if ptr.is_null() {
+                    std::ptr::null()
+                } else {
+                    *(ptr.add(0x20) as *const *const u8)
+                };
+                if visual.is_null() {
+                    None
+                } else {
+                    let color = *(visual.add(24) as *const i32);
+                    let collapsed = *visual.add(28) != 0;
+                    Some(crate::tab_rows::Group {
+                        id,
+                        title: chromium_string(visual).unwrap_or_default(),
+                        color,
+                        collapsed,
+                    })
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        tabs.push(crate::tab_rows::Tab {
+            index,
+            title,
+            active: index == active_index,
+            group,
+        });
+    }
+    Some(tabs)
+}
+
+/// A tab of the window as a space keeps it, with the identity of its page.
+pub struct OpenTab {
+    /// The page object, which stays the same while the tab moves in the strip.
+    pub id: usize,
+    pub saved: crate::spaces::SavedTab,
+}
+
+/// The text of a `std::string` of bytes inside a `GURL`.
+unsafe fn narrow_string(value: *const u8) -> Option<String> {
+    let last = *value.add(23);
+    let (data, size) = if last & 0x80 != 0 {
+        (*(value as *const *const u8), *(value.add(8) as *const usize))
+    } else {
+        (value, last as usize)
+    };
+    if size > 1 << 16 {
+        return None;
+    }
+    Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, size)).into_owned())
+}
+
+/// The title and the address of a page that is no tab of the strip, such as the page of Rivet's
+/// second page view. Empty when the build records no way to read them.
+pub(crate) unsafe fn page_summary(contents: *mut c_void) -> Option<(String, String)> {
+    let base = base()?;
+    if contents.is_null() {
+        return None;
+    }
+    let title = chromium_string(function::<Pointer>(base, bv().title)(contents).cast::<u8>()).unwrap_or_default();
+    let mut url = String::new();
+    for rva in [bv().last_committed_url, bv().visible_url] {
+        let gurl = function::<Pointer>(base, rva)(contents).cast::<u8>();
+        if !gurl.is_null() {
+            url = narrow_string(gurl).unwrap_or_default();
+        }
+        if !url.is_empty() {
+            break;
+        }
+    }
+    Some((title, url))
+}
+
+/// The address a page shows: the visible one while a navigation is pending, which is what an
+/// address bar shows, or the last committed one. Empty when the build records neither.
+pub(crate) unsafe fn page_address(contents: *mut c_void) -> String {
+    let Some(base) = base() else { return String::new() };
+    if contents.is_null() {
+        return String::new();
+    }
+    for rva in [bv().visible_url, bv().last_committed_url] {
+        if rva == 0 {
+            continue;
+        }
+        let gurl = function::<Pointer>(base, rva)(contents).cast::<u8>();
+        if let Some(url) = (!gurl.is_null()).then(|| narrow_string(gurl)).flatten().filter(|url| !url.is_empty()) {
+            return url;
+        }
+    }
+    String::new()
+}
+
+/// The page title of `contents`.
+pub(crate) unsafe fn page_title(contents: *mut c_void) -> String {
+    let Some(base) = base() else { return String::new() };
+    if contents.is_null() {
+        return String::new();
+    }
+    chromium_string(function::<Pointer>(base, bv().title)(contents).cast::<u8>()).unwrap_or_default()
+}
+
+/// The window's tabs with their addresses and titles, in strip order.
+pub unsafe fn open_tabs(window: HWND) -> Option<Vec<OpenTab>> {
+    let base = base()?;
+    let model = tab_model(base, window)?;
+    let titles = tabs(window)?;
+    let mut result = Vec::with_capacity(titles.len());
+    for tab in titles {
+        let contents = contents_at(base, model, tab.index as i32);
+        if contents.is_null() {
+            return None;
+        }
+        let mut url = String::new();
+        for rva in [bv().last_committed_url, bv().visible_url] {
+            let gurl = function::<Pointer>(base, rva)(contents).cast::<u8>();
+            if !gurl.is_null() {
+                url = narrow_string(gurl).unwrap_or_default();
+            }
+            if !url.is_empty() {
+                break;
+            }
+        }
+        result.push(OpenTab {
+            id: contents as usize,
+            saved: crate::spaces::SavedTab {
+                url,
+                title: tab.title,
+                active: tab.active,
+                group: tab.group.map(|group| crate::spaces::SavedGroup {
+                    key: group.id.iter().map(|byte| format!("{byte:02x}")).collect(),
+                    title: group.title,
+                    color: group.color,
+                    collapsed: group.collapsed,
+                }),
+            },
+        });
+    }
+    Some(result)
+}
+
+/// Closes the tab whose page is `id`, wherever it is in the strip now.
+pub unsafe fn close_tab_by_id(window: HWND, id: usize) -> bool {
+    let Some(tabs) = open_tabs(window) else {
+        return false;
+    };
+    match tabs.iter().position(|tab| tab.id == id) {
+        Some(index) => close_tab(window, index),
+        None => false,
+    }
+}
+
+pub unsafe fn activate_tab(window: HWND, index: usize) -> bool {
+    let Some(base) = base() else { return false };
+    let Some(model) = tab_model(base, window) else {
+        return false;
+    };
+    if index >= function::<Count>(base, bv().tab_count)(model).max(0) as usize {
+        return false;
+    }
+    let selection = [0u8; 16];
+    function::<Activate>(base, bv().activate_tab)(model, index as i32, &selection);
+    true
+}
+
+pub unsafe fn close_tab(window: HWND, index: usize) -> bool {
+    let Some(base) = base() else { return false };
+    let Some(model) = tab_model(base, window) else {
+        return false;
+    };
+    if index >= function::<Count>(base, bv().tab_count)(model).max(0) as usize {
+        return false;
+    }
+    function::<Close>(base, bv().close_tab)(model, index as i32, 0);
+    true
+}
+
+/// Hooks `chrome::NewTab` once per process, so a Rivet window's new tab starts on the start page
+/// and stays in the app window. Nothing is hooked when the build has not checked tab control and
+/// navigation, or when `skip` names `newtab`.
+pub(crate) unsafe fn install_new_tab(skip: &str) -> Result<(), String> {
+    let tabs = &crate::builds::get().tabs;
+    if skip.contains("newtab")
+        || tabs.new_tab_prologue.is_empty()
+        || !checked()
+        || !available_here(crate::features::navigation::needs)
+    {
+        return Ok(());
+    }
+    static HOOKED: OnceLock<Result<(), String>> = OnceLock::new();
+    HOOKED
+        .get_or_init(|| {
+            let image = image::recorded().ok_or("this browser build has no recorded new tab command")?;
+            crate::targets::transaction(|| {
+                crate::targets::detour(image.base, tabs.new_tab, tabs.new_tab_prologue, new_tab_hook as usize, &ORIGINAL_NEW_TAB)
+            })
+        })
+        .clone()
+}
+
+/// The code that runs the browser's new-tab command, which the new-tab hook leaves to its caller.
+pub(crate) static ORIGINAL_NEW_TAB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+thread_local! {
+    /// Set while Rivet itself opens a tab, which then chooses its own page.
+    static OWN_NEW_TAB: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while the browser's new-tab command runs on this thread.
+    static IN_NEW_TAB: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether a new-tab command runs now. An app window then takes the tab into its own tab strip
+/// model, where Chromium would otherwise open a normal window for it.
+pub(crate) fn opening_tab() -> bool {
+    OWN_NEW_TAB.with(std::cell::Cell::get) || IN_NEW_TAB.with(std::cell::Cell::get) > 0
+}
+
+/// Stands in for the browser's new-tab command. Every way of opening a tab ends in it, so the
+/// appbar, Ctrl+T and the browser's own menus all give a Rivet window's new tab the start page,
+/// and a window that is not Rivet's keeps the browser's own new tab page.
+pub(crate) unsafe extern "system" fn new_tab_hook(browser: *mut c_void, kind: i32, url: *const c_void) -> *mut c_void {
+    IN_NEW_TAB.with(|depth| depth.set(depth.get() + 1));
+    let contents = new_tab_scoped(browser, kind, url);
+    IN_NEW_TAB.with(|depth| depth.set(depth.get() - 1));
+    contents
+}
+
+unsafe fn new_tab_scoped(browser: *mut c_void, kind: i32, url: *const c_void) -> *mut c_void {
+    let original: NewTab2 = std::mem::transmute_copy(&ORIGINAL_NEW_TAB.load(std::sync::atomic::Ordering::Acquire));
+    // A build that passes an address opens that address, and only an empty one asks for the new tab page.
+    let wanted = !bv().new_tab_takes_address || (!url.is_null() && gurl_is_empty(url));
+    if let Some(window) = rivet_window_of(browser) {
+        if let Some(contents) = add_in_app_window(browser, window, url, wanted) {
+            return contents;
+        }
+    }
+    // Such a build can open the start page as the tab's first page, so the browser's own new tab page
+    // is never loaded and is not left behind in the tab's history.
+    if bv().new_tab_takes_address {
+        if wanted && !OWN_NEW_TAB.with(std::cell::Cell::get) {
+            if let Some(start) = rivet_window_of(browser)
+                .and_then(|window| crate::frame::start_url_of(window))
+            {
+                if let Some(contents) = crate::features::navigation::with_address(&start, |address| original(browser, kind, address)) {
+                    crate::trace::trace("new tab in a Rivet window starts on the start page");
+                    return contents;
+                }
+            }
+        }
+        return original(browser, kind, url);
+    }
+    let contents = original(browser, kind, url);
+    if !contents.is_null() && wanted && !OWN_NEW_TAB.with(std::cell::Cell::get) {
+        if let Some(window) = rivet_window_of(browser) {
+            if let Some(url) = crate::frame::start_url_of(window) {
+                if bv().new_tab_delay_ms > 0 {
+                    crate::frame::open_later(window, contents as usize, url, bv().new_tab_delay_ms);
+                    return contents;
+                }
+                let opened = crate::features::navigation::open_page(contents, &url);
+                crate::trace::trace(&format!("new tab in a Rivet window opens the start page: {opened}"));
+            }
+        }
+    }
+    contents
+}
+/// `chrome::AddTabAt(browser, url, index, foreground, group, _, _)`.
+type AddTabAt = unsafe extern "system" fn(*mut c_void, *const c_void, i32, bool, *const [u8; 24], bool, bool) -> *mut c_void;
+
+/// Adds the new tab to the Rivet window's own tab strip model with Chromium's `chrome::AddTabAt`,
+/// for a build whose new-tab command would send an app window's tab to a tabbed window. The tab
+/// opens the start page when the command asked for the new tab page. None for any other build.
+unsafe fn add_in_app_window(browser: *mut c_void, window: HWND, url: *const c_void, wanted: bool) -> Option<*mut c_void> {
+    let (rva, prologue) = crate::builds::add_tab_at_for(crate::builds::get())?;
+    let base = base()?;
+    if !crate::chromium::memory::prologue_is(base + rva, prologue) || url.is_null() {
+        return None;
+    }
+    let add = function::<AddTabAt>(base, rva);
+    // An empty optional group: its has-value byte at +0x10 is zero.
+    let no_group = [0u8; 24];
+    if wanted && !OWN_NEW_TAB.with(std::cell::Cell::get) {
+        if let Some(start) = crate::frame::start_url_of(window) {
+            if let Some(contents) = crate::features::navigation::with_address(&start, |address| {
+                add(browser, address, -1, true, &no_group, false, false)
+            }) {
+                crate::trace::trace("new tab in a Rivet window starts on the start page, in its own tab strip");
+                return Some(contents);
+            }
+        }
+    }
+    let contents = add(browser, url, -1, true, &no_group, false, false);
+    crate::trace::trace("new tab in a Rivet window added to its own tab strip");
+    Some(contents)
+}
+
+/// The Rivet window whose browser object `browser` stands for. `chrome::NewTab` takes the
+/// `Browser` itself, and a build that records `new_tab_address` passes a pointer that far into it.
+unsafe fn rivet_window_of(target: *mut c_void) -> Option<HWND> {
+    let past = bv().new_tab_address.unwrap_or(0);
+    let base = base()?;
+    crate::frame::rivet_windows().into_iter().find(|window| {
+        browser(base, *window).is_some_and(|holder| holder as usize + past == target as usize)
+    })
+}
+
+type NewTab2 = unsafe extern "system" fn(*mut c_void, i32, *const c_void) -> *mut c_void;
+
+/// Whether a `GURL` holds no address. Its first member is a `std::string`, which is empty when its
+/// first and last byte are zero in either layout of libc++'s string: a short string keeps its
+/// length in one of them and a long one flags itself in one of them, and a long one is never empty.
+unsafe fn gurl_is_empty(url: *const c_void) -> bool {
+    let bytes = url.cast::<u8>();
+    *bytes == 0 && *bytes.add(23) == 0
+}
+
+/// Opens a tab that starts on the start page, for a build whose new-tab command takes the address.
+/// Returns false for any other build, which opens the tab and then its page.
+pub unsafe fn new_start_tab(window: HWND) -> bool {
+    if !bv().new_tab_takes_address || ORIGINAL_NEW_TAB.load(std::sync::atomic::Ordering::Acquire) == 0 {
+        return false;
+    }
+    open_new_tab(window)
+}
+
+pub unsafe fn new_tab(window: HWND) -> bool {
+    OWN_NEW_TAB.with(|own| own.set(true));
+    let opened = open_new_tab(window);
+    OWN_NEW_TAB.with(|own| own.set(false));
+    opened
+}
+
+unsafe fn open_new_tab(window: HWND) -> bool {
+    let Some(base) = base() else { return false };
+    if bv().new_tab == crate::builds::ABSENT || bv().new_tab_address.is_some() {
+        // The browser's own new-tab command, as its menu sends it.
+        const IDC_NEW_TAB: usize = 34014;
+        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+            window,
+            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
+            IDC_NEW_TAB,
+            0,
+        );
+        return true;
+    }
+    let Some(browser) = browser(base, window) else {
+        return false;
+    };
+    // Chrome accepts the new-tab command source value 5.
+    function::<NewTab>(base, bv().new_tab)(browser, 5);
+    true
+}
+
+/// One-shot diagnostic for the isolated test profile.
+pub unsafe fn probe_group(window: HWND) {
+    let Some(base) = base() else { return };
+    if !group_calls_known() {
+        crate::trace::trace("group probe: signature mismatch");
+        return;
+    }
+    let Some(model) = tab_model(base, window) else {
+        return;
+    };
+    if function::<Count>(base, bv().tab_count)(model) != 1 {
+        crate::trace::trace("group probe: requires exactly one tab");
+        return;
+    }
+    crate::trace::trace("group probe: before new tab 1");
+    if !new_tab(window) {
+        return;
+    }
+    crate::trace::trace("group probe: before new tab 2");
+    if !new_tab(window) {
+        return;
+    }
+    crate::trace::trace("group probe: before add");
+    let count = function::<Count>(base, bv().tab_count)(model);
+    crate::trace::trace(&format!("group probe: tab count {count}"));
+    if count != 3 {
+        return;
+    }
+    type Allocate = unsafe extern "system" fn(usize) -> *mut i32;
+    let indices = function::<Allocate>(base, 0x05d3_d6a0)(8);
+    if indices.is_null() {
+        return;
+    }
+    indices.write(1);
+    indices.add(1).write(2);
+    // This Chrome build's vector is a pointer, element count and capacity.
+    let span = [indices as usize, 2, 2];
+    let mut id = [0u8; 16];
+    type Add = unsafe extern "system" fn(
+        *mut c_void,
+        *mut [u8; 16],
+        *const [usize; 3],
+        bool,
+    ) -> *mut [u8; 16];
+    function::<Add>(base, 0x0a20_60b0)(model, &mut id, &span, false);
+    crate::trace::trace(&format!("group probe: created {id:02x?}"));
+    type Get = unsafe extern "system" fn(*mut c_void, *mut [u8; 24], i32) -> *mut [u8; 24];
+    type Lookup = unsafe extern "system" fn(*mut c_void, *const u8) -> *mut u8;
+    let group_model: *mut c_void = if bv().groups {
+        *(model.cast::<u8>().add(8) as *const *mut c_void)
+    } else {
+        std::ptr::null_mut()
+    };
+    for i in 0..3 {
+        let mut optional = [0u8; 24];
+        function::<Get>(base, 0x0311_2320)(model, &mut optional, i);
+        crate::trace::trace(&format!("group probe: tab {i} optional {optional:02x?}"));
+    }
+    let group = function::<Lookup>(base, 0x0a1f_1130)(group_model, id.as_ptr());
+    if group.is_null() {
+        return;
+    }
+    let data = *(group.add(0x20) as *const *const u8);
+    if data.is_null() {
+        return;
+    }
+    crate::trace::trace(&format!(
+        "group probe: group {:02x?}",
+        std::slice::from_raw_parts(group, 0x30)
+    ));
+    crate::trace::trace(&format!(
+        "group probe: visual before {:02x?}",
+        std::slice::from_raw_parts(data, 32)
+    ));
+    let mut visual = [0u8; 32];
+    for (i, c) in "Rivet test".encode_utf16().enumerate() {
+        visual[i * 2..i * 2 + 2].copy_from_slice(&c.to_le_bytes());
+    }
+    visual[23] = 10;
+    visual[24..28].copy_from_slice(&3i32.to_le_bytes());
+    type Change = unsafe extern "system" fn(*mut c_void, *const u8, *const u8, bool);
+    function::<Change>(base, 0x0a20_8550)(model, id.as_ptr(), visual.as_ptr(), false);
+    let data = *(group.add(0x20) as *const *const u8);
+    crate::trace::trace(&format!(
+        "group probe: visual named {:02x?}",
+        std::slice::from_raw_parts(data, 32)
+    ));
+    visual[24..28].copy_from_slice(&5i32.to_le_bytes());
+    visual[28] = 1;
+    function::<Change>(base, 0x0a20_8550)(model, id.as_ptr(), visual.as_ptr(), false);
+    let data = *(group.add(0x20) as *const *const u8);
+    crate::trace::trace(&format!(
+        "group probe: visual collapsed {:02x?}",
+        std::slice::from_raw_parts(data, 32)
+    ));
+    visual[28] = 0;
+    function::<Change>(base, 0x0a20_8550)(model, id.as_ptr(), visual.as_ptr(), false);
+    let collapsed_ok = toggle_group(window, &id);
+    let collapsed = tabs(window).and_then(|tabs| {
+        tabs.get(1)
+            .and_then(|tab| tab.group.as_ref().map(|group| group.collapsed))
+    });
+    crate::trace::trace(&format!(
+        "group probe: toggle collapsed {collapsed_ok} {collapsed:?}"
+    ));
+    let expanded_ok = toggle_group(window, &id);
+    let expanded = tabs(window).and_then(|tabs| {
+        tabs.get(1)
+            .and_then(|tab| tab.group.as_ref().map(|group| group.collapsed))
+    });
+    crate::trace::trace(&format!(
+        "group probe: toggle expanded {expanded_ok} {expanded:?}"
+    ));
+    let selected = activate_tab(window, 1);
+    let active =
+        tabs(window).and_then(|tabs| tabs.iter().find(|tab| tab.active).map(|tab| tab.index));
+    crate::trace::trace(&format!(
+        "group probe: activate child {selected} {active:?}"
+    ));
+    activate_tab(window, 0);
+}
+
+type Allocate = unsafe extern "system" fn(usize) -> *mut i32;
+type AddToNewGroup = unsafe extern "system" fn(
+    *mut c_void,
+    *mut [u8; 16],
+    *const [usize; 3],
+    bool,
+) -> *mut [u8; 16];
+
+/// Whether the two functions that make a group are the ones this build expects.
+fn group_calls_known() -> bool {
+    static KNOWN: OnceLock<bool> = OnceLock::new();
+    *KNOWN.get_or_init(|| unsafe {
+        let Some(image) = image::recorded() else { return false };
+        image.has(bv().allocate, bv().allocate_prologue)
+            && image.has(bv().add_to_new_group, bv().add_to_new_group_prologue)
+    })
+}
+
+/// Puts the tabs whose pages are `ids` into one new group with this title and colour, and returns
+/// the group's id. `collapsed` is left to the caller, because a collapsed group must not hold the
+/// active tab.
+pub unsafe fn group_tabs(window: HWND, ids: &[usize], title: &str, color: i32) -> Option<[u8; 16]> {
+    let base = base()?;
+    if ids.is_empty() || !group_calls_known() {
+        return None;
+    }
+    let model = tab_model(base, window)?;
+    let open = open_tabs(window)?;
+    let mut positions: Vec<i32> = ids
+        .iter()
+        .filter_map(|id| open.iter().position(|tab| tab.id == *id))
+        .map(|position| position as i32)
+        .collect();
+    positions.sort_unstable();
+    if positions.is_empty() {
+        return None;
+    }
+    // Chrome takes over this vector of a pointer, an element count and a capacity.
+    let indices = function::<Allocate>(base, bv().allocate)(positions.len() * 4);
+    if indices.is_null() {
+        return None;
+    }
+    for (slot, position) in positions.iter().enumerate() {
+        indices.add(slot).write(*position);
+    }
+    let span = [indices as usize, positions.len(), positions.len()];
+    let mut id = [0u8; 16];
+    function::<AddToNewGroup>(base, bv().add_to_new_group)(model, &mut id, &span, false);
+    set_group_visuals(base, model, &id, title, color, false)?;
+    Some(id)
+}
+
+/// Names, colours and folds a group. The visual data goes to the browser by value, so the browser
+/// destroys it after the call. A title of up to ten UTF-16 units fits the string's own storage,
+/// and a longer one needs a buffer from the browser's own allocator for that to be sound.
+unsafe fn set_group_visuals(
+    base: usize,
+    model: *mut c_void,
+    id: &[u8; 16],
+    title: &str,
+    color: i32,
+    collapsed: bool,
+) -> Option<()> {
+    let units: Vec<u16> = title.encode_utf16().collect();
+    let mut visual = [0u8; 32];
+    if units.len() <= 10 {
+        for (slot, unit) in units.iter().enumerate() {
+            visual[slot * 2..slot * 2 + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+        visual[23] = units.len() as u8;
+    } else {
+        if !group_calls_known() {
+            return None;
+        }
+        let buffer = function::<Allocate>(base, bv().allocate)((units.len() + 1) * 2).cast::<u16>();
+        if buffer.is_null() {
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(units.as_ptr(), buffer, units.len());
+        buffer.add(units.len()).write(0);
+        visual[..8].copy_from_slice(&(buffer as usize).to_le_bytes());
+        visual[8..16].copy_from_slice(&units.len().to_le_bytes());
+        visual[16..24].copy_from_slice(&((units.len() as u64) | 1 << 63).to_le_bytes());
+    }
+    visual[24..28].copy_from_slice(&color.to_le_bytes());
+    visual[28] = collapsed as u8;
+    function::<ChangeGroup>(base, bv().change_group)(model, id.as_ptr(), visual.as_ptr(), false);
+    Some(())
+}
+
+pub unsafe fn toggle_group(window: HWND, id: &[u8; 16]) -> bool {
+    let Some(base) = base() else { return false };
+    let Some(model) = tab_model(base, window) else {
+        return false;
+    };
+    let group_model: *mut c_void = if bv().groups {
+        *(model.cast::<u8>().add(8) as *const *mut c_void)
+    } else {
+        std::ptr::null_mut()
+    };
+    if group_model.is_null() || !function::<HasGroup>(base, bv().has_group)(group_model, id.as_ptr()) {
+        return false;
+    }
+    let group = function::<LookupGroup>(base, bv().lookup_group)(group_model, id.as_ptr());
+    if group.is_null() {
+        return false;
+    }
+    let visual = *(group.add(0x20) as *const *const u8);
+    if visual.is_null() {
+        return false;
+    }
+    let title = chromium_string(visual).unwrap_or_default();
+    let color = *(visual.add(24) as *const i32);
+    let collapsed = *visual.add(28) != 0;
+    set_group_visuals(base, model, id, &title, color, !collapsed).is_some()
+}
