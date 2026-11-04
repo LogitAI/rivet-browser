@@ -23,10 +23,14 @@ fn all() -> std::sync::MutexGuard<'static, Vec<(usize, usize)>> {
 /// `Widget::GetWidgetForNativeView`. Zero when the build records neither.
 pub(crate) unsafe fn widget_of(window: HWND) -> usize {
     let row = row();
-    if row.content_window_for_hwnd == crate::builds::ABSENT || row.widget_for_window == crate::builds::ABSENT {
+    if row.content_window_for_hwnd == crate::builds::ABSENT
+        || row.widget_for_window == crate::builds::ABSENT
+    {
         return 0;
     }
-    let Some(image) = crate::chromium::image::recorded() else { return 0 };
+    let Some(image) = crate::chromium::image::recorded() else {
+        return 0;
+    };
     let content: Pointer = std::mem::transmute(image.base + row.content_window_for_hwnd);
     let widget_for: Pointer = std::mem::transmute(image.base + row.widget_for_window);
     let aura = content(window as *const c_void);
@@ -67,7 +71,8 @@ pub(crate) fn rivet_widgets() -> Vec<usize> {
 /// the view's own vtable.
 pub(crate) unsafe fn widget_holding(view: *mut c_void) -> usize {
     let table = *(view as *const usize);
-    let get_widget: Pointer = std::mem::transmute(*(table as *const usize).add(row().get_widget_slot));
+    let get_widget: Pointer =
+        std::mem::transmute(*(table as *const usize).add(row().get_widget_slot));
     get_widget(view) as usize
 }
 

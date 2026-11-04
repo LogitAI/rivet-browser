@@ -13,10 +13,10 @@ use windows::core::{Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{HMODULE, HWND, POINT};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1,
-    ID2D1SolidColorBrush, D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ROUNDED_RECT, D2D1_CAP_STYLE_FLAT,
-    D2D1_DASH_STYLE_DASH, D2D1_LINE_JOIN_MITER, D2D1_STROKE_STYLE_PROPERTIES,
+    D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1SolidColorBrush,
+    D2D1_ANTIALIAS_MODE_ALIASED, D2D1_CAP_STYLE_FLAT, D2D1_DASH_STYLE_DASH,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_LINE_JOIN_MITER, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES,
 };
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -32,8 +32,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_AXIS_VALUE, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS,
-    DWRITE_TEXT_RANGE,
-    DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_TEXT_RANGE, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -402,7 +401,11 @@ impl Appbar {
     /// of the window's surface such as the Sidebar's rail.
     pub(crate) fn composition(
         &self,
-    ) -> (IDCompositionDesktopDevice, IDCompositionVisual2, IDWriteFactory5) {
+    ) -> (
+        IDCompositionDesktopDevice,
+        IDCompositionVisual2,
+        IDWriteFactory5,
+    ) {
         (self.device.clone(), self.root.clone(), self.dwrite.clone())
     }
 
@@ -507,7 +510,15 @@ impl Appbar {
             let dark = self.dark_row;
             let result = canvas.pressed(area, 8.0, 0.96, effect, || {
                 if hot || effect.is_some() {
-                    canvas.fill_rounded(area, 8.0, if dark { rgba(WHITE, 0.09) } else { rgba(INK, 0.06) })?;
+                    canvas.fill_rounded(
+                        area,
+                        8.0,
+                        if dark {
+                            rgba(WHITE, 0.09)
+                        } else {
+                            rgba(INK, 0.06)
+                        },
+                    )?;
                 }
                 // The design's glyph sits above where DirectWrite centres it, and darkens to the
                 // ink colour on hover like the other icons of the row.
@@ -583,12 +594,7 @@ impl Appbar {
                 let frame = rivet_core::space_frame(self.scene().tint());
                 canvas.floating(rect(PEEK_PAD, PEEK_PAD, side as f32, height as f32), frame)?;
                 context.SetTransform(&(Matrix3x2::translation(PEEK_PAD, PEEK_PAD) * origin));
-                canvas.draw(
-                    side as f32,
-                    height as f32,
-                    &self.scene(),
-                    Surface::Floating,
-                )
+                canvas.draw(side as f32, height as f32, &self.scene(), Surface::Floating)
             })();
             surface.EndDraw()?;
             result?;
@@ -633,11 +639,7 @@ impl Appbar {
             )?;
             self.paint(&surface, width, height, dpi)?;
             self.visual.SetContent(&surface)?;
-            self.painted = Some(Painted {
-                width,
-                height,
-                dpi,
-            });
+            self.painted = Some(Painted { width, height, dpi });
         }
         self.device.Commit()
     }
@@ -676,7 +678,14 @@ impl Appbar {
         // The ground is drawn in pixels, so the hole edges land on whole pixels.
         context.SetDpi(96.0, 96.0);
         context.SetTransform(&Matrix3x2::translation(offset.x as f32, offset.y as f32));
-        let result = ground::paint(&context, width as f32, height as f32, dpi as f32 / 96.0, tint, holes);
+        let result = ground::paint(
+            &context,
+            width as f32,
+            height as f32,
+            dpi as f32 / 96.0,
+            tint,
+            holes,
+        );
         surface.EndDraw()?;
         result?;
         self.ground.SetContent(&surface)?;
@@ -730,7 +739,11 @@ impl Appbar {
 
     /// Shows the developer bar, or removes it when `bar` is none. It is transparent: the buttons lie
     /// on the browser's own dark top row.
-    pub(crate) unsafe fn update_dev(&mut self, bar: Option<&crate::dev_bar::View>, dpi: u32) -> Result<()> {
+    pub(crate) unsafe fn update_dev(
+        &mut self,
+        bar: Option<&crate::dev_bar::View>,
+        dpi: u32,
+    ) -> Result<()> {
         let Some(bar) = bar else {
             if self.dev_painted.take().is_some() {
                 self.dev.SetContent(None)?;
@@ -757,9 +770,16 @@ impl Appbar {
         let mut offset = POINT::default();
         let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
         context.SetDpi(dpi as f32, dpi as f32);
-        context.SetTransform(&Matrix3x2::translation(offset.x as f32 / scale, offset.y as f32 / scale));
+        context.SetTransform(&Matrix3x2::translation(
+            offset.x as f32 / scale,
+            offset.y as f32 / scale,
+        ));
         context.Clear(Some(&rgba(WHITE, 0.0)));
-        let canvas = Canvas { context: &context, dwrite: &self.dwrite, fonts: &self.fonts };
+        let canvas = Canvas {
+            context: &context,
+            dwrite: &self.dwrite,
+            fonts: &self.fonts,
+        };
         let h = height as f32 / scale;
         let w = width as f32 / scale;
         let mut result = Ok(());
@@ -806,7 +826,12 @@ impl Appbar {
 
     /// Shows why this window's browser is older than the installed one, over the window's lower right
     /// corner. Pointer input still reaches the page below, since the visual takes none.
-    pub(crate) unsafe fn update_held(&mut self, warning: Option<&str>, client: (i32, i32), dpi: u32) -> Result<()> {
+    pub(crate) unsafe fn update_held(
+        &mut self,
+        warning: Option<&str>,
+        client: (i32, i32),
+        dpi: u32,
+    ) -> Result<()> {
         let Some(warning) = warning else {
             return Ok(());
         };
@@ -814,13 +839,17 @@ impl Appbar {
         const WIDTH: f32 = 660.0;
         const MARGIN: f32 = 8.0;
         let scale = dpi as f32 / 96.0;
-        let width = (WIDTH * scale).min(client.0 as f32 - 2.0 * MARGIN * scale).round() as i32;
+        let width = (WIDTH * scale)
+            .min(client.0 as f32 - 2.0 * MARGIN * scale)
+            .round() as i32;
         let height = (HEIGHT * scale).round() as i32;
         if width <= 0 {
             return Ok(());
         }
-        self.held.SetOffsetX2(client.0 as f32 - width as f32 - (MARGIN * scale).round())?;
-        self.held.SetOffsetY2(client.1 as f32 - height as f32 - (MARGIN * scale).round())?;
+        self.held
+            .SetOffsetX2(client.0 as f32 - width as f32 - (MARGIN * scale).round())?;
+        self.held
+            .SetOffsetY2(client.1 as f32 - height as f32 - (MARGIN * scale).round())?;
         let key = (warning.to_owned(), width, dpi);
         if self.held_painted.as_ref() == Some(&key) {
             return self.device.Commit();
@@ -834,13 +863,28 @@ impl Appbar {
         let mut offset = POINT::default();
         let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
         context.SetDpi(dpi as f32, dpi as f32);
-        context.SetTransform(&Matrix3x2::translation(offset.x as f32 / scale, offset.y as f32 / scale));
+        context.SetTransform(&Matrix3x2::translation(
+            offset.x as f32 / scale,
+            offset.y as f32 / scale,
+        ));
         context.Clear(Some(&rgba(WHITE, 0.0)));
-        let canvas = Canvas { context: &context, dwrite: &self.dwrite, fonts: &self.fonts };
+        let canvas = Canvas {
+            context: &context,
+            dwrite: &self.dwrite,
+            fonts: &self.fonts,
+        };
         let w = width as f32 / scale;
         let result = canvas
             .fill_rounded(rect(0.0, 0.0, w, HEIGHT), 8.0, rgba(HELD_GROUND, 1.0))
-            .and_then(|()| canvas.text(HELD_TEXT, rect(12.0, 0.0, w - 24.0, HEIGHT), warning, HELD_INK, false));
+            .and_then(|()| {
+                canvas.text(
+                    HELD_TEXT,
+                    rect(12.0, 0.0, w - 24.0, HEIGHT),
+                    warning,
+                    HELD_INK,
+                    false,
+                )
+            });
         surface.EndDraw()?;
         result?;
         self.held.SetContent(&surface)?;
@@ -851,7 +895,12 @@ impl Appbar {
     /// Shows the top bar of a window with a single page: back, forward, reload, the security chip and
     /// the address, as the study's `.toolbar`. While the address is edited, the text engine's pixels
     /// take the place of the text. `None` removes the bar.
-    pub(crate) unsafe fn update_address(&mut self, window: isize, bar: Option<&crate::features::address_bar::View>, dpi: u32) -> Result<()> {
+    pub(crate) unsafe fn update_address(
+        &mut self,
+        window: isize,
+        bar: Option<&crate::features::address_bar::View>,
+        dpi: u32,
+    ) -> Result<()> {
         use crate::features::address_bar::{parts_of, Part, Security, CHIP, FIELD_GROUND};
         let Some(bar) = bar else {
             if self.address_painted.take().is_some() {
@@ -879,13 +928,25 @@ impl Appbar {
             0.0
         };
         let total = height + ((list_h + 8.0) * scale).ceil() as i32 * (list_h > 0.0) as i32;
-        let surface = self.device.CreateSurface(width as u32, total as u32, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_ALPHA_MODE_PREMULTIPLIED)?;
+        let surface = self.device.CreateSurface(
+            width as u32,
+            total as u32,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_ALPHA_MODE_PREMULTIPLIED,
+        )?;
         let mut offset = POINT::default();
         let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
         context.SetDpi(dpi as f32, dpi as f32);
-        context.SetTransform(&Matrix3x2::translation(offset.x as f32 / scale, offset.y as f32 / scale));
+        context.SetTransform(&Matrix3x2::translation(
+            offset.x as f32 / scale,
+            offset.y as f32 / scale,
+        ));
         context.Clear(Some(&rgba(WHITE, 0.0)));
-        let canvas = Canvas { context: &context, dwrite: &self.dwrite, fonts: &self.fonts };
+        let canvas = Canvas {
+            context: &context,
+            dwrite: &self.dwrite,
+            fonts: &self.fonts,
+        };
         let (w, h) = (width as f32 / scale, height as f32 / scale);
         let draw = || -> Result<()> {
             if bar.pane {
@@ -906,8 +967,12 @@ impl Appbar {
                             canvas.fill_rounded(area, 8.0, rgba(INK, 0.06))?;
                         }
                         let (glyph, ink) = match part {
-                            Part::Back => ('\u{E72B}', if bar.can_back { SOFT_INK } else { 0xb9b6bb }),
-                            Part::Forward => ('\u{E72A}', if bar.can_forward { MUTED } else { 0xd3d1d6 }),
+                            Part::Back => {
+                                ('\u{E72B}', if bar.can_back { SOFT_INK } else { 0xb9b6bb })
+                            }
+                            Part::Forward => {
+                                ('\u{E72A}', if bar.can_forward { MUTED } else { 0xd3d1d6 })
+                            }
                             _ => ('\u{E72C}', SOFT_INK),
                         };
                         canvas.icon(glyph, area, 16.0, ink)?;
@@ -922,7 +987,11 @@ impl Appbar {
                         let (glyph, words) = bar.security.look();
                         let insecure = bar.security == Security::NotSecure;
                         let words = if bar.editing { "" } else { words };
-                        let chip_w = if words.is_empty() { CHIP } else { CHIP + 4.0 + measure(&self.dwrite, &self.fonts, CHIP_TEXT, words)? };
+                        let chip_w = if words.is_empty() {
+                            CHIP
+                        } else {
+                            CHIP + 4.0 + measure(&self.dwrite, &self.fonts, CHIP_TEXT, words)?
+                        };
                         let chip = rect(x + 6.0, (h - 22.0) / 2.0, chip_w, 22.0);
                         let ink = if insecure { 0xb3261e } else { SOFT_INK };
                         if insecure && !bar.editing {
@@ -933,20 +1002,55 @@ impl Appbar {
                         }
                         canvas.icon(glyph, rect(chip.left, chip.top, CHIP, 22.0), 13.0, ink)?;
                         if !words.is_empty() {
-                            canvas.text(CHIP_TEXT, rect(chip.left + CHIP - 2.0, chip.top, chip_w - CHIP, 22.0), words, ink, false)?;
+                            canvas.text(
+                                CHIP_TEXT,
+                                rect(chip.left + CHIP - 2.0, chip.top, chip_w - CHIP, 22.0),
+                                words,
+                                ink,
+                                false,
+                            )?;
                         }
                         let left = chip.right + 4.0;
                         let room = (area.right - 10.0 - left).max(0.0);
                         if !bar.editing {
-                            let title_w = if bar.title.is_empty() { 0.0 } else { measure(&self.dwrite, &self.fonts, ADDRESS_TITLE, &bar.title)?.min(room) };
+                            let title_w = if bar.title.is_empty() {
+                                0.0
+                            } else {
+                                measure(&self.dwrite, &self.fonts, ADDRESS_TITLE, &bar.title)?
+                                    .min(room)
+                            };
                             if title_w > 0.0 {
-                                let title = elide(&self.dwrite, &self.fonts, ADDRESS_TITLE, &bar.title, room)?;
-                                canvas.text(ADDRESS_TITLE, rect(left, area.top, title_w, 28.0), &title, SOFT_INK, false)?;
+                                let title = elide(
+                                    &self.dwrite,
+                                    &self.fonts,
+                                    ADDRESS_TITLE,
+                                    &bar.title,
+                                    room,
+                                )?;
+                                canvas.text(
+                                    ADDRESS_TITLE,
+                                    rect(left, area.top, title_w, 28.0),
+                                    &title,
+                                    SOFT_INK,
+                                    false,
+                                )?;
                             }
                             let rest_room = room - title_w;
                             if rest_room > 8.0 {
-                                let rest = elide(&self.dwrite, &self.fonts, META_ROW, &bar.rest, rest_room)?;
-                                canvas.text(META_ROW, rect(left + title_w, area.top, rest_room, 28.0), &rest, MUTED, false)?;
+                                let rest = elide(
+                                    &self.dwrite,
+                                    &self.fonts,
+                                    META_ROW,
+                                    &bar.rest,
+                                    rest_room,
+                                )?;
+                                canvas.text(
+                                    META_ROW,
+                                    rect(left + title_w, area.top, rest_room, 28.0),
+                                    &rest,
+                                    MUTED,
+                                    false,
+                                )?;
                             }
                         }
                     }
@@ -958,25 +1062,61 @@ impl Appbar {
             if list_h > 0.0 {
                 if let Some((left, lw)) = crate::features::address_bar::dropdown_of(w, bar.pane) {
                     let list = rect(left, h + 2.0, lw, list_h);
-                    canvas.fill_rounded(D2D_RECT_F { top: list.top + 2.0, bottom: list.bottom + 3.0, ..list }, 10.0, rgba(0x28_1c_1e, 0.08))?;
+                    canvas.fill_rounded(
+                        D2D_RECT_F {
+                            top: list.top + 2.0,
+                            bottom: list.bottom + 3.0,
+                            ..list
+                        },
+                        10.0,
+                        rgba(0x28_1c_1e, 0.08),
+                    )?;
                     canvas.fill_rounded(list, 10.0, rgba(WHITE, 1.0))?;
                     canvas.ring(list, 10.0, rgba(INK, 0.08))?;
                     for (index, (contents, description)) in bar.suggestions.iter().enumerate() {
-                        let row = rect(left + 4.0, list.top + SUGGESTION_PAD + index as f32 * SUGGESTION_ROW, lw - 8.0, SUGGESTION_ROW);
+                        let row = rect(
+                            left + 4.0,
+                            list.top + SUGGESTION_PAD + index as f32 * SUGGESTION_ROW,
+                            lw - 8.0,
+                            SUGGESTION_ROW,
+                        );
                         if bar.selected == Some(index) {
                             canvas.fill_rounded(row, 7.0, rgba(INK, 0.06))?;
                         }
                         // A page the browser knows has a globe, a search a magnifier.
-                        let glyph = if contents.contains("://") || description.is_empty() { '\u{E774}' } else { '\u{E721}' };
-                        canvas.icon(glyph, rect(row.left + 4.0, row.top, 24.0, SUGGESTION_ROW), 13.0, MUTED)?;
+                        let glyph = if contents.contains("://") || description.is_empty() {
+                            '\u{E774}'
+                        } else {
+                            '\u{E721}'
+                        };
+                        canvas.icon(
+                            glyph,
+                            rect(row.left + 4.0, row.top, 24.0, SUGGESTION_ROW),
+                            13.0,
+                            MUTED,
+                        )?;
                         let room = (row.right - row.left - 40.0).max(0.0);
-                        let shown = elide(&self.dwrite, &self.fonts, META_ROW, contents, room * 0.6)?;
+                        let shown =
+                            elide(&self.dwrite, &self.fonts, META_ROW, contents, room * 0.6)?;
                         let used = measure(&self.dwrite, &self.fonts, META_ROW, &shown)?;
-                        canvas.text(META_ROW, rect(row.left + 32.0, row.top, used, SUGGESTION_ROW), &shown, INK, false)?;
+                        canvas.text(
+                            META_ROW,
+                            rect(row.left + 32.0, row.top, used, SUGGESTION_ROW),
+                            &shown,
+                            INK,
+                            false,
+                        )?;
                         if !description.is_empty() {
                             let rest = format!(" \u{b7} {description}");
-                            let rest = elide(&self.dwrite, &self.fonts, META_ROW, &rest, room - used)?;
-                            canvas.text(META_ROW, rect(row.left + 32.0 + used, row.top, room - used, SUGGESTION_ROW), &rest, MUTED, false)?;
+                            let rest =
+                                elide(&self.dwrite, &self.fonts, META_ROW, &rest, room - used)?;
+                            canvas.text(
+                                META_ROW,
+                                rect(row.left + 32.0 + used, row.top, room - used, SUGGESTION_ROW),
+                                &rest,
+                                MUTED,
+                                false,
+                            )?;
                         }
                     }
                 }
@@ -1036,7 +1176,8 @@ impl Appbar {
             self.rows.push((visual, None));
         }
         let scale = dpi as f32 / 96.0;
-        let (device, dwrite, fonts) = (self.device.clone(), self.dwrite.clone(), self.fonts.clone());
+        let (device, dwrite, fonts) =
+            (self.device.clone(), self.dwrite.clone(), self.fonts.clone());
         for (index, (visual, painted)) in self.rows.iter_mut().enumerate() {
             let Some(row) = rows.get(index) else {
                 if painted.take().is_some() {
@@ -1072,7 +1213,11 @@ impl Appbar {
                 offset.y as f32 / scale,
             ));
             context.Clear(Some(&rgba(WHITE, 0.0)));
-            let canvas = Canvas { context: &context, dwrite: &dwrite, fonts: &fonts };
+            let canvas = Canvas {
+                context: &context,
+                dwrite: &dwrite,
+                fonts: &fonts,
+            };
             let result = canvas.pane_row(row, width as f32 / scale, height as f32 / scale, scale);
             surface.EndDraw()?;
             result?;
@@ -1133,14 +1278,22 @@ impl Appbar {
         }
         if self.drag.is_none() {
             let zone = self.device.CreateVisual()?;
-            self.root.AddVisual(&zone, true, None::<&IDCompositionVisual>)?;
+            self.root
+                .AddVisual(&zone, true, None::<&IDCompositionVisual>)?;
             let ghost = self.device.CreateVisual()?;
-            self.root.AddVisual(&ghost, true, None::<&IDCompositionVisual>)?;
-            self.drag = Some(DragVisuals { zone, zone_key: None, ghost, ghost_key: None });
+            self.root
+                .AddVisual(&ghost, true, None::<&IDCompositionVisual>)?;
+            self.drag = Some(DragVisuals {
+                zone,
+                zone_key: None,
+                ghost,
+                ghost_key: None,
+            });
         }
         let scale = dpi as f32 / 96.0;
         let tint = self.scene().tint();
-        let (device, dwrite, fonts) = (self.device.clone(), self.dwrite.clone(), self.fonts.clone());
+        let (device, dwrite, fonts) =
+            (self.device.clone(), self.dwrite.clone(), self.fonts.clone());
         let drag = self.drag.as_mut().expect("created above");
         match zone {
             Some(zone) => {
@@ -1163,9 +1316,17 @@ impl Appbar {
                         offset.y as f32 / scale,
                     ));
                     context.Clear(Some(&rgba(WHITE, 0.0)));
-                    let canvas = Canvas { context: &context, dwrite: &dwrite, fonts: &fonts };
-                    let result =
-                        canvas.drop_target(width as f32 / scale, height as f32 / scale, &zone.label, tint);
+                    let canvas = Canvas {
+                        context: &context,
+                        dwrite: &dwrite,
+                        fonts: &fonts,
+                    };
+                    let result = canvas.drop_target(
+                        width as f32 / scale,
+                        height as f32 / scale,
+                        &zone.label,
+                        tint,
+                    );
                     surface.EndDraw()?;
                     result?;
                     drag.zone.SetContent(&surface)?;
@@ -1185,8 +1346,10 @@ impl Appbar {
                     ((width + 2.0 * GHOST_PAD) * scale).ceil() as i32,
                     ((GHOST_HEIGHT + 2.0 * GHOST_PAD) * scale).ceil() as i32,
                 );
-                drag.ghost.SetOffsetX2((ghost.x - GHOST_PAD * scale).round())?;
-                drag.ghost.SetOffsetY2((ghost.y - GHOST_PAD * scale).round())?;
+                drag.ghost
+                    .SetOffsetX2((ghost.x - GHOST_PAD * scale).round())?;
+                drag.ghost
+                    .SetOffsetY2((ghost.y - GHOST_PAD * scale).round())?;
                 let key = (pw, dpi, ghost.title.clone(), ghost.colour);
                 if drag.ghost_key.as_ref() != Some(&key) {
                     let surface = device.CreateSurface(
@@ -1203,7 +1366,11 @@ impl Appbar {
                         offset.y as f32 / scale,
                     ));
                     context.Clear(Some(&rgba(WHITE, 0.0)));
-                    let canvas = Canvas { context: &context, dwrite: &dwrite, fonts: &fonts };
+                    let canvas = Canvas {
+                        context: &context,
+                        dwrite: &dwrite,
+                        fonts: &fonts,
+                    };
                     let result = canvas.ghost(width, ghost);
                     surface.EndDraw()?;
                     result?;
@@ -1532,13 +1699,7 @@ impl Canvas<'_> {
     }
 
     /// Paints the Appbar in device-independent pixels, after the shell study.
-    unsafe fn draw(
-        &self,
-        w: f32,
-        h: f32,
-        scene: &Scene,
-        surface: Surface,
-    ) -> Result<()> {
+    unsafe fn draw(&self, w: f32, h: f32, scene: &Scene, surface: Surface) -> Result<()> {
         use crate::frame::AppbarHit;
         let tint = scene.tint();
         // The docked appbar has no fill of its own: the window's ground lies under it. A floating
@@ -1598,12 +1759,7 @@ impl Canvas<'_> {
         let badge_width = 26.0 + 6.0 * badge_text.chars().count() as f32;
         let badge = rect(w - 8.0 - 8.0 - badge_width, 111.0, badge_width, 20.0);
         self.fill_rounded(badge, 6.0, rgba(WHITE, 0.5))?;
-        self.dot(
-            badge.left + 7.0,
-            118.0,
-            6.0,
-            rivet_core::space_accent(tint),
-        )?;
+        self.dot(badge.left + 7.0, 118.0, 6.0, rivet_core::space_accent(tint))?;
         self.text(
             BADGE,
             rect(badge.left + 18.0, 111.0, badge_width - 22.0, 20.0),
@@ -1894,7 +2050,11 @@ impl Canvas<'_> {
             },
             None,
         )?;
-        let outline = D2D1_ROUNDED_RECT { rect: area, radiusX: PANEL_RADIUS, radiusY: PANEL_RADIUS };
+        let outline = D2D1_ROUNDED_RECT {
+            rect: area,
+            radiusX: PANEL_RADIUS,
+            radiusY: PANEL_RADIUS,
+        };
         self.context.DrawRoundedRectangle(
             &outline,
             &self.paint_brush(rgba(accent, 0.7))?,
@@ -1905,7 +2065,11 @@ impl Canvas<'_> {
         let (pill_w, pill_h) = (text + 24.0, 30.0);
         let pill = rect((w - pill_w) / 2.0, (h - pill_h) / 2.0, pill_w, pill_h);
         self.fill_rounded(
-            D2D_RECT_F { top: pill.top + 3.0, bottom: pill.bottom + 3.0, ..pill },
+            D2D_RECT_F {
+                top: pill.top + 3.0,
+                bottom: pill.bottom + 3.0,
+                ..pill
+            },
             9.0,
             rgba(0x28_1c_1e, 0.08),
         )?;
@@ -1920,19 +2084,35 @@ impl Canvas<'_> {
         // Every page of a split is its own rounded panel, so the row's top corners follow the
         // panel's radius and the ground shows in the gap between pages.
         let (ox, oy) = (row.reach_left / scale, row.y / scale);
-        let clip = rect(ox, oy, vw - ox - row.reach_right / scale, (vh - oy) + PANEL_RADIUS);
-        self.with_rounded_clip(clip, PANEL_RADIUS, || self.pane_row_inner(row, vw, vh, scale))
+        let clip = rect(
+            ox,
+            oy,
+            vw - ox - row.reach_right / scale,
+            (vh - oy) + PANEL_RADIUS,
+        );
+        self.with_rounded_clip(clip, PANEL_RADIUS, || {
+            self.pane_row_inner(row, vw, vh, scale)
+        })
     }
 
     /// Runs `draw` with everything outside a rounded rectangle masked away.
-    unsafe fn with_rounded_clip(&self, area: D2D_RECT_F, radius: f32, draw: impl FnOnce() -> Result<()>) -> Result<()> {
+    unsafe fn with_rounded_clip(
+        &self,
+        area: D2D_RECT_F,
+        radius: f32,
+        draw: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         use std::mem::ManuallyDrop;
         use windows::Win32::Graphics::Direct2D::{
             ID2D1Geometry, ID2D1Layer, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_LAYER_OPTIONS1_NONE,
             D2D1_LAYER_PARAMETERS1,
         };
         let factory = self.context.GetFactory()?;
-        let shape = D2D1_ROUNDED_RECT { rect: area, radiusX: radius, radiusY: radius };
+        let shape = D2D1_ROUNDED_RECT {
+            rect: area,
+            radiusX: radius,
+            radiusY: radius,
+        };
         let geometry: ID2D1Geometry = factory.CreateRoundedRectangleGeometry(&shape)?.cast()?;
         let mut layer = D2D1_LAYER_PARAMETERS1 {
             // The layer only needs the rounded area; `rect` takes a width and height, not a far corner.
@@ -1964,7 +2144,10 @@ impl Canvas<'_> {
         let h = vh - oy;
         let clip_w = vw - ox;
         self.fill(rect(0.0, oy, ox, h), PAPER)?;
-        self.fill(rect(vw - row.reach_right / scale, oy, row.reach_right / scale, h), PAPER)?;
+        self.fill(
+            rect(vw - row.reach_right / scale, oy, row.reach_right / scale, h),
+            PAPER,
+        )?;
         let buttons = row_buttons(w, row.first, row.caption / scale);
         // The focused page's address is the browser's own address bar, which shows through a hole in
         // the row. Everything else on every row is drawn here.
@@ -1990,18 +2173,28 @@ impl Canvas<'_> {
             self.fill(rect(vw, oy + h - 1.0, full - vw, 1.0), HAIRLINE)?;
             self.caption_buttons(full, oy, h, row.caption_hover, row.zoomed, false)?;
         }
-        self.with_opacity(crate::features::split::row_ink_opacity(row.active), || self.pane_row_buttons(row, &buttons, ox, oy, h))
+        self.with_opacity(crate::features::split::row_ink_opacity(row.active), || {
+            self.pane_row_buttons(row, &buttons, ox, oy, h)
+        })
     }
 
     /// Runs `draw` with everything it draws faded to `opacity`.
     unsafe fn with_opacity(&self, opacity: f32, draw: impl FnOnce() -> Result<()>) -> Result<()> {
         use std::mem::ManuallyDrop;
-        use windows::Win32::Graphics::Direct2D::{ID2D1Layer, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_LAYER_OPTIONS1_NONE, D2D1_LAYER_PARAMETERS1};
+        use windows::Win32::Graphics::Direct2D::{
+            ID2D1Layer, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_LAYER_OPTIONS1_NONE,
+            D2D1_LAYER_PARAMETERS1,
+        };
         if opacity >= 1.0 {
             return draw();
         }
         let layer = D2D1_LAYER_PARAMETERS1 {
-            contentBounds: D2D_RECT_F { left: -1.0e6, top: -1.0e6, right: 1.0e6, bottom: 1.0e6 },
+            contentBounds: D2D_RECT_F {
+                left: -1.0e6,
+                top: -1.0e6,
+                right: 1.0e6,
+                bottom: 1.0e6,
+            },
             geometricMask: ManuallyDrop::new(None),
             maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
             maskTransform: Matrix3x2::identity(),
@@ -2016,7 +2209,14 @@ impl Canvas<'_> {
     }
 
     /// The buttons and the address of a page's row.
-    unsafe fn pane_row_buttons(&self, row: &PaneRow, buttons: &[(crate::features::split::RowButton, f32, f32)], ox: f32, oy: f32, h: f32) -> Result<()> {
+    unsafe fn pane_row_buttons(
+        &self,
+        row: &PaneRow,
+        buttons: &[(crate::features::split::RowButton, f32, f32)],
+        ox: f32,
+        oy: f32,
+        h: f32,
+    ) -> Result<()> {
         use crate::features::split::RowButton;
         for &(button, x, width) in buttons {
             let area = rect(ox + x, oy + (h - 28.0) / 2.0, width, 28.0);
@@ -2040,7 +2240,13 @@ impl Canvas<'_> {
                     } else {
                         format!("{} \u{b7} {}", row.title, row.url)
                     };
-                    self.text(META_ROW, rect(area.left + 10.0, area.top, (width - 20.0).max(0.0), 28.0), &shown, MUTED, false)?;
+                    self.text(
+                        META_ROW,
+                        rect(area.left + 10.0, area.top, (width - 20.0).max(0.0), 28.0),
+                        &shown,
+                        MUTED,
+                        false,
+                    )?;
                 }
                 _ => {
                     if hot {
@@ -2049,8 +2255,12 @@ impl Canvas<'_> {
                     let (glyph, size, ink) = match button {
                         RowButton::Grip => ('\u{E7C2}', 13.0, SOFT_INK),
                         // A disabled icon is faded, like `.icon:disabled`.
-                        RowButton::Back => ('\u{E72B}', 16.0, if able { SOFT_INK } else { 0xb9b6bb }),
-                        RowButton::Forward => ('\u{E72A}', 16.0, if able { MUTED } else { 0xd3d1d6 }),
+                        RowButton::Back => {
+                            ('\u{E72B}', 16.0, if able { SOFT_INK } else { 0xb9b6bb })
+                        }
+                        RowButton::Forward => {
+                            ('\u{E72A}', 16.0, if able { MUTED } else { 0xd3d1d6 })
+                        }
                         RowButton::Reload => ('\u{E72C}', 16.0, SOFT_INK),
                         RowButton::Popout => ('\u{EE47}', 13.0, SOFT_INK),
                         _ => ('\u{E711}', 12.0, SOFT_INK),
@@ -2115,7 +2325,13 @@ impl Canvas<'_> {
         }
         self.fill_rounded(body, 9.0, color(WHITE))?;
         self.ring(body, 9.0, rgba(0x000000, 0.06))?;
-        self.favicon(body.left + 9.0, body.top + 7.0, 18.0, ghost.colour, &ghost.letter)?;
+        self.favicon(
+            body.left + 9.0,
+            body.top + 7.0,
+            18.0,
+            ghost.colour,
+            &ghost.letter,
+        )?;
         let label = rect(body.left + 35.0, body.top, width - 47.0, GHOST_HEIGHT);
         self.text(ACTIVE, label, &ghost.title, INK, false)
     }
@@ -2149,6 +2365,10 @@ impl Canvas<'_> {
         self.tab_row_text(left, inner, top, item, item.title, hovered, effect, false)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one row of the tab list is drawn from all of these at once"
+    )]
     unsafe fn tab_row_text(
         &self,
         left: f32,
@@ -2179,9 +2399,7 @@ impl Canvas<'_> {
                 Lead::Glyph(glyph) => {
                     self.icon(glyph, rect(lead_x, top, 16.0, 34.0), 16.0, SOFT_INK)?
                 }
-                Lead::Favicon(rgb, letter) => {
-                    self.favicon(lead_x, top + 9.0, 16.0, rgb, letter)?
-                }
+                Lead::Favicon(rgb, letter) => self.favicon(lead_x, top + 9.0, 16.0, rgb, letter)?,
             }
             let label_x = lead_x + 26.0;
             let (style, ink) = if item.active {
@@ -2229,14 +2447,20 @@ impl Canvas<'_> {
 }
 
 /// `value` cut to fit `room` DIPs, ending in an ellipsis when it was cut, as `text-overflow: ellipsis`.
-unsafe fn elide(dwrite: &IDWriteFactory5, fonts: &IDWriteFontCollection1, style: Type, value: &str, room: f32) -> Result<String> {
+unsafe fn elide(
+    dwrite: &IDWriteFactory5,
+    fonts: &IDWriteFontCollection1,
+    style: Type,
+    value: &str,
+    room: f32,
+) -> Result<String> {
     if measure(dwrite, fonts, style, value)? <= room {
         return Ok(value.to_owned());
     }
     let chars: Vec<char> = value.chars().collect();
     let (mut low, mut high) = (0usize, chars.len());
     while low < high {
-        let middle = (low + high + 1) / 2;
+        let middle = (low + high).div_ceil(2);
         let candidate: String = chars[..middle].iter().collect::<String>() + "\u{2026}";
         if measure(dwrite, fonts, style, &candidate)? <= room {
             low = middle;
@@ -2253,8 +2477,13 @@ pub(crate) fn make_fonts_known_to_gdi() {
     static DONE: std::sync::Once = std::sync::Once::new();
     DONE.call_once(|| unsafe {
         for font in FONTS {
-            let mut count = 0u32;
-            windows_sys::Win32::Graphics::Gdi::AddFontMemResourceEx(font.as_ptr().cast(), font.len() as u32, std::ptr::null(), &mut count);
+            let count = 0u32;
+            windows_sys::Win32::Graphics::Gdi::AddFontMemResourceEx(
+                font.as_ptr().cast(),
+                font.len() as u32,
+                std::ptr::null(),
+                &count,
+            );
         }
     });
 }

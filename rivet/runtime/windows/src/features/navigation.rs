@@ -6,11 +6,11 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-use windows_sys::Win32::Foundation::HWND;
-use crate::chromium::image;
 use crate::builds::Build;
+use crate::chromium::image;
 use crate::feature::Needs;
 use crate::targets::Target;
+use windows_sys::Win32::Foundation::HWND;
 
 /// Size of a `GURL`, which Chromium 156 lays out the same way in every build it ships.
 const GURL_SIZE: usize = 0x78;
@@ -26,7 +26,10 @@ pub(crate) fn needs(build: &Build) -> Needs {
     Needs::checked(
         row.supported,
         crate::builds::unchecked_reason(build, "opening addresses"),
-        row.signatures.iter().map(|(rva, bytes)| Target::new("navigation function", *rva, bytes)).collect(),
+        row.signatures
+            .iter()
+            .map(|(rva, bytes)| Target::new("navigation function", *rva, bytes))
+            .collect(),
     )
 }
 
@@ -62,17 +65,14 @@ impl<const N: usize> Raw<N> {
 
 static BASE: OnceLock<Option<usize>> = OnceLock::new();
 
-
 fn base() -> Option<usize> {
     *BASE.get_or_init(|| unsafe {
         let image = image::recorded()?;
-        crate::feature::needs_here(needs).verify(&image).ok().map(|()| image.base)
+        crate::feature::needs_here(needs)
+            .verify(&image)
+            .ok()
+            .map(|()| image.base)
     })
-}
-
-/// Whether this build can open addresses, with every function it needs matching the record.
-pub(crate) fn ready() -> bool {
-    base().is_some()
 }
 
 unsafe fn function<T: Copy>(base: usize, rva: usize) -> T {
@@ -118,7 +118,10 @@ pub unsafe fn open_if_active(window: HWND, contents: usize, url: &str) -> bool {
 }
 
 /// Runs `work` with `url` as a `GURL`, which lives only for the call.
-pub(crate) unsafe fn with_address<R>(url: &str, work: impl FnOnce(*const c_void) -> R) -> Option<R> {
+pub(crate) unsafe fn with_address<R>(
+    url: &str,
+    work: impl FnOnce(*const c_void) -> R,
+) -> Option<R> {
     let base = base()?;
     let mut target = Raw::<GURL_SIZE>::zeroed();
     let wide: Vec<u16> = url.encode_utf16().collect();

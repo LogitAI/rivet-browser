@@ -69,21 +69,11 @@ pub(crate) unsafe fn pages(window: HWND) -> Option<Vec<PageState>> {
     )
 }
 
-/// The active tab of `window`, which the address bar shows.
-pub(crate) unsafe fn active_page(window: HWND) -> Option<PageState> {
-    pages(window)?.into_iter().find(|page| page.active)
-}
-
 /// Runs a navigation command on the active tab of `window`, on the browser UI thread.
 pub(crate) unsafe fn run(window: HWND, command: Command) -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_COMMAND};
     SendMessageW(window, WM_COMMAND, command.id(), 0);
     true
-}
-
-/// Opens what a person typed or pasted in the active tab, as the browser's address bar would.
-pub(crate) unsafe fn navigate(window: HWND, url: &str) -> bool {
-    crate::features::navigation::open(window, url)
 }
 
 #[cfg(test)]

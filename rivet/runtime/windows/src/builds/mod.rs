@@ -25,9 +25,6 @@ pub use edge::EDGE;
 pub use samsung::SAMSUNG;
 pub use whale::{WHALE, WHALE_ADD_TAB_AT};
 
-#[allow(unused_imports)]
-use crate::features::look::{ACCENT_TINT, FOCUS_RING, HAIRLINE, INK, PAPER, SELECTION, SOFT_INK};
-
 /// An address the build does not have. Every check against it fails, so the feature that needs it
 /// stays off.
 pub(crate) const ABSENT: usize = 0x7FFF_0000;
@@ -110,7 +107,6 @@ pub struct Omnibox {
     pub signatures: &'static [(usize, &'static [u8])],
 }
 }
-
 
 row_struct! {
 /// What a Rivet app window calls in Chromium: the window feature answer that keeps new tabs in the
@@ -868,15 +864,23 @@ pub fn unchecked_reason(build: &Build, feature: &str) -> &'static str {
 }
 
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 9] = [&CHROME_156_74, &CHROME_156_80, &CHROME, &EDGE, &CHROME_150, &WHALE, &BRAVE, &BRAVE_63, &SAMSUNG];
+static TABLE: [&Build; 9] = [
+    &CHROME_156_74,
+    &CHROME_156_80,
+    &CHROME,
+    &EDGE,
+    &CHROME_150,
+    &WHALE,
+    &BRAVE,
+    &BRAVE_63,
+    &SAMSUNG,
+];
 
 static CURRENT: OnceLock<Option<&'static Build>> = OnceLock::new();
 
 /// The row for the browser module loaded in this process, if any row matches its version.
 pub fn current() -> Option<&'static Build> {
-    *CURRENT.get_or_init(|| {
-        crate::chromium::image::recorded_build()
-    })
+    *CURRENT.get_or_init(crate::chromium::image::recorded_build)
 }
 
 /// The row of the verified build. Only code that already holds a recorded image calls this.
@@ -922,7 +926,11 @@ fn loaded() -> &'static Loaded {
         let mut frames = signed.frames;
         frames.extend(checked_in.frames);
         frames.extend(chrome_build::builds(chrome_build::TABLE));
-        Loaded { builds: in_order(signed.builds, &compiled), frames, note }
+        Loaded {
+            builds: in_order(signed.builds, &compiled),
+            frames,
+            note,
+        }
     })
 }
 
@@ -945,7 +953,6 @@ pub fn table_note() -> &'static str {
 pub fn compiled() -> &'static [&'static Build] {
     &TABLE
 }
-
 
 #[cfg(test)]
 mod tests;

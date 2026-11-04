@@ -5,14 +5,17 @@
 //! ownership checks.
 
 pub mod chrome_build;
+pub mod hold;
 pub mod row_port;
 pub mod row_watch;
 pub mod signed_table;
-pub mod hold;
+#[cfg(windows)]
 pub mod textservices;
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 /// A top-level browser window and the browser process that owns it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -776,6 +779,7 @@ fn remote_export_address(
 ///
 /// `read(offset, buffer)` fills `buffer` from `offset` bytes after the image base and reports
 /// whether it succeeded. Forwarded exports are rejected because they do not point into the image.
+#[cfg(any(windows, test))]
 fn find_export_rva(read: &mut dyn FnMut(usize, &mut [u8]) -> bool, export: &str) -> Option<u32> {
     fn u16_at(read: &mut dyn FnMut(usize, &mut [u8]) -> bool, offset: usize) -> Option<u16> {
         let mut bytes = [0u8; 2];
@@ -1004,16 +1008,24 @@ mod tests {
     #[test]
     fn fr1_module_snapshot_gives_up_after_its_attempts_and_on_other_errors() {
         let mut tries = 0;
-        let outcome: Result<(), u32> = retry_while_modules_change(3, || {}, || {
-            tries += 1;
-            Err(24)
-        });
+        let outcome: Result<(), u32> = retry_while_modules_change(
+            3,
+            || {},
+            || {
+                tries += 1;
+                Err(24)
+            },
+        );
         assert_eq!((outcome, tries), (Err(24), 3));
         let mut tries = 0;
-        let outcome: Result<(), u32> = retry_while_modules_change(3, || {}, || {
-            tries += 1;
-            Err(5)
-        });
+        let outcome: Result<(), u32> = retry_while_modules_change(
+            3,
+            || {},
+            || {
+                tries += 1;
+                Err(5)
+            },
+        );
         assert_eq!((outcome, tries), (Err(5), 1));
     }
 
@@ -1217,7 +1229,11 @@ mod tests {
         let root = rivet_core::paths::TestDir::new("rivet-samsung");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("143.0.4.29")).unwrap();
-        for name in ["samsunginternet.dll", "notification_helper.exe", "chrome_pwa_launcher.exe"] {
+        for name in [
+            "samsunginternet.dll",
+            "notification_helper.exe",
+            "chrome_pwa_launcher.exe",
+        ] {
             std::fs::write(root.join("143.0.4.29").join(name), b"x").unwrap();
         }
         std::fs::write(root.join("samsunginternet.exe"), b"x").unwrap();
@@ -1228,7 +1244,8 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
         // The installed build resolves the same way.
-        let installed = Path::new(r"C:\Program Files\Samsung\Internet\Application\samsunginternet.exe");
+        let installed =
+            Path::new(r"C:\Program Files\Samsung\Internet\Application\samsunginternet.exe");
         if installed.is_file() {
             assert_eq!(resolve_browser_executable(installed), installed);
         }
@@ -1241,7 +1258,10 @@ mod tests {
         std::fs::create_dir_all(root.join("156.0.8078.48")).unwrap();
         std::fs::write(root.join("156.0.8078.48").join("chrome.dll"), b"x").unwrap();
         std::fs::write(root.join("chrome.exe"), b"x").unwrap();
-        assert_eq!(resolve_browser_executable(&root.join("chrome.exe")), root.join("chrome.exe"));
+        assert_eq!(
+            resolve_browser_executable(&root.join("chrome.exe")),
+            root.join("chrome.exe")
+        );
         assert_eq!(
             resolve_browser_executable(&root.join("missing").join("a.exe")),
             root.join("missing").join("a.exe")

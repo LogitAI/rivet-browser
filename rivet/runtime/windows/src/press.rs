@@ -147,6 +147,7 @@ impl<K: Copy + PartialEq> Presses<K> {
         }
     }
 
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn release_all(&mut self, now: f32) {
         for press in self.list.iter_mut().filter(|p| p.up_at.is_none()) {
             press.up_at = Some(now);
@@ -159,6 +160,7 @@ impl<K: Copy + PartialEq> Presses<K> {
         !self.list.is_empty()
     }
 
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn amounts(&self, now: f32) -> Vec<(K, f32, f32)> {
         self.list
             .iter()

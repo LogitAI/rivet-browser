@@ -176,8 +176,6 @@ pub(crate) enum Cookie {
     /// The prologue ends with the seven byte load, which the trampoline redoes from its absolute
     /// address. A prologue that does not end with one is copied whole.
     Trailing,
-    /// The seven byte load sits at this offset of the prologue.
-    At(usize),
 }
 
 /// The ways the browser's functions are detoured. Each browser function was first detoured by a
@@ -235,12 +233,6 @@ pub(crate) unsafe fn detour_styled(
     let mut trampoline = Vec::new();
     let cookie_at = match style.cookie {
         Cookie::None => None,
-        Cookie::At(at) => {
-            if prologue.get(at..at + 3) != Some(&[0x48, 0x8B, 0x05]) || prologue.len() < at + 7 {
-                return Err(format!("{rva:#x} has no cookie load where recorded"));
-            }
-            Some(at)
-        }
         Cookie::Trailing => (prologue.len() >= 7
             && prologue[prologue.len() - 7..prologue.len() - 4] == [0x48, 0x8B, 0x05])
         .then(|| prologue.len() - 7),

@@ -28,7 +28,9 @@ pub const CORRUPT_KEEP: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// The local application data folder of the current user.
 pub fn local_app_data() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()).map(PathBuf::from)
+    std::env::var_os("LOCALAPPDATA")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 /// The folders below one Rivet root.
@@ -45,7 +47,9 @@ impl Layout {
 
     /// The layout below a local application data folder, `<local>\Rivet`.
     pub fn under(local_app_data: &Path) -> Self {
-        Self { root: local_app_data.join(ROOT_NAME) }
+        Self {
+            root: local_app_data.join(ROOT_NAME),
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -97,8 +101,11 @@ impl Layout {
     /// Where a trace switched on by `name` writes. A switch is the file `debug\<name>` or the
     /// name listed in `RIVET_TRACE`, separated by commas.
     pub fn trace_file(&self, name: &str) -> Option<PathBuf> {
-        let listed = std::env::var("RIVET_TRACE")
-            .is_ok_and(|value| value.split(',').any(|item| item.trim().eq_ignore_ascii_case(name)));
+        let listed = std::env::var("RIVET_TRACE").is_ok_and(|value| {
+            value
+                .split(',')
+                .any(|item| item.trim().eq_ignore_ascii_case(name))
+        });
         (listed || self.debug().join(name).is_file()).then(|| self.logs().join(name))
     }
 }
@@ -106,9 +113,15 @@ impl Layout {
 /// What one migration step did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Moved {
-    Moved { from: PathBuf, to: PathBuf },
+    Moved {
+        from: PathBuf,
+        to: PathBuf,
+    },
     /// The old place was in use or both places exist. It stays, and the next start tries again.
-    Kept { from: PathBuf, reason: String },
+    Kept {
+        from: PathBuf,
+        reason: String,
+    },
     Removed(PathBuf),
 }
 
@@ -124,20 +137,32 @@ pub fn migrate(local_app_data: &Path) -> Vec<Moved> {
         (root.join("browsers"), layout.held_browsers()),
         (root.join("builds"), layout.builds()),
         (root.join("spaces"), layout.spaces()),
-        (local_app_data.join("LogitAI").join("Rivet").join("sessions.json"), layout.sessions_file()),
+        (
+            local_app_data
+                .join("LogitAI")
+                .join("Rivet")
+                .join("sessions.json"),
+            layout.sessions_file(),
+        ),
     ];
     for (from, to) in steps {
         if std::fs::symlink_metadata(&from).is_err() {
             continue;
         }
         if std::fs::symlink_metadata(&to).is_ok() {
-            done.push(Moved::Kept { from, reason: format!("{} already exists", to.display()) });
+            done.push(Moved::Kept {
+                from,
+                reason: format!("{} already exists", to.display()),
+            });
             continue;
         }
         let made = to.parent().map_or(Ok(()), std::fs::create_dir_all);
         match made.and_then(|()| std::fs::rename(&from, &to)) {
             Ok(()) => done.push(Moved::Moved { from, to }),
-            Err(error) => done.push(Moved::Kept { from, reason: error.to_string() }),
+            Err(error) => done.push(Moved::Kept {
+                from,
+                reason: error.to_string(),
+            }),
         }
     }
     // Folders that older builds made and left empty. `remove_dir` refuses a folder with anything in it.
@@ -185,7 +210,9 @@ pub fn prune(layout: &Layout, now: SystemTime) -> Vec<PathBuf> {
     }
     for entry in read_dir(&layout.scratch()) {
         let path = entry.path();
-        if older_than(&path, now, Duration::from_secs(24 * 60 * 60)) && std::fs::remove_file(&path).is_ok() {
+        if older_than(&path, now, Duration::from_secs(24 * 60 * 60))
+            && std::fs::remove_file(&path).is_ok()
+        {
             removed.push(path);
         }
     }
@@ -204,19 +231,27 @@ pub fn cap_log(path: &Path) {
 }
 
 fn read_dir(path: &Path) -> Vec<std::fs::DirEntry> {
-    std::fs::read_dir(path).map(|entries| entries.flatten().collect()).unwrap_or_default()
+    std::fs::read_dir(path)
+        .map(|entries| entries.flatten().collect())
+        .unwrap_or_default()
 }
 
 fn older_than(path: &Path, now: SystemTime, age: Duration) -> bool {
     std::fs::metadata(path)
         .and_then(|meta| meta.modified())
-        .is_ok_and(|modified| now.duration_since(modified).is_ok_and(|elapsed| elapsed > age))
+        .is_ok_and(|modified| {
+            now.duration_since(modified)
+                .is_ok_and(|elapsed| elapsed > age)
+        })
 }
 
 /// The `user_data_dir` a spaces file records, read without a full JSON parser.
 fn recorded_profile(text: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
-    value["user_data_dir"].as_str().filter(|dir| !dir.is_empty()).map(str::to_owned)
+    value["user_data_dir"]
+        .as_str()
+        .filter(|dir| !dir.is_empty())
+        .map(str::to_owned)
 }
 
 /// A folder of one test below the build's target folder, removed when it is dropped. Tests use it
@@ -229,7 +264,12 @@ impl TestDir {
         let exe = std::env::current_exe().expect("the test binary has a path");
         let base = std::env::var_os("CARGO_TARGET_TMPDIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| exe.parent().and_then(Path::parent).unwrap_or(Path::new(".")).join("rivet-test-tmp"));
+            .unwrap_or_else(|| {
+                exe.parent()
+                    .and_then(Path::parent)
+                    .unwrap_or(Path::new("."))
+                    .join("rivet-test-tmp")
+            });
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = base.join(format!("{name}-{}-{unique}", std::process::id()));
@@ -265,15 +305,28 @@ impl Drop for TestDir {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn nfr7_every_kind_of_file_has_one_folder_below_one_root() {
         let layout = Layout::under(Path::new(r"C:\Local"));
-        assert_eq!(layout.setup_file(), Path::new(r"C:\Local\Rivet\config\setup.json"));
+        assert_eq!(
+            layout.setup_file(),
+            Path::new(r"C:\Local\Rivet\config\setup.json")
+        );
         assert_eq!(layout.profiles(), Path::new(r"C:\Local\Rivet\profiles"));
-        assert_eq!(layout.sessions_file(), Path::new(r"C:\Local\Rivet\state\sessions.json"));
+        assert_eq!(
+            layout.sessions_file(),
+            Path::new(r"C:\Local\Rivet\state\sessions.json")
+        );
         assert_eq!(layout.spaces(), Path::new(r"C:\Local\Rivet\state\spaces"));
-        assert_eq!(layout.table_file(), Path::new(r"C:\Local\Rivet\cache\builds\table.bin"));
-        assert_eq!(layout.held_browsers(), Path::new(r"C:\Local\Rivet\cache\browsers"));
+        assert_eq!(
+            layout.table_file(),
+            Path::new(r"C:\Local\Rivet\cache\builds\table.bin")
+        );
+        assert_eq!(
+            layout.held_browsers(),
+            Path::new(r"C:\Local\Rivet\cache\browsers")
+        );
         assert_eq!(layout.logs(), Path::new(r"C:\Local\Rivet\logs"));
     }
 
@@ -282,33 +335,65 @@ mod tests {
         let local = TestDir::new("nfr7-migrate");
         let old = local.join("Rivet");
         std::fs::create_dir_all(old.join("browsers").join("chrome").join("1.2.3.4")).unwrap();
-        std::fs::write(old.join("browsers").join("chrome").join("1.2.3.4").join("chrome.exe"), "x").unwrap();
+        std::fs::write(
+            old.join("browsers")
+                .join("chrome")
+                .join("1.2.3.4")
+                .join("chrome.exe"),
+            "x",
+        )
+        .unwrap();
         std::fs::create_dir_all(old.join("spaces")).unwrap();
         std::fs::write(old.join("spaces").join("default.json"), "{}").unwrap();
         std::fs::create_dir_all(old.join("builds")).unwrap();
         std::fs::write(old.join("setup.json"), "{}").unwrap();
         std::fs::create_dir_all(old.join("settings")).unwrap();
         std::fs::create_dir_all(old.join("profiles").join("chrome").join("Default")).unwrap();
-        std::fs::write(old.join("profiles").join("chrome").join("Default").join("Cookies"), "browser").unwrap();
+        std::fs::write(
+            old.join("profiles")
+                .join("chrome")
+                .join("Default")
+                .join("Cookies"),
+            "browser",
+        )
+        .unwrap();
         let logit = local.join("LogitAI").join("Rivet");
         std::fs::create_dir_all(&logit).unwrap();
         std::fs::write(logit.join("sessions.json"), "[]").unwrap();
 
         migrate(&local);
         let layout = Layout::under(&local);
-        assert!(layout.held_browsers().join("chrome").join("1.2.3.4").join("chrome.exe").is_file());
+        assert!(layout
+            .held_browsers()
+            .join("chrome")
+            .join("1.2.3.4")
+            .join("chrome.exe")
+            .is_file());
         assert!(layout.spaces().join("default.json").is_file());
         assert!(layout.builds().is_dir());
         assert!(layout.setup_file().is_file());
-        assert_eq!(std::fs::read_to_string(layout.sessions_file()).unwrap(), "[]");
+        assert_eq!(
+            std::fs::read_to_string(layout.sessions_file()).unwrap(),
+            "[]"
+        );
         assert!(!old.join("settings").exists() && !local.join("LogitAI").exists());
         assert!(!old.join("browsers").exists() && !old.join("setup.json").exists());
         assert_eq!(
-            std::fs::read_to_string(layout.profiles().join("chrome").join("Default").join("Cookies")).unwrap(),
+            std::fs::read_to_string(
+                layout
+                    .profiles()
+                    .join("chrome")
+                    .join("Default")
+                    .join("Cookies")
+            )
+            .unwrap(),
             "browser",
             "profiles already sit in their place and are not touched"
         );
-        assert!(migrate(&local).is_empty(), "a second start has nothing to do");
+        assert!(
+            migrate(&local).is_empty(),
+            "a second start has nothing to do"
+        );
     }
 
     #[test]
@@ -322,7 +407,14 @@ mod tests {
         let done = migrate(&local);
         assert!(matches!(&done[..], [Moved::Kept { .. }]), "{done:?}");
         assert!(local.join("Rivet").join("spaces").is_dir());
-        assert!(local.join("Rivet").join("settings").join("kept.txt").is_file(), "a folder with files is not removed");
+        assert!(
+            local
+                .join("Rivet")
+                .join("settings")
+                .join("kept.txt")
+                .is_file(),
+            "a folder with files is not removed"
+        );
     }
 
     #[cfg(windows)]
@@ -330,14 +422,25 @@ mod tests {
     fn nfr7_a_held_build_in_use_is_not_moved_and_not_copied() {
         use std::os::windows::fs::OpenOptionsExt;
         let local = TestDir::new("nfr7-locked");
-        let exe = local.join("Rivet").join("browsers").join("chrome").join("chrome.exe");
+        let exe = local
+            .join("Rivet")
+            .join("browsers")
+            .join("chrome")
+            .join("chrome.exe");
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, "x").unwrap();
         // A running browser opens its files without sharing delete, which blocks a folder rename.
-        let open = std::fs::OpenOptions::new().read(true).share_mode(1).open(&exe).unwrap();
+        let open = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&exe)
+            .unwrap();
         let done = migrate(&local);
         assert!(matches!(&done[..], [Moved::Kept { .. }]), "{done:?}");
-        assert!(!Layout::under(&local).held_browsers().exists(), "nothing was copied");
+        assert!(
+            !Layout::under(&local).held_browsers().exists(),
+            "nothing was copied"
+        );
         drop(open);
         assert!(matches!(&migrate(&local)[..], [Moved::Moved { .. }]));
     }
@@ -350,17 +453,31 @@ mod tests {
         std::fs::create_dir_all(layout.logs()).unwrap();
         let alive = local.join("alive-profile");
         std::fs::create_dir_all(&alive).unwrap();
-        let record = |dir: &Path| serde_json::json!({ "version": 1, "user_data_dir": dir.to_string_lossy() }).to_string();
+        let record = |dir: &Path| {
+            serde_json::json!({ "version": 1, "user_data_dir": dir.to_string_lossy() }).to_string()
+        };
         std::fs::write(layout.spaces().join("aaaa.json"), record(&alive)).unwrap();
-        std::fs::write(layout.spaces().join("bbbb.json"), record(&local.join("gone"))).unwrap();
+        std::fs::write(
+            layout.spaces().join("bbbb.json"),
+            record(&local.join("gone")),
+        )
+        .unwrap();
         std::fs::write(layout.spaces().join("default.json"), "{}").unwrap();
         std::fs::write(layout.spaces().join("cccc.json.corrupt"), "{").unwrap();
         std::fs::write(layout.logs().join("rivet-nav.log"), "x").unwrap();
 
-        assert!(prune(&layout, SystemTime::now()).iter().all(|path| path.ends_with("bbbb.json")));
+        assert!(prune(&layout, SystemTime::now())
+            .iter()
+            .all(|path| path.ends_with("bbbb.json")));
         assert!(!layout.spaces().join("bbbb.json").exists());
-        assert!(layout.spaces().join("aaaa.json").is_file() && layout.spaces().join("default.json").is_file());
-        assert!(layout.spaces().join("cccc.json.corrupt").is_file() && layout.logs().join("rivet-nav.log").is_file());
+        assert!(
+            layout.spaces().join("aaaa.json").is_file()
+                && layout.spaces().join("default.json").is_file()
+        );
+        assert!(
+            layout.spaces().join("cccc.json.corrupt").is_file()
+                && layout.logs().join("rivet-nav.log").is_file()
+        );
 
         let later = SystemTime::now() + CORRUPT_KEEP + Duration::from_secs(60);
         prune(&layout, later);
@@ -377,7 +494,12 @@ mod tests {
         std::fs::write(dir.join("rivet-nav.log.old"), "older").unwrap();
         cap_log(&log);
         assert!(!log.exists());
-        assert_eq!(std::fs::metadata(dir.join("rivet-nav.log.old")).unwrap().len(), LOG_LIMIT_BYTES);
+        assert_eq!(
+            std::fs::metadata(dir.join("rivet-nav.log.old"))
+                .unwrap()
+                .len(),
+            LOG_LIMIT_BYTES
+        );
         std::fs::write(&log, "small").unwrap();
         cap_log(&log);
         assert!(log.is_file());
@@ -390,7 +512,10 @@ mod tests {
         assert_eq!(layout.trace_file("rivet-test-switch.log"), None);
         std::fs::create_dir_all(layout.debug()).unwrap();
         std::fs::write(layout.debug().join("rivet-test-switch.log"), "").unwrap();
-        assert_eq!(layout.trace_file("rivet-test-switch.log"), Some(layout.logs().join("rivet-test-switch.log")));
+        assert_eq!(
+            layout.trace_file("rivet-test-switch.log"),
+            Some(layout.logs().join("rivet-test-switch.log"))
+        );
     }
 
     #[test]
