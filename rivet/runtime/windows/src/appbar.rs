@@ -88,6 +88,13 @@ const ACTIVE: Type = style("Manrope", 12.5, 600, 0.0);
 /// The study's `.where b` and `.security`.
 const ADDRESS_TITLE: Type = style("Manrope", 12.0, 600, 0.0);
 const CHIP_TEXT: Type = style("Manrope", 11.5, 600, 0.0);
+/// The address of a page in developer mode: a monospace font every Windows has, its size and the
+/// width of one of its characters at that size, in DIPs.
+const MONO_FAMILY: &str = "Consolas";
+const MONO_SIZE: f32 = 12.0;
+const MONO_ADVANCE: f32 = 6.6;
+/// The developer ground behind the address, a cool slate.
+const DEV_FIELD: u32 = 0x3d5a80;
 const FAVICON: Type = style("Manrope", 9.0, 700, 0.0);
 /// Interface icons come from the font Windows 11 draws its own caption buttons with.
 const ICONS: &str = "Segoe Fluent Icons";
@@ -852,7 +859,7 @@ impl Appbar {
     /// the address, as the study's `.toolbar`. While the address is edited, the text engine's pixels
     /// take the place of the text. `None` removes the bar.
     pub(crate) unsafe fn update_address(&mut self, window: isize, bar: Option<&crate::features::address_bar::View>, dpi: u32) -> Result<()> {
-        use crate::features::address_bar::{parts_of, Part, Security, CHIP, FIELD_GROUND};
+        use crate::features::address_bar::{Part, Security, CHIP, FIELD_GROUND};
         let Some(bar) = bar else {
             if self.address_painted.take().is_some() {
                 self.address.SetContent(None)?;
@@ -897,7 +904,7 @@ impl Appbar {
                 canvas.fill(rect(0.0, h / 2.0, w, h / 2.0), PAPER)?;
                 canvas.fill(rect(0.0, h - 1.0, w, 1.0), HAIRLINE)?;
             }
-            for (part, x, pw) in parts_of(w, bar.pane) {
+            for (part, x, pw) in crate::features::address_bar::parts_reserving(w, bar.pane, bar.reserve) {
                 let area = rect(x, (h - 28.0) / 2.0, pw, 28.0);
                 let hot = bar.hover == Some(part);
                 match part {
@@ -916,6 +923,9 @@ impl Appbar {
                     Part::Address => {
                         if bar.editing {
                             canvas.fill_rounded(area, 8.0, rgba(FIELD_GROUND, 1.0))?;
+                        } else if bar.dev {
+                            // The developer row's own ground, so a local page is told apart at a glance.
+                            canvas.fill_rounded(area, 8.0, rgba(DEV_FIELD, if hot { 0.28 } else { 0.18 }))?;
                         } else if hot || bar.hover == Some(Part::Chip) {
                             canvas.fill_rounded(area, 8.0, rgba(INK, 0.05))?;
                         }
@@ -937,7 +947,11 @@ impl Appbar {
                         }
                         let left = chip.right + 4.0;
                         let room = (area.right - 10.0 - left).max(0.0);
-                        if !bar.editing {
+                        if !bar.editing && bar.dev {
+                            // Developer mode: the whole address in a monospace system font.
+                            let shown = crate::dev_mode::fit_address(&bar.url, room, MONO_ADVANCE);
+                            canvas.mono_text(rect(left, area.top, room, 28.0), &shown, SOFT_INK)?;
+                        } else if !bar.editing {
                             let title_w = if bar.title.is_empty() { 0.0 } else { measure(&self.dwrite, &self.fonts, ADDRESS_TITLE, &bar.title)?.min(room) };
                             if title_w > 0.0 {
                                 let title = elide(&self.dwrite, &self.fonts, ADDRESS_TITLE, &bar.title, room)?;
@@ -1294,6 +1308,29 @@ impl Canvas<'_> {
         self.context
             .DrawEllipse(&ring, &self.brush(INK)?, 12.0 * unit, None);
         self.dot(x + 35.5 * unit, y + 35.5 * unit, 17.0 * unit, 0x7c2d4f)
+    }
+
+    /// Draws one line in the system's monospace font, vertically centred in a box.
+    unsafe fn mono_text(&self, area: D2D_RECT_F, value: &str, rgb: u32) -> Result<()> {
+        let locale = HSTRING::from("en-us");
+        let format = self.dwrite.CreateTextFormat(
+            &HSTRING::from(MONO_FAMILY),
+            // The system's own fonts: Rivet's collection holds only the fonts it brings.
+            None::<&IDWriteFontCollection1>,
+            DWRITE_FONT_WEIGHT(400),
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            MONO_SIZE,
+            PCWSTR(locale.as_ptr()),
+        )?;
+        format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+        let wide: Vec<u16> = value.encode_utf16().collect();
+        let layout = self.dwrite.CreateTextLayout(&wide, &format, area.right - area.left, area.bottom - area.top)?;
+        self.context.PushAxisAlignedClip(&area, D2D1_ANTIALIAS_MODE_ALIASED);
+        self.context.DrawTextLayout(Vector2 { X: area.left, Y: area.top }, &layout, &self.brush(rgb)?, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        self.context.PopAxisAlignedClip();
+        Ok(())
     }
 
     /// Draws one line of text vertically centred in a box, optionally aligned to its right edge.
@@ -1850,7 +1887,9 @@ impl Canvas<'_> {
                 }
             }
             Menu::Settings => {
+                let provider = crate::frame::saved_credentials();
                 for (index, (title, hit)) in crate::frame::SETTINGS_ITEMS.iter().enumerate() {
+                    let title = crate::frame::settings_title(title, *hit, provider);
                     let y = top + 4.0 + index as f32 * 34.0;
                     let item = rect(left + 4.0, y, inner - 8.0, 34.0);
                     let effect = hit.and_then(|hit| scene.effect(&[hit]));
@@ -1861,7 +1900,7 @@ impl Canvas<'_> {
                         self.text(
                             TAB,
                             rect(left + 13.0, y, inner - 26.0, 34.0),
-                            title,
+                            &title,
                             if hit.is_some() { SOFT_INK } else { MUTED },
                             false,
                         )

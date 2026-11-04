@@ -221,6 +221,12 @@ pub(crate) struct View {
     pub pane: bool,
     pub title: String,
     pub rest: String,
+    /// Set while the page is in developer mode: the row takes the developer ground and the address
+    /// is shown whole in a monospace font.
+    pub dev: bool,
+    pub url: String,
+    /// The room in DIPs the developer buttons take before the caption buttons.
+    pub reserve: f32,
     pub security: Security,
     pub hover: Option<Part>,
     pub can_back: bool,
@@ -325,10 +331,39 @@ unsafe fn in_pane(window: HWND) -> bool {
 
 /// The controls of the bar: the full row of a single page, or the address alone in a pane's row.
 pub(crate) fn parts_of(width: f32, pane: bool) -> Vec<(Part, f32, f32)> {
-    if pane {
+    parts_reserving(width, pane, 0.0)
+}
+
+/// The controls of the bar with `reserve` DIPs left free before the caption buttons, where the
+/// developer buttons of a page in developer mode sit.
+pub(crate) fn parts_reserving(width: f32, pane: bool, reserve: f32) -> Vec<(Part, f32, f32)> {
+    let mut out = if pane {
         vec![(Part::Chip, ADDRESS_PAD - 4.0, CHIP), (Part::Address, 0.0, width)]
     } else {
         parts(width, TOGGLE_OVER_BAR)
+    };
+    if !pane && reserve > 0.0 {
+        out.retain_mut(|(part, _, w)| {
+            if *part == Part::Address {
+                *w -= reserve;
+                *w >= 56.0
+            } else {
+                true
+            }
+        });
+        if !out.iter().any(|p| p.0 == Part::Address) {
+            out.retain(|p| p.0 != Part::Chip);
+        }
+    }
+    out
+}
+
+/// The room the developer buttons take at the end of the bar of `window`, in DIPs.
+unsafe fn dev_reserve(window: HWND) -> f32 {
+    if crate::features::dev_page::window_in_dev_mode(window) {
+        crate::dev_mode::bar_width(crate::features::dev_page::dev_actions().len())
+    } else {
+        0.0
     }
 }
 
@@ -463,7 +498,13 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
     let (title, rest) = shown(&title, &url);
     let toggle = TOGGLE_OVER_BAR;
     let pane = in_pane(window);
+    let dev = crate::features::dev_page::window_in_dev_mode(window);
+    let reserve = dev_reserve(window);
+    let security = Security::from_level(crate::features::omnibox::security_level(window), &url);
     Some(with_bar(window, |bar| View {
+        dev,
+        url: url.clone(),
+        reserve: if pane { 0.0 } else { reserve },
         pane,
         x: x * f,
         y: y * f,
@@ -472,7 +513,7 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
         toggle,
         title,
         rest,
-        security: Security::from_level(crate::features::omnibox::security_level(window), &url),
+        security,
         hover: bar.hover,
         can_back: true,
         can_forward: true,
@@ -485,10 +526,20 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
     }))
 }
 
-/// The field's rectangle in client pixels.
+/// The address and its security chip as left, top, width and height in client DIPs, which the
+/// browser's bubbles anchor to.
+pub(crate) unsafe fn anchors(window: HWND) -> Option<([f32; 4], [f32; 4])> {
+    let [x, y, width] = place(window)?;
+    let parts = parts_reserving(width, in_pane(window), dev_reserve(window));
+    let top = y + (ROW_HEIGHT as f32 - ADDRESS_HEIGHT) / 2.0;
+    let find = |part: Part| parts.iter().find(|p| p.0 == part).map(|(_, left, w)| [x + left, top, *w, ADDRESS_HEIGHT]);
+    let address = find(Part::Address)?;
+    Some((address, find(Part::Chip).unwrap_or(address)))
+}
+
 unsafe fn field_rect(window: HWND) -> Option<RECT> {
     let [x, y, width] = place(window)?;
-    let (_, left, w) = parts_of(width, in_pane(window)).into_iter().find(|p| p.0 == Part::Address)?;
+    let (_, left, w) = parts_reserving(width, in_pane(window), dev_reserve(window)).into_iter().find(|p| p.0 == Part::Address)?;
     let f = factor(window);
     let top = y + (ROW_HEIGHT as f32 - ADDRESS_HEIGHT) / 2.0;
     let text_left = x + left + ADDRESS_PAD + CHIP + 4.0;
@@ -521,7 +572,7 @@ unsafe fn part_at(window: HWND, point: POINT) -> Option<Part> {
     if py < 0.0 || py >= ROW_HEIGHT as f32 {
         return None;
     }
-    let parts = parts_of(width, in_pane(window));
+    let parts = parts_reserving(width, in_pane(window), dev_reserve(window));
     // The chip lies inside the address, so it is looked for first.
     parts
         .iter()
@@ -1045,6 +1096,19 @@ mod tests {
         let (_, x, w) = *parts(1000.0, true).iter().find(|p| p.0 == Part::Address).unwrap();
         // 4 DIP `.where` margin, 4 DIP `.caption` margin, then three 46 DIP buttons.
         assert_eq!(x + w, 1000.0 - 4.0 - 4.0 - 138.0);
+    }
+
+    #[test]
+    fn fr11_developer_buttons_sit_between_the_address_and_the_caption_buttons() {
+        let plain = super::parts_of(1000.0, false);
+        let dev = super::parts_reserving(1000.0, false, 216.0);
+        let address = |parts: &[(Part, f32, f32)]| parts.iter().find(|p| p.0 == Part::Address).map(|p| p.1 + p.2);
+        assert_eq!(address(&dev).unwrap() + 216.0, address(&plain).unwrap());
+        // Too narrow for both: the buttons keep their room and the address goes.
+        let narrow = super::parts_reserving(330.0, false, 216.0);
+        assert!(narrow.iter().all(|p| p.0 != Part::Address && p.0 != Part::Chip));
+        // A split pane's address carries no developer buttons.
+        assert_eq!(super::parts_reserving(300.0, true, 216.0), super::parts_of(300.0, true));
     }
 
     #[test]

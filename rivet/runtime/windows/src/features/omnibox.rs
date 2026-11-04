@@ -140,7 +140,9 @@ pub(crate) unsafe fn page_info(window: HWND) -> bool {
     // highlight: an empty `std::optional`.
     let mut callback: usize = 0;
     const ANCHOR_LOCATION_BAR: i32 = 0;
-    at::<ShowPageInfo>(base, f.show_page_info)(contents, &mut callback, ANCHOR_LOCATION_BAR, 0)
+    crate::features::bubble_anchor::with_page_info(|| {
+        at::<ShowPageInfo>(base, f.show_page_info)(contents, &mut callback, ANCHOR_LOCATION_BAR, 0)
+    })
 }
 
 /// One suggestion of the browser's autocomplete, as its own dropdown shows it.

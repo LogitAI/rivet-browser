@@ -2,6 +2,7 @@
 
 pub(crate) mod address_bar;
 pub(crate) mod app_window;
+pub(crate) mod bubble_anchor;
 pub(crate) mod second_view;
 pub(crate) mod dev_page;
 pub(crate) mod look;
