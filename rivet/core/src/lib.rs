@@ -6,8 +6,11 @@
 use std::fmt;
 use std::path::PathBuf;
 
+pub mod credentials;
 pub mod paths;
 pub mod session;
+
+pub use credentials::CredentialProvider;
 
 /// The tint of the first space a window starts with.
 pub const WORK_TINT: u32 = 0xd08a52;
@@ -163,6 +166,8 @@ pub struct LaunchRequest {
     pub url: String,
     pub user_data_dir: Option<PathBuf>,
     pub display: DisplayMode,
+    /// Who keeps the profile's passwords and passkeys.
+    pub credentials: CredentialProvider,
 }
 
 /// The exact process invocation Rivet gives to a Chromium browser.
@@ -230,6 +235,7 @@ pub fn build_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchEr
         reject_control_characters(&value)?;
         arguments.push(format!("--user-data-dir={value}"));
     }
+    arguments.extend(request.credentials.launch_arguments());
     match display {
         DisplayMode::Visible => {
             // An app window has no maker tab strip or toolbar.
@@ -273,10 +279,21 @@ mod tests {
             url: "https://example.test/".into(),
             user_data_dir: Some(PathBuf::from("C:/Profiles/rivet")),
             display,
+            credentials: CredentialProvider::Browser,
         }
     }
 
     #[cfg(windows)]
+    #[test]
+    fn nfr8_launch_carries_the_chosen_provider_switches() {
+        let mut input = request(DisplayMode::Visible);
+        input.credentials = CredentialProvider::System;
+        let plan = build_launch_plan(&input).unwrap();
+        assert!(plan.arguments.contains(&"--disable-features=WebAuthenticationEnclaveAuthenticator".into()));
+        let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
+        assert!(!plan.arguments.iter().any(|argument| argument.starts_with("--disable-features")));
+    }
+
     #[test]
     fn fr1_rivet_never_enters_the_persons_own_profile() {
         let allowed = |path: &str| profile_allows_rivet(Some(std::path::Path::new(path)));

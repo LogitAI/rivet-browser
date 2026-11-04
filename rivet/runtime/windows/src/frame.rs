@@ -74,6 +74,8 @@ pub(crate) enum AppbarHit {
     NewSpace,
     ProfileSettings,
     ManageProfiles,
+    /// The settings entry that switches who keeps passwords and passkeys.
+    Credentials,
     /// The entry of a tab's menu that shows the tab beside the one after it.
     SplitTab(usize),
     /// The entry of a tab's menu that pins the tab, or unpins a pinned one.
@@ -112,11 +114,31 @@ pub(crate) fn tab_item_hit(row: usize, index: usize) -> Option<AppbarHit> {
 }
 
 /// The entries of the settings menu. An entry without an action is shown dimmed.
-pub(crate) const SETTINGS_ITEMS: [(&str, Option<AppbarHit>); 3] = [
+pub(crate) const SETTINGS_ITEMS: [(&str, Option<AppbarHit>); 4] = [
     ("Profile settings", Some(AppbarHit::ProfileSettings)),
     ("Manage profiles", Some(AppbarHit::ManageProfiles)),
+    ("Passwords and passkeys", Some(AppbarHit::Credentials)),
     ("Rivet settings", None),
 ];
+
+/// The title of a settings entry as drawn. The provider entry names the current choice.
+pub(crate) fn settings_title(title: &'static str, hit: Option<AppbarHit>, provider: rivet_core::CredentialProvider) -> String {
+    if hit == Some(AppbarHit::Credentials) {
+        format!("Passwords: {}", provider.label())
+    } else {
+        title.to_owned()
+    }
+}
+
+/// The setup file this window's Rivet profile was started from.
+fn setup_file() -> Option<std::path::PathBuf> {
+    rivet_core::paths::Layout::current().map(|layout| layout.setup_file())
+}
+
+/// The saved provider, which the next start of a Rivet profile uses.
+pub(crate) fn saved_credentials() -> rivet_core::CredentialProvider {
+    setup_file().map_or_else(Default::default, |path| rivet_core::credentials::load_from_setup(&path))
+}
 
 const WORKSPACE_MENU_TOP: f32 = 138.0;
 const WORKSPACE_ROW: f32 = 48.0;
@@ -1507,6 +1529,16 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
                 close_menu(window);
                 open_menu(window, menu);
             }
+        }
+        AppbarHit::Credentials => {
+            // The browser reads the provider's switches and preferences when a Rivet profile
+            // starts, so the choice applies from the next start.
+            let next = saved_credentials().other();
+            if let Some(path) = setup_file() {
+                let saved = rivet_core::credentials::save_to_setup(&path, next);
+                crate::trace::trace(&format!("passwords and passkeys: {} saved {saved:?}", next.as_str()));
+            }
+            crate::frame::update_appbar(window);
         }
         AppbarHit::ProfileSettings | AppbarHit::ManageProfiles => {
             close_menu(window);
@@ -3579,7 +3611,7 @@ mod tests {
         );
     }
 
-    use super::{appbar_hit, menu_hit, tab_row_end, AppbarHit, Menu};
+    use super::{appbar_hit, menu_hit, settings_title, tab_row_end, AppbarHit, Menu, SETTINGS_ITEMS};
 
     #[test]
     fn fr3_workspace_menu_opens_from_header_and_chevron() {
@@ -3640,11 +3672,22 @@ mod tests {
         };
         assert_eq!(hit(0.0), (true, Some(AppbarHit::ProfileSettings)));
         assert_eq!(hit(1.0), (true, Some(AppbarHit::ManageProfiles)));
-        assert_eq!(hit(2.0), (true, None), "Rivet settings has no action yet");
+        assert_eq!(hit(2.0), (true, Some(AppbarHit::Credentials)));
+        assert_eq!(hit(3.0), (true, None), "Rivet settings has no action yet");
         assert_eq!(
             menu_hit(Menu::Settings, 20.0, top - 1.0, 268.0, 700.0, 3),
             (false, None)
         );
+    }
+
+    #[test]
+    fn nfr8_rivet_settings_name_the_chosen_password_and_passkey_provider() {
+        use rivet_core::CredentialProvider;
+        let (title, hit) = SETTINGS_ITEMS[2];
+        assert_eq!(hit, Some(AppbarHit::Credentials));
+        assert_eq!(settings_title(title, hit, CredentialProvider::System), "Passwords: Windows passkeys");
+        assert_eq!(settings_title(title, hit, CredentialProvider::Browser), "Passwords: Browser password manager");
+        assert_eq!(settings_title("Manage profiles", Some(AppbarHit::ManageProfiles), CredentialProvider::System), "Manage profiles");
     }
 
     fn test_rows() -> Vec<crate::tab_rows::Row> {

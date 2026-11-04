@@ -98,21 +98,63 @@ impl Modes {
 /// A button of the developer bar, in the order it is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    /// Rivet's own: the page's address goes to the clipboard.
+    CopyLink,
     /// Rivet's own: the page floats as the Mini Window. It runs no browser command.
     MiniWindow,
+    /// Rivet's own: a picture of the page goes to the clipboard.
+    Screenshot,
     Inspect,
     Console,
+    Network,
+    Performance,
 }
 
 impl Action {
+    /// Every button in the order the bar draws them, left to right before the caption buttons.
+    pub const ORDER: [Action; 7] = [
+        Action::CopyLink,
+        Action::MiniWindow,
+        Action::Screenshot,
+        Action::Inspect,
+        Action::Console,
+        Action::Network,
+        Action::Performance,
+    ];
+
+    /// Whether Rivet does the work itself rather than run a browser command.
+    pub fn rivet_own(self) -> bool {
+        matches!(self, Action::CopyLink | Action::MiniWindow | Action::Screenshot)
+    }
+
     /// The Segoe Fluent Icons glyph and the label of the button.
     pub fn look(self) -> (char, &'static str) {
         match self {
+            Action::CopyLink => ('\u{E71B}', "Copy link"),
             Action::MiniWindow => ('\u{E8A7}', "Open in Mini Window"),
+            Action::Screenshot => ('\u{E722}', "Screenshot"),
             Action::Inspect => ('\u{E7C9}', "Inspect element"),
             Action::Console => ('\u{E756}', "Console"),
+            Action::Network => ('\u{E968}', "Network"),
+            Action::Performance => ('\u{E9D9}', "Performance"),
         }
     }
+}
+
+/// The address as the developer row shows it: whole, and cut at the end with an ellipsis when
+/// more characters than fit in `room` DIPs at `advance` DIPs each.
+pub fn fit_address(url: &str, room: f32, advance: f32) -> String {
+    let fit = if advance > 0.0 { (room / advance).floor().max(0.0) as usize } else { usize::MAX };
+    let count = url.chars().count();
+    if count <= fit {
+        return url.to_owned();
+    }
+    if fit == 0 {
+        return String::new();
+    }
+    let mut shown: String = url.chars().take(fit - 1).collect();
+    shown.push('\u{2026}');
+    shown
 }
 
 /// The buttons a window offers, from the browser commands its build can run. A command the build
@@ -125,12 +167,18 @@ pub fn buttons(known: &[(Action, u32)]) -> Vec<(Action, u32)> {
         .collect()
 }
 
-/// The bar's buttons: Rivet's own Mini Window button first, then the browser commands the build
-/// knows. Rivet's button carries no command.
+/// The bar's buttons in `Action::ORDER`: Rivet's own buttons always, which carry no command, and
+/// the browser's buttons whose command the build knows.
 pub fn bar_buttons(known: &[(Action, u32)]) -> Vec<(Action, u32)> {
-    let mut all = vec![(Action::MiniWindow, 0)];
-    all.extend(buttons(known));
-    all
+    Action::ORDER
+        .iter()
+        .filter_map(|action| {
+            if action.rivet_own() {
+                return Some((*action, 0));
+            }
+            known.iter().find(|(each, command)| each == action && *command != 0).copied()
+        })
+        .collect()
 }
 
 /// The size of the bar's buttons and the gap before the caption buttons, in DIPs.
@@ -239,9 +287,29 @@ mod tests {
         let known = [(Action::Inspect, 0), (Action::Console, 40005)];
         assert_eq!(
             bar_buttons(&known),
-            vec![(Action::MiniWindow, 0), (Action::Console, 40005)]
+            vec![(Action::CopyLink, 0), (Action::MiniWindow, 0), (Action::Screenshot, 0), (Action::Console, 40005)]
         );
-        assert_eq!(bar_buttons(&[]), vec![(Action::MiniWindow, 0)]);
+        assert_eq!(bar_buttons(&[]), vec![(Action::CopyLink, 0), (Action::MiniWindow, 0), (Action::Screenshot, 0)]);
+    }
+
+    #[test]
+    fn fr11_bar_offers_every_button_in_the_spec_order_when_the_build_knows_them() {
+        let known = [(Action::Performance, 5), (Action::Network, 4), (Action::Console, 3), (Action::Inspect, 2)];
+        let order: Vec<Action> = bar_buttons(&known).into_iter().map(|(action, _)| action).collect();
+        assert_eq!(order, Action::ORDER.to_vec());
+        assert_eq!(bar_buttons(&known)[3], (Action::Inspect, 2));
+        let labels: Vec<&str> = Action::ORDER.iter().map(|action| action.look().1).collect();
+        assert_eq!(
+            labels,
+            ["Copy link", "Open in Mini Window", "Screenshot", "Inspect element", "Console", "Network", "Performance"]
+        );
+    }
+
+    #[test]
+    fn fr11_developer_row_shows_the_whole_address_cut_only_when_it_does_not_fit() {
+        assert_eq!(fit_address("http://localhost:3000/a", 1000.0, 6.6), "http://localhost:3000/a");
+        assert_eq!(fit_address("http://localhost:3000/a", 67.0, 6.6), "http://lo\u{2026}");
+        assert_eq!(fit_address("http://localhost", 0.0, 6.6), "");
     }
 
     #[test]
