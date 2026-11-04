@@ -51,7 +51,7 @@ pub unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
 
 /// The pages of the window's split, or none when the active tab is not in one.
 pub unsafe fn panes(window: HWND) -> Vec<Pane> {
-    // Where the second view is the split, its two pages are the panes, each with its own row.
+    // Where Rivet's extra views are the split, their pages are the panes, each with its own row.
     if crate::features::second_view::available() {
         return crate::features::second_view::panes(window);
     }
@@ -105,15 +105,14 @@ pub unsafe fn unsplit_active(window: HWND) -> bool {
     backend().unsplit_active(window)
 }
 
-/// Shows tab `other` in Rivet's second page view beside the active page. `leading` puts it first.
-unsafe fn split_in_view(window: HWND, other: usize, leading: bool) -> bool {
-    use crate::features::second_view::{is_docked, is_split, open_tab, Mode};
-    // A view that only keeps the Sidebar's rail free takes the page; a page already shown does not
-    // make way for another.
-    if is_split(window) || is_docked(window) {
+/// Shows tab `other` in one of Rivet's extra page views on `side` of the page in slot `target`.
+unsafe fn split_in_view(window: HWND, other: usize, target: usize, side: Side) -> bool {
+    use crate::features::second_view::{add_tab, is_docked};
+    // A docked page does not make way for a split.
+    if is_docked(window) {
         return false;
     }
-    open_tab(window, other, Mode::Split { leading })
+    add_tab(window, other, target, side)
 }
 
 /// The tab a split of the active tab joins when no tab is named: the one after it, or the one before
@@ -141,7 +140,11 @@ pub unsafe fn split_active(window: HWND) -> bool {
         return false;
     };
     if crate::features::second_view::available() {
-        return split_in_view(window, other, other < active);
+        if active_is_split(window) {
+            return false;
+        }
+        let side = if other < active { Side::Left } else { Side::Right };
+        return split_in_view(window, other, 0, side);
     }
     backend().split_pair(window, active.min(other), active.max(other), false)
 }
@@ -165,12 +168,11 @@ pub fn drop_pair(active: usize, dragged: usize, side: Side) -> (usize, usize, bo
     (first, second, matches!(side, Side::Top | Side::Bottom))
 }
 
-/// Splits the active tab with `dragged`, which takes `side` of it. Returns false when the tab is
-/// the active one, does not exist, or either tab is already in a split.
-pub unsafe fn split_beside(window: HWND, dragged: usize, side: Side) -> bool {
-    let Some(tabs) = crate::features::tabs::tabs(window) else {
-        return false;
-    };
+/// Puts `dragged` on `side` of the page in slot `target` of the window's split, or of the focused
+/// page when no slot is named. Up to four pages share the window. Returns false when the tab is the
+/// active one, does not exist, is already shown, or the split is full.
+pub unsafe fn split_beside_page(window: HWND, dragged: usize, side: Side, target: Option<usize>) -> bool {
+    let Some(tabs) = crate::features::tabs::tabs(window) else { return false };
     let Some(active) = tabs.iter().find(|tab| tab.active).map(|tab| tab.index) else {
         return false;
     };
@@ -178,12 +180,54 @@ pub unsafe fn split_beside(window: HWND, dragged: usize, side: Side) -> bool {
         return false;
     }
     if crate::features::second_view::available() {
-        // The second view sits beside the page only. A drop on the top or bottom takes the left or
-        // right side.
-        return split_in_view(window, dragged, matches!(side, Side::Left | Side::Top));
+        let target = target.unwrap_or_else(|| crate::features::second_view::focused_slot(window));
+        return split_in_view(window, dragged, target, side);
     }
     let (first, second, stacked) = drop_pair(active, dragged, side);
     backend().split_pair(window, first, second, stacked)
+}
+
+/// Whether the window takes no more pages in its split, so a drop only opens the tab.
+pub unsafe fn split_full(window: HWND) -> bool {
+    if crate::features::second_view::available() {
+        return !crate::features::second_view::has_room(window);
+    }
+    // The browser's own split keeps two pages.
+    active_is_split(window)
+}
+
+/// The page a drop at (`x`, `y`) in window DIPs lands on, as x, y, width and height, with the slot
+/// of the split that shows it. Without a split, that is the whole page area.
+pub unsafe fn drop_page(window: HWND, x: i32, y: i32) -> Option<([i32; 4], Option<usize>)> {
+    for pane in panes(window) {
+        if x >= pane.x && x < pane.x + pane.width && y >= pane.y && y < pane.y + pane.height {
+            let slot = if crate::features::second_view::is_split(window) { crate::features::second_view::slot_of_pane(window, &pane) } else { None };
+            return Some(([pane.x, pane.y, pane.width, pane.height], slot));
+        }
+    }
+    let [left, top, right, bottom] = page_area(window)?;
+    Some(([left, top, right - left, bottom - top], None))
+}
+
+/// The tabs whose pages the window's split shows, in reading order.
+pub unsafe fn shown_tabs(window: HWND) -> Vec<usize> {
+    panes(window).iter().filter_map(|pane| pane.tab).collect()
+}
+
+/// Takes the page of `slot` out of the window's split and floats it in a Mini Window. The other
+/// pages stay, and the split ends when one page is left.
+pub unsafe fn pop_out(window: HWND, slot: usize) -> bool {
+    let tab = panes(window)
+        .iter()
+        .find(|pane| crate::features::second_view::slot_of_pane(window, pane) == Some(slot))
+        .and_then(|pane| pane.tab);
+    let Some(tab) = tab else {
+        return false;
+    };
+    if !crate::features::second_view::close_pane(window, slot) {
+        return false;
+    }
+    crate::features::mini_window::open(window, tab)
 }
 
 /// The part of a page near each edge where a drop splits it, as a share of its size.
@@ -191,7 +235,7 @@ const EDGE_SHARE: f32 = 0.28;
 
 /// Where a tab dropped at (`x`, `y`) on a page of `page` (x, y, width, height) lands, and the
 /// rectangle that shows it. A drop near an edge splits the page there and shows that half. A drop
-/// elsewhere, or on a window that is already split, opens the tab in the page.
+/// elsewhere, or on a window whose split is full, opens the tab in the page.
 pub fn drop_zone(page: [f32; 4], x: f32, y: f32, full: bool, gap: f32) -> (Option<Side>, [f32; 4]) {
     let [left, top, width, height] = page;
     let distances = [

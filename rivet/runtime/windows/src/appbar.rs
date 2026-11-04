@@ -79,6 +79,8 @@ const fn style(family: &'static str, size: f32, weight: i32, tracking: f32) -> T
 
 const SPACE_NAME: Type = style("Newsreader", 14.0, 600, -0.01);
 const BADGE: Type = style("DM Mono", 10.0, 500, 0.0);
+/// The title of the split group in the tab list, as the study's `.group .title`.
+const GROUP_TITLE: Type = style("DM Mono", 10.0, 500, 0.08);
 const META: Type = style("DM Mono", 10.0, 400, 0.0);
 const META_ROW: Type = style("Manrope", 12.0, 400, 0.0);
 const HELD_TEXT: Type = style("Manrope", 12.0, 500, 0.0);
@@ -1816,6 +1818,17 @@ impl Canvas<'_> {
                         )
                     })?;
                 }
+                TabRow::SplitTitle { count } => {
+                    // The group's glass reaches over its title and the tabs that follow, as the
+                    // study's `.group`.
+                    let tall = crate::tab_rows::SPLIT_TITLE_HEIGHT + 34.0 * *count as f32;
+                    let glass = rect(left - 4.0, top - 2.0, inner + 8.0, tall + 6.0);
+                    self.fill_rounded(glass, 12.0, rgba(WHITE, 0.35))?;
+                    self.ring(glass, 12.0, rgba(INK, 0.06))?;
+                    let height = crate::tab_rows::SPLIT_TITLE_HEIGHT;
+                    self.icon('\u{ECA5}', rect(left + 8.0, top, 12.0, height), 12.0, MUTED)?;
+                    self.text(GROUP_TITLE, rect(left + 26.0, top, inner - 34.0, height), "SPLIT VIEW", MUTED, false)?;
+                }
                 TabRow::NewTab => {
                     let row = row(Lead::Glyph('\u{E710}'), "New tab", "Ctrl T");
                     self.tab_row(
@@ -1852,7 +1865,7 @@ impl Canvas<'_> {
                     )?;
                 }
             }
-            top += 34.0;
+            top += crate::tab_rows::height(item);
         }
 
         // The foot: the settings, the spaces and a new space.
@@ -2171,7 +2184,10 @@ impl Canvas<'_> {
             // Rivet draws the caption buttons on the row of the page at the window's top right.
             self.fill(rect(vw, oy, full - vw, h), PAPER)?;
             self.fill(rect(vw, oy + h - 1.0, full - vw, 1.0), HAIRLINE)?;
-            self.caption_buttons(full, oy, h, row.caption_hover, row.zoomed, false)?;
+            // The window buttons fade with the rest of a row whose page is not focused.
+            self.with_opacity(crate::features::split::row_ink_opacity(row.active), || {
+                self.caption_buttons(full, oy, h, row.caption_hover, row.zoomed, false)
+            })?;
         }
         self.with_opacity(crate::features::split::row_ink_opacity(row.active), || {
             self.pane_row_buttons(row, &buttons, ox, oy, h)
@@ -2240,13 +2256,10 @@ impl Canvas<'_> {
                     } else {
                         format!("{} \u{b7} {}", row.title, row.url)
                     };
-                    self.text(
-                        META_ROW,
-                        rect(area.left + 10.0, area.top, (width - 20.0).max(0.0), 28.0),
-                        &shown,
-                        MUTED,
-                        false,
-                    )?;
+                    // A long address ends in an ellipsis inside its field.
+                    let room = (width - 20.0).max(0.0);
+                    let shown = elide(self.dwrite, self.fonts, META_ROW, &shown, room)?;
+                    self.text(META_ROW, rect(area.left + 10.0, area.top, room, 28.0), &shown, MUTED, false)?;
                 }
                 _ => {
                     if hot {

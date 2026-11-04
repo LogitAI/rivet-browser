@@ -378,6 +378,12 @@ pub unsafe fn pop_out_pane(window: HWND, index: usize) -> bool {
     let Some(tab) = panes.get(index).and_then(|pane| pane.tab) else {
         return false;
     };
+    // A split on Rivet's own page views keeps its other pages.
+    if let Some(slot) = crate::features::second_view::slot_of_pane(window, &panes[index]) {
+        let done = crate::features::split::pop_out(window, slot);
+        crate::trace::trace(&format!("mini window: pop out page {index} of the split: {done}"));
+        return done;
+    }
     if let Some(other) = panes
         .iter()
         .enumerate()
@@ -451,7 +457,7 @@ pub unsafe fn return_to(window: HWND, edge: Edge) -> bool {
         return close(window);
     };
     close(window);
-    let done = crate::features::split::split_beside(window, tab, side_of(edge));
+    let done = crate::features::split::split_beside_page(window, tab, side_of(edge), None);
     crate::trace::trace(&format!(
         "mini window: returned tab {tab} to the {edge:?} edge: {done}"
     ));

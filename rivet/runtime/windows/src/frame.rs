@@ -285,32 +285,28 @@ const DROP_GAP: f32 = 8.0;
 /// Where a dragged tab would land.
 struct Drop {
     side: Option<crate::features::split::Side>,
+    /// The slot of the split page the drop lands on, or none for the window's page.
+    slot: Option<usize>,
     view: crate::appbar::DropView,
 }
 
 /// The drop under a point in client pixels, or none when the point is off the page.
 unsafe fn drop_at(window: HWND, point: POINT) -> Option<Drop> {
     use crate::features::split::Side;
-    let [area_left, area_top, area_right, area_bottom] = crate::features::split::page_area(window)?;
     let factor = layout_dpi(window) as f32 / 96.0;
-    let (left, top) = (area_left as f32 * factor, area_top as f32 * factor);
-    let (width, height) = (
-        (area_right - area_left) as f32 * factor,
-        (area_bottom - area_top) as f32 * factor,
-    );
     let (x, y) = (point.x as f32, point.y as f32);
+    // A drop splits the page under the pointer, which is one page of a split or the whole area.
+    let ([page_x, page_y, page_w, page_h], slot) =
+        crate::features::split::drop_page(window, (x / factor).floor() as i32, (y / factor).floor() as i32)?;
+    let (left, top) = (page_x as f32 * factor, page_y as f32 * factor);
+    let (width, height) = (page_w as f32 * factor, page_h as f32 * factor);
     if x < left || x > left + width || y < top || y > top + height {
         return None;
     }
-    // Chrome keeps two pages in a split, so a window that has one only offers to open here.
-    let full = crate::features::split::active_is_split(window);
-    let (side, [zone_x, zone_y, w, h]) = crate::features::split::drop_zone(
-        [left, top, width, height],
-        x,
-        y,
-        full,
-        DROP_GAP * factor,
-    );
+    // A split that holds all the pages it can only offers to open here.
+    let full = crate::features::split::split_full(window);
+    let (side, [zone_x, zone_y, w, h]) =
+        crate::features::split::drop_zone([left, top, width, height], x, y, full, DROP_GAP * factor);
     let label = match side {
         Some(Side::Left) => "Split left",
         Some(Side::Right) => "Split right",
@@ -320,6 +316,7 @@ unsafe fn drop_at(window: HWND, point: POINT) -> Option<Drop> {
     };
     Some(Drop {
         side,
+        slot,
         view: crate::appbar::DropView {
             x: zone_x,
             y: zone_y,
@@ -450,7 +447,7 @@ unsafe fn tab_drag_end(window: HWND, release: Option<LPARAM>) {
         };
         if let Some(drop) = drop_at(window, point) {
             let done = match drop.side {
-                Some(side) => crate::features::split::split_beside(window, drag.index, side),
+                Some(side) => crate::features::split::split_beside_page(window, drag.index, side, drop.slot),
                 None => crate::features::tabs::activate_tab(window, drag.index),
             };
             crate::trace::trace(&format!(
@@ -651,17 +648,15 @@ unsafe fn second_view_row_action(
     use crate::features::second_view;
     use crate::features::split::RowButton;
     let Some(pane) = panes.get(hit.0) else { return };
+    let slot = second_view::slot_of_pane(window, pane).unwrap_or(0);
     let focus = |pane: &crate::features::split::Pane| {
-        let second = second_view::is_second_pane(window, pane);
-        second_view::set_second_focused(second);
+        second_view::set_focused(slot);
         if let Some(tab) = pane.tab {
             crate::features::tabs::activate_tab(window, tab);
-            // Activating the second view's tab moves its page; both pages go back where they were.
+            // Activating an extra view's tab moves its page; every page goes back where it was.
             second_view::hold(window);
         }
-        if second {
-            second_view::focus(window);
-        }
+        second_view::focus_pane(window, slot);
     };
     let done = match hit.1 {
         RowButton::Grip => true,
@@ -676,19 +671,9 @@ unsafe fn second_view_row_action(
             }
             pane.tab.is_some()
         }
-        RowButton::Popout => crate::features::mini_window::pop_out_pane(window, hit.0),
-        RowButton::Unsplit => {
-            // The other page stays: its tab becomes active, so the window shows it alone.
-            if let Some(tab) = panes
-                .iter()
-                .enumerate()
-                .find(|(index, _)| *index != hit.0)
-                .and_then(|(_, other)| other.tab)
-            {
-                crate::features::tabs::activate_tab(window, tab);
-            }
-            second_view::close(window)
-        }
+        // The other pages stay. The split ends when one page is left.
+        RowButton::Popout => crate::features::split::pop_out(window, slot),
+        RowButton::Unsplit => second_view::close_pane(window, slot),
     };
     crate::trace::trace(&format!("split row: {:?} of page {}: {done}", hit.1, hit.0));
 }
@@ -1294,13 +1279,13 @@ fn tab_row_end(rows: &[Row], y: f32) -> Option<(usize, i32)> {
         if matches!(row, Row::NewTab) && top > 138.0 {
             top += 17.0;
         }
-        if (top..top + 34.0).contains(&y) {
+        if (top..top + tab_rows::height(row)).contains(&y) {
             return match row {
-                Row::Tab { index, .. } => Some((*index, (top + 34.0) as i32)),
+                Row::Tab { index, .. } => Some((*index, (top + tab_rows::height(row)) as i32)),
                 _ => None,
             };
         }
-        top += 34.0;
+        top += tab_rows::height(row);
     }
     None
 }
@@ -1338,15 +1323,17 @@ fn appbar_hit(
         if matches!(row, Row::NewTab) && top > 138.0 {
             top += 17.0;
         }
-        if (top..top + 34.0).contains(&y) {
+        if (top..top + tab_rows::height(row)).contains(&y) {
             return Some(match row {
                 Row::Group(group) => AppbarHit::Folder(group.id),
+                // The title of the split group answers nothing.
+                Row::SplitTitle { .. } => return None,
                 Row::NewTab => AppbarHit::NewTab,
                 Row::Tab { index, .. } if x >= left + inner - 34.0 => AppbarHit::CloseTab(*index),
                 Row::Tab { index, .. } => AppbarHit::Tab(*index),
             });
         }
-        top += 34.0;
+        top += tab_rows::height(row);
     }
     let foot = height - FOOT_HEIGHT;
     if (foot..foot + 28.0).contains(&y) {
@@ -1372,7 +1359,8 @@ fn appbar_hit(
 
 fn appbar_model(window: HWND) -> Vec<Row> {
     let tabs = unsafe { crate::features::tabs::tabs(window) }.unwrap_or_default();
-    tab_rows::build_rows(&tabs)
+    let split = unsafe { crate::features::split::shown_tabs(window) };
+    tab_rows::group_split(tab_rows::build_rows(&tabs), &split)
 }
 
 unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
@@ -2448,12 +2436,16 @@ unsafe fn ground_holes(window: HWND) -> Vec<crate::ground::Hole> {
             })
             .collect();
         let active = panes.iter().position(|pane| pane.active).unwrap_or(0);
-        let mut holes =
-            crate::ground::split_holes(&pages, active, crate::features::split::ROW_HEIGHT);
-        // The Sidebar's rail and the caption buttons sit at the window's right edge, in the panel
-        // of the last page as in a window that is not split.
-        if let (Some(last), Some(panel)) = (holes.last_mut(), frame_layout::panel_bounds(window)) {
-            last.rect.width = last.rect.width.max(panel.x + panel.width - last.rect.x);
+        let mut holes = crate::ground::split_holes(&pages, active, crate::features::split::ROW_HEIGHT);
+        // The Sidebar's rail and the caption buttons sit at the window's right edge, in the panels
+        // of the right-most pages as in a window that is not split.
+        let right = panes.iter().map(|pane| pane.x + pane.width).max().unwrap_or(0);
+        if let Some(panel) = frame_layout::panel_bounds(window) {
+            for (hole, pane) in holes.iter_mut().zip(&panes) {
+                if pane.x + pane.width == right {
+                    hole.rect.width = hole.rect.width.max(panel.x + panel.width - hole.rect.x);
+                }
+            }
         }
         return holes;
     }
@@ -3394,18 +3386,22 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 if let Ok(text) = std::fs::read_to_string(&flag) {
                     let _ = std::fs::remove_file(&flag);
                     use crate::features::split::Side;
-                    let side = match text.trim() {
+                    // The flag reads a side, then optionally the slot of the page to split.
+                    let mut words = text.split_whitespace();
+                    let side = match words.next().unwrap_or("") {
                         "left" => Side::Left,
                         "top" => Side::Top,
                         "bottom" => Side::Bottom,
                         _ => Side::Right,
                     };
+                    let slot = words.next().and_then(|word| word.parse::<usize>().ok());
+                    // The first tab that is neither active nor shown in the split yet.
+                    let shown = crate::features::split::shown_tabs(window);
                     let tabs = crate::features::tabs::tabs(window).unwrap_or_default();
-                    let other = tabs.iter().find(|tab| !tab.active).map(|tab| tab.index);
-                    let done = other.is_some_and(|index| {
-                        crate::features::split::split_beside(window, index, side)
-                    });
-                    crate::trace::trace(&format!("drop flag: {side:?} {other:?} {done}"));
+                    let other = tabs.iter().find(|tab| !tab.active && !shown.contains(&tab.index)).map(|tab| tab.index);
+                    let done = other.is_some_and(|index| crate::features::split::split_beside_page(window, index, side, slot));
+                    let pages = crate::features::split::panes(window).len();
+                    crate::trace::trace(&format!("drop flag: {side:?} of {slot:?} {other:?} {done} pages {pages}"));
                 }
             }
             persist_tick(window);
