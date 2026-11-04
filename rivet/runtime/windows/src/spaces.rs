@@ -143,6 +143,7 @@ pub struct HandOver {
 /// Whether showing `target` needs another browser than `current`, the browser of this window.
 /// A window whose browser is not one a space can be based on (`None`) never hands over. Spaces of
 /// the same browser switch inside the window.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn hand_over(
     target: &SpaceInfo,
     current: Option<BrowserKind>,
@@ -156,6 +157,7 @@ pub fn hand_over(
 }
 
 /// The profile folder Rivet keeps for a browser's profile: `<root>\Rivet\profiles\<browser>\<name>`.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn profile_dir(
     root: &std::path::Path,
     browser: BrowserKind,
@@ -1330,6 +1332,7 @@ mod tests {
         assert_eq!(kind("C:\\Vivaldi\\vivaldi.exe"), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr3_a_space_of_another_browser_hands_over_with_its_own_profile_folder() {
         let spaces = Spaces::new();
@@ -1371,6 +1374,7 @@ mod tests {
         assert_eq!(hand_over(&spaces.list()[1], None, root), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr3_profile_names_cannot_leave_the_profile_folder() {
         let root = std::path::Path::new("D:\\Data");
