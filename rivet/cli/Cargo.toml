@@ -21,6 +21,7 @@ path = "src/launcher.rs"
 [dependencies]
 rivet-core.workspace = true
 rivet-platform-windows = { path = "../platform/windows" }
+rivet-protocol = { path = "../protocol" }
 serde_json.workspace = true
 windows-sys.workspace = true
 

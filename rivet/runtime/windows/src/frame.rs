@@ -586,7 +586,8 @@ unsafe fn second_view_row_action(window: HWND, panes: &[crate::features::split::
             }
             pane.tab.is_some()
         }
-        RowButton::Popout | RowButton::Unsplit => {
+        RowButton::Popout => crate::features::mini_window::pop_out_pane(window, hit.0),
+        RowButton::Unsplit => {
             // The other page stays: its tab becomes active, so the window shows it alone.
             if let Some(tab) = panes.iter().enumerate().find(|(index, _)| *index != hit.0).and_then(|(_, other)| other.tab) {
                 crate::features::tabs::activate_tab(window, tab);
@@ -626,7 +627,11 @@ unsafe fn row_action(window: HWND, hit: RowHit) {
             }
             navigate(window, hit.1);
         }
-        RowButton::Popout | RowButton::Unsplit => {
+        RowButton::Popout => {
+            let done = crate::features::mini_window::pop_out_pane(window, hit.0);
+            crate::trace::trace(&format!("split row: {:?} of page {}: {done}", hit.1, hit.0));
+        }
+        RowButton::Unsplit => {
             crate::features::tabs::activate_tab(window, tab);
             let done = crate::features::split::unsplit_active(window);
             crate::trace::trace(&format!("split row: {:?} of page {}: {done}", hit.1, hit.0));
@@ -2238,6 +2243,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             }
             sync_ground(window, appbar, visible, dpi);
             crate::side_rail::update(window, appbar, visible, dpi);
+            crate::features::mini_window::update(window, appbar, visible, dpi);
         }
     });
 }
@@ -2479,6 +2485,17 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         update_appbar(window);
         return 0;
     }
+    if message == RegisterWindowMessageW(wide(rivet_protocol::window::MINI_WINDOW_MESSAGE).as_ptr()) && attached(window) {
+        crate::features::mini_window::command(window, wparam, lparam);
+        update_appbar(window);
+        return 0;
+    }
+    // The Mini Window floats over the pages, so its frame and row take the mouse first.
+    if attached(window) {
+        if let Some(result) = crate::features::mini_window::on_mouse(window, message, lparam) {
+            return result;
+        }
+    }
     if attached(window) {
         // The second page view's divider and its keyboard focus take the mouse before the rest.
         let browser = || call_browser(window, message, wparam, lparam);
@@ -2570,6 +2587,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             );
             if let Some(hit) = hit {
                 ROW_PRESS.with(|all| all.borrow_mut().insert(window as isize, hit));
+                // A grip drag may end anywhere, so its release comes back to this window.
+                if hit.1 == crate::features::split::RowButton::Grip {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::SetCapture(window);
+                }
             }
             0
         }
@@ -2585,7 +2606,16 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     y: ((lparam >> 16) & 0xffff) as i16 as i32,
                 },
             );
-            if let Some(hit) = pressed.filter(|pressed| Some(*pressed) == now) {
+            let (x, y) = ((lparam & 0xffff) as i16 as i32, ((lparam >> 16) & 0xffff) as i16 as i32);
+            // A grip released outside the pages makes its page a Mini Window.
+            let grip = pressed.filter(|pressed| pressed.1 == crate::features::split::RowButton::Grip);
+            if grip.is_some() {
+                windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+            }
+            if let Some(hit) = grip.filter(|hit| crate::features::mini_window::grip_released(window, hit.0, x, y)) {
+                crate::trace::trace(&format!("split row: grip of page {} dropped outside the pages", hit.0));
+                update_appbar(window);
+            } else if let Some(hit) = pressed.filter(|pressed| Some(*pressed) == now) {
                 row_action(window, hit);
             }
             0
@@ -2935,6 +2965,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             frame_layout::forget_view(window);
             crate::features::widgets::forget(window);
             crate::side_rail::forget(window);
+            crate::features::mini_window::forget(window);
             LAYOUT_DPI.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             let key = wide(ORIGINAL_PROC);
             let original = GetPropW(window, key.as_ptr());

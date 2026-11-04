@@ -129,6 +129,12 @@ pub(crate) unsafe fn release(window: HWND, point: POINT) {
         return;
     }
     let Some((_, _, actions)) = place(window) else { return };
+    if let Some((Action::MiniWindow, _)) = actions.get(down) {
+        // Rivet's own button: the page floats, and the window shows the tab beside it.
+        crate::features::mini_window::pop_out_active(window);
+        crate::frame::update_appbar(window);
+        return;
+    }
     if let Some((_, command)) = actions.get(down) {
         // The browser's own command, as its keyboard shortcut sends it.
         PostMessageW(window, WM_COMMAND, *command as usize, 0);

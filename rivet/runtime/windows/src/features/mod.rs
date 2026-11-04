@@ -5,6 +5,7 @@ pub(crate) mod app_window;
 pub(crate) mod second_view;
 pub(crate) mod dev_page;
 pub(crate) mod look;
+pub(crate) mod mini_window;
 pub(crate) mod frame_layout;
 pub(crate) mod navigation;
 pub(crate) mod page_bar;

@@ -465,6 +465,43 @@ pub fn wait_for_new_browser_window(
     Err(WindowDiscoveryError::UnsupportedPlatform)
 }
 
+/// Posts the registered window message `name` with `wparam` and `lparam` to exactly one previously
+/// discovered browser window. The handle and process are checked again first, as for a close.
+#[cfg(windows)]
+pub fn post_window_command(
+    browser: &Path,
+    window: BrowserWindow,
+    name: &str,
+    wparam: usize,
+    lparam: isize,
+) -> Result<(), WindowCloseError> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, RegisterWindowMessageW};
+
+    let windows = browser_windows(browser)
+        .map_err(|_| WindowCloseError::WindowIsNotOwnedByTheSelectedBrowser)?;
+    if !windows.contains(&window) {
+        return Err(WindowCloseError::WindowIsNotOwnedByTheSelectedBrowser);
+    }
+    let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    let message = unsafe { RegisterWindowMessageW(name.as_ptr()) };
+    if message == 0 || unsafe { PostMessageW(window.handle as _, message, wparam, lparam) } == 0 {
+        return Err(WindowCloseError::CloseMessageFailed);
+    }
+    Ok(())
+}
+
+/// Reports that window commands are unavailable on non-Windows targets.
+#[cfg(not(windows))]
+pub fn post_window_command(
+    _browser: &Path,
+    _window: BrowserWindow,
+    _name: &str,
+    _wparam: usize,
+    _lparam: isize,
+) -> Result<(), WindowCloseError> {
+    Err(WindowCloseError::UnsupportedPlatform)
+}
+
 /// Reports that browser-window closing is unavailable on non-Windows targets.
 #[cfg(not(windows))]
 pub fn close_browser_window(

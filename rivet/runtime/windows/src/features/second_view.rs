@@ -1074,6 +1074,100 @@ pub(crate) unsafe fn on_mouse(window: HWND, message: u32, lparam: isize, browser
     }
 }
 
+
+/// Bare `ContentsWebView`s for other features of the window, such as the Mini Window. Each is a
+/// view of the browser view like the second view, with no layout of its own: its owner places it.
+pub(crate) mod bare {
+    use super::*;
+
+    /// A new page view in `window` showing `page`, a tab of that window that no page view shows.
+    /// Returns the view and its parent. It is added last, so it is drawn over the window's pages.
+    pub(crate) unsafe fn new_view(window: HWND, page: usize) -> Option<(usize, usize)> {
+        let base = base()?;
+        let (new, ctor, add) = (recorded("new")?, recorded("ctor")?, recorded("add_child")?);
+        if page == 0 {
+            return None;
+        }
+        let context = if let Some(rva) = recorded("ctx") {
+            crate::features::tabs::function::<unsafe extern "system" fn(usize) -> usize>(base, rva)(page)
+        } else if let Some(offset) = recorded("ctxoff") {
+            word(page + offset).unwrap_or(0)
+        } else {
+            0
+        };
+        let parent = browser_view(window)?;
+        if context == 0 {
+            return None;
+        }
+        let view = crate::features::tabs::function::<unsafe extern "system" fn(usize) -> usize>(base, new)(recorded("size").unwrap_or(0x528));
+        crate::features::tabs::function::<unsafe extern "system" fn(usize, usize) -> usize>(base, ctor)(view, context);
+        let children = children_of(parent).len();
+        crate::features::tabs::function::<unsafe extern "system" fn(usize, usize, usize) -> usize>(base, add)(parent, view, children);
+        set_page(view, page);
+        if let Some(behaviour) = recorded("focus_behavior") {
+            crate::features::tabs::function::<unsafe extern "system" fn(usize, i32)>(base, behaviour)(view, 1);
+        }
+        Some((view, parent))
+    }
+
+    /// Places a view at `rect` (x, y, width, height) in window DIPs.
+    pub(crate) unsafe fn place(view: usize, parent: usize, rect: [i32; 4]) {
+        let [ox, oy] = window_origin(parent);
+        set_bounds(view, [rect[0] - ox, rect[1] - oy, rect[2].max(1), rect[3].max(1)]);
+    }
+
+    /// Lets go of the view's page, takes the view out of its parent and deletes it. The page stays
+    /// with its tab.
+    pub(crate) unsafe fn drop_view(view: usize, parent: usize) {
+        let Some(base) = base() else { return };
+        set_page(view, 0);
+        if let Some(remove) = recorded("remove_child") {
+            crate::features::tabs::function::<unsafe extern "system" fn(usize, usize)>(base, remove)(parent, view);
+        }
+        match virtual_of(view, "dtor", "dtor_slot") {
+            Some(destroy) => {
+                std::mem::transmute::<usize, unsafe extern "system" fn(usize, u32) -> usize>(destroy)(view, 1);
+            }
+            None => crate::trace::trace("bare view: no destructor for this build; the view is kept"),
+        }
+    }
+
+    /// Gives the view the keyboard.
+    pub(crate) unsafe fn focus(view: usize) -> bool {
+        let Some(function) = virtual_of(view, "request_focus", "focus_slot") else { return false };
+        std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(function)(view);
+        true
+    }
+
+    /// The browser moved `page` into the window's page view because its tab became active. The page
+    /// view takes `behind` back and `view` shows `page` again. Returns whether the pages moved.
+    pub(crate) unsafe fn take_back(window: HWND, view: usize, page: usize, behind: usize) -> bool {
+        let Some(parent) = browser_view(window) else { return false };
+        let size = recorded("size").unwrap_or(0x528);
+        let Some(main) = views_with_vtable(parent, *(view as *const usize))
+            .into_iter()
+            .find(|candidate| *candidate != view && holds(*candidate, page, size))
+        else {
+            return false;
+        };
+        set_page(view, 0);
+        set_page(main, behind);
+        set_page(view, page);
+        true
+    }
+
+    /// The window's active page, or zero.
+    pub(crate) unsafe fn active(window: HWND) -> usize {
+        active_page(window)
+    }
+
+    /// The page of the window's tab `index`, or zero.
+    pub(crate) unsafe fn page_of_tab(window: HWND, index: usize) -> usize {
+        let Some(base) = base() else { return 0 };
+        crate::features::tabs::tab_model(base, window)
+            .map_or(0, |model| crate::features::tabs::contents_at(base, model, index as i32) as usize)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::{after_close, below_bar, divide, keep, layout, may_stop_following, needs_layout, page_after_close, upgrades, Keep, Mode, DIVIDER, MIN_PANE, SIDEBAR_WIDTH};
