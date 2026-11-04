@@ -101,7 +101,10 @@ fn names(pdb: &Path, needles: &[&str]) -> Result<(), String> {
 
 /// Prints, for each address in hex, the public symbol that starts at or just before it.
 fn near(pdb: &Path, addresses: &[&str]) -> Result<(), String> {
-    let wanted: Vec<u32> = addresses.iter().filter_map(|text| u32::from_str_radix(text.trim_start_matches("0x"), 16).ok()).collect();
+    let wanted: Vec<u32> = addresses
+        .iter()
+        .filter_map(|text| u32::from_str_radix(text.trim_start_matches("0x"), 16).ok())
+        .collect();
     let mut best: Vec<Option<(u32, String)>> = vec![None; wanted.len()];
     symbols::publics(pdb, &mut |address, name| {
         for (slot, target) in wanted.iter().enumerate() {
@@ -132,12 +135,14 @@ fn port(
     row_path: &Path,
     report_path: &Path,
 ) -> Result<bool, String> {
-    let prior: serde_json::Value =
-        serde_json::from_slice(&read(prior)?).map_err(|error| format!("the prior row is not JSON: {error}"))?;
+    let prior: serde_json::Value = serde_json::from_slice(&read(prior)?)
+        .map_err(|error| format!("the prior row is not JSON: {error}"))?;
     let bytes = read(module)?;
     let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
     let mut old = Vec::new();
-    symbols::publics(old_pdb, &mut |address, name| old.push((address, name.to_owned())))?;
+    symbols::publics(old_pdb, &mut |address, name| {
+        old.push((address, name.to_owned()))
+    })?;
     old.sort();
     // The frame entry keeps plain numbers.
     let mut targets = row_port::addresses_of(&prior["build"]);
@@ -159,12 +164,23 @@ fn port(
     let places = symbols::private_places(new_pdb, &names.values().cloned().collect::<Vec<_>>())?;
     let private = names
         .iter()
-        .filter_map(|(address, name)| match places.get(name).map(Vec::as_slice) {
-            Some([place]) => Some((*address, *place)),
-            _ => None,
-        })
+        .filter_map(
+            |(address, name)| match places.get(name).map(Vec::as_slice) {
+                Some([place]) => Some((*address, *place)),
+                _ => None,
+            },
+        )
         .collect();
-    let (row, report) = row_port::port_row(&prior, &named, &NewBuild { version, pe: &pe, symbols: &new, private: &private });
+    let (row, report) = row_port::port_row(
+        &prior,
+        &named,
+        &NewBuild {
+            version,
+            pe: &pe,
+            symbols: &new,
+            private: &private,
+        },
+    );
     let text = |value: &dyn erased::Json| value.pretty();
     std::fs::write(row_path, text(&row)).map_err(|error| error.to_string())?;
     std::fs::write(report_path, text(&report)).map_err(|error| error.to_string())?;
@@ -191,10 +207,17 @@ mod erased {
 }
 
 fn json_file(path: &Path) -> Result<serde_json::Value, String> {
-    serde_json::from_slice(&read(path)?).map_err(|error| format!("{} is not JSON: {error}", path.display()))
+    serde_json::from_slice(&read(path)?)
+        .map_err(|error| format!("{} is not JSON: {error}", path.display()))
 }
 
-fn pending(stable: &Path, beta: &Path, edge: &Path, brave: &Path, known: &Path) -> Result<(), String> {
+fn pending(
+    stable: &Path,
+    beta: &Path,
+    edge: &Path,
+    brave: &Path,
+    known: &Path,
+) -> Result<(), String> {
     let mut candidates = row_watch::chrome_candidates(&json_file(stable)?, &json_file(beta)?);
     candidates.extend(row_watch::edge_candidates(&json_file(edge)?));
     candidates.extend(row_watch::brave_candidates(&json_file(brave)?));
@@ -205,7 +228,10 @@ fn pending(stable: &Path, beta: &Path, edge: &Path, brave: &Path, known: &Path) 
         .filter_map(|pair| Some((pair[0].as_str()?.to_owned(), pair[1].as_str()?.to_owned())))
         .collect();
     let left = row_watch::pending(candidates, &known);
-    println!("{}", serde_json::to_string_pretty(&left).map_err(|error| error.to_string())?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&left).map_err(|error| error.to_string())?
+    );
     Ok(())
 }
 
@@ -227,7 +253,8 @@ fn table_add(table_path: &Path, row: &Path, module: &Path) -> Result<(), String>
 }
 
 fn table_read(signed: &Path, out: &Path) -> Result<(), String> {
-    let public = std::env::var("RIVET_TABLE_PUBLIC_KEY").map_err(|_| "RIVET_TABLE_PUBLIC_KEY is not set")?;
+    let public =
+        std::env::var("RIVET_TABLE_PUBLIC_KEY").map_err(|_| "RIVET_TABLE_PUBLIC_KEY is not set")?;
     let file = read(signed)?;
     let table = signed_table::parse(signed_table::open(&public, &file)?)?;
     let text = serde_json::to_string(&table).map_err(|error| error.to_string())?;
@@ -246,10 +273,12 @@ fn table_merge(table_path: &Path, parts: &[&str]) -> Result<(), String> {
 }
 
 fn table_sign(table: &Path, signed: &Path, published: Option<&Path>) -> Result<(), String> {
-    let private = std::env::var("RIVET_TABLE_SIGNING_KEY").map_err(|_| "RIVET_TABLE_SIGNING_KEY is not set")?;
+    let private = std::env::var("RIVET_TABLE_SIGNING_KEY")
+        .map_err(|_| "RIVET_TABLE_SIGNING_KEY is not set")?;
     let published = match published {
         Some(path) => {
-            let public = std::env::var("RIVET_TABLE_PUBLIC_KEY").map_err(|_| "RIVET_TABLE_PUBLIC_KEY is not set")?;
+            let public = std::env::var("RIVET_TABLE_PUBLIC_KEY")
+                .map_err(|_| "RIVET_TABLE_PUBLIC_KEY is not set")?;
             let file = read(path)?;
             Some(signed_table::parse(signed_table::open(&public, &file)?)?)
         }
@@ -263,7 +292,11 @@ fn table_sign(table: &Path, signed: &Path, published: Option<&Path>) -> Result<(
     let payload = serde_json::to_vec(&merged).map_err(|error| error.to_string())?;
     let file = signed_table::sign(&private, &payload)?;
     std::fs::write(signed, file).map_err(|error| error.to_string())?;
-    println!("sequence {}, {} rows", merged["sequence"], merged["rows"].as_array().map_or(0, Vec::len));
+    println!(
+        "sequence {}, {} rows",
+        merged["sequence"],
+        merged["rows"].as_array().map_or(0, Vec::len)
+    );
     Ok(())
 }
 
@@ -340,8 +373,8 @@ mod symbols {
     use std::path::Path;
 
     use windows_sys::Win32::System::Diagnostics::Debug::{
-        SymCleanup, SymEnumSymbolsW, SymFromAddrW, SymFromNameW, SymInitializeW, SymLoadModuleExW, SymSetOptions,
-        SYMBOL_INFOW, SYMOPT_UNDNAME,
+        SymCleanup, SymEnumSymbolsW, SymFromAddrW, SymFromNameW, SymInitializeW, SymLoadModuleExW,
+        SymSetOptions, SYMBOL_INFOW, SYMOPT_UNDNAME,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -446,9 +479,22 @@ mod symbols {
                 (*info).SizeOfStruct = std::mem::size_of::<SYMBOL_INFOW>() as u32;
                 (*info).MaxNameLen = 1000;
                 let mut distance = 0u64;
-                if SymFromAddrW(GetCurrentProcess(), BASE + u64::from(*address), &mut distance, info) != 0 && distance == 0 {
-                    let name = std::slice::from_raw_parts((*info).Name.as_ptr(), (*info).NameLen as usize);
-                    names.insert(*address, String::from_utf16_lossy(name).trim_end_matches(['\0', ' ']).to_owned());
+                if SymFromAddrW(
+                    GetCurrentProcess(),
+                    BASE + u64::from(*address),
+                    &mut distance,
+                    info,
+                ) != 0
+                    && distance == 0
+                {
+                    let name =
+                        std::slice::from_raw_parts((*info).Name.as_ptr(), (*info).NameLen as usize);
+                    names.insert(
+                        *address,
+                        String::from_utf16_lossy(name)
+                            .trim_end_matches(['\0', ' '])
+                            .to_owned(),
+                    );
                 }
             }
         }
@@ -457,7 +503,10 @@ mod symbols {
     }
 
     /// Where each function name lies, from the PDB's private symbols.
-    pub fn private_places(pdb: &Path, names: &[String]) -> Result<HashMap<String, Vec<u32>>, String> {
+    pub fn private_places(
+        pdb: &Path,
+        names: &[String],
+    ) -> Result<HashMap<String, Vec<u32>>, String> {
         unsafe extern "system" fn each(
             info: *const SYMBOL_INFOW,
             _size: u32,
@@ -477,7 +526,13 @@ mod symbols {
             let mask: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
             let mut found: Vec<(String, u32)> = Vec::new();
             unsafe {
-                SymEnumSymbolsW(GetCurrentProcess(), BASE, mask.as_ptr(), Some(each), (&raw mut found).cast());
+                SymEnumSymbolsW(
+                    GetCurrentProcess(),
+                    BASE,
+                    mask.as_ptr(),
+                    Some(each),
+                    (&raw mut found).cast(),
+                );
             }
             let mut exact: Vec<u32> = found
                 .into_iter()
@@ -584,10 +639,16 @@ mod symbols {
     pub fn publics(_pdb: &Path, _visit: &mut dyn FnMut(u32, &str)) -> Result<(), String> {
         Err("symbol extraction needs Windows DbgHelp".into())
     }
-    pub fn private_names(_pdb: &Path, _addresses: &[u32]) -> Result<std::collections::BTreeMap<u32, String>, String> {
+    pub fn private_names(
+        _pdb: &Path,
+        _addresses: &[u32],
+    ) -> Result<std::collections::BTreeMap<u32, String>, String> {
         Err("symbol extraction needs Windows DbgHelp".into())
     }
-    pub fn private_places(_pdb: &Path, _names: &[String]) -> Result<std::collections::HashMap<String, Vec<u32>>, String> {
+    pub fn private_places(
+        _pdb: &Path,
+        _names: &[String],
+    ) -> Result<std::collections::HashMap<String, Vec<u32>>, String> {
         Err("symbol extraction needs Windows DbgHelp".into())
     }
 

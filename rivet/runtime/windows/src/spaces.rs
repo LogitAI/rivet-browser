@@ -63,6 +63,7 @@ impl BrowserKind {
     }
 
     /// The App Paths name the browser's installer registers.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn executable(self) -> &'static str {
         match self {
             Self::Chrome => "chrome.exe",
@@ -77,6 +78,7 @@ impl BrowserKind {
     }
 
     /// The browser a program path is, or `None` for one a space cannot be based on.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn from_program(path: &str) -> Option<Self> {
         let name = path.rsplit(['\\', '/']).next()?.to_ascii_lowercase();
         Self::ALL.into_iter().find(|kind| kind.executable() == name)
@@ -94,6 +96,7 @@ pub struct SpaceInfo {
 }
 
 impl SpaceInfo {
+    #[cfg(test)]
     /// The badge text, such as `Edge · Lab`.
     pub fn badge(&self) -> String {
         self.badge_in(None)
@@ -101,14 +104,20 @@ impl SpaceInfo {
 
     /// The badge in a window of a browser no space can be based on, which shows every space itself.
     pub fn badge_in(&self, sole_browser: Option<&str>) -> String {
-        format!("{} \u{b7} {}", sole_browser.unwrap_or(self.browser.label()), self.profile)
+        format!(
+            "{} \u{b7} {}",
+            sole_browser.unwrap_or(self.browser.label()),
+            self.profile
+        )
     }
 
+    #[cfg(test)]
     /// The colour of the window's ground in this space.
     pub fn frame(&self) -> u32 {
         rivet_core::space_frame(self.tint)
     }
 
+    #[cfg(test)]
     /// The strong colour of marks and active controls in this space.
     pub fn accent(&self) -> u32 {
         rivet_core::space_accent(self.tint)
@@ -134,6 +143,7 @@ pub struct HandOver {
 /// Whether showing `target` needs another browser than `current`, the browser of this window.
 /// A window whose browser is not one a space can be based on (`None`) never hands over. Spaces of
 /// the same browser switch inside the window.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn hand_over(
     target: &SpaceInfo,
     current: Option<BrowserKind>,
@@ -147,14 +157,28 @@ pub fn hand_over(
 }
 
 /// The profile folder Rivet keeps for a browser's profile: `<root>\Rivet\profiles\<browser>\<name>`.
-pub fn profile_dir(root: &std::path::Path, browser: BrowserKind, profile: &str) -> std::path::PathBuf {
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn profile_dir(
+    root: &std::path::Path,
+    browser: BrowserKind,
+    profile: &str,
+) -> std::path::PathBuf {
     let name: String = profile
         .chars()
-        .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let name = name.trim();
     let name = if name.is_empty() { "Default" } else { name };
-    rivet_core::paths::Layout::under(root).profiles().join(browser.key()).join(name)
+    rivet_core::paths::Layout::under(root)
+        .profiles()
+        .join(browser.key())
+        .join(name)
 }
 
 /// The arguments of `rivet session start` for a hand-over.
@@ -197,7 +221,12 @@ pub fn show_for(running: bool) -> Show {
 /// Whether a profile folder name read from a window is the folder asked for. Slash direction,
 /// trailing separators and letter case do not matter on Windows.
 pub fn same_directory(a: &str, b: &str) -> bool {
-    let normal = |text: &str| text.trim().trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase();
+    let normal = |text: &str| {
+        text.trim()
+            .trim_end_matches(['\\', '/'])
+            .replace('/', "\\")
+            .to_lowercase()
+    };
     !normal(a).is_empty() && normal(a) == normal(b)
 }
 
@@ -214,7 +243,10 @@ pub struct Candidate {
 /// The window to bring forward among a process's windows given topmost first: the first browser
 /// window that is shown and not an owned popup.
 pub fn pick_window(windows: &[Candidate]) -> Option<isize> {
-    windows.iter().find(|candidate| candidate.shown && !candidate.owned).map(|candidate| candidate.window)
+    windows
+        .iter()
+        .find(|candidate| candidate.shown && !candidate.owned)
+        .map(|candidate| candidate.window)
 }
 
 /// Whether the launcher got the other browser's window up. A browser the runtime cannot attach to
@@ -372,9 +404,17 @@ impl Spaces {
 
     /// The file text for these spaces. `open` are the tabs the window shows now, which belong to
     /// the current space.
-    pub fn to_json(&self, open: &[SavedTab], width: i32, hidden: bool, user_data_dir: &str) -> String {
+    pub fn to_json(
+        &self,
+        open: &[SavedTab],
+        width: i32,
+        hidden: bool,
+        user_data_dir: &str,
+    ) -> String {
         let mut out = String::new();
-        out.push_str(&format!("{{\n  \"version\": {FORMAT},\n  \"user_data_dir\": "));
+        out.push_str(&format!(
+            "{{\n  \"version\": {FORMAT},\n  \"user_data_dir\": "
+        ));
         quote(&mut out, user_data_dir);
         out.push_str(&format!(
             ",\n  \"current\": {},\n  \"appbar\": {{\"width\": {width}, \"hidden\": {hidden}}},\n  \"spaces\": [",
@@ -391,7 +431,11 @@ impl Spaces {
             ));
             quote(&mut out, &info.profile);
             out.push_str(", \"tabs\": [");
-            let tabs: &[SavedTab] = if index == self.current { open } else { &self.saved[index] };
+            let tabs: &[SavedTab] = if index == self.current {
+                open
+            } else {
+                &self.saved[index]
+            };
             for (n, tab) in tabs.iter().take(MAX_STORED_TABS).enumerate() {
                 out.push_str(if n == 0 { "\n      {" } else { ",\n      {" });
                 out.push_str("\"url\": ");
@@ -451,7 +495,11 @@ impl Spaces {
                     profile,
                 ),
             };
-            if name.trim().is_empty() || name.len() > MAX_TEXT || profile.len() > MAX_TEXT || tint > 0xff_ffff {
+            if name.trim().is_empty()
+                || name.len() > MAX_TEXT
+                || profile.len() > MAX_TEXT
+                || tint > 0xff_ffff
+            {
                 return None;
             }
             let mut tabs = Vec::new();
@@ -465,7 +513,8 @@ impl Spaces {
                 let group = match tab.get("group") {
                     None | Some(json::Json::Null) => None,
                     Some(group) => {
-                        let (key, name) = (group.get("id")?.as_str()?, group.get("title")?.as_str()?);
+                        let (key, name) =
+                            (group.get("id")?.as_str()?, group.get("title")?.as_str()?);
                         if key.len() > MAX_TEXT || name.len() > MAX_TEXT {
                             return None;
                         }
@@ -484,17 +533,30 @@ impl Spaces {
                     group,
                 });
             }
-            list.push(SpaceInfo { name: name.into(), tint: tint as u32, browser, profile: profile.into() });
+            list.push(SpaceInfo {
+                name: name.into(),
+                tint: tint as u32,
+                browser,
+                profile: profile.into(),
+            });
             saved.push(tabs);
         }
         let appbar = root.get("appbar")?;
         let width = appbar.get("width")?.as_u64()?.min(i32::MAX as u64) as i32;
         let hidden = appbar.get("hidden")?.as_bool()?;
-        let mut spaces = Spaces { list, current, saved };
+        let mut spaces = Spaces {
+            list,
+            current,
+            saved,
+        };
         if version == 1 {
             spaces.migrate_sample();
         }
-        Some(Stored { spaces, width, hidden })
+        Some(Stored {
+            spaces,
+            width,
+            hidden,
+        })
     }
 
     /// Version 1 files either had no browser at all or were rewritten with every space on Chrome,
@@ -505,17 +567,28 @@ impl Spaces {
         let mut names: Vec<&str> = self.list.iter().map(|info| info.name.as_str()).collect();
         names.sort_unstable();
         let is_sample = names == ["Personal", "Research", "Work"]
-            && self.list.iter().all(|info| info.browser == BrowserKind::Chrome);
+            && self
+                .list
+                .iter()
+                .all(|info| info.browser == BrowserKind::Chrome);
         if !is_sample {
             return;
         }
         let current_name = self.list[self.current].name.clone();
         let mut migrated = Spaces::new();
         for index in 0..migrated.list.len() {
-            let old = self.list.iter().position(|old| old.name == migrated.list[index].name).unwrap();
+            let old = self
+                .list
+                .iter()
+                .position(|old| old.name == migrated.list[index].name)
+                .unwrap();
             migrated.saved[index] = std::mem::take(&mut self.saved[old]);
         }
-        migrated.current = migrated.list.iter().position(|info| info.name == current_name).unwrap();
+        migrated.current = migrated
+            .list
+            .iter()
+            .position(|info| info.name == current_name)
+            .unwrap();
         *self = migrated;
     }
 }
@@ -545,10 +618,14 @@ fn quote(out: &mut String, value: &str) {
 
 /// Where the file of a browser profile lives: `<key>.json` in the layout's spaces folder, with the
 /// key made from the profile's `--user-data-dir`, or `default` when the browser has none.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn store_path(root: &std::path::Path, user_data_dir: Option<&str>) -> std::path::PathBuf {
     let key = match user_data_dir {
         Some(dir) => {
-            let normal = dir.trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase();
+            let normal = dir
+                .trim_end_matches(['\\', '/'])
+                .replace('/', "\\")
+                .to_lowercase();
             let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
             for byte in normal.bytes() {
                 hash = (hash ^ byte as u64).wrapping_mul(0x100_0000_01b3);
@@ -557,10 +634,13 @@ pub fn store_path(root: &std::path::Path, user_data_dir: Option<&str>) -> std::p
         }
         None => "default".into(),
     };
-    rivet_core::paths::Layout::under(root).spaces().join(format!("{key}.json"))
+    rivet_core::paths::Layout::under(root)
+        .spaces()
+        .join(format!("{key}.json"))
 }
 
 /// The `--user-data-dir` among a process's arguments.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn user_data_dir_of(args: impl IntoIterator<Item = String>) -> Option<String> {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -635,7 +715,10 @@ mod json {
     }
 
     pub fn parse(text: &str) -> Option<Json> {
-        let mut reader = Reader { bytes: text.as_bytes(), at: 0 };
+        let mut reader = Reader {
+            bytes: text.as_bytes(),
+            at: 0,
+        };
         let value = reader.value(0)?;
         reader.space();
         (reader.at == reader.bytes.len()).then_some(value)
@@ -720,10 +803,17 @@ mod json {
                 b'n' => self.word("null", Json::Null),
                 _ => {
                     let start = self.at;
-                    while matches!(self.bytes.get(self.at), Some(b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')) {
+                    while matches!(
+                        self.bytes.get(self.at),
+                        Some(b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
+                    ) {
                         self.at += 1;
                     }
-                    std::str::from_utf8(&self.bytes[start..self.at]).ok()?.parse().ok().map(Json::Num)
+                    std::str::from_utf8(&self.bytes[start..self.at])
+                        .ok()?
+                        .parse()
+                        .ok()
+                        .map(Json::Num)
                 }
             }
         }
@@ -799,13 +889,22 @@ mod tests {
     #[test]
     fn fr3_old_start_page_is_reopened_with_the_spaces_browser() {
         let start = "file:///C:/Rivet/start.html?space=Research&browser=Edge&profile=Lab&tint=5b8bab&accent=2f5f80";
-        assert_eq!(restored_url("file:///C:/Rivet/start.html?space=Research", start), start);
-        // A page saved before start pages carried colours follows the space too.
         assert_eq!(
-            restored_url("file:///C:/Rivet/start.html?space=Research&browser=Edge&profile=Lab", start),
+            restored_url("file:///C:/Rivet/start.html?space=Research", start),
             start
         );
-        assert_eq!(restored_url("https://example.com/", start), "https://example.com/");
+        // A page saved before start pages carried colours follows the space too.
+        assert_eq!(
+            restored_url(
+                "file:///C:/Rivet/start.html?space=Research&browser=Edge&profile=Lab",
+                start
+            ),
+            start
+        );
+        assert_eq!(
+            restored_url("https://example.com/", start),
+            "https://example.com/"
+        );
     }
 
     #[test]
@@ -813,10 +912,17 @@ mod tests {
         let mut spaces = Spaces::new();
         spaces.adopt_browser(Some(BrowserKind::Whale));
         assert_eq!(spaces.list()[0].badge(), "Whale \u{b7} Work");
-        assert_eq!(spaces.list()[1].badge(), "Edge \u{b7} Lab", "other spaces keep their browser");
+        assert_eq!(
+            spaces.list()[1].badge(),
+            "Edge \u{b7} Lab",
+            "other spaces keep their browser"
+        );
         let mut unknown = Spaces::new();
         unknown.adopt_browser(None);
-        assert_eq!(unknown.list()[0].badge_in(Some("Samsung")), "Samsung \u{b7} Work");
+        assert_eq!(
+            unknown.list()[0].badge_in(Some("Samsung")),
+            "Samsung \u{b7} Work"
+        );
     }
 
     #[test]
@@ -832,7 +938,10 @@ mod tests {
         let other = "file:///C:/R/start.html?space=Work&browser=Chrome&profile=Work&tint=d08a52&accent=9a5424";
         assert!(start_pages_stale(&[other], start));
         assert!(!start_pages_stale(&[start], start));
-        assert!(!start_pages_stale(&[other, "https://a.test/"], start), "a page of the user's own stays");
+        assert!(
+            !start_pages_stale(&[other, "https://a.test/"], start),
+            "a page of the user's own stays"
+        );
         assert!(!start_pages_stale(&[], start));
     }
 
@@ -916,7 +1025,10 @@ mod tests {
         spaces.list[1].name = "Caf\u{e9} \"two\"\\".into();
         spaces.switch_to(
             1,
-            vec![tab("https://a.test/?q=1&r=\u{d55c}", false), tab("https://b.test/", true)],
+            vec![
+                tab("https://a.test/?q=1&r=\u{d55c}", false),
+                tab("https://b.test/", true),
+            ],
             "start",
         );
         spaces
@@ -925,7 +1037,10 @@ mod tests {
     #[test]
     fn fr3_file_keeps_names_tints_tabs_and_the_current_space_across_a_restart() {
         let spaces = sample();
-        let open = vec![tab("https://c.test/", true), tab("https://d.test/\ttab", false)];
+        let open = vec![
+            tab("https://c.test/", true),
+            tab("https://d.test/\ttab", false),
+        ];
         let text = spaces.to_json(&open, 300, true, "D:\\Profiles\\Work");
         let stored = Spaces::from_json(&text).expect("a file this module wrote must load");
         assert_eq!((stored.width, stored.hidden), (300, true));
@@ -943,7 +1058,14 @@ mod tests {
     fn fr3_file_holds_no_more_than_names_tints_profiles_urls_and_titles() {
         let text = sample().to_json(&[], 268, false, "D:\\p");
         for key in [
-            "version", "user_data_dir", "current", "appbar", "spaces", "name", "tint", "browser",
+            "version",
+            "user_data_dir",
+            "current",
+            "appbar",
+            "spaces",
+            "name",
+            "tint",
+            "browser",
             "profile",
             "tabs",
         ] {
@@ -959,7 +1081,8 @@ mod tests {
         let good = Spaces::new().to_json(&[], 268, false, "d");
         assert!(Spaces::from_json(&good).is_some());
         let cut = &good[..good.len() / 2];
-        let empty = "{\"version\":1,\"current\":0,\"appbar\":{\"width\":1,\"hidden\":false},\"spaces\":[]}";
+        let empty =
+            "{\"version\":1,\"current\":0,\"appbar\":{\"width\":1,\"hidden\":false},\"spaces\":[]}";
         for bad in [
             "",
             "not json",
@@ -981,7 +1104,12 @@ mod tests {
     #[test]
     fn fr3_tab_groups_survive_the_file_and_older_files_have_none() {
         let group = |key: &str, collapsed| {
-            Some(SavedGroup { key: key.into(), title: "Read \"later\"".into(), color: 3, collapsed })
+            Some(SavedGroup {
+                key: key.into(),
+                title: "Read \"later\"".into(),
+                color: 3,
+                collapsed,
+            })
         };
         let mut a = tab("https://a.test/", true);
         a.group = group("0a1b", false);
@@ -1012,8 +1140,16 @@ mod tests {
             rows,
             [
                 ("Work".to_owned(), 0xd08a52, "Chrome \u{b7} Work".to_owned()),
-                ("Research".to_owned(), 0x5b8bab, "Edge \u{b7} Lab".to_owned()),
-                ("Personal".to_owned(), 0xc0577f, "Whale \u{b7} Personal".to_owned()),
+                (
+                    "Research".to_owned(),
+                    0x5b8bab,
+                    "Edge \u{b7} Lab".to_owned()
+                ),
+                (
+                    "Personal".to_owned(),
+                    0xc0577f,
+                    "Whale \u{b7} Personal".to_owned()
+                ),
             ]
         );
     }
@@ -1023,7 +1159,10 @@ mod tests {
         let spaces = Spaces::new();
         let text = spaces.to_json(&[], 268, false, "d");
         assert!(text.contains("\"browser\": \"edge\""));
-        assert_eq!(Spaces::from_json(&text).unwrap().spaces.list(), spaces.list());
+        assert_eq!(
+            Spaces::from_json(&text).unwrap().spaces.list(),
+            spaces.list()
+        );
         // A file from before spaces had a browser: no field, and the badge text as the profile.
         let old = "{\"version\":1,\"current\":0,\"appbar\":{\"width\":268,\"hidden\":false},\"spaces\":[{\"name\":\"Work\",\"tint\":1,\"profile\":\"Chrome \u{b7} Work\",\"tabs\":[]},{\"name\":\"B\",\"tint\":2,\"profile\":\"Mine\",\"tabs\":[]}]}";
         let loaded = Spaces::from_json(old).unwrap().spaces;
@@ -1032,7 +1171,10 @@ mod tests {
         assert_eq!(loaded.list()[1].badge(), "Chrome \u{b7} Mine");
         // A browser this version does not know is read as Chrome rather than losing the file.
         let future = text.replace("\"edge\"", "\"vivaldi\"");
-        assert_eq!(Spaces::from_json(&future).unwrap().spaces.list()[1].browser, BrowserKind::Chrome);
+        assert_eq!(
+            Spaces::from_json(&future).unwrap().spaces.list()[1].browser,
+            BrowserKind::Chrome
+        );
         assert!(Spaces::from_json(&text.replace("\"edge\"", "7")).is_none());
     }
 
@@ -1044,23 +1186,47 @@ mod tests {
     }
 
     fn v1_space(name: &str, tint: u32, browser: Option<&str>, profile: &str, url: &str) -> String {
-        let browser = browser.map(|b| format!("\"browser\":\"{b}\",")).unwrap_or_default();
+        let browser = browser
+            .map(|b| format!("\"browser\":\"{b}\","))
+            .unwrap_or_default();
         format!(
             "{{\"name\":\"{name}\",\"tint\":{tint},{browser}\"profile\":\"{profile}\",\"tabs\":[{{\"url\":\"{url}\",\"title\":\"t\",\"active\":true}}]}}"
         )
     }
 
     fn rows(spaces: &Spaces) -> Vec<(String, u32, String)> {
-        spaces.list().iter().map(|s| (s.name.clone(), s.tint, s.badge())).collect()
+        spaces
+            .list()
+            .iter()
+            .map(|s| (s.name.clone(), s.tint, s.badge()))
+            .collect()
     }
 
     #[test]
     fn fr3_version_1_sample_file_without_browsers_migrates_to_the_defaults_and_keeps_tabs() {
         let text = v1_file(
             &[
-                v1_space("Work", 13666898, None, "Chrome \u{b7} Work", "https://w.test/"),
-                v1_space("Personal", 5999531, None, "Chrome \u{b7} Personal", "https://p.test/"),
-                v1_space("Research", 12605311, None, "Chrome \u{b7} Research", "https://r.test/"),
+                v1_space(
+                    "Work",
+                    13666898,
+                    None,
+                    "Chrome \u{b7} Work",
+                    "https://w.test/",
+                ),
+                v1_space(
+                    "Personal",
+                    5999531,
+                    None,
+                    "Chrome \u{b7} Personal",
+                    "https://p.test/",
+                ),
+                v1_space(
+                    "Research",
+                    12605311,
+                    None,
+                    "Chrome \u{b7} Research",
+                    "https://r.test/",
+                ),
             ],
             1,
         );
@@ -1071,7 +1237,9 @@ mod tests {
         assert_eq!(loaded.take_current_tabs()[0].url, "https://p.test/");
         assert_eq!(loaded.saved[0][0].url, "https://w.test/");
         assert_eq!(loaded.saved[1][0].url, "https://r.test/");
-        assert!(loaded.to_json(&[], 310, false, "d").contains("\"version\": 2"));
+        assert!(loaded
+            .to_json(&[], 310, false, "d")
+            .contains("\"version\": 2"));
     }
 
     #[test]
@@ -1079,8 +1247,20 @@ mod tests {
         let text = v1_file(
             &[
                 v1_space("Work", 13666898, Some("chrome"), "Work", "https://w.test/"),
-                v1_space("Personal", 5999531, Some("chrome"), "Default", "https://p.test/"),
-                v1_space("Research", 12605311, Some("chrome"), "Default", "https://r.test/"),
+                v1_space(
+                    "Personal",
+                    5999531,
+                    Some("chrome"),
+                    "Default",
+                    "https://p.test/",
+                ),
+                v1_space(
+                    "Research",
+                    12605311,
+                    Some("chrome"),
+                    "Default",
+                    "https://r.test/",
+                ),
             ],
             0,
         );
@@ -1103,8 +1283,14 @@ mod tests {
             1,
         );
         let loaded = Spaces::from_json(&renamed).unwrap().spaces;
-        assert_eq!(rows(&loaded)[1], ("Play".to_owned(), 2, "Chrome \u{b7} Default".to_owned()));
-        assert!(loaded.list().iter().all(|s| s.browser == BrowserKind::Chrome));
+        assert_eq!(
+            rows(&loaded)[1],
+            ("Play".to_owned(), 2, "Chrome \u{b7} Default".to_owned())
+        );
+        assert!(loaded
+            .list()
+            .iter()
+            .all(|s| s.browser == BrowserKind::Chrome));
         assert_eq!(loaded.current(), 1);
         let added = v1_file(
             &[
@@ -1132,16 +1318,21 @@ mod tests {
         assert_eq!(loaded.spaces.to_json(&[], 268, false, "d"), text);
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr3_programs_map_to_their_browser() {
         let kind = |path| BrowserKind::from_program(path);
-        assert_eq!(kind("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"), Some(BrowserKind::Chrome));
+        assert_eq!(
+            kind("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"),
+            Some(BrowserKind::Chrome)
+        );
         assert_eq!(kind("C:/Edge/MSEdge.exe"), Some(BrowserKind::Edge));
         assert_eq!(kind("whale.exe"), Some(BrowserKind::Whale));
         assert_eq!(kind("C:\\Brave\\brave.exe"), Some(BrowserKind::Brave));
         assert_eq!(kind("C:\\Vivaldi\\vivaldi.exe"), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr3_a_space_of_another_browser_hands_over_with_its_own_profile_folder() {
         let spaces = Spaces::new();
@@ -1150,32 +1341,60 @@ mod tests {
         assert_eq!(hand_over(&spaces.list()[0], current, root), None);
         let edge = hand_over(&spaces.list()[1], current, root).unwrap();
         assert_eq!(edge.browser, BrowserKind::Edge);
-        assert_eq!(edge.user_data_dir, std::path::Path::new("D:\\Data\\Rivet\\profiles\\edge\\Lab"));
+        assert_eq!(
+            edge.user_data_dir,
+            std::path::Path::new("D:\\Data\\Rivet\\profiles\\edge\\Lab")
+        );
         let whale = hand_over(&spaces.list()[2], current, root).unwrap();
-        assert_eq!(whale.user_data_dir, std::path::Path::new("D:\\Data\\Rivet\\profiles\\whale\\Personal"));
-        let brave = SpaceInfo { name: "Lab".into(), tint: 0, browser: BrowserKind::Brave, profile: "Test".into() };
+        assert_eq!(
+            whale.user_data_dir,
+            std::path::Path::new("D:\\Data\\Rivet\\profiles\\whale\\Personal")
+        );
+        let brave = SpaceInfo {
+            name: "Lab".into(),
+            tint: 0,
+            browser: BrowserKind::Brave,
+            profile: "Test".into(),
+        };
         let brave = hand_over(&brave, current, root).unwrap();
-        assert_eq!((brave.browser, BrowserKind::from_key("brave")), (BrowserKind::Brave, Some(BrowserKind::Brave)));
-        assert!(brave.user_data_dir.ends_with(std::path::Path::new("brave").join("Test")));
+        assert_eq!(
+            (brave.browser, BrowserKind::from_key("brave")),
+            (BrowserKind::Brave, Some(BrowserKind::Brave))
+        );
+        assert!(brave
+            .user_data_dir
+            .ends_with(std::path::Path::new("brave").join("Test")));
         // From an Edge window the Research space stays, and the Chrome one hands back.
-        assert_eq!(hand_over(&spaces.list()[1], Some(BrowserKind::Edge), root), None);
+        assert_eq!(
+            hand_over(&spaces.list()[1], Some(BrowserKind::Edge), root),
+            None
+        );
         assert!(hand_over(&spaces.list()[0], Some(BrowserKind::Edge), root).is_some());
         // A window of a browser no space is based on never hands over.
         assert_eq!(hand_over(&spaces.list()[1], None, root), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr3_profile_names_cannot_leave_the_profile_folder() {
         let root = std::path::Path::new("D:\\Data");
         let dir = profile_dir(root, BrowserKind::Edge, "..\\..\\evil:*");
         assert!(dir.starts_with("D:\\Data\\Rivet\\profiles\\edge"));
-        assert_eq!(dir.components().count(), std::path::Path::new("D:\\Data\\Rivet\\profiles\\edge\\x").components().count());
+        assert_eq!(
+            dir.components().count(),
+            std::path::Path::new("D:\\Data\\Rivet\\profiles\\edge\\x")
+                .components()
+                .count()
+        );
         assert!(profile_dir(root, BrowserKind::Edge, "  ").ends_with("Default"));
     }
 
     #[test]
     fn fr3_hand_over_starts_the_session_through_the_launcher_with_profile_and_runtime() {
-        let hand = HandOver { browser: BrowserKind::Edge, user_data_dir: "D:\\P\\edge\\Lab".into() };
+        let hand = HandOver {
+            browser: BrowserKind::Edge,
+            user_data_dir: "D:\\P\\edge\\Lab".into(),
+        };
         let args = start_arguments(
             &hand,
             std::path::Path::new("C:\\Edge\\msedge.exe"),
@@ -1185,12 +1404,22 @@ mod tests {
         assert_eq!(
             args,
             [
-                "session", "start", "--browser", "C:\\Edge\\msedge.exe", "--user-data-dir",
-                "D:\\P\\edge\\Lab", "--runtime", "D:\\R\\rivet_runtime_windows.dll", "--url",
+                "session",
+                "start",
+                "--browser",
+                "C:\\Edge\\msedge.exe",
+                "--user-data-dir",
+                "D:\\P\\edge\\Lab",
+                "--runtime",
+                "D:\\R\\rivet_runtime_windows.dll",
+                "--url",
                 "file:///start.html?space=Research"
             ]
         );
-        assert!(!start_arguments(&hand, std::path::Path::new("e"), None, "u").contains(&"--runtime".into()));
+        assert!(
+            !start_arguments(&hand, std::path::Path::new("e"), None, "u")
+                .contains(&"--runtime".into())
+        );
     }
 
     #[test]
@@ -1201,15 +1430,30 @@ mod tests {
 
     #[test]
     fn fr3_a_running_profile_is_found_by_its_folder_whatever_the_spelling() {
-        assert!(same_directory(r"D:/Data/Rivet/profiles/edge/Lab/", r"d:\data\rivet\profiles\edge\lab"));
-        assert!(!same_directory(r"D:\Data\Rivet\edge\Lab", r"D:\Data\Rivet\edge\Other"));
+        assert!(same_directory(
+            r"D:/Data/Rivet/profiles/edge/Lab/",
+            r"d:\data\rivet\profiles\edge\lab"
+        ));
+        assert!(!same_directory(
+            r"D:\Data\Rivet\edge\Lab",
+            r"D:\Data\Rivet\edge\Other"
+        ));
         assert!(!same_directory("", ""));
     }
 
     #[test]
     fn fr3_the_window_brought_forward_is_a_shown_browser_window_not_a_popup() {
-        let one = |window, shown, owned| Candidate { window, shown, owned };
-        let windows = [one(1, true, true), one(2, false, false), one(3, true, false), one(4, true, false)];
+        let one = |window, shown, owned| Candidate {
+            window,
+            shown,
+            owned,
+        };
+        let windows = [
+            one(1, true, true),
+            one(2, false, false),
+            one(3, true, false),
+            one(4, true, false),
+        ];
         assert_eq!(pick_window(&windows), Some(3));
         assert_eq!(pick_window(&windows[..2]), None);
         assert_eq!(pick_window(&[]), None);
@@ -1219,8 +1463,14 @@ mod tests {
     fn fr3_a_launch_counts_as_started_even_when_the_runtime_cannot_attach() {
         assert!(handover_started(true, ""));
         // The browser opened but the runtime could not attach yet: it still counts.
-        assert!(handover_started(false, "could not load the Rivet runtime into browser task 7: x"));
-        assert!(!handover_started(false, "could not start C:\\missing.exe: not found"));
+        assert!(handover_started(
+            false,
+            "could not load the Rivet runtime into browser task 7: x"
+        ));
+        assert!(!handover_started(
+            false,
+            "could not start C:\\missing.exe: not found"
+        ));
     }
 
     #[test]
@@ -1240,6 +1490,7 @@ mod tests {
         assert!(Spaces::from_json(&text.replace("\\ude00", "\\u0041")).is_none());
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr3_store_is_keyed_by_the_profile_directory() {
         let root = std::path::Path::new("C:\\Local");
@@ -1249,8 +1500,14 @@ mod tests {
         assert!(a.starts_with("C:\\Local\\Rivet\\state\\spaces"));
         assert!(store_path(root, None).ends_with("default.json"));
         let args = |list: &[&str]| user_data_dir_of(list.iter().map(|s| s.to_string()));
-        assert_eq!(args(&["c.exe", "--user-data-dir=D:\\x"]), Some("D:\\x".into()));
-        assert_eq!(args(&["c.exe", "--user-data-dir", "D:\\y"]), Some("D:\\y".into()));
+        assert_eq!(
+            args(&["c.exe", "--user-data-dir=D:\\x"]),
+            Some("D:\\x".into())
+        );
+        assert_eq!(
+            args(&["c.exe", "--user-data-dir", "D:\\y"]),
+            Some("D:\\y".into())
+        );
         assert_eq!(args(&["c.exe"]), None);
     }
 

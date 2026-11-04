@@ -77,7 +77,10 @@ impl<R: Read + Seek> Reader<'_, R> {
 /// The imported DLL names and exported function names of a PE file, or `None` when the file is
 /// not a readable PE file.
 pub fn names<R: Read + Seek>(source: &mut R) -> Option<Names> {
-    let mut reader = Reader { source, sections: Vec::new() };
+    let mut reader = Reader {
+        source,
+        sections: Vec::new(),
+    };
     if reader.bytes(0, 2)? != b"MZ" {
         return None;
     }
@@ -180,7 +183,8 @@ pub(crate) fn synthetic(imports: &[&str], exports: &[&str]) -> Vec<u8> {
         file[directories..directories + 4].copy_from_slice(&strings_at(export_dir).to_le_bytes());
     }
     if !imports.is_empty() {
-        file[directories + 8..directories + 12].copy_from_slice(&strings_at(import_dir).to_le_bytes());
+        file[directories + 8..directories + 12]
+            .copy_from_slice(&strings_at(import_dir).to_le_bytes());
     }
     let table = optional + 240;
     file[table + 8..table + 12].copy_from_slice(&(section.len() as u32).to_le_bytes());
@@ -198,7 +202,10 @@ mod tests {
 
     #[test]
     fn fr1_reads_the_imports_and_exports_of_a_pe_file() {
-        let file = synthetic(&["KERNEL32.dll", "chrome_elf.dll"], &["GetHandleVerifier", "IsBrowserProcess"]);
+        let file = synthetic(
+            &["KERNEL32.dll", "chrome_elf.dll"],
+            &["GetHandleVerifier", "IsBrowserProcess"],
+        );
         let found = names(&mut Cursor::new(file)).unwrap();
         assert_eq!(found.imports, ["KERNEL32.dll", "chrome_elf.dll"]);
         assert_eq!(found.exports, ["GetHandleVerifier", "IsBrowserProcess"]);

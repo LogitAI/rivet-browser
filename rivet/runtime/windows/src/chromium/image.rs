@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn nfr3_recorded_offsets_outside_the_image_are_not_read() {
-        let bytes = vec![0xabu8; 64];
+        let bytes = [0xabu8; 64];
         let image = Image {
             base: bytes.as_ptr() as usize,
             size: 64,

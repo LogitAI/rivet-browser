@@ -31,9 +31,14 @@ pub(crate) fn window_in_dev_mode(window: HWND) -> bool {
 
 /// Switches developer mode of the page `window` shows, as the person's choice.
 pub(crate) unsafe fn toggle_dev_mode(window: HWND) -> bool {
-    let Some((tab, address)) = active_page(window) else { return false };
+    let Some((tab, address)) = active_page(window) else {
+        return false;
+    };
     let on = modes().toggle(tab, &address);
-    crate::trace::trace(&format!("developer mode of window {:#x} is {on}", window as usize));
+    crate::trace::trace(&format!(
+        "developer mode of window {:#x} is {on}",
+        window as usize
+    ));
     crate::hooks::page_area::relayout(window);
     windows_sys::Win32::Graphics::Gdi::InvalidateRect(window, std::ptr::null(), 0);
     crate::frame::update_appbar(window);
@@ -43,5 +48,8 @@ pub(crate) unsafe fn toggle_dev_mode(window: HWND) -> bool {
 /// The buttons the developer bar of this build offers, with the command each runs.
 pub(crate) fn dev_actions() -> Vec<(Action, u32)> {
     let dev = &crate::builds::get().toolbar.dev;
-    crate::dev_mode::buttons(&[(Action::Inspect, dev.inspect), (Action::Console, dev.console)])
+    crate::dev_mode::buttons(&[
+        (Action::Inspect, dev.inspect),
+        (Action::Console, dev.console),
+    ])
 }

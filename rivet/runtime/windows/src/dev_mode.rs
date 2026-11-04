@@ -10,7 +10,9 @@
 pub fn host_of(address: &str) -> Option<String> {
     let address = address.trim();
     let lower = address.to_ascii_lowercase();
-    let rest = ["https://", "http://"].iter().find_map(|scheme| lower.strip_prefix(scheme))?;
+    let rest = ["https://", "http://"]
+        .iter()
+        .find_map(|scheme| lower.strip_prefix(scheme))?;
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let authority = authority.rsplit('@').next().unwrap_or("");
     let host = if authority.starts_with('[') {
@@ -24,7 +26,10 @@ pub fn host_of(address: &str) -> Option<String> {
 
 /// Whether a page at `address` starts in developer mode: it is served from this computer.
 pub fn starts_in_dev_mode(address: &str) -> bool {
-    matches!(host_of(address).as_deref(), Some("localhost" | "127.0.0.1" | "[::1]"))
+    matches!(
+        host_of(address).as_deref(),
+        Some("localhost" | "127.0.0.1" | "[::1]")
+    )
 }
 
 /// What one tab remembers.
@@ -60,7 +65,11 @@ impl Modes {
                 if self.tabs.len() >= REMEMBERED {
                     self.tabs.remove(0);
                 }
-                self.tabs.push(TabMode { tab, host: host.clone(), chosen: None });
+                self.tabs.push(TabMode {
+                    tab,
+                    host: host.clone(),
+                    chosen: None,
+                });
                 self.tabs.len() - 1
             }
         };
@@ -106,7 +115,11 @@ impl Action {
 /// The buttons a window offers, from the browser commands its build can run. A command the build
 /// does not know leaves its button out.
 pub fn buttons(known: &[(Action, u32)]) -> Vec<(Action, u32)> {
-    known.iter().filter(|(_, command)| *command != 0).copied().collect()
+    known
+        .iter()
+        .filter(|(_, command)| *command != 0)
+        .copied()
+        .collect()
 }
 
 /// The size of the bar's buttons and the gap before the caption buttons, in DIPs.

@@ -1,10 +1,10 @@
 //! Split view: two pages shown side by side in one window. How a split is made, ended and laid out
 //! belongs to the browser, so the browser's backend does that. What is common lives here: which tabs
 //! a split joins, the rows each page gets, and where a dropped tab lands.
-use std::ffi::c_void;
-use crate::features::frame_layout::Rect;
 use crate::builds::Build;
 use crate::feature::Needs;
+use crate::features::frame_layout::Rect;
+
 use windows_sys::Win32::Foundation::HWND;
 
 fn backend() -> &'static dyn crate::browsers::SplitBackend {
@@ -32,12 +32,6 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
     backend().on_page_area(area)
 }
 
-/// A browser's toolbar can move the address after the layout placed it, so once the toolbar is done,
-/// the address of a split goes back to the focused page.
-pub unsafe fn place_address(toolbar: *mut c_void) {
-    backend().place_address(toolbar)
-}
-
 /// Whether the browser's address can follow the focused page. A toolbar that places it by hand keeps
 /// it over the first page, so only that page's row shows the browser's address.
 pub fn address_follows_page() -> bool {
@@ -49,7 +43,8 @@ pub unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
     // Where the second view is the split, the page view itself says where the pages go, so a
     // tab drop works without the browser's own split.
     if crate::features::second_view::available() {
-        return crate::features::second_view::page_area(window).or_else(|| backend().page_area(window));
+        return crate::features::second_view::page_area(window)
+            .or_else(|| backend().page_area(window));
     }
     backend().page_area(window)
 }
@@ -67,7 +62,14 @@ pub unsafe fn panes(window: HWND) -> Vec<Pane> {
 /// field moves to the focused pane, but only while that pane shows the window's active tab, which
 /// is the page the field opens addresses in. The browser's own split keeps its address in the top
 /// line, and over the first page where the toolbar places it by hand.
-pub fn row_editable(second_view: bool, active: bool, shows_active_tab: bool, top_line: bool, first: bool, follows: bool) -> bool {
+pub fn row_editable(
+    second_view: bool,
+    active: bool,
+    shows_active_tab: bool,
+    top_line: bool,
+    first: bool,
+    follows: bool,
+) -> bool {
     if second_view {
         active && shows_active_tab
     } else {
@@ -97,7 +99,8 @@ pub unsafe fn active_is_split(window: HWND) -> bool {
 pub unsafe fn unsplit_active(window: HWND) -> bool {
     if crate::features::second_view::available() {
         // The second view lets go of the page, and its tab shows it again.
-        return crate::features::second_view::is_split(window) && crate::features::second_view::close(window);
+        return crate::features::second_view::is_split(window)
+            && crate::features::second_view::close(window);
     }
     backend().unsplit_active(window)
 }
@@ -128,11 +131,15 @@ pub fn partner_of(active: usize, count: usize) -> Option<usize> {
 /// Splits the active tab with the tab after it, or before it when it is the last one. Returns false
 /// when the window has a single tab or the active tab is already split.
 pub unsafe fn split_active(window: HWND) -> bool {
-    let Some(tabs) = crate::features::tabs::tabs(window) else { return false };
+    let Some(tabs) = crate::features::tabs::tabs(window) else {
+        return false;
+    };
     let Some(active) = tabs.iter().find(|tab| tab.active).map(|tab| tab.index) else {
         return false;
     };
-    let Some(other) = partner_of(active, tabs.len()) else { return false };
+    let Some(other) = partner_of(active, tabs.len()) else {
+        return false;
+    };
     if crate::features::second_view::available() {
         return split_in_view(window, other, other < active);
     }
@@ -148,7 +155,6 @@ pub enum Side {
     Bottom,
 }
 
-
 /// The two tabs a drop makes a split of, the one shown first coming first, and whether they are
 /// stacked. A tab dropped on the left or top of the page is shown before the active one.
 pub fn drop_pair(active: usize, dragged: usize, side: Side) -> (usize, usize, bool) {
@@ -162,7 +168,9 @@ pub fn drop_pair(active: usize, dragged: usize, side: Side) -> (usize, usize, bo
 /// Splits the active tab with `dragged`, which takes `side` of it. Returns false when the tab is
 /// the active one, does not exist, or either tab is already in a split.
 pub unsafe fn split_beside(window: HWND, dragged: usize, side: Side) -> bool {
-    let Some(tabs) = crate::features::tabs::tabs(window) else { return false };
+    let Some(tabs) = crate::features::tabs::tabs(window) else {
+        return false;
+    };
     let Some(active) = tabs.iter().find(|tab| tab.active).map(|tab| tab.index) else {
         return false;
     };
@@ -288,14 +296,29 @@ pub fn row_buttons(width: f32, first: bool, caption: f32) -> Vec<(RowButton, f32
     let start = if first { TOGGLE_ROOM } else { 0.0 } + 2.0;
     let end = width - caption - ROW_PAD;
     let free = end - start;
-    let mut left = vec![RowButton::Grip, RowButton::Back, RowButton::Forward, RowButton::Reload];
+    let mut left = vec![
+        RowButton::Grip,
+        RowButton::Back,
+        RowButton::Forward,
+        RowButton::Reload,
+    ];
     let mut right = vec![RowButton::Popout, RowButton::Unsplit];
     let needed = |left: &[RowButton], right: &[RowButton]| {
         let pitch = BUTTON + BUTTON_GAP;
-        pitch * left.len() as f32 + ADDRESS_LEAD + ADDRESS_MIN + ADDRESS_TRAIL + pitch * right.len() as f32
+        pitch * left.len() as f32
+            + ADDRESS_LEAD
+            + ADDRESS_MIN
+            + ADDRESS_TRAIL
+            + pitch * right.len() as f32
             - BUTTON_GAP
     };
-    for drop in [RowButton::Popout, RowButton::Forward, RowButton::Grip, RowButton::Reload, RowButton::Back] {
+    for drop in [
+        RowButton::Popout,
+        RowButton::Forward,
+        RowButton::Grip,
+        RowButton::Reload,
+        RowButton::Back,
+    ] {
         if needed(&left, &right) <= free {
             break;
         }
@@ -308,14 +331,19 @@ pub fn row_buttons(width: f32, first: bool, caption: f32) -> Vec<(RowButton, f32
         buttons.push((*button, x, BUTTON));
         x += BUTTON + BUTTON_GAP;
     }
-    let right_start = end - right.len() as f32 * BUTTON - (right.len() as f32 - 1.0).max(0.0) * BUTTON_GAP;
+    let right_start =
+        end - right.len() as f32 * BUTTON - (right.len() as f32 - 1.0).max(0.0) * BUTTON_GAP;
     let address = x + ADDRESS_LEAD;
     let address_width = right_start - ADDRESS_TRAIL - address;
     if address_width >= ADDRESS_MIN {
         buttons.push((RowButton::Address, address, address_width));
     }
     for (index, button) in right.iter().enumerate() {
-        buttons.push((*button, right_start + index as f32 * (BUTTON + BUTTON_GAP), BUTTON));
+        buttons.push((
+            *button,
+            right_start + index as f32 * (BUTTON + BUTTON_GAP),
+            BUTTON,
+        ));
     }
     buttons
 }
@@ -379,7 +407,10 @@ pub unsafe fn toggle_split(window: HWND) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{caption_over, drop_pair, drop_zone, fill_area, partner_of, row_buttons, row_top, RowButton, Side, CAPTION_ROOM, TOGGLE_ROOM};
+    use super::{
+        caption_over, drop_pair, drop_zone, fill_area, partner_of, row_buttons, row_top, RowButton,
+        Side, CAPTION_ROOM, TOGGLE_ROOM,
+    };
 
     #[test]
     fn fr9_split_with_a_new_start_tab_joins_the_tab_after_the_active_one() {
@@ -424,9 +455,15 @@ mod tests {
         let (side, rect) = drop_zone(page, 880.0, 300.0, false, 8.0);
         assert_eq!(side, Some(Side::Right));
         assert_eq!(rect, [100.0 + 396.0 + 8.0, 50.0, 396.0, 600.0]);
-        assert_eq!(drop_zone(page, 120.0, 300.0, false, 8.0).0, Some(Side::Left));
+        assert_eq!(
+            drop_zone(page, 120.0, 300.0, false, 8.0).0,
+            Some(Side::Left)
+        );
         assert_eq!(drop_zone(page, 500.0, 60.0, false, 8.0).0, Some(Side::Top));
-        assert_eq!(drop_zone(page, 500.0, 640.0, false, 8.0).0, Some(Side::Bottom));
+        assert_eq!(
+            drop_zone(page, 500.0, 640.0, false, 8.0).0,
+            Some(Side::Bottom)
+        );
     }
 
     #[test]
@@ -480,7 +517,10 @@ mod tests {
                     assert!(*x >= edge, "overlap at {width} {first} {last}: {buttons:?}");
                     edge = x + w;
                 }
-                assert!(edge <= limit, "row runs under the caption at {width}: {buttons:?}");
+                assert!(
+                    edge <= limit,
+                    "row runs under the caption at {width}: {buttons:?}"
+                );
                 assert!(buttons.iter().any(|b| b.0 == RowButton::Unsplit));
             }
         }
@@ -488,7 +528,10 @@ mod tests {
 
     #[test]
     fn fr9_narrow_row_drops_the_mini_window_button_before_the_address() {
-        let names: Vec<RowButton> = row_buttons(303.0, false, CAPTION_ROOM).iter().map(|b| b.0).collect();
+        let names: Vec<RowButton> = row_buttons(303.0, false, CAPTION_ROOM)
+            .iter()
+            .map(|b| b.0)
+            .collect();
         assert!(!names.contains(&RowButton::Popout));
         assert!(names.contains(&RowButton::Address) && names.contains(&RowButton::Unsplit));
     }
@@ -504,8 +547,14 @@ mod tests {
         use super::row_editable;
         // Second view: the focused pane that shows the active tab, wherever it sits.
         assert!(row_editable(true, true, true, true, false, false));
-        assert!(!row_editable(true, false, true, true, true, true), "an unfocused pane only shows its address");
-        assert!(!row_editable(true, true, false, true, true, true), "a page of another window has no field");
+        assert!(
+            !row_editable(true, false, true, true, true, true),
+            "an unfocused pane only shows its address"
+        );
+        assert!(
+            !row_editable(true, true, false, true, true, true),
+            "a page of another window has no field"
+        );
         // The browser's own split keeps the old rule.
         assert!(row_editable(false, true, true, true, true, false));
         assert!(!row_editable(false, true, true, true, false, false));

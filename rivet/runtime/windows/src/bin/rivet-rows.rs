@@ -27,7 +27,12 @@ fn rows_with(arguments: &[&str]) -> Result<Vec<serde_json::Value>, String> {
         let ["--table", path] = pair else {
             return Err(format!("unknown argument {pair:?}"));
         };
-        rows.extend(table_rows(path)?["rows"].as_array().cloned().unwrap_or_default());
+        rows.extend(
+            table_rows(path)?["rows"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default(),
+        );
     }
     Ok(rows)
 }

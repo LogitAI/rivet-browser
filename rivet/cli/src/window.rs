@@ -25,20 +25,22 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory5, IDWriteFontCollection, IDWriteFontCollection1, IDWriteTextFormat3, IDWriteTextLayout1,
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE, DWRITE_FONT_AXIS_VALUE,
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS,
-    DWRITE_TEXT_RANGE, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWriteCreateFactory, IDWriteFactory5, IDWriteFontCollection, IDWriteFontCollection1,
+    IDWriteTextFormat3, IDWriteTextLayout1, DWRITE_FACTORY_TYPE_SHARED,
+    DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE, DWRITE_FONT_AXIS_VALUE, DWRITE_FONT_STRETCH_NORMAL,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+    DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
     DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapDitherTypeNone,
-    WICBitmapPaletteTypeCustom,
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
+    WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom,
 };
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+};
 use windows::Win32::UI::WindowsAndMessaging::HICON;
 use windows_numerics::Matrix3x2;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -48,13 +50,16 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::Dialogs::{
-    GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST,
+    OPENFILENAMEW,
 };
 use windows_sys::Win32::UI::Controls::MARGINS;
-use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+use windows_sys::Win32::UI::HiDpi::{
+    GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_RETURN,
-    VK_UP,
+    GetKeyState, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_CONTROL, VK_DOWN,
+    VK_ESCAPE, VK_RETURN, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -90,7 +95,12 @@ struct Type {
 }
 
 const fn style(family: &'static str, size: f32, weight: i32, tracking: f32) -> Type {
-    Type { family, size, weight, tracking }
+    Type {
+        family,
+        size,
+        weight,
+        tracking,
+    }
 }
 
 const TITLE: Type = style("Newsreader", 24.0, 600, -0.01);
@@ -137,7 +147,12 @@ fn mix(base: u32, over: u32, amount: f32) -> u32 {
 }
 
 fn d2d(rect: Rect) -> D2D_RECT_F {
-    D2D_RECT_F { left: rect.x, top: rect.y, right: rect.right(), bottom: rect.bottom() }
+    D2D_RECT_F {
+        left: rect.x,
+        top: rect.y,
+        right: rect.right(),
+        bottom: rect.bottom(),
+    }
 }
 
 /// The graphics objects of the window. The render target is rebuilt when Windows takes it away.
@@ -156,7 +171,12 @@ unsafe fn load_fonts(dwrite: &IDWriteFactory5) -> windows::core::Result<IDWriteF
     let builder = dwrite.CreateFontSetBuilder()?;
     for font in FONTS {
         // The bytes are static, so DirectWrite can read them in place without an owner object.
-        let file = loader.CreateInMemoryFontFileReference(dwrite, font.as_ptr().cast(), font.len() as u32, None)?;
+        let file = loader.CreateInMemoryFontFileReference(
+            dwrite,
+            font.as_ptr().cast(),
+            font.len() as u32,
+            None,
+        )?;
         builder.AddFontFile(&file)?;
     }
     let set = builder.CreateFontSet()?;
@@ -169,10 +189,23 @@ impl Gfx {
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
         let wic = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
-        Ok(Self { factory, dwrite, fonts, wic, target: None, icons: HashMap::new() })
+        Ok(Self {
+            factory,
+            dwrite,
+            fonts,
+            wic,
+            target: None,
+            icons: HashMap::new(),
+        })
     }
 
-    unsafe fn target(&mut self, window: HWND, width: u32, height: u32, dpi: u32) -> windows::core::Result<ID2D1HwndRenderTarget> {
+    unsafe fn target(
+        &mut self,
+        window: HWND,
+        width: u32,
+        height: u32,
+        dpi: u32,
+    ) -> windows::core::Result<ID2D1HwndRenderTarget> {
         if let Some(target) = &self.target {
             return Ok(target.clone());
         }
@@ -195,7 +228,12 @@ impl Gfx {
     }
 
     /// The icon of a program as a bitmap of the target, at the size that is asked for in pixels.
-    unsafe fn icon(&mut self, target: &ID2D1RenderTarget, program: &std::path::Path, pixels: i32) -> Option<ID2D1Bitmap> {
+    unsafe fn icon(
+        &mut self,
+        target: &ID2D1RenderTarget,
+        program: &std::path::Path,
+        pixels: i32,
+    ) -> Option<ID2D1Bitmap> {
         let key = format!("{}@{pixels}", program.display());
         if let Some(found) = self.icons.get(&key) {
             return found.clone();
@@ -205,7 +243,8 @@ impl Gfx {
             let file = wide(&program.to_string_lossy());
             let mut icon: windows_sys::Win32::UI::WindowsAndMessaging::HICON = std::ptr::null_mut();
             let mut id = 0u32;
-            let count = PrivateExtractIconsW(file.as_ptr(), 0, pixels, pixels, &mut icon, &mut id, 1, 0);
+            let count =
+                PrivateExtractIconsW(file.as_ptr(), 0, pixels, pixels, &mut icon, &mut id, 1, 0);
             if count == 0 || count == u32::MAX || icon.is_null() {
                 return None;
             }
@@ -214,7 +253,14 @@ impl Gfx {
             // Direct2D draws premultiplied pixels, and an icon is not premultiplied.
             let converter = wic.CreateFormatConverter().ok()?;
             converter
-                .Initialize(&bitmap.ok()?, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom)
+                .Initialize(
+                    &bitmap.ok()?,
+                    &GUID_WICPixelFormat32bppPBGRA,
+                    WICBitmapDitherTypeNone,
+                    None,
+                    0.0,
+                    WICBitmapPaletteTypeCustom,
+                )
                 .ok()?;
             target.CreateBitmapFromWicBitmap(&converter, None).ok()
         })();
@@ -243,7 +289,11 @@ impl Canvas<'_> {
 
     unsafe fn fill(&self, area: Rect, radius: f32, rgb: u32, alpha: f32) {
         if let Ok(brush) = self.brush(rgb, alpha) {
-            let shape = D2D1_ROUNDED_RECT { rect: d2d(area), radiusX: radius, radiusY: radius };
+            let shape = D2D1_ROUNDED_RECT {
+                rect: d2d(area),
+                radiusX: radius,
+                radiusY: radius,
+            };
             self.target.FillRoundedRectangle(&shape, &brush);
         }
     }
@@ -262,14 +312,22 @@ impl Canvas<'_> {
                 radiusX: radius - inset,
                 radiusY: radius - inset,
             };
-            self.target.DrawRoundedRectangle(&shape, &brush, width, None);
+            self.target
+                .DrawRoundedRectangle(&shape, &brush, width, None);
         }
     }
 
     unsafe fn dot(&self, x: f32, y: f32, size: f32, rgb: u32) {
         if let Ok(brush) = self.brush(rgb, 1.0) {
             let radius = size / 2.0;
-            let ellipse = D2D1_ELLIPSE { point: windows_numerics::Vector2 { X: x + radius, Y: y + radius }, radiusX: radius, radiusY: radius };
+            let ellipse = D2D1_ELLIPSE {
+                point: windows_numerics::Vector2 {
+                    X: x + radius,
+                    Y: y + radius,
+                },
+                radiusX: radius,
+                radiusY: radius,
+            };
             self.target.FillEllipse(&ellipse, &brush);
         }
     }
@@ -277,14 +335,33 @@ impl Canvas<'_> {
     /// The Rivet mark of the appbar: the tile, the ring and the pin.
     unsafe fn mark(&self, x: f32, y: f32, size: f32) {
         let unit = size / 96.0;
-        self.fill(Rect { x, y, w: size, h: size }, 24.0 * unit, 0xf2eee5, 1.0);
+        self.fill(
+            Rect {
+                x,
+                y,
+                w: size,
+                h: size,
+            },
+            24.0 * unit,
+            0xf2eee5,
+            1.0,
+        );
         if let Ok(brush) = self.brush(INK, 1.0) {
-            let start = windows_numerics::Vector2 { X: x + 58.0 * unit, Y: y + 58.0 * unit };
-            let end = windows_numerics::Vector2 { X: x + 74.0 * unit, Y: y + 74.0 * unit };
+            let start = windows_numerics::Vector2 {
+                X: x + 58.0 * unit,
+                Y: y + 58.0 * unit,
+            };
+            let end = windows_numerics::Vector2 {
+                X: x + 74.0 * unit,
+                Y: y + 74.0 * unit,
+            };
             self.target.DrawLine(start, end, &brush, 13.0 * unit, None);
             self.dot(end.X - 6.5 * unit, end.Y - 6.5 * unit, 13.0 * unit, INK);
             let ring = D2D1_ELLIPSE {
-                point: windows_numerics::Vector2 { X: x + 44.0 * unit, Y: y + 44.0 * unit },
+                point: windows_numerics::Vector2 {
+                    X: x + 44.0 * unit,
+                    Y: y + 44.0 * unit,
+                },
                 radiusX: 25.0 * unit,
                 radiusY: 25.0 * unit,
             };
@@ -293,7 +370,11 @@ impl Canvas<'_> {
         self.dot(x + 35.5 * unit, y + 35.5 * unit, 17.0 * unit, BERRY);
     }
 
-    unsafe fn format(&self, style: Type, family: Option<&str>) -> windows::core::Result<IDWriteTextFormat3> {
+    unsafe fn format(
+        &self,
+        style: Type,
+        family: Option<&str>,
+    ) -> windows::core::Result<IDWriteTextFormat3> {
         let locale = HSTRING::from("en-us");
         let name = HSTRING::from(family.unwrap_or(style.family));
         let format = if family.is_some() {
@@ -320,37 +401,68 @@ impl Canvas<'_> {
         let format: IDWriteTextFormat3 = format.cast()?;
         if style.family == "Newsreader" {
             // A browser sets the optical size axis to the font size. DirectWrite keeps the default.
-            format.SetFontAxisValues(&[DWRITE_FONT_AXIS_VALUE { axisTag: DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE, value: style.size }])?;
+            format.SetFontAxisValues(&[DWRITE_FONT_AXIS_VALUE {
+                axisTag: DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE,
+                value: style.size,
+            }])?;
         }
         Ok(format)
     }
 
     /// Draws text in a box: one line centred vertically and trimmed with an ellipsis, or wrapped
     /// from the top when `wrap` is set.
-    unsafe fn text(&self, style: Type, area: Rect, value: &str, rgb: u32, align: Align, wrap: bool) {
+    unsafe fn text(
+        &self,
+        style: Type,
+        area: Rect,
+        value: &str,
+        rgb: u32,
+        align: Align,
+        wrap: bool,
+    ) {
         let _ = (|| -> windows::core::Result<()> {
             let format = self.format(style, None)?;
-            format.SetWordWrapping(if wrap { DWRITE_WORD_WRAPPING_WRAP } else { DWRITE_WORD_WRAPPING_NO_WRAP })?;
-            format.SetParagraphAlignment(if wrap { DWRITE_PARAGRAPH_ALIGNMENT_NEAR } else { DWRITE_PARAGRAPH_ALIGNMENT_CENTER })?;
+            format.SetWordWrapping(if wrap {
+                DWRITE_WORD_WRAPPING_WRAP
+            } else {
+                DWRITE_WORD_WRAPPING_NO_WRAP
+            })?;
+            format.SetParagraphAlignment(if wrap {
+                DWRITE_PARAGRAPH_ALIGNMENT_NEAR
+            } else {
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER
+            })?;
             format.SetTextAlignment(match align {
                 Align::Left => DWRITE_TEXT_ALIGNMENT_LEADING,
                 Align::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
             })?;
             if !wrap {
                 let sign = self.dwrite.CreateEllipsisTrimmingSign(&format)?;
-                let trimming = DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER, delimiter: 0, delimiterCount: 0 };
+                let trimming = DWRITE_TRIMMING {
+                    granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                    delimiter: 0,
+                    delimiterCount: 0,
+                };
                 format.SetTrimming(&trimming, &sign)?;
             }
             let text: Vec<u16> = value.encode_utf16().collect();
-            let layout = self.dwrite.CreateTextLayout(&text, &format, area.w, area.h)?;
+            let layout = self
+                .dwrite
+                .CreateTextLayout(&text, &format, area.w, area.h)?;
             if style.tracking != 0.0 {
                 let layout: IDWriteTextLayout1 = layout.cast()?;
-                let range = DWRITE_TEXT_RANGE { startPosition: 0, length: text.len() as u32 };
+                let range = DWRITE_TEXT_RANGE {
+                    startPosition: 0,
+                    length: text.len() as u32,
+                };
                 layout.SetCharacterSpacing(0.0, style.tracking * style.size, 0.0, range)?;
             }
             let brush = self.brush(rgb, 1.0)?;
             self.target.DrawTextLayout(
-                windows_numerics::Vector2 { X: area.x, Y: area.y },
+                windows_numerics::Vector2 {
+                    X: area.x,
+                    Y: area.y,
+                },
                 &layout,
                 &brush,
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
@@ -365,7 +477,9 @@ impl Canvas<'_> {
             let format = self.format(style, None)?;
             format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
             let text: Vec<u16> = value.encode_utf16().collect();
-            let layout = self.dwrite.CreateTextLayout(&text, &format, 4000.0, 100.0)?;
+            let layout = self
+                .dwrite
+                .CreateTextLayout(&text, &format, 4000.0, 100.0)?;
             let mut metrics = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut metrics)?;
             Ok(metrics.widthIncludingTrailingWhitespace)
@@ -380,9 +494,19 @@ impl Canvas<'_> {
             format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
             format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
             let text: Vec<u16> = glyph.to_string().encode_utf16().collect();
-            let layout = self.dwrite.CreateTextLayout(&text, &format, area.w, area.h)?;
+            let layout = self
+                .dwrite
+                .CreateTextLayout(&text, &format, area.w, area.h)?;
             let brush = self.brush(rgb, 1.0)?;
-            self.target.DrawTextLayout(windows_numerics::Vector2 { X: area.x, Y: area.y }, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            self.target.DrawTextLayout(
+                windows_numerics::Vector2 {
+                    X: area.x,
+                    Y: area.y,
+                },
+                &layout,
+                &brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+            );
             Ok(())
         })();
     }
@@ -392,11 +516,25 @@ impl Canvas<'_> {
 unsafe fn press(target: &ID2D1RenderTarget, area: Rect, pressed: bool) {
     let scale = if pressed { 0.98 } else { 1.0 };
     let (cx, cy) = (area.x + area.w / 2.0, area.y + area.h / 2.0);
-    target.SetTransform(&Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: cx - cx * scale, M32: cy - cy * scale });
+    target.SetTransform(&Matrix3x2 {
+        M11: scale,
+        M12: 0.0,
+        M21: 0.0,
+        M22: scale,
+        M31: cx - cx * scale,
+        M32: cy - cy * scale,
+    });
 }
 
 unsafe fn unpress(target: &ID2D1RenderTarget) {
-    target.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: 0.0, M32: 0.0 });
+    target.SetTransform(&Matrix3x2 {
+        M11: 1.0,
+        M12: 0.0,
+        M21: 0.0,
+        M22: 1.0,
+        M31: 0.0,
+        M32: 0.0,
+    });
 }
 
 fn status_badge(status: &Status) -> (&'static str, u32) {
@@ -436,9 +574,20 @@ impl App {
     }
 
     unsafe fn canvas_measure(&mut self) -> Vec<f32> {
-        let Ok(target) = self.gfx.target(self.window, 1, 1, self.dpi) else { return Vec::new() };
-        let canvas = Canvas { target: &target.cast::<ID2D1RenderTarget>().unwrap(), dwrite: &self.gfx.dwrite, fonts: &self.gfx.fonts };
-        let widths: Vec<f32> = self.model.profiles.iter().map(|name| canvas.measure(CHIP, name) + 28.0).collect();
+        let Ok(target) = self.gfx.target(self.window, 1, 1, self.dpi) else {
+            return Vec::new();
+        };
+        let canvas = Canvas {
+            target: &target.cast::<ID2D1RenderTarget>().unwrap(),
+            dwrite: &self.gfx.dwrite,
+            fonts: &self.gfx.fonts,
+        };
+        let widths: Vec<f32> = self
+            .model
+            .profiles
+            .iter()
+            .map(|name| canvas.measure(CHIP, name) + 28.0)
+            .collect();
         let fit = model::chips_that_fit(&widths);
         widths[..fit].to_vec()
     }
@@ -472,8 +621,13 @@ impl App {
     unsafe fn paint(&mut self) {
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(self.window, &mut client);
-        let (width, height) = ((client.right - client.left).max(1) as u32, (client.bottom - client.top).max(1) as u32);
-        let Ok(target) = self.gfx.target(self.window, width, height, self.dpi) else { return };
+        let (width, height) = (
+            (client.right - client.left).max(1) as u32,
+            (client.bottom - client.top).max(1) as u32,
+        );
+        let Ok(target) = self.gfx.target(self.window, width, height, self.dpi) else {
+            return;
+        };
         let render: ID2D1RenderTarget = match target.cast() {
             Ok(render) => render,
             Err(_) => return,
@@ -490,18 +644,49 @@ impl App {
 
     unsafe fn draw(&mut self, render: &ID2D1RenderTarget) {
         let layout = self.layout.clone();
-        let canvas = Canvas { target: render, dwrite: &self.gfx.dwrite.clone(), fonts: &self.gfx.fonts.clone() };
-        let size = Rect { x: 0.0, y: 0.0, w: model::WIDTH, h: layout.height };
+        let canvas = Canvas {
+            target: render,
+            dwrite: &self.gfx.dwrite.clone(),
+            fonts: &self.gfx.fonts.clone(),
+        };
+        let size = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: model::WIDTH,
+            h: layout.height,
+        };
         // The window is the frame colour with one paper panel inside it, as in the shell study.
-        let panel = Rect { x: model::FRAME, y: model::FRAME, w: size.w - 2.0 * model::FRAME, h: size.h - 2.0 * model::FRAME };
+        let panel = Rect {
+            x: model::FRAME,
+            y: model::FRAME,
+            w: size.w - 2.0 * model::FRAME,
+            h: size.h - 2.0 * model::FRAME,
+        };
         canvas.fill(panel, 12.0, PAPER, 1.0);
         canvas.ring(panel, 12.0, 0x000000, 0.06, 1.0);
 
         canvas.mark(model::PAD, 30.0, 44.0);
-        canvas.text(TITLE, Rect { x: model::PAD + 58.0, y: 28.0, w: 360.0, h: 30.0 }, "Set up Rivet", INK, Align::Left, false);
+        canvas.text(
+            TITLE,
+            Rect {
+                x: model::PAD + 58.0,
+                y: 28.0,
+                w: 360.0,
+                h: 30.0,
+            },
+            "Set up Rivet",
+            INK,
+            Align::Left,
+            false,
+        );
         canvas.text(
             SUBTITLE,
-            Rect { x: model::PAD + 58.0, y: 58.0, w: 400.0, h: 18.0 },
+            Rect {
+                x: model::PAD + 58.0,
+                y: 58.0,
+                w: 400.0,
+                h: 18.0,
+            },
             "Choose the browser Rivet works in, and a profile for it.",
             MUTED,
             Align::Left,
@@ -516,15 +701,36 @@ impl App {
         if let (Some(notice), Some(reason)) = (layout.notice, self.model.reason.clone()) {
             canvas.fill(notice, 10.0, mix(PAPER, TINT, 0.16), 1.0);
             canvas.ring(notice, 10.0, TINT, 0.5, 1.0);
-            canvas.text(NOTICE, Rect { x: notice.x + 14.0, y: notice.y + 6.0, w: notice.w - 28.0, h: notice.h - 12.0 }, &reason, ACCENT, Align::Left, true);
+            canvas.text(
+                NOTICE,
+                Rect {
+                    x: notice.x + 14.0,
+                    y: notice.y + 6.0,
+                    w: notice.w - 28.0,
+                    h: notice.h - 12.0,
+                },
+                &reason,
+                ACCENT,
+                Align::Left,
+                true,
+            );
         }
 
-        canvas.text(LABEL, layout.browser_label, "DETECTED BROWSERS", MUTED, Align::Left, false);
+        canvas.text(
+            LABEL,
+            layout.browser_label,
+            "DETECTED BROWSERS",
+            MUTED,
+            Align::Left,
+            false,
+        );
         canvas.fill(layout.group, 12.0, WHITE, 0.5);
         canvas.ring(layout.group, 12.0, INK, 0.08, 1.0);
         for (position, row) in layout.rows.iter().enumerate() {
             let index = self.model.scroll + position;
-            let Some(browser) = self.model.browsers.get(index).cloned() else { break };
+            let Some(browser) = self.model.browsers.get(index).cloned() else {
+                break;
+            };
             self.draw_row(&canvas, render, *row, &browser, index, position);
         }
         let manual = layout.manual;
@@ -533,11 +739,38 @@ impl App {
         if hot {
             canvas.fill(manual, 10.0, WHITE, 0.7);
         }
-        canvas.glyph('\u{E8E5}', Rect { x: manual.x + 12.0, y: manual.y + 8.0, w: 28.0, h: 28.0 }, 15.0, ACCENT);
-        canvas.text(ROW_NAME, Rect { x: manual.x + 52.0, y: manual.y + 5.0, w: manual.w - 64.0, h: 18.0 }, "Choose a browser file", INK, Align::Left, false);
+        canvas.glyph(
+            '\u{E8E5}',
+            Rect {
+                x: manual.x + 12.0,
+                y: manual.y + 8.0,
+                w: 28.0,
+                h: 28.0,
+            },
+            15.0,
+            ACCENT,
+        );
+        canvas.text(
+            ROW_NAME,
+            Rect {
+                x: manual.x + 52.0,
+                y: manual.y + 5.0,
+                w: manual.w - 64.0,
+                h: 18.0,
+            },
+            "Choose a browser file",
+            INK,
+            Align::Left,
+            false,
+        );
         canvas.text(
             ROW_META,
-            Rect { x: manual.x + 52.0, y: manual.y + 23.0, w: manual.w - 64.0, h: 14.0 },
+            Rect {
+                x: manual.x + 52.0,
+                y: manual.y + 23.0,
+                w: manual.w - 64.0,
+                h: 14.0,
+            },
             "Any Chromium browser program, picked by hand",
             MUTED,
             Align::Left,
@@ -545,17 +778,39 @@ impl App {
         );
         unpress(render);
 
-        let note_color = if self.model.can_finish() { MUTED } else { BERRY };
-        canvas.text(NOTE, layout.note, &self.model.note(), note_color, Align::Left, true);
+        let note_color = if self.model.can_finish() {
+            MUTED
+        } else {
+            BERRY
+        };
+        canvas.text(
+            NOTE,
+            layout.note,
+            &self.model.note(),
+            note_color,
+            Align::Left,
+            true,
+        );
 
-        canvas.text(LABEL, layout.profile_label, "RIVET PROFILE", MUTED, Align::Left, false);
+        canvas.text(
+            LABEL,
+            layout.profile_label,
+            "RIVET PROFILE",
+            MUTED,
+            Align::Left,
+            false,
+        );
         let field = layout.field;
         canvas.fill(field, 12.0, WHITE, 1.0);
         canvas.ring(field, 12.0, ACCENT, 0.55, 1.5);
         self.draw_field(render, &canvas);
 
         if layout.chips.is_empty() {
-            let hint = if self.model.profiles.is_empty() { "No Rivet profile for this browser yet. It is made when you finish." } else { "" };
+            let hint = if self.model.profiles.is_empty() {
+                "No Rivet profile for this browser yet. It is made when you finish."
+            } else {
+                ""
+            };
             canvas.text(NOTE, layout.chip_hint, hint, MUTED, Align::Left, false);
         } else {
             let typed = config::clean_profile(&self.model.profile);
@@ -564,27 +819,87 @@ impl App {
                 let current = name.eq_ignore_ascii_case(&typed);
                 let hot = self.hover == Hit::Chip(index);
                 press(render, *chip, self.pressed == Hit::Chip(index) && hot);
-                canvas.fill(*chip, 8.0, if current { mix(PAPER, TINT, 0.2) } else { WHITE }, if current { 1.0 } else if hot { 0.9 } else { 0.5 });
-                canvas.ring(*chip, 8.0, if current { ACCENT } else { INK }, if current { 0.5 } else { 0.08 }, 1.0);
-                canvas.text(CHIP, *chip, name, if current { ACCENT } else { SOFT_INK }, Align::Center, false);
+                canvas.fill(
+                    *chip,
+                    8.0,
+                    if current {
+                        mix(PAPER, TINT, 0.2)
+                    } else {
+                        WHITE
+                    },
+                    if current {
+                        1.0
+                    } else if hot {
+                        0.9
+                    } else {
+                        0.5
+                    },
+                );
+                canvas.ring(
+                    *chip,
+                    8.0,
+                    if current { ACCENT } else { INK },
+                    if current { 0.5 } else { 0.08 },
+                    1.0,
+                );
+                canvas.text(
+                    CHIP,
+                    *chip,
+                    name,
+                    if current { ACCENT } else { SOFT_INK },
+                    Align::Center,
+                    false,
+                );
                 unpress(render);
             }
         }
-        canvas.text(PREVIEW, layout.preview, &self.model.preview(), MUTED, Align::Left, false);
+        canvas.text(
+            PREVIEW,
+            layout.preview,
+            &self.model.preview(),
+            MUTED,
+            Align::Left,
+            false,
+        );
 
         let message = self.model.error.clone().unwrap_or_default();
         canvas.text(MESSAGE, layout.message, &message, BERRY, Align::Left, true);
         let finish = layout.finish;
         let enabled = self.model.can_finish();
         let hot = enabled && self.hover == Hit::Finish;
-        press(render, finish, enabled && self.pressed == Hit::Finish && hot);
-        let fill = if !enabled { mix(PAPER, TINT, 0.22) } else if hot { ACCENT_PRESSED } else { ACCENT };
+        press(
+            render,
+            finish,
+            enabled && self.pressed == Hit::Finish && hot,
+        );
+        let fill = if !enabled {
+            mix(PAPER, TINT, 0.22)
+        } else if hot {
+            ACCENT_PRESSED
+        } else {
+            ACCENT
+        };
         canvas.fill(finish, 12.0, fill, 1.0);
-        canvas.text(BUTTON, finish, "Finish", if enabled { WHITE } else { MUTED }, Align::Center, false);
+        canvas.text(
+            BUTTON,
+            finish,
+            "Finish",
+            if enabled { WHITE } else { MUTED },
+            Align::Center,
+            false,
+        );
         unpress(render);
     }
 
-    unsafe fn draw_row(&mut self, canvas: &Canvas<'_>, render: &ID2D1RenderTarget, row: Rect, browser: &Browser, index: usize, position: usize) {
+    unsafe fn draw_row(
+        &mut self,
+        canvas: &Canvas<'_>,
+        render: &ID2D1RenderTarget,
+        row: Rect,
+        browser: &Browser,
+        index: usize,
+        position: usize,
+    ) {
         let selected = self.model.selected == Some(index);
         let hot = self.hover == Hit::Row(position);
         press(render, row, self.pressed == Hit::Row(position) && hot);
@@ -594,27 +909,83 @@ impl App {
         } else if hot {
             canvas.fill(row, 10.0, WHITE, 0.7);
         }
-        let icon_box = Rect { x: row.x + 12.0, y: row.y + 10.0, w: 28.0, h: 28.0 };
+        let icon_box = Rect {
+            x: row.x + 12.0,
+            y: row.y + 10.0,
+            w: 28.0,
+            h: 28.0,
+        };
         let pixels = self.to_px(icon_box.w);
         match self.gfx.icon(render, &browser.path, pixels) {
             Some(bitmap) => {
                 let dest = d2d(icon_box);
-                render.DrawBitmap(&bitmap, Some(&dest), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
+                render.DrawBitmap(
+                    &bitmap,
+                    Some(&dest),
+                    1.0,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                    None,
+                );
             }
             None => canvas.glyph('\u{E774}', icon_box, 18.0, ACCENT),
         }
         let (badge, dot) = status_badge(&browser.status);
         let badge_width = canvas.measure(BADGE, badge) + 28.0;
-        let badge_box = Rect { x: row.right() - 12.0 - badge_width, y: row.y + 14.0, w: badge_width, h: 20.0 };
+        let badge_box = Rect {
+            x: row.right() - 12.0 - badge_width,
+            y: row.y + 14.0,
+            w: badge_width,
+            h: 20.0,
+        };
         canvas.fill(badge_box, 6.0, WHITE, 0.6);
         canvas.ring(badge_box, 6.0, INK, 0.08, 1.0);
         canvas.dot(badge_box.x + 8.0, badge_box.y + 7.0, 6.0, dot);
-        canvas.text(BADGE, Rect { x: badge_box.x + 20.0, y: badge_box.y, w: badge_box.w - 24.0, h: badge_box.h }, badge, SOFT_INK, Align::Left, false);
+        canvas.text(
+            BADGE,
+            Rect {
+                x: badge_box.x + 20.0,
+                y: badge_box.y,
+                w: badge_box.w - 24.0,
+                h: badge_box.h,
+            },
+            badge,
+            SOFT_INK,
+            Align::Left,
+            false,
+        );
         let text_width = badge_box.x - (row.x + 52.0) - 10.0;
-        let name_color = if browser.status.can_open() { INK } else { SOFT_INK };
-        canvas.text(ROW_NAME, Rect { x: row.x + 52.0, y: row.y + 6.0, w: text_width, h: 18.0 }, &browser.name, name_color, Align::Left, false);
+        let name_color = if browser.status.can_open() {
+            INK
+        } else {
+            SOFT_INK
+        };
+        canvas.text(
+            ROW_NAME,
+            Rect {
+                x: row.x + 52.0,
+                y: row.y + 6.0,
+                w: text_width,
+                h: 18.0,
+            },
+            &browser.name,
+            name_color,
+            Align::Left,
+            false,
+        );
         let meta = format!("{}  {}", browser.version, browser.path.display());
-        canvas.text(ROW_META, Rect { x: row.x + 52.0, y: row.y + 25.0, w: text_width, h: 14.0 }, &meta, MUTED, Align::Left, false);
+        canvas.text(
+            ROW_META,
+            Rect {
+                x: row.x + 52.0,
+                y: row.y + 25.0,
+                w: text_width,
+                h: 14.0,
+            },
+            &meta,
+            MUTED,
+            Align::Left,
+            false,
+        );
         unpress(render);
     }
 
@@ -622,15 +993,28 @@ impl App {
         let text = self.layout.text;
         let empty = self.model.profile.is_empty();
         let (left, top) = (self.to_px(text.x), self.to_px(text.y));
-        let (dpi, to_dip) = (self.dpi, |pixels: i32| pixels as f32 * 96.0 / self.dpi as f32);
+        let (dpi, to_dip) = (self.dpi, |pixels: i32| {
+            pixels as f32 * 96.0 / self.dpi as f32
+        });
         if let Some(pixels) = self.field.render(WHITE) {
             let properties = D2D1_BITMAP_PROPERTIES {
-                pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_IGNORE },
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                },
                 dpiX: dpi as f32,
                 dpiY: dpi as f32,
             };
-            let size = D2D_SIZE_U { width: pixels.width as u32, height: pixels.height as u32 };
-            if let Ok(bitmap) = render.CreateBitmap(size, Some(pixels.bytes.as_ptr().cast()), pixels.width as u32 * 4, &properties) {
+            let size = D2D_SIZE_U {
+                width: pixels.width as u32,
+                height: pixels.height as u32,
+            };
+            if let Ok(bitmap) = render.CreateBitmap(
+                size,
+                Some(pixels.bytes.as_ptr().cast()),
+                pixels.width as u32 * 4,
+                &properties,
+            ) {
                 let dest = D2D_RECT_F {
                     left: to_dip(left),
                     top: to_dip(top),
@@ -643,7 +1027,12 @@ impl App {
         if empty {
             canvas.text(
                 style("Manrope", FIELD_TEXT, 400, 0.0),
-                Rect { x: text.x, y: text.y, w: text.w, h: text.h },
+                Rect {
+                    x: text.x,
+                    y: text.y,
+                    w: text.w,
+                    h: text.h,
+                },
                 config::DEFAULT_PROFILE,
                 0xb3b0b8,
                 Align::Left,
@@ -671,7 +1060,9 @@ impl App {
 
     unsafe fn pick_file(&mut self) {
         let mut buffer = [0u16; 1024];
-        let filter: Vec<u16> = "Programs (*.exe)\0*.exe\0All files\0*.*\0\0".encode_utf16().collect();
+        let filter: Vec<u16> = "Programs (*.exe)\0*.exe\0All files\0*.*\0\0"
+            .encode_utf16()
+            .collect();
         let title = wide("Choose a Chromium browser");
         let mut dialog: OPENFILENAMEW = std::mem::zeroed();
         dialog.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
@@ -684,7 +1075,10 @@ impl App {
         if GetOpenFileNameW(&mut dialog) == 0 {
             return;
         }
-        let end = buffer.iter().position(|unit| *unit == 0).unwrap_or(buffer.len());
+        let end = buffer
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(buffer.len());
         let path = PathBuf::from(String::from_utf16_lossy(&buffer[..end]));
         match system::inspect(&path) {
             Ok(browser) => {
@@ -755,7 +1149,12 @@ fn low(value: usize) -> i32 {
     (value & 0xffff) as i16 as i32
 }
 
-unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn window_proc(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     let Some(app) = app(window) else {
         return DefWindowProcW(window, message, wparam, lparam);
     };
@@ -770,7 +1169,10 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
         }
         WM_SIZE => {
             if let Some(target) = &app.gfx.target {
-                let _ = target.Resize(&D2D_SIZE_U { width: (lparam & 0xffff) as u32, height: ((lparam >> 16) & 0xffff) as u32 });
+                let _ = target.Resize(&D2D_SIZE_U {
+                    width: (lparam & 0xffff) as u32,
+                    height: ((lparam >> 16) & 0xffff) as u32,
+                });
             }
             app.repaint();
             0
@@ -778,7 +1180,15 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
         WM_DPICHANGED => {
             app.dpi = (wparam & 0xffff) as u32;
             let suggested = &*(lparam as *const RECT);
-            SetWindowPos(window, std::ptr::null_mut(), suggested.left, suggested.top, suggested.right - suggested.left, suggested.bottom - suggested.top, SWP_NOACTIVATE | SWP_NOZORDER);
+            SetWindowPos(
+                window,
+                std::ptr::null_mut(),
+                suggested.left,
+                suggested.top,
+                suggested.right - suggested.left,
+                suggested.bottom - suggested.top,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            );
             if let Some(target) = &app.gfx.target {
                 target.SetDpi(app.dpi as f32, app.dpi as f32);
             }
@@ -788,7 +1198,10 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
             0
         }
         WM_NCHITTEST => {
-            let mut point = POINT { x: low(lparam as usize), y: ((lparam >> 16) & 0xffff) as i16 as i32 };
+            let mut point = POINT {
+                x: low(lparam as usize),
+                y: ((lparam >> 16) & 0xffff) as i16 as i32,
+            };
             ScreenToClient(window, &mut point);
             let x = app.to_dip(point.x);
             let y = app.to_dip(point.y);
@@ -813,7 +1226,12 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
         }
         WM_MOUSEMOVE => {
             if !app.tracking {
-                let mut track = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: window, dwHoverTime: 0 };
+                let mut track = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: window,
+                    dwHoverTime: 0,
+                };
                 TrackMouseEvent(&mut track);
                 app.tracking = true;
             }
@@ -895,8 +1313,14 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
             app.sync_text();
             result
         }
-        WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP | WM_IME_STARTCOMPOSITION | WM_IME_COMPOSITION | WM_IME_ENDCOMPOSITION
-        | WM_INPUTLANGCHANGE | WM_CONTEXTMENU => match app.field.send(message, wparam, lparam) {
+        WM_KEYUP
+        | WM_SYSKEYDOWN
+        | WM_SYSKEYUP
+        | WM_IME_STARTCOMPOSITION
+        | WM_IME_COMPOSITION
+        | WM_IME_ENDCOMPOSITION
+        | WM_INPUTLANGCHANGE
+        | WM_CONTEXTMENU => match app.field.send(message, wparam, lparam) {
             Some(result) => {
                 app.sync_text();
                 result
@@ -963,8 +1387,13 @@ fn show(model: Model) -> Result<(), String> {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         for font in FONTS {
-            let mut count = 0u32;
-            AddFontMemResourceEx(font.as_ptr().cast(), font.len() as u32, std::ptr::null(), &mut count);
+            let count = 0u32;
+            AddFontMemResourceEx(
+                font.as_ptr().cast(),
+                font.len() as u32,
+                std::ptr::null(),
+                &count,
+            );
         }
         let instance = GetModuleHandleW(std::ptr::null());
         let mut class: WNDCLASSW = std::mem::zeroed();
@@ -997,10 +1426,13 @@ fn show(model: Model) -> Result<(), String> {
         let mut work: RECT = std::mem::zeroed();
         SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut work as *mut RECT).cast(), 0);
         let available = (work.bottom - work.top) as f32 * 96.0 / dpi as f32 - 40.0;
-        let visible = model::visible_rows(model.browsers.len().max(1), available, model.reason.is_some());
-        let field = Field::new(window, "Manrope", INK).map_err(|error| {
+        let visible = model::visible_rows(
+            model.browsers.len().max(1),
+            available,
+            model.reason.is_some(),
+        );
+        let field = Field::new(window, "Manrope", INK).inspect_err(|_error| {
             DestroyWindow(window);
-            error
         })?;
         let gfx = Gfx::new().map_err(|error| {
             DestroyWindow(window);
@@ -1038,9 +1470,22 @@ fn show(model: Model) -> Result<(), String> {
         ));
         let corners = 2i32;
         DwmSetWindowAttribute(window, 33, (&corners as *const i32).cast(), 4);
-        let margins = MARGINS { cxLeftWidth: 1, cxRightWidth: 1, cyTopHeight: 1, cyBottomHeight: 1 };
+        let margins = MARGINS {
+            cxLeftWidth: 1,
+            cxRightWidth: 1,
+            cyTopHeight: 1,
+            cyBottomHeight: 1,
+        };
         DwmExtendFrameIntoClientArea(window, &margins);
-        SetWindowPos(window, std::ptr::null_mut(), x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(
+            window,
+            std::ptr::null_mut(),
+            x,
+            y,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
         SetTimer(window, CARET_TIMER, 530, None);
         if requested_position().is_some() {
             ShowWindow(window, SW_SHOWNOACTIVATE);
@@ -1077,5 +1522,12 @@ fn open_saved(saved: &Saved, root: &std::path::Path) -> Result<(), String> {
 pub fn show_error(text: &str) {
     let caption = wide("Rivet Browser");
     let body = wide(text);
-    unsafe { MessageBoxW(std::ptr::null_mut(), body.as_ptr(), caption.as_ptr(), MB_OK | MB_ICONERROR) };
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            body.as_ptr(),
+            caption.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        )
+    };
 }
