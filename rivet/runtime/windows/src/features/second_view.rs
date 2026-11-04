@@ -392,6 +392,43 @@ unsafe fn virtual_of(view: usize, name: &str, slot_name: &str) -> Option<usize> 
         .or_else(|| recorded(slot_name).map(|slot| *((*(view as *const usize) + slot * 8) as *const usize)))
 }
 
+/// The main page's columns, as x and width within a page area `width` DIPs wide, while the
+/// window shows a split. The browser's bar above the page is narrowed to them.
+pub(crate) fn split_columns(window: HWND, width: i32) -> Option<(i32, i32)> {
+    let state = split().filter(|split| split.window == window as isize && matches!(split.mode, Mode::Split { .. }))?;
+    let (first, _) = layout([0, 0, width, 1], state.mode, SHARE.load(Ordering::Relaxed), rail_of(window as isize));
+    Some((first[0], first[2]))
+}
+
+/// The first view below `root` that holds a page whose vtable is `page_vtable`, as the view and
+/// the page. The Sidebar finds the extension page that the browser's side panel shows this way.
+pub(crate) unsafe fn page_under(root: usize, page_vtable: usize) -> Option<(usize, usize)> {
+    let size = recorded("size").unwrap_or(0x528);
+    let mut queue = vec![(root, 0usize)];
+    let mut visited = 0;
+    while let Some((view, depth)) = queue.pop() {
+        visited += 1;
+        if visited > 400 || depth > 10 {
+            continue;
+        }
+        if view != root {
+            let page = (8..size).step_by(8).filter_map(|offset| word(view + offset)).find(|candidate| {
+                *candidate > 0x10000 && *candidate != view && word(*candidate) == Some(page_vtable)
+            });
+            if let Some(page) = page {
+                return Some((view, page));
+            }
+        }
+        queue.extend(children_of(view).into_iter().map(|child| (child, depth + 1)));
+    }
+    None
+}
+
+/// Gives a page view `page`, or no page for zero, as `WebView::SetWebContents` does.
+pub(crate) unsafe fn hand_page(view: usize, page: usize) -> bool {
+    set_page(view, page)
+}
+
 /// The two pages' bounds for the full page area `full`, both in the page view's parent.
 pub(crate) fn divide(full: [i32; 4], share: u32) -> ([i32; 4], [i32; 4]) {
     let [x, y, width, height] = full;
@@ -441,6 +478,13 @@ unsafe fn offset_in(view: usize, ancestor: usize) -> [i32; 2] {
     [x, y]
 }
 
+/// The page area `full` of the page view `main` over a small inset of its container, which
+/// otherwise shows as a band around the page.
+unsafe fn fitted(main: usize, full: [i32; 4]) -> [i32; 4] {
+    let container = word(main + offsets().0).filter(|parent| *parent != 0).map(|parent| bounds_of(parent));
+    container.map_or(full, |container| crate::features::page_fit::fill(full, [container[2], container[3]]))
+}
+
 /// Puts both pages where the share says, from the page area the browser last gave the page view.
 unsafe fn place(split: &Split) -> bool {
     // Bounds Rivet did not set came from the browser's layout and are the new page area.
@@ -453,10 +497,13 @@ unsafe fn place(split: &Split) -> bool {
     if full[2] <= 0 {
         return false;
     }
+    let full = fitted(split.main, full);
     let full = below_bar(full, top_inset(split, full));
     let (first, second) = layout(full, split.mode, SHARE.load(Ordering::Relaxed), rail_of(split.window));
     let [dx, dy] = offset_in(split.main, split.parent);
     let second = [second[0] + dx, second[1] + dy, second[2], second[3]];
+    let second = crate::features::pane_infobar::lift(split.mode, second, crate::features::pane_infobar::bar_above(split.window as HWND));
+    let second = crate::features::sidebar_page::fit(split.window as HWND, split.mode, second);
     // Bounds that are already right are not set again, so a layout does not ask for another one.
     *LAST.lock().unwrap_or_else(|error| error.into_inner()) = first;
     if now == first && bounds_of(split.view) == second {
@@ -800,6 +847,7 @@ pub(crate) unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
         let full = *FULL.lock().unwrap_or_else(|error| error.into_inner());
         let [ox, oy] = window_origin(state.main);
         let main = bounds_of(state.main);
+        let full = fitted(state.main, full);
         let full = below_bar(full, top_inset(&state, full));
         let (x, y) = (ox - main[0] + full[0], oy - main[1] + full[1]);
         return Some([x, y, x + full[2] - rail_of(window as isize), y + full[3]]);
@@ -911,6 +959,7 @@ pub(crate) unsafe fn close(window: HWND) -> bool {
     if split.owner_view != 0 {
         set_page(split.owner_view, split.page);
     }
+    crate::features::pane_infobar::follow(window);
     crate::trace::trace(&format!("second view: closed after {} layouts; page {:#x} back to {:#x}", LAYOUTS.swap(0, Ordering::Relaxed), split.page, split.owner_view));
     true
 }

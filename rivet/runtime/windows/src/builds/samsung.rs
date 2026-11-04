@@ -129,6 +129,10 @@ pub static SAMSUNG: Build = Build {
         new_tab_address: Some(0),
         // The new tab starts loading a page after the command returns.
         new_tab_delay_ms: 600,
+        // The browser's own new tab page stops the browser beside Rivet's second view, on a view
+        // it expects and does not find. Found statically and unverified: the call of
+        // `WebContents::OpenURL` recorded for navigation, with a new foreground tab.
+        new_tab_by_open_url: Some(true),
         new_tab: 0x0D81_4460,
         last_committed_url: 0x0553_29B0, // slot 19 of the same vtable
         // `GetVisibleURL` is slot 18 of the vtable. The address list asks for it only when the

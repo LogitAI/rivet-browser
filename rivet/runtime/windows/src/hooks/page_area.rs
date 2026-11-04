@@ -122,10 +122,13 @@ impl PageArea<'_> {
 }
 
 /// The steps that change the page area, in the order they run. The top bar takes its row, the Sidebar reserves its rail
-/// next, and the pages of a split fill what is left.
-const STEPS: [unsafe fn(&mut PageArea); 3] = [
+/// next, and the pages of a split fill what is left. An extension page in the second view leaves
+/// the browser's own panel no width, and the bars above the page keep to their pane.
+const STEPS: [unsafe fn(&mut PageArea); 5] = [
     crate::features::address_bar::on_page_area,
     crate::features::side_panel::on_page_area,
+    crate::features::sidebar_page::on_page_area,
+    crate::features::pane_infobar::on_page_area,
     crate::features::split::on_page_area,
 ];
 

@@ -1708,6 +1708,7 @@ static SECOND_VIEW_IDLE: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomi
 
 /// Lays the second page view out now and keeps doing so for a few ticks.
 pub(crate) unsafe fn follow_second_view(window: HWND) {
+    crate::features::pane_infobar::follow(window);
     if !crate::features::second_view::is_open(window) {
         return;
     }
@@ -2920,6 +2921,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             KillTimer(window, PEEK_TIMER);
             KillTimer(window, SECOND_VIEW_TIMER);
             crate::features::second_view::forget(window);
+            crate::features::sidebar_page::forget(window);
+            crate::features::pane_infobar::forget(window);
             LAYOUTS.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
             DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize)));

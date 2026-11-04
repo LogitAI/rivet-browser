@@ -333,6 +333,11 @@ pub struct Tabs {
     /// own new tab page after the command and would replace an address opened at once. Zero opens it
     /// in the command itself.
     pub new_tab_delay_ms: u32,
+    /// Whether a new tab of a Rivet window opens its first page through `WebContents::OpenURL`
+    /// with a new foreground tab, in place of the browser's new-tab command. Set for a build whose
+    /// own new tab page crashes the browser beside Rivet's second page view; the start page loads
+    /// first, so that page never loads in a Rivet window.
+    pub new_tab_by_open_url: Option<bool>,
     /// `WebContentsImpl::GetLastCommittedURL` and `GetVisibleURL`, which return a `const GURL&`.
     pub last_committed_url: usize,
     pub visible_url: usize,
@@ -704,6 +709,7 @@ const UNCHECKED_TABS: Tabs = Tabs {
     new_tab_address: None,
     new_tab_takes_address: false,
     new_tab_delay_ms: 0,
+    new_tab_by_open_url: None,
     last_committed_url: ABSENT,
     visible_url: ABSENT,
     get_group: ABSENT,
