@@ -752,17 +752,21 @@ mod tests {
         assert!(options.url.ends_with(
             "/start.html?space=Work&browser=Chrome&profile=Work&tint=d08a52&accent=9a5424"
         ));
-        let whale = parse_start(vec![
-            "session".into(),
-            "start".into(),
-            "--browser".into(),
-            r"C:\Naver\whale.exe".into(),
-        ])
-        .unwrap();
-        assert!(
-            whale.url.contains("&browser=Whale&"),
-            "the page names the browser it opens in"
-        );
+        // A Windows path only names its file on Windows.
+        #[cfg(windows)]
+        {
+            let whale = parse_start(vec![
+                "session".into(),
+                "start".into(),
+                "--browser".into(),
+                r"C:\Naver\whale.exe".into(),
+            ])
+            .unwrap();
+            assert!(
+                whale.url.contains("&browser=Whale&"),
+                "the page names the browser it opens in"
+            );
+        }
         assert!(build_launch_plan(&LaunchRequest {
             browser: options.browser,
             url: options.url,
