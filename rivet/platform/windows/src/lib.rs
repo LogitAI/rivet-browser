@@ -9,6 +9,7 @@ pub mod hold;
 pub mod row_port;
 pub mod row_watch;
 pub mod signed_table;
+#[cfg(windows)]
 pub mod textservices;
 
 use std::path::Path;
