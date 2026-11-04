@@ -71,8 +71,14 @@ impl MiniWindowCommand {
         let (low, high) = unpack(lparam);
         Some(match wparam {
             POP_OUT => Self::PopOut,
-            MOVE => Self::Move { x: low as i16, y: high as i16 },
-            RESIZE => Self::Resize { width: low, height: high },
+            MOVE => Self::Move {
+                x: low as i16,
+                y: high as i16,
+            },
+            RESIZE => Self::Resize {
+                width: low,
+                height: high,
+            },
             RETURN => Self::Return(match lparam {
                 0 => Edge::Left,
                 1 => Edge::Right,
@@ -130,7 +136,10 @@ mod tests {
             MiniWindowCommand::PopOut,
             MiniWindowCommand::Move { x: -40, y: 300 },
             MiniWindowCommand::Move { x: 1200, y: -1 },
-            MiniWindowCommand::Resize { width: 360, height: 270 },
+            MiniWindowCommand::Resize {
+                width: 360,
+                height: 270,
+            },
             MiniWindowCommand::Return(Edge::Left),
             MiniWindowCommand::Return(Edge::Right),
             MiniWindowCommand::Return(Edge::Top),
@@ -152,10 +161,22 @@ mod tests {
 
     #[test]
     fn fr9_mini_window_commands_parse_from_the_command_line() {
-        assert_eq!(MiniWindowCommand::parse(&["pop-out"]), Ok(MiniWindowCommand::PopOut));
-        assert_eq!(MiniWindowCommand::parse(&["move", "10", "-20"]), Ok(MiniWindowCommand::Move { x: 10, y: -20 }));
-        assert_eq!(MiniWindowCommand::parse(&["return", "top"]), Ok(MiniWindowCommand::Return(Edge::Top)));
-        assert_eq!(MiniWindowCommand::parse(&["close"]), Ok(MiniWindowCommand::Close));
+        assert_eq!(
+            MiniWindowCommand::parse(&["pop-out"]),
+            Ok(MiniWindowCommand::PopOut)
+        );
+        assert_eq!(
+            MiniWindowCommand::parse(&["move", "10", "-20"]),
+            Ok(MiniWindowCommand::Move { x: 10, y: -20 })
+        );
+        assert_eq!(
+            MiniWindowCommand::parse(&["return", "top"]),
+            Ok(MiniWindowCommand::Return(Edge::Top))
+        );
+        assert_eq!(
+            MiniWindowCommand::parse(&["close"]),
+            Ok(MiniWindowCommand::Close)
+        );
         assert!(MiniWindowCommand::parse(&["return", "middle"]).is_err());
         assert!(MiniWindowCommand::parse(&["move", "1"]).is_err());
         assert!(MiniWindowCommand::parse(&["resize", "-1", "4"]).is_err());

@@ -334,7 +334,9 @@ unsafe fn drop_at(window: HWND, point: POINT) -> Option<Drop> {
 /// clears the highlight for none. The Mini Window's grip drag uses it.
 pub(crate) unsafe fn show_drop_zone(window: HWND, point: Option<POINT>) {
     let dpi = layout_dpi(window);
-    let zone = point.and_then(|point| drop_at(window, point)).map(|drop| drop.view);
+    let zone = point
+        .and_then(|point| drop_at(window, point))
+        .map(|drop| drop.view);
     APPBARS.with(|appbars| {
         if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
             if let Err(error) = appbar.update_drag(zone.as_ref(), None, dpi) {
@@ -2679,7 +2681,9 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         update_appbar(window);
         return 0;
     }
-    if message == RegisterWindowMessageW(wide(rivet_protocol::window::MINI_WINDOW_MESSAGE).as_ptr()) && attached(window) {
+    if message == RegisterWindowMessageW(wide(rivet_protocol::window::MINI_WINDOW_MESSAGE).as_ptr())
+        && attached(window)
+    {
         crate::features::mini_window::command(window, wparam, lparam);
         update_appbar(window);
         return 0;
@@ -2803,14 +2807,23 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     y: ((lparam >> 16) & 0xffff) as i16 as i32,
                 },
             );
-            let (x, y) = ((lparam & 0xffff) as i16 as i32, ((lparam >> 16) & 0xffff) as i16 as i32);
+            let (x, y) = (
+                (lparam & 0xffff) as i16 as i32,
+                ((lparam >> 16) & 0xffff) as i16 as i32,
+            );
             // A grip released outside the pages makes its page a Mini Window.
-            let grip = pressed.filter(|pressed| pressed.1 == crate::features::split::RowButton::Grip);
+            let grip =
+                pressed.filter(|pressed| pressed.1 == crate::features::split::RowButton::Grip);
             if grip.is_some() {
                 windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
             }
-            if let Some(hit) = grip.filter(|hit| crate::features::mini_window::grip_released(window, hit.0, x, y)) {
-                crate::trace::trace(&format!("split row: grip of page {} dropped outside the pages", hit.0));
+            if let Some(hit) =
+                grip.filter(|hit| crate::features::mini_window::grip_released(window, hit.0, x, y))
+            {
+                crate::trace::trace(&format!(
+                    "split row: grip of page {} dropped outside the pages",
+                    hit.0
+                ));
                 update_appbar(window);
             } else if let Some(hit) = pressed.filter(|pressed| Some(*pressed) == now) {
                 row_action(window, hit);

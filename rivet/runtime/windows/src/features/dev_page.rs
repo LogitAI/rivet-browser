@@ -48,5 +48,8 @@ pub(crate) unsafe fn toggle_dev_mode(window: HWND) -> bool {
 /// The buttons the developer bar of this build offers, with the command each runs.
 pub(crate) fn dev_actions() -> Vec<(Action, u32)> {
     let dev = &crate::builds::get().toolbar.dev;
-    crate::dev_mode::bar_buttons(&[(Action::Inspect, dev.inspect), (Action::Console, dev.console)])
+    crate::dev_mode::bar_buttons(&[
+        (Action::Inspect, dev.inspect),
+        (Action::Console, dev.console),
+    ])
 }

@@ -237,7 +237,10 @@ mod tests {
     #[test]
     fn fr11_bar_offers_open_in_mini_window_before_the_browser_commands() {
         let known = [(Action::Inspect, 0), (Action::Console, 40005)];
-        assert_eq!(bar_buttons(&known), vec![(Action::MiniWindow, 0), (Action::Console, 40005)]);
+        assert_eq!(
+            bar_buttons(&known),
+            vec![(Action::MiniWindow, 0), (Action::Console, 40005)]
+        );
         assert_eq!(bar_buttons(&[]), vec![(Action::MiniWindow, 0)]);
     }
 

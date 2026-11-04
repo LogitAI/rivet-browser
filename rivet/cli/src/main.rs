@@ -14,9 +14,9 @@ use rivet_core::{build_launch_plan, profile_allows_rivet, DisplayMode, LaunchReq
 use rivet_platform_windows::hold::{self, Launch};
 use rivet_platform_windows::signed_table;
 use rivet_platform_windows::{
-    browser_windows, close_browser_window, post_window_command, inject_runtime, launch_clock, process_tree_is_alive,
-    process_was_launched, resolve_browser_executable, wait_for_new_browser_window,
-    BrowserWindow,
+    browser_windows, close_browser_window, inject_runtime, launch_clock, post_window_command,
+    process_tree_is_alive, process_was_launched, resolve_browser_executable,
+    wait_for_new_browser_window, BrowserWindow,
 };
 
 const USAGE: &str = "\
@@ -555,7 +555,11 @@ fn parse_mini_window(arguments: Vec<String>) -> Result<MiniWindowOptions, String
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--id" => id = Some(next_value(&arguments, &mut index, "--id")?),
-            "--state" => state = Some(PathBuf::from(next_value(&arguments, &mut index, "--state")?)),
+            "--state" => {
+                state = Some(PathBuf::from(next_value(
+                    &arguments, &mut index, "--state",
+                )?))
+            }
             option if option.starts_with("--") => return Err(format!("unknown option {option:?}")),
             word => words.push(word.to_owned()),
         }
@@ -572,7 +576,8 @@ fn parse_mini_window(arguments: Vec<String>) -> Result<MiniWindowOptions, String
 /// Sends a Mini Window command to the window of one Rivet session, the same command the window's
 /// own buttons run.
 fn run_mini_window(options: MiniWindowOptions) -> Result<(), String> {
-    let registry = SessionRegistry::load(&state_path(options.state.as_deref())?).map_err(|error| error.to_string())?;
+    let registry = SessionRegistry::load(&state_path(options.state.as_deref())?)
+        .map_err(|error| error.to_string())?;
     let session = registry
         .list()
         .find(|session| session.id == options.id)
@@ -580,7 +585,10 @@ fn run_mini_window(options: MiniWindowOptions) -> Result<(), String> {
     let (wparam, lparam) = options.command.encode();
     post_window_command(
         &session.browser,
-        BrowserWindow { handle: session.window_handle, process_id: session.process_id },
+        BrowserWindow {
+            handle: session.window_handle,
+            process_id: session.process_id,
+        },
         rivet_protocol::window::MINI_WINDOW_MESSAGE,
         wparam,
         lparam,
@@ -727,17 +735,40 @@ mod tests {
     #[test]
     fn fr9_cli_names_a_session_and_a_mini_window_command() {
         use rivet_protocol::window::{Edge, MiniWindowCommand};
-        let words = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect::<Vec<_>>();
+        let words = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
         assert_eq!(
-            parse_mini_window(words(&["session", "mini-window", "--id", "s1", "return", "left"])),
-            Ok(MiniWindowOptions { id: "s1".into(), state: None, command: MiniWindowCommand::Return(Edge::Left) })
+            parse_mini_window(words(&[
+                "session",
+                "mini-window",
+                "--id",
+                "s1",
+                "return",
+                "left"
+            ])),
+            Ok(MiniWindowOptions {
+                id: "s1".into(),
+                state: None,
+                command: MiniWindowCommand::Return(Edge::Left)
+            })
         );
         assert_eq!(
-            parse_mini_window(words(&["session", "mini-window", "pop-out", "--id", "s2"])).map(|options| options.command),
+            parse_mini_window(words(&["session", "mini-window", "pop-out", "--id", "s2"]))
+                .map(|options| options.command),
             Ok(MiniWindowCommand::PopOut)
         );
-        assert!(parse_mini_window(words(&["session", "mini-window", "close"])).is_err(), "the session is required");
-        assert!(parse_mini_window(words(&["session", "mini-window", "--id", "s1"])).is_err(), "a command is required");
+        assert!(
+            parse_mini_window(words(&["session", "mini-window", "close"])).is_err(),
+            "the session is required"
+        );
+        assert!(
+            parse_mini_window(words(&["session", "mini-window", "--id", "s1"])).is_err(),
+            "a command is required"
+        );
     }
 
     #[test]

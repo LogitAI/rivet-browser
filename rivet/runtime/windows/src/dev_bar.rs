@@ -135,7 +135,9 @@ pub(crate) unsafe fn release(window: HWND, point: POINT) {
     if hit(window, point) != Some(down) {
         return;
     }
-    let Some((_, _, actions)) = place(window) else { return };
+    let Some((_, _, actions)) = place(window) else {
+        return;
+    };
     if let Some((Action::MiniWindow, _)) = actions.get(down) {
         // Rivet's own button: the page floats, and the window shows the tab beside it.
         crate::features::mini_window::pop_out_active(window);
