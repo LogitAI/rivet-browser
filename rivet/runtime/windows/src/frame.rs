@@ -3428,6 +3428,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             // Every browser sends this on a resize, so the second view follows it on all of them.
             follow_second_view(window);
             update_appbar(window);
+            crate::features::window_corners::keep_round(window);
             result
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
@@ -3807,6 +3808,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         _ if message == attach_message() => {
             crate::features::tab_list::connect_command_bar();
             create_appbar(window);
+            crate::features::window_corners::keep_round(window);
             0
         }
         _ => call_browser(window, message, wparam, lparam),
