@@ -298,18 +298,68 @@ pub static SAMSUNG: Build = Build {
         ..UNCHECKED_SPLIT
     },
 
-    // Only the layout part is recorded, found statically from the disassembly and unverified, so the
-    // page area runs in Chromium's older layout. The Sidebar stays off: this build's side panel
-    // registry and entry keys are laid out differently from what the rail reads.
+    // Found statically from the disassembly by the shape of Chrome 156's functions and members, and
+    // unverified. Chromium 143 differs from 156 here:
+    // - the coordinator keeps the window's registry at +0x30 and there is no
+    //   `SidePanelRegistry::From`; the registry keeps its entries as begin and end pointers at +0x48;
+    // - a `SidePanelEntryKey` is 0x48 bytes, with a second optional string at +0x28;
+    // - show by id stops the browser for the extension entry, which opens with toggle instead;
+    // - `GenerateColorsCss` takes four arguments, the fourth a pointer.
+    // The browser view is reached through the layout, since the frame view is not recorded.
     // `BrowserViewLayout::Layout` is slot 3 of the vtable its constructor stores at 0x020AB63C. The
     // constructor copies its views from `BrowserView::InitViews` one for one from +0x30: the host
     // view, the contents container at +0x80 (sized from the contents rect less the side panel) and
     // the unified side panel at +0x98 (built with the "side_panel.is_right_aligned" pref).
     side_panel: SidePanel {
+        supported: true,
+        side_panel_vtable: 0x0E24_FF68,
+        browser_offset: 0x550,
+        features_offset: 0x4E8,
+        features_coordinator: 0x108,
+        browser_view_view_vtable: 0x0E25_F6E8,
+        coordinator_vtable: 0x0E16_FAB8,
+        show: 0x084A_AC00,
+        show_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x70, 0x4C, 0x89, 0xC6],
+        entry_id_to_string: 0x0312_38A0,
+        entry_id_to_string_prologue: &[
+            0x83, 0xFA, 0x19, 0x0F, 0x87, 0xC2, 0x05, 0x00, 0x00, 0x48, 0x89, 0xC8,
+        ],
+        extension_entry: 0x19,
+        entry_count: 0x1A,
+        // Ids 20 to 24 are the browser maker's own entries, which are not Chromium's.
+        hidden_entries: &[20, 21, 22, 23, 24],
+        toggle: 0x084A_8810,
+        toggle_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00,
+        ],
+        entry_showing: 0x00AB_A850,
+        entry_showing_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCF],
+        registry_from: ABSENT,
+        registry_from_prologue: &[0],
+        // `WebContentsImpl::GetColorProvider`, slot 25 of the vtable that holds
+        // `GetBrowserContext`, next to the same `sub rcx, -0x80` stub as Chrome's.
+        get_color_provider: 0x02EC_5740,
+        get_color_provider_prologue: &[
+            0x48, 0x8B, 0x89, 0x98, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x01, 0x48, 0x8B, 0x40, 0x08,
+        ],
+        source_in_widget: 0x48,
+        color_source: 0x98,
+        // `ThemeSource::GenerateColorsCss`, the one function naming "generate_rgb_vars" and
+        // "shadow_host".
+        generate_colors_css: 0x0DAE_36B0,
+        generate_colors_css_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+        ],
         layout_vtable: 0x0E18_0BE0,
         proposed_slot: 3,
         proposed: 0x013C_8310,
         old_layout: Some(true),
+        registry_end: Some(true),
+        registry_in_coordinator: Some(0x30),
+        registry_entries: Some(0x48),
+        coordinator_browser: Some(0x28),
+        entry_key_size: Some(0x48),
+        extensions_by_toggle: Some(true),
         host_view: 0x30,
         page_area: ABSENT,
         contents_container: 0x80,
@@ -323,7 +373,7 @@ pub static SAMSUNG: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
             0xEC, 0x98, 0x00, 0x00, 0x00, 0x48, 0x89, 0xCE,
         ],
-        ..UNCHECKED_SIDEPANEL
+        event_handler_for_point: ABSENT,
     },
     // The frame paint and the top inset are not recorded: nothing shows that this build's functions in
     // those vtable slots are Chromium's, and its frame vtable does not have Chromium's layout.
