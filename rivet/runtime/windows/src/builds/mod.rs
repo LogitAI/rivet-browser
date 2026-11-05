@@ -478,6 +478,9 @@ pub struct SidePanel {
     /// The slot holds Chromium's older `BrowserViewLayoutImplOld::Layout` in place of
     /// `CalculateProposedLayout`, so the layout hook sets bounds after the browser's layout runs.
     pub old_layout: Option<bool>,
+    /// The registry keeps its entries as begin and end pointers at +0x38 and +0x40, where newer
+    /// builds keep a pointer and a count.
+    pub registry_end: Option<bool>,
     /// The layout object keeps the host view at +0x38, the contents container at +0xb8, the side
     /// panel at +0xc0 and the content shown while the side panel animates at +0xc8.
     pub host_view: usize,
@@ -791,6 +794,7 @@ const UNCHECKED_SIDEPANEL: SidePanel = SidePanel {
     proposed_slot: 0,
     proposed: ABSENT,
     old_layout: None,
+    registry_end: None,
     host_view: 0,
     page_area: 0,
     contents_container: 0,

@@ -314,6 +314,7 @@ pub static EDGE: Build = Build {
         proposed_slot: 4,
         proposed: 0x028C7270, // ?Layout@BrowserViewLayoutImplOld@@UEAAXPEAVView@views@@@Z
         old_layout: Some(true),
+        registry_end: None,
         host_view: 0x38,
         page_area: 0,
         contents_container: 0xd8,

@@ -313,6 +313,7 @@ pub static CHROME: Build = Build {
         proposed_slot: 16,
         proposed: 0x0104_8AB0, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl@@MEBA?AUProposedLayout@BrowserViewLayoutImpl@@A
         old_layout: None,
+        registry_end: None,
         host_view: 0x38,
         page_area: 0x50,
         contents_container: 0xb8,
@@ -708,6 +709,7 @@ pub static CHROME_156_74: Build = Build {
         proposed_slot: 16,
         proposed: 0x012B_2170, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl@@MEBA?AUProposedLayout@BrowserViewLayoutImpl@@A
         old_layout: None,
+        registry_end: None,
         host_view: 0x38,
         page_area: 0x50,
         contents_container: 0xb8,
@@ -1119,6 +1121,7 @@ pub static CHROME_156_80: Build = Build {
         proposed_slot: 16,
         proposed: 0x0141_3500, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl@@MEBA?AUProposedLayout@BrowserViewLayoutImpl@@A
         old_layout: None,
+        registry_end: None,
         host_view: 0x38,
         page_area: 0x50,
         contents_container: 0xb8,

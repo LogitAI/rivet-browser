@@ -227,6 +227,7 @@ pub static BRAVE: Build = Build {
         proposed_slot: 16,
         proposed: ABSENT,
         old_layout: None,
+        registry_end: None,
         host_view: 0x38,
         page_area: 0x50,
         contents_container: 0xb8,
@@ -586,6 +587,7 @@ pub static BRAVE_63: Build = Build {
         proposed_slot: 16,
         proposed: 0x038CA250, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl, slot 16, found statically and unverified
         old_layout: None,
+        registry_end: None,
         host_view: 0x38,
         page_area: 0x50,
         contents_container: 0xb8,
