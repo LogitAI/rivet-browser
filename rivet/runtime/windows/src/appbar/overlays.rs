@@ -16,7 +16,12 @@ const CHIP_LABEL: Type = style("Manrope", 11.0, 500, 0.0);
 
 impl Canvas<'_> {
     /// A soft shadow outside `area` that leaves the inside untouched, since a page lies under it.
-    unsafe fn outer_shadow(&self, area: D2D_RECT_F, radius: f32, reach: f32) -> Result<()> {
+    pub(super) unsafe fn outer_shadow(
+        &self,
+        area: D2D_RECT_F,
+        radius: f32,
+        reach: f32,
+    ) -> Result<()> {
         let steps = reach.max(1.0) as i32;
         for step in 1..=steps {
             let grow = step as f32;
@@ -91,7 +96,7 @@ impl Canvas<'_> {
 }
 
 impl Appbar {
-    fn accent(&self) -> u32 {
+    pub(super) fn accent(&self) -> u32 {
         rivet_core::space_accent(
             self.spaces
                 .get(self.current)

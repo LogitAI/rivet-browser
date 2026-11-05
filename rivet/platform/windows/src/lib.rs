@@ -39,6 +39,8 @@ pub enum WindowCloseError {
     UnsupportedPlatform,
     WindowIsNotOwnedByTheSelectedBrowser,
     CloseMessageFailed,
+    /// The window did not take the request, or Rivet is not running in it.
+    RequestNotTaken,
 }
 
 impl std::fmt::Display for WindowCloseError {
@@ -54,6 +56,7 @@ impl std::fmt::Display for WindowCloseError {
             Self::CloseMessageFailed => {
                 write!(f, "could not request the Rivet browser window to close")
             }
+            Self::RequestNotTaken => write!(f, "the Rivet window did not take the request"),
         }
     }
 }
@@ -491,6 +494,60 @@ pub fn post_window_command(
         return Err(WindowCloseError::CloseMessageFailed);
     }
     Ok(())
+}
+
+/// Sends `bytes` as a `WM_COPYDATA` message tagged `data` to exactly one previously discovered
+/// browser window, checked again first as for a close. The window answers within five seconds or
+/// the send fails, so a hung browser never holds the caller.
+#[cfg(windows)]
+pub fn send_window_data(
+    browser: &Path,
+    window: BrowserWindow,
+    data: usize,
+    bytes: &[u8],
+) -> Result<(), WindowCloseError> {
+    use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_COPYDATA,
+    };
+
+    let windows = browser_windows(browser)
+        .map_err(|_| WindowCloseError::WindowIsNotOwnedByTheSelectedBrowser)?;
+    if !windows.contains(&window) {
+        return Err(WindowCloseError::WindowIsNotOwnedByTheSelectedBrowser);
+    }
+    let copy = COPYDATASTRUCT {
+        dwData: data,
+        cbData: bytes.len() as u32,
+        lpData: bytes.as_ptr() as *mut _,
+    };
+    let mut answer: usize = 0;
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            window.handle as _,
+            WM_COPYDATA,
+            0,
+            &copy as *const COPYDATASTRUCT as isize,
+            SMTO_ABORTIFHUNG,
+            5000,
+            &mut answer,
+        )
+    };
+    if sent == 0 || answer == 0 {
+        return Err(WindowCloseError::RequestNotTaken);
+    }
+    Ok(())
+}
+
+/// Reports that window data is unavailable on non-Windows targets.
+#[cfg(not(windows))]
+pub fn send_window_data(
+    _browser: &Path,
+    _window: BrowserWindow,
+    _data: usize,
+    _bytes: &[u8],
+) -> Result<(), WindowCloseError> {
+    Err(WindowCloseError::UnsupportedPlatform)
 }
 
 /// Reports that window commands are unavailable on non-Windows targets.

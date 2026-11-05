@@ -61,6 +61,8 @@ use palette::*;
 
 /// The command bar and the link preview, drawn with the appbar's canvas.
 mod overlays;
+/// The link rules panel, drawn with the appbar's canvas.
+mod link_rules;
 
 /// A text style from the shell study: family, size, weight and letter spacing in em.
 #[derive(Clone, Copy)]
@@ -215,6 +217,9 @@ pub struct Appbar {
     /// The header and shadow of a link preview, and what they were last painted for.
     preview: IDCompositionVisual2,
     preview_painted: Option<(crate::features::link_preview::View, u32)>,
+    /// The link rules panel over the page, and what it was last painted for.
+    rules: IDCompositionVisual2,
+    rules_painted: Option<(crate::features::link_rules::View, u32)>,
 }
 
 /// What one page's top row shows. `x`, `y`, `width` and `height` are window pixels.
@@ -383,6 +388,8 @@ impl Appbar {
         root.AddVisual(&preview, true, None::<&IDCompositionVisual>)?;
         let command = device.CreateVisual()?;
         root.AddVisual(&command, true, None::<&IDCompositionVisual>)?;
+        let rules = device.CreateVisual()?;
+        root.AddVisual(&rules, true, None::<&IDCompositionVisual>)?;
         target.SetRoot(&root)?;
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
@@ -421,6 +428,8 @@ impl Appbar {
             command_painted: None,
             preview,
             preview_painted: None,
+            rules,
+            rules_painted: None,
         })
     }
 

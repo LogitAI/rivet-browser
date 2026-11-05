@@ -7,6 +7,7 @@ pub(crate) mod command_bar;
 pub(crate) mod dev_page;
 pub(crate) mod frame_layout;
 pub(crate) mod link_preview;
+pub(crate) mod link_rules;
 pub(crate) mod link_tabs;
 pub(crate) mod look;
 pub(crate) mod mini_window;

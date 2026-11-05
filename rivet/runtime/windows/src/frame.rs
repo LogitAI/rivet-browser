@@ -948,6 +948,46 @@ unsafe fn switch_space(window: HWND, index: usize) {
     windows_sys::Win32::Graphics::Gdi::InvalidateRect(window, std::ptr::null(), 0);
 }
 
+/// The names of the window's spaces, in order, for the link rules.
+pub(crate) fn space_names(window: HWND) -> Vec<String> {
+    with_spaces(window, |spaces| {
+        spaces.list().iter().map(|space| space.name.clone()).collect()
+    })
+}
+
+/// The name of the space the window shows.
+pub(crate) fn current_space_name(window: HWND) -> Option<String> {
+    with_spaces(window, |spaces| {
+        spaces.list().get(spaces.current()).map(|space| space.name.clone())
+    })
+}
+
+fn space_index(window: HWND, name: &str) -> Option<usize> {
+    with_spaces(window, |spaces| {
+        spaces
+            .list()
+            .iter()
+            .position(|space| space.name.eq_ignore_ascii_case(name))
+    })
+}
+
+/// Whether the window has a space of this name.
+pub(crate) fn has_space_named(window: HWND, name: &str) -> bool {
+    space_index(window, name).is_some()
+}
+
+/// Makes the space of this name the one the window shows, for a link a rule sends there. False
+/// when there is no such space, or when it lives in another browser and so opened its own window.
+pub(crate) unsafe fn show_space_named(window: HWND, name: &str) -> bool {
+    let Some(index) = space_index(window, name) else {
+        return false;
+    };
+    if with_spaces(window, |spaces| spaces.current()) != index {
+        switch_space(window, index);
+    }
+    with_spaces(window, |spaces| spaces.current()) == index
+}
+
 /// Shows a space that lives in another browser. A window cannot move between browser processes,
 /// so the space has its own window. This window stays open on its own space and keeps its tabs.
 /// If a window already runs the space's profile it is brought forward, and it keeps the space it
@@ -2502,6 +2542,14 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             if let Err(error) = appbar.update_preview(preview.as_ref(), dpi) {
                 log(&format!("rivet: could not draw the link preview: {error}"));
             }
+            let rules = if visible {
+                crate::features::link_rules::view(window)
+            } else {
+                None
+            };
+            if let Err(error) = appbar.update_link_rules(rules.as_ref(), dpi) {
+                log(&format!("rivet: could not draw the link rules: {error}"));
+            }
             if !crate::features::command_bar::busy() {
                 let command = if visible {
                     crate::features::command_bar::view(window)
@@ -2854,9 +2902,18 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         update_appbar(window);
         return 0;
     }
+    if message == windows_sys::Win32::UI::WindowsAndMessaging::WM_COPYDATA && attached(window) {
+        if let Some(result) = crate::features::link_rules::copy_data(window, lparam) {
+            return result;
+        }
+    }
     // The command bar's scrim and the link preview's header lie over the pages, and the Mini
     // Window floats over them, so they take the pointer and the keyboard before the pages do.
     if attached(window) {
+        if let Some(result) = crate::features::link_rules::message(window, message, wparam, lparam)
+        {
+            return result;
+        }
         if let Some(result) = crate::features::command_bar::message(window, message, wparam, lparam)
         {
             return result;
@@ -3366,6 +3423,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
             crate::features::address_bar::forget(window);
             crate::features::command_bar::forget(window);
+            crate::features::link_rules::forget(window);
             crate::features::link_preview::forget(window);
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::features::vertical_tabs::forget(window);
@@ -3517,6 +3575,25 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                             crate::features::command_bar::run_for_test(window, index)
                         }
                         Some("preview") => crate::features::link_preview::open(window, index),
+                        // Link rules: `linkrules` opens the panel, `linkrulesadd` adds the page's
+                        // site, `linkrulestarget N` and `linkrulesremove N` click rule N, and
+                        // `linkopen ADDRESS` routes an address as `rivet session open` does.
+                        Some("linkrules") => crate::features::link_rules::open(window),
+                        Some(word @ ("linkrulesadd" | "linkrulestarget" | "linkrulesremove")) => {
+                            use crate::features::link_rules::{click_for_test, describe, Hit};
+                            let hit = match word {
+                                "linkrulesadd" => Hit::AddSite,
+                                "linkrulestarget" => Hit::Target(index),
+                                _ => Hit::Remove(index),
+                            };
+                            let done = click_for_test(window, hit);
+                            crate::trace::trace(&format!("link rules now [{}]", describe(window)));
+                            done
+                        }
+                        Some("linkopen") => {
+                            let address = text.trim().trim_start_matches("linkopen").trim();
+                            crate::features::link_rules::open_request(window, address)
+                        }
                         Some("previewopen") => crate::features::link_preview::open_as_tab(window),
                         Some("previewesc") => crate::features::link_preview::dismiss(window),
                         Some("bartext") => {
