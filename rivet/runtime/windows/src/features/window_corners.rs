@@ -12,9 +12,9 @@ use windows_sys::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateRectRgn, DeleteObject, GetRgnBox, SetWindowRgn, HRGN, SIMPLEREGION,
+    CreateRectRgn, DeleteObject, GetRgnBox, GetWindowRgn, SetWindowRgn, HRGN, SIMPLEREGION,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, GetWindowRgn, IsZoomed};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsZoomed};
 
 /// What a window's region is, as far as its corners are concerned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
