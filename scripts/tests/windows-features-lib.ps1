@@ -108,19 +108,30 @@ function Test-Blank($Capture) {
     [FeaturePixels]::NonDominant($Capture.Pixels, $Capture.Width, 0, 0, $Capture.Width, $Capture.Height) -lt 0.02
 }
 
-# A link preview: the `Floating` page shows solidly inside the area of the `Under` page, which still
-# shows around it, so it lies over that page instead of beside it.
+# A link preview: the `Floating` page shows solidly over the `Under` page, which still shows in a
+# margin to its left, to its right and below it. The preview covers most of the page, so the page
+# under it is looked for in those margins rather than as a page region of its own. Its header lies
+# above the floating page, so the top margin is not checked.
 function Test-FloatingPage($Capture, [int]$Under, [int]$Floating) {
-    if (Test-Blank $Capture) { return New-Verdict 'NOT_DRIVEN' 'the capture is blank' }
-    $window = $Capture.Width * $Capture.Height
-    $u = Get-PageRegion $Capture $Under
-    $f = Get-PageRegion $Capture $Floating
-    if ($f.Count -lt $window * 0.08) { return New-Verdict 'FAIL' ('the preview page does not show: {0:P1} of the window has its colour' -f ($f.Count / $window)) }
-    if ($f.Count -lt $f.Area * 0.85) { return New-Verdict 'FAIL' ('the preview page is not painted solidly (fill {0:P0})' -f ($f.Count / $f.Area)) }
-    if ($u.Count -lt $window * 0.05) { return New-Verdict 'FAIL' 'the page under the preview no longer shows' }
-    $inside = $f.X0 -gt $u.X0 -and $f.X1 -lt $u.X1 -and $f.Y0 -gt $u.Y0 -and $f.Y1 -le $u.Y1
-    if (-not $inside) { return New-Verdict 'FAIL' ('the preview {0}x{1} at {2},{3} is not inside the page {4}x{5} at {6},{7}' -f $f.Width, $f.Height, $f.X0, $f.Y0, $u.Width, $u.Height, $u.X0, $u.Y0) }
-    New-Verdict 'PASS' ('preview {0}x{1} at {2},{3} over the page {4}x{5} at {6},{7}' -f $f.Width, $f.Height, $f.X0, $f.Y0, $u.Width, $u.Height, $u.X0, $u.Y0)
+  if (Test-Blank $Capture) { return New-Verdict 'NOT_DRIVEN' 'the capture is blank' }
+  $w = $Capture.Width; $h = $Capture.Height
+  $window = $w * $h
+  $f = Get-PageRegion $Capture $Floating
+  if ($f.Count -lt $window * 0.08) { return New-Verdict 'FAIL' ('the preview page does not show: {0:P1} of the window has its colour' -f ($f.Count / $window)) }
+  if ($f.Count -lt $f.Area * 0.85) { return New-Verdict 'FAIL' ('the preview page is not painted solidly (fill {0:P0})' -f ($f.Count / $f.Area)) }
+  $gap = 4; $band = 8
+  $sides = [ordered]@{
+    left = @(($f.X0 - $gap - $band), $f.Y0, ($f.X0 - $gap), $f.Y1)
+    right = @(($f.X1 + $gap), $f.Y0, ($f.X1 + $gap + $band), $f.Y1)
+    below = @($f.X0, ($f.Y1 + $gap), $f.X1, ($f.Y1 + $gap + $band))
+  }
+  foreach ($side in $sides.Keys) {
+    $x0, $y0, $x1, $y1 = $sides[$side]
+    if ($x0 -lt 0 -or $y0 -lt 0 -or $x1 -gt $w -or $y1 -gt $h) { return New-Verdict 'FAIL' "the preview reaches the window edge on the $side, so no page shows under it there" }
+    $share = [FeaturePixels]::Fraction($Capture.Pixels, $w, $x0, $y0, $x1, $y1, $Under, $script:Tolerance)
+    if ($share -lt 0.8) { return New-Verdict 'FAIL' ('the page under the preview no longer shows on the {0} ({1:P0} of the margin)' -f $side, $share) }
+  }
+  New-Verdict 'PASS' ('preview {0}x{1} at {2},{3} with the page under it on the left, the right and below' -f $f.Width, $f.Height, $f.X0, $f.Y0)
 }
 
 function Get-Coverage($Region, $Capture) { if ($Region.Area -eq 0) { 0 } else { $Region.Count / ($Capture.Width * $Capture.Height) } }
