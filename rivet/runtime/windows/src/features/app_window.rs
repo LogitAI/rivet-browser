@@ -16,8 +16,24 @@ pub(crate) fn recorded(name: &str) -> Option<usize> {
 }
 
 /// A value named in the test profile's `rivet-spike.txt`.
+///
+/// The addresses there are unchecked and belong to one build, so only the profile's own debug
+/// folder may hold them. A file left in the shared folder would hand them to every browser Rivet
+/// opens, on any build, and a wrong address crashes the browser. The file is read once per process
+/// because the layout asks for these values many times a second.
 fn switched(name: &str) -> Option<usize> {
-    let text = std::fs::read_to_string(crate::frame::debug_switch("rivet-spike.txt")?).ok()?;
+    static TEXT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let text = TEXT.get_or_init(|| spike_text(crate::frame::own_debug_directory().as_deref()));
+    spike_value(text.as_deref()?, name)
+}
+
+/// The text of `rivet-spike.txt` in a profile's own debug folder.
+fn spike_text(own: Option<&std::path::Path>) -> Option<String> {
+    std::fs::read_to_string(own?.join("rivet-spike.txt")).ok()
+}
+
+/// The value of `name` in the text of a spike file: `name 0xRVA` per line.
+fn spike_value(text: &str, name: &str) -> Option<usize> {
     text.lines().find_map(|line| {
         let mut words = line.split_whitespace();
         (words.next()? == name)
@@ -636,6 +652,26 @@ mod tests {
         title_bar: FEATURE_TITLEBAR,
         tab_strip: FEATURE_TABSTRIP,
     };
+
+    #[test]
+    fn nfr3_unchecked_spike_addresses_apply_only_from_the_profiles_own_debug_folder() {
+        let shared = rivet_core::paths::TestDir::new("spike-shared");
+        std::fs::write(shared.join("rivet-spike.txt"), "ctx 06AC7B40\n").unwrap();
+        // A browser started without its own `rivet-debug` folder never reads a spike file, so the
+        // shared folder's file cannot reach it.
+        assert_eq!(spike_text(None), None);
+        let own = rivet_core::paths::TestDir::new("spike-own");
+        assert_eq!(spike_text(Some(own.path())), None);
+        std::fs::write(
+            own.join("rivet-spike.txt"),
+            "new 06F4DE00\nctx 0x06AC7B40\n",
+        )
+        .unwrap();
+        let text = spike_text(Some(own.path())).expect("the own file is read");
+        assert_eq!(spike_value(&text, "ctx"), Some(0x06AC_7B40));
+        assert_eq!(spike_value(&text, "new"), Some(0x06F4_DE00));
+        assert_eq!(spike_value(&text, "size"), None);
+    }
 
     #[test]
     fn app_window_new_tabs_stay_in_the_app_window_without_a_drawn_tab_strip() {
