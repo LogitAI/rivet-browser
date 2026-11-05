@@ -2215,11 +2215,6 @@ thread_local! {
     static TAB_TICKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// A debug switch file: the process's own when its profile has the folder, else the shared one.
-pub(crate) fn debug_switch(name: &str) -> Option<std::path::PathBuf> {
-    debug_directory().map(|dir| dir.join(name))
-}
-
 /// The log a switched-on trace writes, rotated when it is full. `None` while the switch is off.
 fn trace_file(name: &str) -> Option<std::path::PathBuf> {
     let path = rivet_core::paths::Layout::current()?.trace_file(name)?;
