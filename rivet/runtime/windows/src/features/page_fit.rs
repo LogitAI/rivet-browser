@@ -34,9 +34,43 @@ pub(crate) fn fill(page: [i32; 4], container: [i32; 2]) -> [i32; 4] {
     [0, 0, container_width, container_height]
 }
 
+/// An extra page view's bounds `rect` grown by the inset the window's page had, the page bounds
+/// `page` before `fill` grew them to `filled`. The browser keeps the same inset inside every page
+/// view it makes, so Rivet's own views take it back the same way and their pages line up.
+pub(crate) fn outset(rect: [i32; 4], page: [i32; 4], filled: [i32; 4]) -> [i32; 4] {
+    if page == filled {
+        return rect;
+    }
+    let left = page[0] - filled[0];
+    let top = page[1] - filled[1];
+    let right = (filled[0] + filled[2]) - (page[0] + page[2]);
+    let bottom = (filled[1] + filled[3]) - (page[1] + page[3]);
+    [
+        rect[0] - left,
+        rect[1] - top,
+        rect[2] + left + right,
+        rect[3] + top + bottom,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
-    use super::fill;
+    use super::{fill, outset};
+
+    #[test]
+    fn fr9_an_extra_page_takes_back_the_inset_its_view_keeps() {
+        // Samsung Internet 30.0.4.29 drew the split's second page 3 DIPs lower than the first.
+        let page = [4, 3, 1152, 700];
+        let filled = fill(page, [1164, 711]);
+        assert_eq!(
+            outset([600, 0, 500, 711], page, filled),
+            [596, -3, 512, 722]
+        );
+        assert_eq!(
+            outset([600, 0, 500, 711], filled, filled),
+            [600, 0, 500, 711]
+        );
+    }
 
     #[test]
     fn fr10_a_page_inset_by_its_container_fills_the_container() {
