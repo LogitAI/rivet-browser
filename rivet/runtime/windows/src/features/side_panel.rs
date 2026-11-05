@@ -102,13 +102,67 @@ pub struct Objects {
     pub view: usize,
 }
 
+thread_local! {
+    /// The objects found for each window, with the `BrowserWindow` they were found from.
+    static FOUND: RefCell<std::collections::HashMap<isize, (usize, Objects)>> =
+        RefCell::default();
+}
+
+/// Whether objects found before can be used again: they came from the same `BrowserWindow`, all
+/// of them were found, and each still carries its type's vtable. One not found yet, such as a
+/// side panel the browser makes later, is looked for again.
+pub fn reuse_found(
+    cached: Option<(usize, Objects)>,
+    browser_window: usize,
+    alive: impl Fn(usize) -> bool,
+) -> Option<Objects> {
+    let (from, found) = cached?;
+    (from == browser_window
+        && [found.coordinator, found.side_panel, found.view]
+            .iter()
+            .all(|object| *object != 0 && alive(*object)))
+    .then_some(found)
+}
+
 /// Finds a window's `BrowserView`, its side panel coordinator and its `SidePanel` from the frame
-/// view the browser laid out last.
+/// view the browser laid out last. Finding them scans the `BrowserView`, which the window's timer
+/// would otherwise do several times a second, so they are kept per window while their
+/// `BrowserWindow` stays and each still has its vtable.
 pub unsafe fn objects(window: HWND) -> Option<Objects> {
     let base = chrome_base();
     if base == 0 || !checked() {
         return None;
     }
+    let browser_window = match frame_layout::frame_view(window) {
+        Some(frame) => {
+            *((frame + crate::builds::get().layout.frame_browser_window_offset) as *const usize)
+        }
+        None => page_area::laid_out_host(window)?,
+    };
+    let cached = FOUND.with(|found| found.borrow().get(&(window as isize)).copied());
+    let vtables = [
+        bv().coordinator_vtable,
+        bv().side_panel_vtable,
+        bv().browser_view_view_vtable,
+    ];
+    let alive = |object: usize| {
+        readable(object, 8)
+            && vtables
+                .iter()
+                .any(|vtable| *(object as *const usize) == base + vtable)
+    };
+    if let Some(found) = reuse_found(cached, browser_window, alive) {
+        return Some(found);
+    }
+    let found = find_objects(window, base)?;
+    FOUND.with(|all| {
+        all.borrow_mut()
+            .insert(window as isize, (browser_window, found))
+    });
+    Some(found)
+}
+
+unsafe fn find_objects(window: HWND, base: usize) -> Option<Objects> {
     // The frame view holds the `BrowserWindow` subobject of `BrowserView` at +0x340. A build whose
     // frame view is not recorded has it from the layout, which lays that same view out.
     let browser_window = match frame_layout::frame_view(window) {
@@ -1067,6 +1121,44 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn found() -> Objects {
+        Objects {
+            coordinator: 0x100,
+            side_panel: 0x200,
+            view: 0x300,
+        }
+    }
+
+    #[test]
+    fn idle_panel_objects_are_found_once_while_the_window_stays() {
+        let cached = Some((0x50, found()));
+        let reused = reuse_found(cached, 0x50, |_| true).expect("the same window reuses them");
+        assert_eq!(reused.coordinator, 0x100);
+        assert!(
+            reuse_found(None, 0x50, |_| true).is_none(),
+            "nothing found yet"
+        );
+    }
+
+    #[test]
+    fn idle_panel_objects_are_found_again_when_the_window_or_an_object_changed() {
+        let cached = Some((0x50, found()));
+        assert!(
+            reuse_found(cached, 0x60, |_| true).is_none(),
+            "another BrowserWindow"
+        );
+        assert!(
+            reuse_found(cached, 0x50, |object| object != 0x200).is_none(),
+            "a freed side panel"
+        );
+        let mut missing = found();
+        missing.side_panel = 0;
+        assert!(
+            reuse_found(Some((0x50, missing)), 0x50, |_| true).is_none(),
+            "a side panel not found yet is looked for again"
+        );
+    }
 
     #[test]
     fn fr10_rail_counts_registry_entries_kept_as_a_count_or_an_end_pointer() {
