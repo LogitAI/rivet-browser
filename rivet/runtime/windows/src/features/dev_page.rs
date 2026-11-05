@@ -48,14 +48,27 @@ pub(crate) unsafe fn toggle_dev_mode(window: HWND) -> bool {
 /// The buttons the developer bar of this build offers, with the command each runs.
 pub(crate) fn dev_actions() -> Vec<(Action, u32)> {
     let dev = &crate::builds::get().toolbar.dev;
-    // Chromium has no browser command that opens DevTools on its Network or Performance panel, so
-    // those two buttons stay out until a build records a Chromium function for them.
+    // Chromium has no browser command that opens DevTools on its Network or Performance panel.
+    // Rivet opens them itself through Chromium's DevTools functions where the build records them.
+    let panels = panel_buttons(crate::features::dev_tools::available());
     crate::dev_mode::bar_buttons(&[
         (Action::Inspect, dev.inspect),
         (Action::Console, dev.console),
-        (Action::Network, 0),
-        (Action::Performance, 0),
+        (Action::Network, panels),
+        (Action::Performance, panels),
     ])
+}
+
+/// The marker the Network and Performance buttons carry when Rivet can open their panels. Rivet
+/// runs them itself, so it is never sent to the browser as a command.
+pub(crate) const PANEL_BUTTON: u32 = u32::MAX;
+
+fn panel_buttons(available: bool) -> u32 {
+    if available {
+        PANEL_BUTTON
+    } else {
+        0
+    }
 }
 
 /// Runs one of Rivet's own buttons. Returns whether `action` is one.
@@ -74,6 +87,11 @@ pub(crate) unsafe fn run_own(window: HWND, action: Action) -> bool {
         Action::Screenshot => {
             let copied = copy_page_picture(window);
             crate::trace::trace(&format!("developer bar: screenshot {copied}"));
+        }
+        Action::Network | Action::Performance => {
+            // Never posted as a command, even when the panel could not be opened.
+            let opened = crate::features::dev_tools::open_panel(window, action);
+            crate::trace::trace(&format!("developer bar: {action:?} {opened}"));
         }
         _ => return false,
     }
@@ -185,6 +203,26 @@ unsafe fn copy_page_picture(window: HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr11_network_and_performance_buttons_show_only_where_rivet_opens_their_panels() {
+        let shown = |available| {
+            let panels = panel_buttons(available);
+            crate::dev_mode::bar_buttons(&[
+                (Action::Inspect, 40023),
+                (Action::Console, 40005),
+                (Action::Network, panels),
+                (Action::Performance, panels),
+            ])
+        };
+        let with = shown(true);
+        assert_eq!(with.len(), 7);
+        assert!(with.contains(&(Action::Network, PANEL_BUTTON)));
+        assert!(with.contains(&(Action::Performance, PANEL_BUTTON)));
+        let without = shown(false);
+        assert_eq!(without.len(), 5);
+        assert!(!without.iter().any(|(action, _)| *action == Action::Network));
+    }
 
     #[test]
     fn fr11_screenshot_takes_the_page_below_the_address_row() {

@@ -16,6 +16,7 @@ mod brave;
 mod chrome;
 mod edge;
 mod omnibox_rows;
+pub mod page_tool_rows;
 mod samsung;
 mod whale;
 

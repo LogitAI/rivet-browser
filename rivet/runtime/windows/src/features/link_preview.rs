@@ -223,6 +223,7 @@ pub(crate) unsafe fn dismiss(window: HWND) -> bool {
         }
         None => second_view::close(window),
     };
+    crate::features::page_links::preview_dismissed(window);
     crate::trace::trace(&format!("link preview: dismissed: {closed}"));
     closed
 }
@@ -232,6 +233,7 @@ pub(crate) unsafe fn open_as_tab(window: HWND) -> bool {
     let Some((tab, _)) = shown(window) else {
         return dismiss(window);
     };
+    crate::features::page_links::preview_kept(window);
     dismiss(window);
     let activated = crate::features::tabs::activate_tab(window, tab);
     crate::trace::trace(&format!("link preview: open as tab {tab}: {activated}"));
