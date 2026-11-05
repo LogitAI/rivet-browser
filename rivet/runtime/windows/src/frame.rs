@@ -2136,7 +2136,12 @@ pub(crate) fn browser_windows_of_process() -> Vec<HWND> {
             if owner == me {
                 found.push(window);
             }
-            window = FindWindowExW(std::ptr::null_mut(), window, class.as_ptr(), std::ptr::null());
+            window = FindWindowExW(
+                std::ptr::null_mut(),
+                window,
+                class.as_ptr(),
+                std::ptr::null(),
+            );
         }
     });
     found

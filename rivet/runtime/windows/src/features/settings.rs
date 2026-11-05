@@ -694,7 +694,11 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
             return None;
         }
         // A change made without a key, such as a drag that selects, counts too.
-        if card.field.as_ref().is_some_and(|field| field.take_changed()) {
+        if card
+            .field
+            .as_ref()
+            .is_some_and(|field| field.take_changed())
+        {
             card.generation += 1;
         }
         Some(View {

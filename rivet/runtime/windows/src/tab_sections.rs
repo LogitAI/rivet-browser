@@ -760,7 +760,10 @@ mod tests {
         for now in 101..100 + SEEN_STEP {
             list.sync(&tabs, now);
         }
-        assert_eq!(list, saved, "the same tabs within a step change nothing to write");
+        assert_eq!(
+            list, saved,
+            "the same tabs within a step change nothing to write"
+        );
         list.sync(&tabs, 100 + SEEN_STEP);
         assert_ne!(list, saved, "the active tab's time moves on after a step");
     }

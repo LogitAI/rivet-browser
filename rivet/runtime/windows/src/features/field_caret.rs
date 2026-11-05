@@ -13,11 +13,17 @@ mod tests {
 
     #[test]
     fn idle_command_bar_caret_blink_redraws_only_the_caret() {
-        assert!(only_caret(7, 7), "a blink leaves the text and selection as they were");
+        assert!(
+            only_caret(7, 7),
+            "a blink leaves the text and selection as they were"
+        );
     }
 
     #[test]
     fn idle_settings_caret_timer_that_changed_the_field_redraws_the_card() {
-        assert!(!only_caret(7, 8), "a timer that scrolled or selected text paints the card");
+        assert!(
+            !only_caret(7, 8),
+            "a timer that scrolled or selected text paints the card"
+        );
     }
 }

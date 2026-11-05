@@ -187,7 +187,11 @@ impl Appbar {
 
 /// Whether a card over the page must be painted again: only when what it shows changed. Its
 /// field's text and selection count in the view's generation, and its caret is drawn apart.
-pub(super) fn card_needs_paint<V: PartialEq>(painted: Option<&(V, u32)>, view: &V, dpi: u32) -> bool {
+pub(super) fn card_needs_paint<V: PartialEq>(
+    painted: Option<&(V, u32)>,
+    view: &V,
+    dpi: u32,
+) -> bool {
     painted.is_none_or(|(old, at)| old != view || *at != dpi)
 }
 
@@ -234,8 +238,14 @@ mod tests {
     #[test]
     fn idle_command_and_settings_cards_are_painted_only_when_they_changed() {
         let painted = (("rows", 3u64), 96);
-        assert!(!card_needs_paint(Some(&painted), &("rows", 3u64), 96), "a blink paints nothing");
-        assert!(card_needs_paint(Some(&painted), &("rows", 4u64), 96), "typed text paints");
+        assert!(
+            !card_needs_paint(Some(&painted), &("rows", 3u64), 96),
+            "a blink paints nothing"
+        );
+        assert!(
+            card_needs_paint(Some(&painted), &("rows", 4u64), 96),
+            "typed text paints"
+        );
         assert!(card_needs_paint(Some(&painted), &("other", 3u64), 96));
         assert!(card_needs_paint(Some(&painted), &("rows", 3u64), 120));
         assert!(card_needs_paint::<(&str, u64)>(None, &("rows", 3u64), 96));
