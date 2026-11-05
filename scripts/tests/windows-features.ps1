@@ -276,7 +276,21 @@ function Send-Flag($ctx, [string]$File, [string]$Text) {
 # After a launch: a Rivet window that never attached is a failure of the browser build.
 function Test-Attached($ctx) { $ctx.Error -ne 'attach-failed' }
 
-function Stop-Scene($ctx) { Stop-Mine $ctx.ExeName $ctx.Profile }
+# Stops the scene's browser, keeps its trace under the run's `traces` folder and deletes its test
+# profile, so a long run does not fill the disk. Captures are kept where they were written.
+function Stop-Scene($ctx) {
+  Stop-Mine $ctx.ExeName $ctx.Profile
+  for ($i = 0; $i -lt 20 -and @(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count -gt 0; $i++) { Start-Sleep -Milliseconds 250 }
+  if (-not $ctx.Profile -or -not (Test-Path $ctx.Profile)) { return }
+  $traces = Join-Path $OutDir 'traces'
+  $debugDir = Join-Path $ctx.Profile 'rivet-debug'
+  if (Test-Path $debugDir) {
+    $keep = Join-Path $traces (Split-Path -Leaf $ctx.Profile)
+    New-Item -ItemType Directory -Force $keep | Out-Null
+    Copy-Item -Path (Join-Path $debugDir '*') -Destination $keep -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  Remove-Item -Recurse -Force $ctx.Profile -ErrorAction SilentlyContinue
+}
 
 # The visible browser windows of the test profile's processes.
 function Get-MyTops($ctx) {
