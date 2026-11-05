@@ -29,3 +29,4 @@ pub(crate) mod tab_strip;
 pub(crate) mod tabs;
 pub(crate) mod vertical_tabs;
 pub(crate) mod widgets;
+pub(crate) mod window_corners;
