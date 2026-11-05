@@ -188,7 +188,10 @@ mod tests {
             Some("https://github.com/LogitAI")
         );
         assert_eq!(decode_open_link(OPEN_LINK_DATA + 1, &bytes), None);
-        assert_eq!(decode_open_link(OPEN_LINK_DATA, b"RVL0https://a.example/"), None);
+        assert_eq!(
+            decode_open_link(OPEN_LINK_DATA, b"RVL0https://a.example/"),
+            None
+        );
         assert_eq!(decode_open_link(OPEN_LINK_DATA, b"RVL1\xff"), None);
     }
 
@@ -200,11 +203,19 @@ mod tests {
         assert!(encode_open_link("file:///C:/Users/a/page.HTML").is_ok());
         assert!(encode_open_link("file:///C:/Windows/system.ini").is_err());
         assert!(encode_open_link("file:///C:/a.html?x=.html").is_err());
-        assert!(encode_open_link("file:///C:/Users/a/page.HTML").is_ok(), "an HTML file from Explorer");
+        assert!(
+            encode_open_link("file:///C:/Users/a/page.HTML").is_ok(),
+            "an HTML file from Explorer"
+        );
         assert!(encode_open_link("file:///C:/Windows/system.ini").is_err());
         assert!(encode_open_link("https://a.example/\n").is_err());
-        assert!(encode_open_link(&format!("https://a.example/{}", "x".repeat(MAX_LINK_BYTES))).is_err());
-        assert_eq!(decode_open_link(OPEN_LINK_DATA, b"RVL1chrome://settings"), None);
+        assert!(
+            encode_open_link(&format!("https://a.example/{}", "x".repeat(MAX_LINK_BYTES))).is_err()
+        );
+        assert_eq!(
+            decode_open_link(OPEN_LINK_DATA, b"RVL1chrome://settings"),
+            None
+        );
     }
 
     #[test]

@@ -29,12 +29,6 @@ pub(crate) fn layout_hook() -> usize {
     }
 }
 
-/// Whether split view reads the page area the layout hook records. With the older layout the split
-/// works from its own bounds, so the hook serves the Sidebar alone.
-pub(crate) fn split_reads_page_area() -> bool {
-    crate::builds::get().side_panel.old_layout != Some(true)
-}
-
 /// The key of the Rivet window a view of the browser belongs to, or none when the window is not one
 /// of Rivet's. Views are asked from inside the browser's layout, which runs on the UI thread.
 pub(crate) unsafe fn rivet_owner(view: *mut std::ffi::c_void) -> Option<usize> {

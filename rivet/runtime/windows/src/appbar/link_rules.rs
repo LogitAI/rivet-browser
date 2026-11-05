@@ -150,12 +150,7 @@ impl Appbar {
                     if remove_hot {
                         canvas.fill_rounded(glyph, 6.0, rgba(INK, 0.06))?;
                     }
-                    canvas.icon(
-                        '\u{E711}',
-                        glyph,
-                        8.0,
-                        if remove_hot { INK } else { MUTED },
-                    )?;
+                    canvas.icon('\u{E711}', glyph, 8.0, if remove_hot { INK } else { MUTED })?;
                 }
             }
             let [ax, ay, aw, ah] = panel::add_box(view.rows.len());

@@ -1074,7 +1074,11 @@ mod tests {
         assert_eq!(registry_count(data, 5, false), 5);
         assert_eq!(registry_count(data, data + 5 * 8, true), 5);
         assert_eq!(registry_count(data, data, true), 0);
-        assert_eq!(registry_count(data, 0, true), 0, "a broken end gives no entries");
+        assert_eq!(
+            registry_count(data, 0, true),
+            0,
+            "a broken end gives no entries"
+        );
     }
 
     #[test]
@@ -1107,7 +1111,12 @@ mod tests {
         assert!(shape.extensions_by_toggle);
         let chrome = registry_shape(&crate::builds::CHROME_156_80.side_panel);
         assert_eq!(
-            (chrome.in_coordinator, chrome.coordinator_browser, chrome.entries, chrome.key_size),
+            (
+                chrome.in_coordinator,
+                chrome.coordinator_browser,
+                chrome.entries,
+                chrome.key_size
+            ),
             (None, 8, 0x38, 0x28)
         );
     }
@@ -1128,7 +1137,10 @@ mod tests {
         assert!(samsung.supported);
         assert_eq!(samsung.hidden_entries, &[20, 21, 22, 23, 24]);
         assert_eq!(samsung.old_layout, Some(true));
-        assert_eq!((samsung.contents_container, samsung.side_panel), (0x80, 0x98));
+        assert_eq!(
+            (samsung.contents_container, samsung.side_panel),
+            (0x80, 0x98)
+        );
     }
 
     #[test]

@@ -8,11 +8,21 @@ use rivet_core::link_rules::{LinkRules, Pattern, Target};
 /// What `rivet link-rules` was asked to do.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RulesRequest {
-    List { json: bool },
-    Set { pattern: Pattern, target: Target },
-    Remove { pattern: Pattern },
+    List {
+        json: bool,
+    },
+    Set {
+        pattern: Pattern,
+        target: Target,
+    },
+    Remove {
+        pattern: Pattern,
+    },
     /// Where a link would open, without opening it.
-    Route { url: String, json: bool },
+    Route {
+        url: String,
+        json: bool,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -37,9 +47,7 @@ pub(crate) fn parse_rules(arguments: &[String]) -> Result<RulesOptions, String> 
                 ));
             }
             "--json" => json = true,
-            option if option.starts_with("--") => {
-                return Err(format!("unknown option {option:?}"))
-            }
+            option if option.starts_with("--") => return Err(format!("unknown option {option:?}")),
             word => words.push(word.to_owned()),
         }
         index += 1;
@@ -160,9 +168,7 @@ pub(crate) fn parse_open(arguments: &[String]) -> Result<OpenOptions, String> {
                     arguments.get(index).ok_or("--state needs a value")?,
                 ));
             }
-            option if option.starts_with("--") => {
-                return Err(format!("unknown option {option:?}"))
-            }
+            option if option.starts_with("--") => return Err(format!("unknown option {option:?}")),
             word if url.is_none() => url = Some(word.to_owned()),
             word => return Err(format!("unexpected {word:?}")),
         }
@@ -195,7 +201,10 @@ mod tests {
         };
         run(&["set", "github.com/*", "Work"]).unwrap();
         run(&["set", "https://calendar.google.com/", "mini-window"]).unwrap();
-        assert_eq!(run(&["route", "https://gist.github.com/x"]).unwrap(), "Work");
+        assert_eq!(
+            run(&["route", "https://gist.github.com/x"]).unwrap(),
+            "Work"
+        );
         assert_eq!(
             run(&["route", "https://calendar.google.com/e", "--json"]).unwrap(),
             r#"{"kind":"mini-window"}"#
@@ -210,13 +219,23 @@ mod tests {
         );
         run(&["remove", "github.com"]).unwrap();
         assert!(run(&["remove", "github.com"]).is_err());
-        assert_eq!(run(&["route", "https://github.com/"]).unwrap(), "Current space, new tab");
+        assert_eq!(
+            run(&["route", "https://github.com/"]).unwrap(),
+            "Current space, new tab"
+        );
     }
 
     #[test]
     fn fr3_cli_reads_link_rule_requests() {
         assert_eq!(
-            parse_rules(&words(&["--rules", "r.json", "set", "*.notion.so", "Research"])).unwrap(),
+            parse_rules(&words(&[
+                "--rules",
+                "r.json",
+                "set",
+                "*.notion.so",
+                "Research"
+            ]))
+            .unwrap(),
             RulesOptions {
                 request: RulesRequest::Set {
                     pattern: Pattern::Host("notion.so".into()),
@@ -233,7 +252,14 @@ mod tests {
     #[test]
     fn fr3_cli_sends_only_web_addresses_into_a_session() {
         assert_eq!(
-            parse_open(&words(&["session", "open", "--id", "s1", "https://github.com/"])).unwrap(),
+            parse_open(&words(&[
+                "session",
+                "open",
+                "--id",
+                "s1",
+                "https://github.com/"
+            ]))
+            .unwrap(),
             OpenOptions {
                 id: "s1".into(),
                 state: None,

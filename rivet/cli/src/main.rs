@@ -82,7 +82,10 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
     if arguments.first().is_some_and(|command| command == "setup") {
         return run_setup(&arguments[1..]);
     }
-    if arguments.first().is_some_and(|command| command == "link-rules") {
+    if arguments
+        .first()
+        .is_some_and(|command| command == "link-rules")
+    {
         let options = links::parse_rules(&arguments[1..])?;
         let path = links::rules_path(options.rules)?;
         println!("{}", links::run_rules_at(&path, options.request)?);

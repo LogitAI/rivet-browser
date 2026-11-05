@@ -59,12 +59,12 @@ mod palette {
 }
 use palette::*;
 
+/// The link rules panel, drawn with the appbar's canvas.
+mod link_rules;
 /// The command bar and the link preview, drawn with the appbar's canvas.
 mod overlays;
 /// The Rivet settings card, drawn with the appbar's canvas.
 mod settings_card;
-/// The link rules panel, drawn with the appbar's canvas.
-mod link_rules;
 
 /// A text style from the shell study: family, size, weight and letter spacing in em.
 #[derive(Clone, Copy)]

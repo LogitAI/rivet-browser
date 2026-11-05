@@ -83,7 +83,7 @@ unsafe fn spec(gurl: *const u8) -> Option<String> {
 unsafe extern "system" fn target_url_hook(this: *mut c_void, source: *mut c_void, url: *const u8) {
     let address = spec(url).unwrap_or_default();
     if let Ok(mut hover) = HOVER.lock() {
-        *hover = (!address.is_empty()).then(|| (source as usize, address));
+        *hover = (!address.is_empty()).then_some((source as usize, address));
     }
     let original = ORIGINAL_TARGET_URL.load(Ordering::Acquire);
     if original != 0 {

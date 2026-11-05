@@ -16,7 +16,9 @@ pub const OPEN_LINK: &str = "--open-link";
 /// The address of a launch that carries a link: `None` when the launch has no `--open-link`, and
 /// an error when it has one without a web address.
 pub fn from_arguments(arguments: &[String]) -> Option<Result<String, String>> {
-    let at = arguments.iter().position(|argument| argument == OPEN_LINK)?;
+    let at = arguments
+        .iter()
+        .position(|argument| argument == OPEN_LINK)?;
     let Some(url) = arguments.get(at + 1) else {
         return Some(Err(format!("{OPEN_LINK} needs an address")));
     };
@@ -125,7 +127,10 @@ mod tests {
             from_arguments(&words(&["--open-link", "https://github.com/"])),
             Some(Ok("https://github.com/".into()))
         );
-        assert!(matches!(from_arguments(&words(&["--open-link"])), Some(Err(_))));
+        assert!(matches!(
+            from_arguments(&words(&["--open-link"])),
+            Some(Err(_))
+        ));
         assert!(matches!(
             from_arguments(&words(&["--open-link", "file:///C:/x.ini"])),
             Some(Err(_))

@@ -25,7 +25,9 @@ fn rules_path() -> Option<std::path::PathBuf> {
 }
 
 fn load() -> LinkRules {
-    rules_path().map(|path| LinkRules::load(&path)).unwrap_or_default()
+    rules_path()
+        .map(|path| LinkRules::load(&path))
+        .unwrap_or_default()
 }
 
 fn save(rules: &LinkRules) {
@@ -96,9 +98,8 @@ pub(crate) unsafe fn copy_data(window: HWND, lparam: LPARAM) -> Option<LRESULT> 
 /// Opens `url` at `target`. A space this window cannot show, such as one of another browser,
 /// gets the link as a new tab of the current space rather than losing it.
 unsafe fn deliver(window: HWND, url: &str, target: &Target) -> bool {
-    let new_tab = || {
-        crate::features::tabs::new_tab(window) && crate::features::navigation::open(window, url)
-    };
+    let new_tab =
+        || crate::features::tabs::new_tab(window) && crate::features::navigation::open(window, url);
     match target {
         Target::CurrentSpace => new_tab(),
         Target::MiniWindow => new_tab() && crate::features::mini_window::pop_out_active(window),
@@ -192,13 +193,23 @@ pub(crate) fn row_top(index: usize) -> f32 {
 
 /// The close glyph's box inside the card.
 pub(crate) fn close_box(width: f32) -> [f32; 4] {
-    [width - PAD - REMOVE, PAD + (TITLE_HEIGHT - REMOVE) / 2.0, REMOVE, REMOVE]
+    [
+        width - PAD - REMOVE,
+        PAD + (TITLE_HEIGHT - REMOVE) / 2.0,
+        REMOVE,
+        REMOVE,
+    ]
 }
 
 /// The "Add this site" button's box inside the card.
 pub(crate) fn add_box(rules: usize) -> [f32; 4] {
     let top = row_top(rules.min(ROWS_SHOWN) + 1);
-    [PAD, top + (FOOTER_HEIGHT - BUTTON_HEIGHT) / 2.0, BUTTON_WIDTH, BUTTON_HEIGHT]
+    [
+        PAD,
+        top + (FOOTER_HEIGHT - BUTTON_HEIGHT) / 2.0,
+        BUTTON_WIDTH,
+        BUTTON_HEIGHT,
+    ]
 }
 
 fn inside(area: [f32; 4], x: f32, y: f32) -> bool {
@@ -285,7 +296,11 @@ pub(crate) fn is_open(window: HWND) -> bool {
     PANELS.with(|panels| {
         panels
             .try_borrow()
-            .map(|panels| panels.get(&(window as isize)).is_some_and(|panel| panel.open))
+            .map(|panels| {
+                panels
+                    .get(&(window as isize))
+                    .is_some_and(|panel| panel.open)
+            })
             .unwrap_or(false)
     })
 }
@@ -398,7 +413,10 @@ unsafe fn act(window: HWND, hit: Hit) {
     }
     let rules = with_panel(window, |panel| panel.rules.clone());
     save(&rules);
-    crate::trace::trace(&format!("link rules: {hit:?}, now {} rules", rules.rules.len()));
+    crate::trace::trace(&format!(
+        "link rules: {hit:?}, now {} rules",
+        rules.rules.len()
+    ));
     crate::frame::update_appbar(window);
 }
 
@@ -492,7 +510,9 @@ mod tests {
     fn rules(list: &[(&str, Target)]) -> LinkRules {
         let mut rules = LinkRules::default();
         for (pattern, target) in list {
-            rules.set(Pattern::parse(pattern).unwrap(), target.clone()).unwrap();
+            rules
+                .set(Pattern::parse(pattern).unwrap(), target.clone())
+                .unwrap();
         }
         rules
     }
@@ -504,8 +524,14 @@ mod tests {
             ("calendar.google.com", Target::MiniWindow),
             ("example.com", Target::CurrentSpace),
         ]);
-        assert_eq!(after_move(&list, "https://other.example/", "Research"), AfterMove::Stay);
-        assert_eq!(after_move(&list, "https://example.com/", "Research"), AfterMove::Stay);
+        assert_eq!(
+            after_move(&list, "https://other.example/", "Research"),
+            AfterMove::Stay
+        );
+        assert_eq!(
+            after_move(&list, "https://example.com/", "Research"),
+            AfterMove::Stay
+        );
         assert_eq!(
             after_move(&list, "https://github.com/x", "Research"),
             AfterMove::ToSpace("Work".into())
@@ -515,7 +541,10 @@ mod tests {
             AfterMove::Stay,
             "a link for the space the window shows stays where it is"
         );
-        assert_eq!(after_move(&list, "https://calendar.google.com/", "Work"), AfterMove::Float);
+        assert_eq!(
+            after_move(&list, "https://calendar.google.com/", "Work"),
+            AfterMove::Float
+        );
     }
 
     #[test]
@@ -526,7 +555,11 @@ mod tests {
         assert!(height(3) > height(2));
         assert_eq!(height(50), height(ROWS_SHOWN), "the card stops growing");
         let [_, _, narrow, _] = card(300.0, 0);
-        assert_eq!(narrow, 300.0 - 36.0, "a narrow page keeps the card inside it");
+        assert_eq!(
+            narrow,
+            300.0 - 36.0,
+            "a narrow page keeps the card inside it"
+        );
     }
 
     #[test]
@@ -535,12 +568,23 @@ mod tests {
         let [cx, cy, cw, _] = card(width, 2);
         let row = |index: usize| cy + row_top(index) + ROW_HEIGHT / 2.0;
         assert_eq!(hit(width, 2, cx - 5.0, row(0)), Hit::Outside);
-        assert_eq!(hit(width, 2, cx + 20.0, row(0)), Hit::Inside, "the pattern is not a button");
+        assert_eq!(
+            hit(width, 2, cx + 20.0, row(0)),
+            Hit::Inside,
+            "the pattern is not a button"
+        );
         assert_eq!(hit(width, 2, cx + cw - 80.0, row(1)), Hit::Target(1));
         assert_eq!(hit(width, 2, cx + cw - PAD - 4.0, row(0)), Hit::Remove(0));
-        assert_eq!(hit(width, 2, cx + cw - 80.0, row(2)), Hit::Inside, "everything else is fixed");
+        assert_eq!(
+            hit(width, 2, cx + cw - 80.0, row(2)),
+            Hit::Inside,
+            "everything else is fixed"
+        );
         let [ax, ay, _, ah] = add_box(2);
-        assert_eq!(hit(width, 2, cx + ax + 4.0, cy + ay + ah / 2.0), Hit::AddSite);
+        assert_eq!(
+            hit(width, 2, cx + ax + 4.0, cy + ay + ah / 2.0),
+            Hit::AddSite
+        );
         let [bx, by, _, _] = close_box(cw);
         assert_eq!(hit(width, 2, cx + bx + 2.0, cy + by + 2.0), Hit::Close);
     }
@@ -551,7 +595,10 @@ mod tests {
             site_of("https://www.github.com:443/LogitAI?x=1"),
             Some(Pattern::Host("github.com".into()))
         );
-        assert_eq!(site_of("http://user@notion.so/"), Some(Pattern::Host("notion.so".into())));
+        assert_eq!(
+            site_of("http://user@notion.so/"),
+            Some(Pattern::Host("notion.so".into()))
+        );
         assert_eq!(site_of("chrome://settings/"), None);
         assert_eq!(site_of("file:///C:/x.html"), None);
     }

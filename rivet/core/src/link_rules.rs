@@ -94,15 +94,22 @@ fn parts(url: &str) -> Option<Parts<'_>> {
     let (scheme, after) = url.split_once("://")?;
     let end = after.find(['/', '?', '#']).unwrap_or(after.len());
     let authority = &after[..end];
-    let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     let host = if host_port.starts_with('[') {
-        host_port.split_once(']').map_or(host_port, |(host, _)| host)
+        host_port
+            .split_once(']')
+            .map_or(host_port, |(host, _)| host)
     } else {
         host_port.split(':').next().unwrap_or(host_port)
     };
     Some(Parts {
         scheme: scheme.to_ascii_lowercase(),
-        host: host.trim_start_matches('[').trim_end_matches('.').to_ascii_lowercase(),
+        host: host
+            .trim_start_matches('[')
+            .trim_end_matches('.')
+            .to_ascii_lowercase(),
         rest: &after[end..],
     })
 }
@@ -248,14 +255,19 @@ mod tests {
     fn rules(list: &[(&str, Target)]) -> LinkRules {
         let mut rules = LinkRules::default();
         for (pattern, target) in list {
-            rules.set(Pattern::parse(pattern).unwrap(), target.clone()).unwrap();
+            rules
+                .set(Pattern::parse(pattern).unwrap(), target.clone())
+                .unwrap();
         }
         rules
     }
 
     #[test]
     fn fr3_a_link_no_rule_matches_opens_in_the_current_space() {
-        assert_eq!(LinkRules::default().route("https://example.com/"), Target::CurrentSpace);
+        assert_eq!(
+            LinkRules::default().route("https://example.com/"),
+            Target::CurrentSpace
+        );
         let list = rules(&[("github.com", Target::Space("Work".into()))]);
         assert_eq!(list.route("https://example.com/"), Target::CurrentSpace);
         assert_eq!(list.route("mailto:a@example.com"), Target::CurrentSpace);
@@ -268,12 +280,27 @@ mod tests {
             ("github.com/*", Target::Space("Work".into())),
             ("*.notion.so", Target::Space("Research".into())),
         ]);
-        assert_eq!(list.route("https://github.com/LogitAI"), Target::Space("Work".into()));
-        assert_eq!(list.route("http://gist.GitHub.com:443/x"), Target::Space("Work".into()));
-        assert_eq!(list.route("https://user@github.com/"), Target::Space("Work".into()));
-        assert_eq!(list.route("https://www.notion.so/page"), Target::Space("Research".into()));
+        assert_eq!(
+            list.route("https://github.com/LogitAI"),
+            Target::Space("Work".into())
+        );
+        assert_eq!(
+            list.route("http://gist.GitHub.com:443/x"),
+            Target::Space("Work".into())
+        );
+        assert_eq!(
+            list.route("https://user@github.com/"),
+            Target::Space("Work".into())
+        );
+        assert_eq!(
+            list.route("https://www.notion.so/page"),
+            Target::Space("Research".into())
+        );
         assert_eq!(list.route("https://notgithub.com/"), Target::CurrentSpace);
-        assert_eq!(list.route("https://github.com.evil.example/"), Target::CurrentSpace);
+        assert_eq!(
+            list.route("https://github.com.evil.example/"),
+            Target::CurrentSpace
+        );
         assert_eq!(list.route("file:///C:/github.com/"), Target::CurrentSpace);
     }
 
@@ -283,11 +310,26 @@ mod tests {
             ("https://calendar.google.com/event", Target::MiniWindow),
             ("example.com/docs", Target::Space("Docs".into())),
         ]);
-        assert_eq!(list.route("https://calendar.google.com/event?eid=1"), Target::MiniWindow);
-        assert_eq!(list.route("http://calendar.google.com/event/2"), Target::MiniWindow);
-        assert_eq!(list.route("https://calendar.google.com/"), Target::CurrentSpace);
-        assert_eq!(list.route("https://mail.calendar.google.com/event"), Target::CurrentSpace);
-        assert_eq!(list.route("https://example.com/docs/a"), Target::Space("Docs".into()));
+        assert_eq!(
+            list.route("https://calendar.google.com/event?eid=1"),
+            Target::MiniWindow
+        );
+        assert_eq!(
+            list.route("http://calendar.google.com/event/2"),
+            Target::MiniWindow
+        );
+        assert_eq!(
+            list.route("https://calendar.google.com/"),
+            Target::CurrentSpace
+        );
+        assert_eq!(
+            list.route("https://mail.calendar.google.com/event"),
+            Target::CurrentSpace
+        );
+        assert_eq!(
+            list.route("https://example.com/docs/a"),
+            Target::Space("Docs".into())
+        );
         assert_eq!(list.route("https://example.com/blog"), Target::CurrentSpace);
     }
 
@@ -297,9 +339,16 @@ mod tests {
             ("https://github.com/LogitAI/", Target::MiniWindow),
             ("github.com", Target::Space("Work".into())),
         ]);
-        assert_eq!(list.route("https://github.com/LogitAI/rivet"), Target::MiniWindow);
-        assert_eq!(list.route("https://github.com/other"), Target::Space("Work".into()));
-        list.set(Pattern::Host("github.com".into()), Target::CurrentSpace).unwrap();
+        assert_eq!(
+            list.route("https://github.com/LogitAI/rivet"),
+            Target::MiniWindow
+        );
+        assert_eq!(
+            list.route("https://github.com/other"),
+            Target::Space("Work".into())
+        );
+        list.set(Pattern::Host("github.com".into()), Target::CurrentSpace)
+            .unwrap();
         assert_eq!(list.rules.len(), 2, "the same pattern is one rule");
         assert_eq!(list.route("https://github.com/other"), Target::CurrentSpace);
         assert!(list.remove(&Pattern::Host("github.com".into())));
@@ -308,13 +357,22 @@ mod tests {
 
     #[test]
     fn fr3_patterns_and_targets_are_read_as_people_write_them() {
-        assert_eq!(Pattern::parse("*.Notion.so").unwrap(), Pattern::Host("notion.so".into()));
-        assert_eq!(Pattern::parse("github.com/*").unwrap(), Pattern::Host("github.com".into()));
+        assert_eq!(
+            Pattern::parse("*.Notion.so").unwrap(),
+            Pattern::Host("notion.so".into())
+        );
+        assert_eq!(
+            Pattern::parse("github.com/*").unwrap(),
+            Pattern::Host("github.com".into())
+        );
         assert!(Pattern::parse("").is_err());
         assert!(Pattern::parse("ftp://example.com/").is_err());
         assert!(Pattern::parse("a b").is_err());
         assert_eq!(Target::parse("mini-window").unwrap(), Target::MiniWindow);
-        assert_eq!(Target::parse("current-space").unwrap(), Target::CurrentSpace);
+        assert_eq!(
+            Target::parse("current-space").unwrap(),
+            Target::CurrentSpace
+        );
         assert_eq!(Target::parse("Work").unwrap(), Target::Space("Work".into()));
         assert!(Target::parse(" ").is_err());
     }
@@ -337,7 +395,10 @@ mod tests {
                 Target::CurrentSpace
             ]
         );
-        assert_eq!(Target::Space("Gone".into()).next(&spaces), Target::MiniWindow);
+        assert_eq!(
+            Target::Space("Gone".into()).next(&spaces),
+            Target::MiniWindow
+        );
         assert_eq!(Target::CurrentSpace.next(&[]), Target::MiniWindow);
     }
 

@@ -1001,14 +1001,21 @@ unsafe fn switch_space(window: HWND, index: usize) {
 /// The names of the window's spaces, in order, for the link rules.
 pub(crate) fn space_names(window: HWND) -> Vec<String> {
     with_spaces(window, |spaces| {
-        spaces.list().iter().map(|space| space.name.clone()).collect()
+        spaces
+            .list()
+            .iter()
+            .map(|space| space.name.clone())
+            .collect()
     })
 }
 
 /// The name of the space the window shows.
 pub(crate) fn current_space_name(window: HWND) -> Option<String> {
     with_spaces(window, |spaces| {
-        spaces.list().get(spaces.current()).map(|space| space.name.clone())
+        spaces
+            .list()
+            .get(spaces.current())
+            .map(|space| space.name.clone())
     })
 }
 
