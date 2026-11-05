@@ -772,6 +772,13 @@ unsafe fn place(split: &Split) -> bool {
             rect
         } else {
             let moved = [rect[0] + dx, rect[1] + dy, rect[2], rect[3]];
+            // The browser keeps its page inset inside each page view; a split's pages line up.
+            let moved = if split.mode == Mode::Split {
+                let raw = *FULL.lock().unwrap_or_else(|error| error.into_inner());
+                crate::features::page_fit::outset(moved, raw, fitted(split.main, raw))
+            } else {
+                moved
+            };
             // A page on the top line rises over the browser's bars, which belong to the main page.
             let moved = if rect[1] == full[1] {
                 crate::features::pane_infobar::lift(
