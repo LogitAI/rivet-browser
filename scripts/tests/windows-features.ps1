@@ -813,6 +813,17 @@ function Invoke-SplitOneTab($Name, $shots) {
 # evidence beside the measured rectangles.
 # An elevated browser otherwise relaunches itself de-elevated and the first process exits with no output.
 $script:DemoGeometry = $null
+# A file another process may still hold open for writing, read without asking for sole access. The
+# read is tried again for a few seconds while the writer lets go. Null when it never could be read.
+function Read-SharedText([string]$Path) {
+  for ($try = 0; $try -lt 20; $try++) {
+    try {
+      $stream = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+      try { return (New-Object IO.StreamReader($stream)).ReadToEnd() } finally { $stream.Dispose() }
+    } catch [IO.IOException] { Start-Sleep -Milliseconds 500 }
+  }
+  $null
+}
 # The demo is rendered once with Chrome, whose headless mode works, and the render is kept beside
 # every browser's results, so each browser is compared with the same image. Brave's headless launch
 # left no screenshot. A render is reused only while the demo file is unchanged.
@@ -858,13 +869,19 @@ function Get-DemoGeometry {
   Stop-Mine $ExeName $profile_
   $common = @('--headless=new', '--do-not-de-elevate', "--user-data-dir=`"$profile_`"", '--disable-sync', '--no-first-run', '--no-default-browser-check', '--disable-features=msImplicitSignin,msEdgeSignIn,Translate', '--lang=en-US', '--window-size=1600,1000', '--force-device-scale-factor=1', '--hide-scrollbars', '--virtual-time-budget=3000')
   $dom = Join-Path $dir 'rivet-shell-demo.dom.html'
+  $dump = $null
   try {
     $shot = Start-Process -FilePath $ExePath -ArgumentList ($common + @("--screenshot=`"$png`"", $url)) -PassThru -WindowStyle Hidden
     if (-not $shot.WaitForExit(60000)) { return $null }
     $dump = Start-Process -FilePath $ExePath -ArgumentList ($common + @('--dump-dom', $url)) -PassThru -WindowStyle Hidden -RedirectStandardOutput $dom
     if (-not $dump.WaitForExit(60000)) { return $null }
-  } finally { Stop-Mine $ExeName $profile_ }
-  $text = [IO.File]::ReadAllText($dom)
+  } finally {
+    Stop-Mine $ExeName $profile_
+    # The redirected output stays open while the process object or a child of the dump holds it.
+    if ($dump) { $dump.Dispose() }
+  }
+  $text = Read-SharedText $dom
+  if ($null -eq $text) { return $null }
   $m = [regex]::Match($text, '<pre id="rivet-geometry"[^>]*>([^<]*)</pre>')
   if (-not $m.Success) { return $null }
   $json = [Net.WebUtility]::HtmlDecode($m.Groups[1].Value)

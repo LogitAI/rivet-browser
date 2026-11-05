@@ -180,9 +180,19 @@ pub(crate) unsafe fn run(
                 .insert(window as isize, (page[1], page[3]))
         });
     }
+    let traced = |area: &mut PageArea| {
+        [row().page_area, row().contents_container, row().toolbar]
+            .map(|offset| area.bounds(offset).map(|bounds| *bounds))
+    };
+    let before = traced(&mut area);
     for step in STEPS {
         step(&mut area);
     }
+    let after = traced(&mut area);
+    crate::trace::trace_changed(
+        "page area",
+        &format!("page area: area, page, top row {before:?} to {after:?}"),
+    );
     area.bounds.commit();
 }
 

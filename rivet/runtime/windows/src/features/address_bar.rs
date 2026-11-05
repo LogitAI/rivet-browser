@@ -399,6 +399,7 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
     }
     let row = &crate::builds::get().side_panel;
     let Some(contents) = area.bounds(row.contents_container) else {
+        crate::trace::trace_changed("bar layout", "address bar: the layout has no page container");
         return;
     };
     // An app window's top container holds the browser's title row, which Rivet's bar replaces. When
@@ -433,6 +434,10 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
     let contents = &mut *contents;
     contents[1] += ROW_HEIGHT;
     contents[3] = (contents[3] - ROW_HEIGHT).max(1);
+    crate::trace::trace_changed(
+        "bar layout",
+        &format!("address bar: layout page {before:?} to {contents:?}"),
+    );
 }
 
 /// The top row, the page and the views that moved with them.
@@ -540,6 +545,7 @@ unsafe fn ensure_layout(window: HWND) {
     let reason = installed.as_ref().err().cloned().unwrap_or_default();
     match offset_for(installed, crate::features::second_view::available()) {
         Offset::Layout => {
+            crate::trace::trace("address bar: the browser's layout moves the page below the bar");
             BY_LAYOUT.store(true, std::sync::atomic::Ordering::Release);
             let name: Vec<u16> = crate::features::split::RELAYOUT_MESSAGE
                 .encode_utf16()

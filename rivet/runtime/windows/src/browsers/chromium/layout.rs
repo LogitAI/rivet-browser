@@ -90,6 +90,13 @@ pub(crate) unsafe extern "system" fn proposed_layout(
     let host = *(this
         .cast::<u8>()
         .add(crate::builds::get().side_panel.host_view) as *const usize);
+    crate::trace::trace_changed(
+        "layout hook",
+        &format!(
+            "layout hook: host {host:x} window {}",
+            frame_layout::hwnd_of_view(host as *const c_void).is_some()
+        ),
+    );
     if let Some(window) = frame_layout::hwnd_of_view(host as *const c_void) {
         page_area::run(this, host, window, &mut Map { out });
     }
@@ -111,6 +118,13 @@ unsafe extern "system" fn app_proposed_layout(
     let host = *(this
         .cast::<u8>()
         .add(crate::builds::get().side_panel.host_view) as *const usize);
+    crate::trace::trace_changed(
+        "layout hook",
+        &format!(
+            "layout hook: host {host:x} window {}",
+            frame_layout::hwnd_of_view(host as *const c_void).is_some()
+        ),
+    );
     if let Some(window) = frame_layout::hwnd_of_view(host as *const c_void) {
         page_area::run(this, host, window, &mut Map { out });
     }

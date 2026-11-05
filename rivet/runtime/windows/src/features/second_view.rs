@@ -738,6 +738,10 @@ unsafe fn area_of(split: &Split) -> Option<[i32; 4]> {
     let now = bounds_of(split.main);
     let last = *LAST.lock().unwrap_or_else(|error| error.into_inner());
     if now != last && now[2] > 0 {
+        crate::trace::trace_changed(
+            "page view area",
+            &format!("second view: the browser gave the page view {now:?}, Rivet set {last:?}"),
+        );
         *FULL.lock().unwrap_or_else(|error| error.into_inner()) = now;
     }
     let full = *FULL.lock().unwrap_or_else(|error| error.into_inner());
@@ -794,6 +798,14 @@ unsafe fn place(split: &Split) -> bool {
         if slot == 0 {
             *LAST.lock().unwrap_or_else(|error| error.into_inner()) = rect;
         }
+        crate::trace::trace_changed(
+            if slot == 0 { "place 0" } else { "place n" },
+            &format!(
+                "second view: slot {slot} to {rect:?} from area {full:?}, raw {:?}, now {:?}",
+                *FULL.lock().unwrap_or_else(|error| error.into_inner()),
+                bounds_of(view)
+            ),
+        );
         // Bounds that are already right are not set again, so a layout does not ask for another one.
         if bounds_of(view) != rect {
             moves.push((view, rect));
