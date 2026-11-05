@@ -180,19 +180,21 @@ pub(crate) unsafe fn run(
     area.bounds.commit();
 }
 
+/// Whether the row records the browser's layout. That alone decides the patch: the page area
+/// serves the address bar, the split and the Sidebar, so a build whose Sidebar is off still moves
+/// its page with the browser's own layout.
+pub(crate) fn layout_recorded(layout_vtable: usize, proposed: usize) -> bool {
+    layout_vtable != crate::builds::ABSENT && proposed != crate::builds::ABSENT
+}
+
 /// Patches the layout once per process. Without the recorded layout nothing here runs.
 pub(crate) unsafe fn install() -> Result<(), String> {
     const MISSING: &str = "this browser build has no recorded layout for the Sidebar";
-    if row().layout_vtable == crate::builds::ABSENT {
+    if !layout_recorded(row().layout_vtable, row().proposed) {
         return Err(MISSING.into());
     }
     if original() != 0 {
         return Ok(());
-    }
-    if !crate::browsers::split_reads_page_area() && !row().supported {
-        return Err(
-            "the Sidebar is off in this build, and nothing else reads its page area".into(),
-        );
     }
     let Some(image) = image::recorded() else {
         return Err(MISSING.into());
@@ -316,6 +318,14 @@ mod tests {
                 .find(|(key, _)| *key == view)
                 .map(|(_, bounds)| bounds as *mut _)
         }
+    }
+
+    #[test]
+    fn fr10_an_old_layout_is_patched_without_the_sidebar_row() {
+        // Samsung Internet 143.0.4.29's old layout, whose Sidebar row is not supported.
+        assert!(layout_recorded(0x0E18_0BE0, 0x013C_8310));
+        assert!(!layout_recorded(crate::builds::ABSENT, 0x013C_8310));
+        assert!(!layout_recorded(0x0E18_0BE0, crate::builds::ABSENT));
     }
 
     #[test]
