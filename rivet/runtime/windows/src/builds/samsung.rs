@@ -6,7 +6,7 @@ use super::*;
 /// `samsunginternet.dll`, and `samsunginternet.exe` is the browser process itself, so there is no
 /// versioned launcher. The file version resource names the Samsung release, not Chromium's.
 pub static SAMSUNG: Build = Build {
-    omnibox: None,
+    omnibox: Some(super::omnibox_rows::OMNIBOX_SAMSUNG_29),
     app_window: Some(AppWindow {
         feature_impl: Some(0x001FBB10),
         feature_impl_prologue: &[
