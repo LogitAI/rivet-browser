@@ -61,6 +61,8 @@ use palette::*;
 
 /// The command bar and the link preview, drawn with the appbar's canvas.
 mod overlays;
+/// The Rivet settings card, drawn with the appbar's canvas.
+mod settings_card;
 
 /// A text style from the shell study: family, size, weight and letter spacing in em.
 #[derive(Clone, Copy)]
@@ -212,6 +214,9 @@ pub struct Appbar {
     /// The command bar over the page, and what it was last painted for.
     command: IDCompositionVisual2,
     command_painted: Option<(crate::features::command_bar::View, u32)>,
+    /// The Rivet settings card over the page, and what it was last painted for.
+    settings: IDCompositionVisual2,
+    settings_painted: Option<(crate::features::settings::View, u32)>,
     /// The header and shadow of a link preview, and what they were last painted for.
     preview: IDCompositionVisual2,
     preview_painted: Option<(crate::features::link_preview::View, u32)>,
@@ -383,6 +388,8 @@ impl Appbar {
         root.AddVisual(&preview, true, None::<&IDCompositionVisual>)?;
         let command = device.CreateVisual()?;
         root.AddVisual(&command, true, None::<&IDCompositionVisual>)?;
+        let settings = device.CreateVisual()?;
+        root.AddVisual(&settings, true, None::<&IDCompositionVisual>)?;
         target.SetRoot(&root)?;
         let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let fonts = load_fonts(&dwrite)?;
@@ -419,6 +426,8 @@ impl Appbar {
             address_painted: None,
             command,
             command_painted: None,
+            settings,
+            settings_painted: None,
             preview,
             preview_painted: None,
         })
