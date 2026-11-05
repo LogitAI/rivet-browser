@@ -18,6 +18,7 @@ param(
   [int]$Seconds = 0
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows-processes.ps1')
 Add-Type -TypeDefinition @'
 using System;using System.Runtime.InteropServices;using System.Collections.Generic;
 public static class GuardWin{
@@ -78,6 +79,11 @@ if ($SelfTest) {
     if (-not $ok) { $failed++ }
     '{0} {1}: {2}' -f ($(if ($ok) { 'ok  ' } else { 'FAIL' })), $case[3], $got
   }
+  # The process list without WMI must see this guard with its command line, start time and parent.
+  $me = @(Get-ProcessList) | Where-Object { $_.ProcessId -eq $PID } | Select-Object -First 1
+  $ok = [bool]($me -and $me.CommandLine -and $me.CommandLine.Contains('windows-visible-guard') -and $me.CreationDate -and $me.ParentProcessId)
+  if (-not $ok) { $failed++ }
+  '{0} the process list names this guard with its command line: {1}' -f ($(if ($ok) { 'ok  ' } else { 'FAIL' })), $ok
   $real = [GuardWin]::Monitors()
   "monitors on this machine: $($real.Count)"
   if ($real.Count -lt 1) { $failed++ }
@@ -94,7 +100,7 @@ New-Item -ItemType File -Force $Log | Out-Null
 
 # The test processes: every process whose command line names the mark, and their descendants.
 function Get-TestProcesses {
-  $all = @(Get-CimInstance Win32_Process)
+  $all = @(Get-ProcessList)
   $test = New-Object 'System.Collections.Generic.HashSet[uint32]'
   $byId = @{}
   foreach ($p in $all) { $byId[[uint32]$p.ProcessId] = $p }
@@ -138,7 +144,7 @@ while ($true) {
     if (Test-OnMonitor $rect $monitors) {
       Add-Content $Log "$(Get-Date -Format o) ONSCREEN window $($p[0]) pid $($p[1]) class $($p[6]) at $($rect -join ',')"
       if (-not $DryRun) {
-        Stop-Tests (Get-CimInstance Win32_Process)
+        Stop-Tests (Get-ProcessList)
         if ($FailFile) { Set-Content $FailFile "a test window showed on a monitor: $line" }
         exit 1
       }

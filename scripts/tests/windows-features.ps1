@@ -15,7 +15,9 @@ param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
   [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview'),
   [string]$OutDir,
-  [switch]$NoBuild
+  [switch]$NoBuild,
+  # The run stops before a row when the output drive has less free space than this.
+  [double]$MinFreeGigabytes = 20
 )
 $ErrorActionPreference = 'Continue'
 # Under -File a comma list arrives as one string.
@@ -32,6 +34,7 @@ if (-not $OutDir) { $OutDir = Join-Path $repo '.scratch\features' }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 . (Join-Path $PSScriptRoot 'windows-features-lib.ps1')
+. (Join-Path $PSScriptRoot 'windows-processes.ps1')
 
 # Cargo comes from the caller's toolchain: CARGO_HOME when it is set, else cargo on the PATH.
 $cargo = if ($env:CARGO_HOME -and (Test-Path (Join-Path $env:CARGO_HOME 'bin\cargo.exe'))) { Join-Path $env:CARGO_HOME 'bin\cargo.exe' } else { 'cargo' }
@@ -164,12 +167,12 @@ if ($NoBuild) {
 
 # --- Helpers for one launch -----------------------------------------------------------------
 function Stop-Mine($ExeName, $Profile) {
-  Get-CimInstance Win32_Process -Filter "name='$ExeName'" | Where-Object { $_.CommandLine -like "*$Profile*" } |
+  Get-ProcessList $ExeName | Where-Object { $_.CommandLine -like "*$Profile*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
 function Get-MyProcesses($ExeName, $Profile) {
-  @(Get-CimInstance Win32_Process -Filter "name='$ExeName'" | Where-Object { $_.CommandLine -like "*$Profile*" })
+  @(Get-ProcessList $ExeName | Where-Object { $_.CommandLine -like "*$Profile*" })
 }
 
 function Read-Log { Get-Content $logFile -ErrorAction SilentlyContinue }
@@ -1247,6 +1250,13 @@ foreach ($name in $Browsers) {
   $shots = Join-Path $OutDir $name
   New-Item -ItemType Directory -Force $shots | Out-Null
   foreach ($feature in $Features) {
+    # A full disk leaves a fresh profile half written: no key in Local State, an empty Web Data and
+    # a browser profile error dialog on the owner's screen. Stop the run before that can happen.
+    $free = Get-FreeGigabytes $OutDir
+    if ($free -lt $MinFreeGigabytes) {
+      Write-Host "run stopped before $name $feature`: $free GB free on the output drive, below $MinFreeGigabytes GB"
+      exit 2
+    }
     if (-not $built) { Add-Row $name $version $feature 'NOT_DRIVEN' $null "no browser was started: $buildNote"; continue }
     if (-not (Test-Path $exePath)) { Add-Row $name $version $feature 'NOT_DRIVEN' $null 'the browser is not installed'; continue }
     try {

@@ -35,6 +35,7 @@ $installs = @{
 $realExe, $exeName = $installs[$Browser]
 $key = [IO.Path]::GetFileNameWithoutExtension($exeName)
 
+. (Join-Path $PSScriptRoot 'windows-processes.ps1')
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;using System.Runtime.InteropServices;
@@ -57,7 +58,7 @@ function Add-Result([string]$Name, [bool]$Pass, [string]$Detail) {
 }
 
 function Stop-Mine([string]$Profile) {
-  Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*$Profile*" -and $_.ProcessId -ne $PID } |
+  Get-ProcessList | Where-Object { $_.CommandLine -like "*$Profile*" -and $_.ProcessId -ne $PID } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
@@ -132,7 +133,7 @@ Add-Result 'the session reports the held build' ($sessionLine -and $sessionLine.
 $hwnd = [IntPtr]::Zero; $attached = $false; $mine = $null
 $deadline = (Get-Date).AddSeconds(45)
 while ((Get-Date) -lt $deadline -and $sessionLine) {
-  $mine = Get-CimInstance Win32_Process -Filter "name='$exeName'" | Where-Object { $_.CommandLine -like "*$profile_*" -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
+  $mine = Get-ProcessList $exeName | Where-Object { $_.CommandLine -like "*$profile_*" -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
   if (-not $mine) { Start-Sleep 1; continue }
   $h = (Get-Process -Id $mine.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle
   if ($h -and $h -ne [IntPtr]::Zero) {
@@ -172,7 +173,7 @@ if ($attached) {
 }
 
 # The window belongs to the kept copy and to no other browser window. Nothing else was started.
-$others = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*$profile_*" -and $_.ExecutablePath -and -not $_.ExecutablePath.StartsWith($hold, [StringComparison]::OrdinalIgnoreCase) -and $_.ProcessId -ne $PID }
+$others = Get-ProcessList | Where-Object { $_.CommandLine -like "*$profile_*" -and $_.ExecutablePath -and -not $_.ExecutablePath.StartsWith($hold, [StringComparison]::OrdinalIgnoreCase) -and $_.ProcessId -ne $PID }
 Add-Result 'every process on the test profile runs from the kept copy' (-not $others) (($others | ForEach-Object { $_.ExecutablePath }) -join ';')
 Stop-Mine $profile_
 Start-Sleep 2
@@ -183,11 +184,11 @@ $clock = Get-Content $clockFile -Raw | ConvertFrom-Json
 $old = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 8 * 86400
 $clock.first_detected = $old
 [IO.File]::WriteAllText($clockFile, ($clock | ConvertTo-Json -Compress))
-$before = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*$profile_*" }).Count
+$before = @(Get-ProcessList | Where-Object { $_.CommandLine -like "*$profile_*" }).Count
 $text = & $rivet session start --browser $fake --url $url --user-data-dir $profile_ --runtime $runtime --state $state --hold $hold --display visible 2>&1 | ForEach-Object { [string]$_ }
 $exit = $LASTEXITCODE
 Start-Sleep 3
-$after = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*$profile_*" }).Count
+$after = @(Get-ProcessList | Where-Object { $_.CommandLine -like "*$profile_*" }).Count
 Add-Result 'after seven days no window opens and the reason is said' (($exit -ne 0) -and ($after -eq $before) -and ($text -join ' ').Contains('no longer opens new windows')) (($text | Select-Object -First 1) -join '')
 
 # --- Never kept: nothing opens either ---------------------------------------------------------
@@ -195,7 +196,7 @@ Remove-Item -Recurse -Force (Join-Path $OutDir 'hold') -ErrorAction SilentlyCont
 $text = & $rivet session start --browser $fake --url $url --user-data-dir $profile_ --runtime $runtime --state $state --hold $hold --display visible 2>&1 | ForEach-Object { [string]$_ }
 $exit = $LASTEXITCODE
 Start-Sleep 2
-$after = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*$profile_*" }).Count
+$after = @(Get-ProcessList | Where-Object { $_.CommandLine -like "*$profile_*" }).Count
 Add-Result 'with nothing kept no window opens and the reason is said' (($exit -ne 0) -and ($after -eq 0) -and ($text -join ' ').Contains('no verified copy')) (($text | Select-Object -First 1) -join '')
 
 Stop-Mine $profile_
