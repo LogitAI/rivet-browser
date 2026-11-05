@@ -801,9 +801,14 @@ unsafe fn place(split: &Split) -> bool {
         crate::trace::trace_changed(
             if slot == 0 { "place 0" } else { "place n" },
             &format!(
-                "second view: slot {slot} to {rect:?} from area {full:?}, raw {:?}, now {:?}",
+                "second view: slot {slot} to {rect:?} from area {full:?}, raw {:?}, now {:?}, children {:?}, parent {:?}",
                 *FULL.lock().unwrap_or_else(|error| error.into_inner()),
-                bounds_of(view)
+                bounds_of(view),
+                children_of(view)
+                    .into_iter()
+                    .map(|child| bounds_of(child))
+                    .collect::<Vec<_>>(),
+                word(view + offsets().0).filter(|p| *p != 0).map(|p| bounds_of(p))
             ),
         );
         // Bounds that are already right are not set again, so a layout does not ask for another one.
