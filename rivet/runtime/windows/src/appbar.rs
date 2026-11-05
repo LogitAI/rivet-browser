@@ -59,6 +59,8 @@ mod palette {
 }
 use palette::*;
 
+/// The top bar's caret on a visual of its own.
+mod caret;
 /// The link rules panel, drawn with the appbar's canvas.
 mod link_rules;
 /// The command bar and the link preview, drawn with the appbar's canvas.
@@ -213,6 +215,10 @@ pub struct Appbar {
     /// The top bar of a window with a single page, and what it was last painted for.
     address: IDCompositionVisual2,
     address_painted: Option<(crate::features::address_bar::View, u32)>,
+    /// The top bar's caret, inside the top bar's visual.
+    address_caret: caret::AddressCaret,
+    /// The top bar's surface and its size in pixels, drawn over again while the size stays.
+    address_surface: Option<(IDCompositionSurface, u32, u32)>,
     /// The command bar over the page, and what it was last painted for.
     command: IDCompositionVisual2,
     command_painted: Option<(crate::features::command_bar::View, u32)>,
@@ -388,6 +394,7 @@ impl Appbar {
         // The top bar lies under the toggle and the floating appbar, like the browser row it replaces.
         let address = device.CreateVisual()?;
         root.AddVisual(&address, true, &ground)?;
+        let address_caret = caret::AddressCaret::new(&device, &address)?;
         // The link preview and the command bar lie over everything else of the window.
         let preview = device.CreateVisual()?;
         root.AddVisual(&preview, true, None::<&IDCompositionVisual>)?;
@@ -431,6 +438,8 @@ impl Appbar {
             held_painted: None,
             address,
             address_painted: None,
+            address_caret,
+            address_surface: None,
             command,
             command_painted: None,
             settings,
@@ -949,6 +958,8 @@ impl Appbar {
         use crate::features::address_bar::{Part, Security, CHIP, FIELD_GROUND};
         let Some(bar) = bar else {
             if self.address_painted.take().is_some() {
+                self.hide_address_caret()?;
+                self.address_surface = None;
                 self.address.SetContent(None)?;
                 return self.device.Commit();
             }
@@ -956,10 +967,20 @@ impl Appbar {
         };
         self.address.SetOffsetX2(bar.x.round())?;
         self.address.SetOffsetY2(bar.y.round())?;
-        // An edited field draws something new on every key, so only a bar at rest is kept.
-        if !bar.editing && self.address_painted.as_ref() == Some(&(bar.clone(), dpi)) {
+        // The caret is a visual of its own, so a blink or a caret move paints nothing here. The
+        // field's text and selection count in the view's generation.
+        self.address_caret
+            .set_origin((bar.x.round(), bar.y.round()));
+        let caret = if bar.editing {
+            crate::features::address_bar::caret(window as _)
+        } else {
+            None
+        };
+        self.place_address_caret(caret, dpi, false)?;
+        if !caret::address_needs_paint(self.address_painted.as_ref(), bar, dpi) {
             return self.device.Commit();
         }
+        crate::features::activity::count(crate::features::activity::Counter::AddressPaint);
         let (width, height) = (bar.width.round() as i32, bar.height.round() as i32);
         if width <= 0 || height <= 0 {
             return Ok(());
@@ -973,12 +994,26 @@ impl Appbar {
             0.0
         };
         let total = height + ((list_h + 8.0) * scale).ceil() as i32 * (list_h > 0.0) as i32;
-        let surface = self.device.CreateSurface(
-            width as u32,
-            total as u32,
-            DXGI_FORMAT_B8G8R8A8_UNORM,
-            DXGI_ALPHA_MODE_PREMULTIPLIED,
-        )?;
+        // The surface is kept while the bar keeps its size, and drawn over again in place.
+        let reused = self
+            .address_surface
+            .as_ref()
+            .filter(|(_, w, h)| (*w, *h) == (width as u32, total as u32))
+            .map(|(surface, _, _)| surface.clone());
+        let fresh = reused.is_none();
+        let surface = match reused {
+            Some(surface) => surface,
+            None => {
+                let surface = self.device.CreateSurface(
+                    width as u32,
+                    total as u32,
+                    DXGI_FORMAT_B8G8R8A8_UNORM,
+                    DXGI_ALPHA_MODE_PREMULTIPLIED,
+                )?;
+                self.address_surface = Some((surface.clone(), width as u32, total as u32));
+                surface
+            }
+        };
         let mut offset = POINT::default();
         let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
         context.SetDpi(dpi as f32, dpi as f32);
@@ -1181,7 +1216,7 @@ impl Appbar {
             }
             if bar.editing {
                 let origin = (bar.x, bar.y);
-                crate::features::address_bar::with_field_pixels(window as _, |place, bytes, pw, ph, caret| -> Result<()> {
+                crate::features::address_bar::with_field_pixels(window as _, |place, bytes, pw, ph, _caret| -> Result<()> {
                     let properties = windows::Win32::Graphics::Direct2D::D2D1_BITMAP_PROPERTIES1 {
                         pixelFormat: windows::Win32::Graphics::Direct2D::Common::D2D1_PIXEL_FORMAT {
                             format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -1204,11 +1239,6 @@ impl Appbar {
                         None,
                         None,
                     );
-                    if let Some(caret) = caret {
-                        let x = (caret.left as f32 - origin.0) / scale;
-                        let y = (caret.top as f32 - origin.1) / scale;
-                        canvas.fill(rect(x, y, 1.2, (caret.bottom - caret.top) as f32 / scale), INK)?;
-                    }
                     Ok(())
                 })
                 .unwrap_or(Ok(()))?;
@@ -1218,7 +1248,9 @@ impl Appbar {
         let result = draw();
         surface.EndDraw()?;
         result?;
-        self.address.SetContent(&surface)?;
+        if fresh {
+            self.address.SetContent(&surface)?;
+        }
         self.address_painted = Some((bar.clone(), dpi));
         self.device.Commit()
     }

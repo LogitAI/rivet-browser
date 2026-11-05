@@ -2178,6 +2178,43 @@ fn own_debug_directory_in(arguments: impl Iterator<Item = String>) -> Option<std
         .filter(|dir| dir.is_dir())
 }
 
+/// The folder of debug command files that the window's timer looks in, decided once per process:
+/// the process's own when its profile has one, else the shared one when it exists. `None` means
+/// no folder existed when the first window attached, and the timer then touches no files at all,
+/// so an ordinary window never polls the disk. A tester places the folder before the launch.
+pub(crate) fn debug_switches() -> Option<&'static std::path::Path> {
+    static FOUND: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            pick_debug_switches(
+                own_debug_directory(),
+                rivet_core::paths::Layout::current().map(|layout| layout.debug()),
+                |dir| dir.is_dir(),
+            )
+        })
+        .as_deref()
+}
+
+fn pick_debug_switches(
+    own: Option<std::path::PathBuf>,
+    shared: Option<std::path::PathBuf>,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> Option<std::path::PathBuf> {
+    own.filter(|dir| exists(dir))
+        .or_else(|| shared.filter(|dir| exists(dir)))
+}
+
+/// Every how many tab refresh ticks the window checks that its taskbar identity is still Rivet's.
+const TASKBAR_CHECK_EVERY: u64 = 4;
+
+fn taskbar_check_due(tick: u64) -> bool {
+    tick % TASKBAR_CHECK_EVERY == 0
+}
+
+thread_local! {
+    static TAB_TICKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// A debug switch file: the process's own when its profile has the folder, else the shared one.
 pub(crate) fn debug_switch(name: &str) -> Option<std::path::PathBuf> {
     debug_directory().map(|dir| dir.join(name))
@@ -2452,6 +2489,7 @@ fn attach_steps() -> Vec<Step<Attach>> {
             }) {
                 PostMessageW(window, group_probe_message(), 0, 0);
             }
+            crate::features::activity::switch_on_if_asked();
             // Tab titles and selection can change without a window title change.
             windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(
                 window,
@@ -2549,9 +2587,26 @@ unsafe fn compose_appbar(window: HWND) -> bool {
     true
 }
 
+/// Places or hides the top bar's caret alone, for a blink or a caret move that changed nothing
+/// else. The rest of the window's surface stays as it is.
+pub(crate) unsafe fn update_address_caret(window: HWND) {
+    let dpi = layout_dpi(window);
+    let caret = crate::features::address_bar::caret(window);
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.place_address_caret(caret, dpi, true) {
+                log(&format!(
+                    "rivet: could not draw the top bar's caret: {error}"
+                ));
+            }
+        }
+    });
+}
+
 /// Places the appbar visual over the strip the browser's layout left free and redraws it when its
 /// size or DPI changed.
 pub(crate) unsafe fn update_appbar(window: HWND) {
+    crate::features::activity::count(crate::features::activity::Counter::AppbarUpdate);
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
     let dpi = layout_dpi(window);
@@ -3558,24 +3613,41 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
             if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
-            crate::features::side_panel::tick(window, debug_directory().as_deref());
+            use crate::features::activity::{count, Counter};
+            count(Counter::TabTick);
+            let tick = TAB_TICKS.with(|ticks| {
+                ticks.set(ticks.get() + 1);
+                ticks.get()
+            });
+            if debug_switches().is_some() {
+                count(Counter::DebugScan);
+            }
+            crate::features::side_panel::tick(window, debug_switches());
             crate::features::tab_list::tick(window);
             crate::features::command_bar::tick(window);
+            // An extension page may load into the browser's side panel some time after the click
+            // that opened it, after the side rail's pointer timer has gone quiet.
+            crate::features::sidebar_page::follow(window);
             // A browser can write its own identity again, for example when a profile finishes
-            // loading. The taskbar groups by that identity, so Rivet puts its own back.
-            if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
-                crate::trace::trace("taskbar identity was replaced; applying Rivet's again");
-                let _ = taskbar::apply(window as isize, runtime_directory().as_deref());
-                set_rivet_icons(window);
+            // loading. The taskbar groups by that identity, so Rivet puts its own back. Reading the
+            // identity goes through the shell's property store, so it is not done on every tick.
+            if taskbar_check_due(tick) {
+                count(Counter::TaskbarCheck);
+                if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
+                    crate::trace::trace("taskbar identity was replaced; applying Rivet's again");
+                    let _ = taskbar::apply(window as isize, runtime_directory().as_deref());
+                    set_rivet_icons(window);
+                }
             }
-            if let Some(flag) = debug_directory().map(|dir| dir.join("rivet-split-now.flag")) {
+            crate::features::activity::report_on_tick();
+            if let Some(flag) = debug_switches().map(|dir| dir.join("rivet-split-now.flag")) {
                 if std::fs::remove_file(&flag).is_ok() {
                     crate::features::split::probe(window);
                 }
             }
             // A checked build runs one tab command from `rivet-tab.txt` without a pointer: `new [ADDRESS]`,
             // `activate N`, `close N` or `navigate ADDRESS`, and traces the tab list afterwards.
-            if let Some(flag) = debug_switch("rivet-tab.txt") {
+            if let Some(flag) = debug_switches().map(|dir| dir.join("rivet-tab.txt")) {
                 if let Ok(text) = std::fs::read_to_string(&flag) {
                     let _ = std::fs::remove_file(&flag);
                     let mut words = text.split_whitespace();
@@ -3759,7 +3831,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 }
             }
             // A checked build drops the first inactive tab on a side of the page without a pointer.
-            if let Some(flag) = debug_directory().map(|dir| dir.join("rivet-drop.flag")) {
+            if let Some(flag) = debug_switches().map(|dir| dir.join("rivet-drop.flag")) {
                 if let Ok(text) = std::fs::read_to_string(&flag) {
                     let _ = std::fs::remove_file(&flag);
                     use crate::features::split::Side;
@@ -3817,6 +3889,35 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn idle_timer_looks_for_no_debug_files_without_a_debug_folder() {
+        use std::path::{Path, PathBuf};
+        let own = Some(PathBuf::from("own"));
+        let shared = Some(PathBuf::from("shared"));
+        let none = |_: &Path| false;
+        assert_eq!(
+            super::pick_debug_switches(own.clone(), shared.clone(), none),
+            None
+        );
+        let only_shared = |dir: &Path| dir == Path::new("shared");
+        assert_eq!(
+            super::pick_debug_switches(own.clone(), shared.clone(), only_shared),
+            shared
+        );
+        assert_eq!(
+            super::pick_debug_switches(own.clone(), shared, |_: &Path| true),
+            own
+        );
+    }
+
+    #[test]
+    fn idle_taskbar_identity_is_checked_every_two_seconds_not_every_tick() {
+        let due: Vec<u64> = (1..=12)
+            .filter(|&tick| super::taskbar_check_due(tick))
+            .collect();
+        assert_eq!(due, vec![4, 8, 12]);
+    }
+
     #[test]
     fn nfr3_a_build_without_frame_paint_still_attaches_the_rivet_frame() {
         let steps = super::attach_steps();

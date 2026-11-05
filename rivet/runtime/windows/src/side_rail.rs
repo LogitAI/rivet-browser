@@ -38,9 +38,9 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT as SysPoint, W
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetAncestor, GetCursorPos, IsIconic, IsWindowVisible, SetTimer,
+    CallNextHookEx, GetAncestor, GetCursorPos, IsIconic, IsWindowVisible, KillTimer, SetTimer,
     SetWindowsHookExW, GA_ROOT, MSG, PM_REMOVE, WH_GETMESSAGE, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_NULL,
+    WM_MOUSEMOVE, WM_NCMOUSEMOVE, WM_NULL,
 };
 
 use crate::appbar::Appbar;
@@ -312,6 +312,15 @@ struct Rail {
     /// The geometry of the last update, for hit testing in physical pixels.
     scale: f32,
     geometry: Option<PageGeometry>,
+    /// Whether the pointer timer runs. It runs only while the pointer moves, a fade is under way
+    /// or the page geometry is being waited for, so an idle window has no timer at all.
+    polling: bool,
+    /// Layouts asked for since the rail last wanted page geometry it did not have.
+    relayouts: u32,
+    /// Whether the rail wanted page geometry at the last update: the Sidebar is on and shown.
+    wanted: bool,
+    /// The pointer in client pixels at the last tick.
+    last_pointer: Option<(i32, i32)>,
 }
 
 thread_local! {
@@ -354,6 +363,10 @@ impl Rail {
             opacity: 0.0,
             scale: 1.0,
             geometry: None,
+            polling: false,
+            relayouts: 0,
+            wanted: false,
+            last_pointer: None,
         })
     }
 
@@ -792,10 +805,16 @@ pub unsafe fn update(window: HWND, appbar: &Appbar, visible: bool, dpi: u32) {
             if let Err(error) = panel::install_page_colours() {
                 crate::trace::trace(&format!("side rail: {error}"));
             }
-            SetTimer(window, POLL_TIMER, POLL_MS, Some(poll));
             install_hook();
         }
         let rail = rails.get_mut(&(window as isize)).expect("inserted above");
+        let wanted = visible && panel::sidebar_checked();
+        if wanted && !rail.wanted {
+            // The Sidebar was just turned on or shown: the geometry may need a few layouts.
+            rail.relayouts = 0;
+            start(window, rail);
+        }
+        rail.wanted = wanted;
         if let Err(error) = refresh(window, rail, geometry, dpi) {
             crate::trace::trace(&format!("side rail: {error}"));
         }
@@ -1077,73 +1096,168 @@ fn target_at(rail: &Rail, unfolded: bool, x: f32, y: f32) -> Option<Target> {
 }
 
 /// Follows the pointer: the open button fades in near the corner, and hover marks follow.
+/// The timer runs while this is so, and stops on the first tick where it is not.
 unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
+    crate::features::activity::count(crate::features::activity::Counter::RailTick);
     let mut pointer = SysPoint { x: 0, y: 0 };
     if GetCursorPos(&mut pointer) == 0 || IsWindowVisible(window) == 0 || IsIconic(window) != 0 {
+        stop(window);
         return;
     }
     ScreenToClient(window, &mut pointer);
     // An extension page may load into the browser's side panel after the click that opened it.
     crate::features::sidebar_page::follow(window);
-    let known = RAILS.with(|rails| {
-        rails
-            .borrow()
-            .get(&(window as isize))
-            .is_some_and(|rail| rail.geometry.is_some())
+    let unknown = RAILS.with(|rails| {
+        let mut rails = rails.borrow_mut();
+        let rail = rails.get_mut(&(window as isize))?;
+        if rail.geometry.is_some() {
+            return None;
+        }
+        let step = when_unknown(rail.wanted, rail.relayouts);
+        if step == Unknown::Relayout {
+            rail.relayouts += 1;
+        }
+        Some(step)
     });
-    if !known {
-        // Not laid out since the layout hook went in. Lay out outside any layout of the browser's.
-        crate::hooks::page_area::relayout(window);
-        crate::frame::update_appbar(window);
-        return;
+    match unknown {
+        None => {}
+        Some(Unknown::Relayout) => {
+            // Not laid out since the layout hook went in. Lay out outside any layout of the
+            // browser's, a few times at most: a layout repaints the whole browser window.
+            crate::features::activity::count(crate::features::activity::Counter::RailRelayout);
+            crate::hooks::page_area::relayout(window);
+            crate::frame::update_appbar(window);
+            return;
+        }
+        Some(Unknown::Wait) => {
+            // Nothing to follow: no rail is shown, or the layouts did not bring it. The next
+            // update of the window that wants the rail starts the timer again.
+            stop(window);
+            return;
+        }
     }
-    let changed = RAILS.with(|rails| {
+    let point = (pointer.x, pointer.y);
+    let (changed, settled) = RAILS.with(|rails| {
         let mut rails = rails.borrow_mut();
         let Some(rail) = rails.get_mut(&(window as isize)) else {
-            return false;
+            return (false, true);
         };
-        let unfolded = panel::is_unfolded(window);
-        let (x, y) = to_dips(pointer, rail.scale);
-        let before = (
+        let moved = rail.last_pointer.replace(point) != Some(point);
+        let changed = follow_pointer(window, rail, pointer);
+        (
+            changed,
+            is_settled(
+                moved,
+                changed,
+                rail.opacity,
+                open_opacity(rail.near, rail.over),
+            ),
+        )
+    });
+    if changed {
+        crate::frame::update_appbar(window);
+    }
+    if settled {
+        stop(window);
+    }
+}
+
+/// What the timer does while the rail has no page geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unknown {
+    Relayout,
+    Wait,
+}
+
+/// Layouts the rail may ask for in a row while waiting for its page geometry.
+const MAX_RELAYOUTS: u32 = 5;
+
+fn when_unknown(wanted: bool, relayouts: u32) -> Unknown {
+    if wanted && relayouts < MAX_RELAYOUTS {
+        Unknown::Relayout
+    } else {
+        Unknown::Wait
+    }
+}
+
+/// Whether a tick found nothing left to follow: the pointer stood still, nothing changed and the
+/// open button's fade has arrived.
+fn is_settled(moved: bool, changed: bool, opacity: f32, target: f32) -> bool {
+    !moved && !changed && opacity == target
+}
+
+/// Starts the pointer timer of a window whose rail is borrowed already.
+unsafe fn start(window: HWND, rail: &mut Rail) {
+    if !rail.polling {
+        rail.polling = true;
+        SetTimer(window, POLL_TIMER, POLL_MS, Some(poll));
+    }
+}
+
+/// Starts the pointer timer of a window that has a rail, when it is not running.
+pub(crate) unsafe fn wake(window: HWND) {
+    RAILS.with(|rails| {
+        if let Ok(mut rails) = rails.try_borrow_mut() {
+            if let Some(rail) = rails.get_mut(&(window as isize)) {
+                start(window, rail);
+            }
+        }
+    });
+}
+
+unsafe fn stop(window: HWND) {
+    let was = RAILS.with(|rails| {
+        rails
+            .borrow_mut()
+            .get_mut(&(window as isize))
+            .is_some_and(|rail| std::mem::replace(&mut rail.polling, false))
+    });
+    if was {
+        KillTimer(window, POLL_TIMER);
+    }
+}
+
+/// Moves the rail's hover marks and the open button's fade one tick toward the pointer. Returns
+/// whether anything the rail shows changed.
+unsafe fn follow_pointer(window: HWND, rail: &mut Rail, pointer: SysPoint) -> bool {
+    let unfolded = panel::is_unfolded(window);
+    let (x, y) = to_dips(pointer, rail.scale);
+    let before = (
+        rail.hover,
+        rail.near,
+        rail.over,
+        rail.opacity,
+        rail.close_hover,
+    );
+    let forced = FORCED_POINTER.with(|forced| forced.get());
+    rail.near = !unfolded
+        && forced.map_or_else(
+            || rail.geometry.is_some_and(|g| in_hot_area(g, x, y)),
+            |(near, _)| near,
+        );
+    rail.over = !unfolded
+        && forced.map_or_else(
+            || rail.geometry.is_some_and(|g| on_open_button(g, x, y)),
+            |(_, over)| over,
+        );
+    rail.hover = FORCED_HOVER
+        .with(|forced| forced.get())
+        .filter(|_| unfolded)
+        .or(match target_at(rail, unfolded, x, y) {
+            Some(Target::Rail(hit)) => Some(hit),
+            _ => None,
+        });
+    rail.close_hover = (FORCED_CLOSE.with(|forced| forced.get()) && rail.shown.is_some())
+        || (unfolded && target_at(rail, unfolded, x, y) == Some(Target::PanelClose));
+    rail.opacity = fade(rail.opacity, open_opacity(rail.near, rail.over), 0.2);
+    before
+        != (
             rail.hover,
             rail.near,
             rail.over,
             rail.opacity,
             rail.close_hover,
-        );
-        let forced = FORCED_POINTER.with(|forced| forced.get());
-        rail.near = !unfolded
-            && forced.map_or_else(
-                || rail.geometry.is_some_and(|g| in_hot_area(g, x, y)),
-                |(near, _)| near,
-            );
-        rail.over = !unfolded
-            && forced.map_or_else(
-                || rail.geometry.is_some_and(|g| on_open_button(g, x, y)),
-                |(_, over)| over,
-            );
-        rail.hover = FORCED_HOVER
-            .with(|forced| forced.get())
-            .filter(|_| unfolded)
-            .or(match target_at(rail, unfolded, x, y) {
-                Some(Target::Rail(hit)) => Some(hit),
-                _ => None,
-            });
-        rail.close_hover = (FORCED_CLOSE.with(|forced| forced.get()) && rail.shown.is_some())
-            || (unfolded && target_at(rail, unfolded, x, y) == Some(Target::PanelClose));
-        rail.opacity = fade(rail.opacity, open_opacity(rail.near, rail.over), 0.2);
-        before
-            != (
-                rail.hover,
-                rail.near,
-                rail.over,
-                rail.opacity,
-                rail.close_hover,
-            )
-    });
-    if changed {
-        crate::frame::update_appbar(window);
-    }
+        )
 }
 
 unsafe fn install_hook() {
@@ -1165,6 +1279,12 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
         let message = &mut *(lparam as *mut MSG);
         if matches!(message.message, WM_LBUTTONDOWN | WM_LBUTTONUP) && click(message) {
             message.message = WM_NULL;
+        } else if matches!(message.message, WM_MOUSEMOVE | WM_NCMOUSEMOVE) {
+            // The pointer moved over one of the thread's windows: follow it until it rests.
+            let window = GetAncestor(message.hwnd, GA_ROOT);
+            if !window.is_null() {
+                wake(window);
+            }
         }
     }
     CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
@@ -1341,6 +1461,8 @@ pub unsafe fn simulate(window: HWND, command: &str) {
         perform(window, target);
     }
     crate::frame::update_appbar(window);
+    // A held pointer fades the open button in over a few ticks, with no real pointer moving.
+    wake(window);
 }
 
 /// Forgets a window that is going away.
@@ -1351,6 +1473,48 @@ pub fn forget(window: HWND) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_rail_without_geometry_lays_out_a_few_times_then_waits() {
+        assert_eq!(
+            when_unknown(false, 0),
+            Unknown::Wait,
+            "no Sidebar shown, no layout"
+        );
+        let tries = (0..20)
+            .filter(|&n| when_unknown(true, n) == Unknown::Relayout)
+            .count();
+        assert_eq!(tries as u32, MAX_RELAYOUTS);
+        assert_eq!(when_unknown(true, MAX_RELAYOUTS), Unknown::Wait);
+    }
+
+    #[test]
+    fn idle_rail_timer_stops_once_the_pointer_rests_and_the_fade_arrives() {
+        assert!(is_settled(false, false, 0.0, 0.0));
+        assert!(
+            !is_settled(true, false, 0.0, 0.0),
+            "a moving pointer is followed"
+        );
+        assert!(
+            !is_settled(false, true, 0.0, 0.0),
+            "a change is drawn first"
+        );
+        assert!(
+            !is_settled(false, false, 0.4, 1.0),
+            "a fade under way goes on"
+        );
+        let mut opacity = 0.0;
+        let mut ticks = 0;
+        while !is_settled(false, false, opacity, 1.0) {
+            opacity = fade(opacity, 1.0, 0.2);
+            ticks += 1;
+        }
+        assert!(
+            ticks <= 6,
+            "the fade arrives exactly, so the timer can stop"
+        );
+        assert_eq!(opacity, 1.0);
+    }
 
     #[test]
     fn fr10_rail_buttons_are_thirty_dips_two_apart_after_six() {
