@@ -1133,6 +1133,11 @@ mod tests {
         let whale = row("Naver Whale");
         assert!(whale.supported && whale.registry_end == Some(true));
         assert_eq!((whale.extension_entry, whale.entry_count), (0x15, 0x16));
+        // The traced app window layout keeps the page area, the top row and the page container here.
+        assert_eq!(
+            (whale.page_area, whale.toolbar, whale.contents_container),
+            (0x28, 0x40, 0x90)
+        );
         let samsung = row("Samsung Internet");
         assert!(samsung.supported);
         assert_eq!(samsung.hidden_entries, &[20, 21, 22, 23, 24]);
