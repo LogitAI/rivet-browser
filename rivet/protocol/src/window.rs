@@ -126,9 +126,86 @@ impl MiniWindowCommand {
     }
 }
 
+/// The `dwData` of a `WM_COPYDATA` message that asks a Rivet window to open a link. An address
+/// does not fit in two numbers, so it travels as copied data: the bytes `RVL1` and then the
+/// address in UTF-8. The window routes it by its link rules.
+pub const OPEN_LINK_DATA: usize = 0x5256_4c31;
+const OPEN_LINK_MAGIC: &[u8; 4] = b"RVL1";
+/// The longest address a request may carry. Chromium shows at most this much of an address.
+pub const MAX_LINK_BYTES: usize = 32 * 1024;
+
+/// The copied data of a request to open `url`. Only `http` and `https` addresses and local
+/// `.htm` or `.html` files are sent, so a request can never run a script or open another file.
+pub fn encode_open_link(url: &str) -> Result<Vec<u8>, String> {
+    check_link(url)?;
+    let mut bytes = OPEN_LINK_MAGIC.to_vec();
+    bytes.extend_from_slice(url.as_bytes());
+    Ok(bytes)
+}
+
+/// The address of a request, or none for data this protocol does not define.
+pub fn decode_open_link(data: usize, bytes: &[u8]) -> Option<String> {
+    if data != OPEN_LINK_DATA {
+        return None;
+    }
+    let url = std::str::from_utf8(bytes.strip_prefix(OPEN_LINK_MAGIC)?).ok()?;
+    check_link(url).ok()?;
+    Some(url.to_owned())
+}
+
+fn check_link(url: &str) -> Result<(), String> {
+    if url.len() > MAX_LINK_BYTES {
+        return Err(format!("an address is at most {MAX_LINK_BYTES} bytes"));
+    }
+    let lower = url.to_ascii_lowercase();
+    let web = lower.starts_with("https://") || lower.starts_with("http://");
+    // A page file a person opens from Explorer, when Rivet is the app for `.htm` and `.html`.
+    let page_file = lower.starts_with("file:///")
+        && (lower.ends_with(".html") || lower.ends_with(".htm"))
+        && !lower.contains(['?', '#']);
+    if !(web || page_file) {
+        return Err(format!(
+            "{url:?} is not an http or https address or an HTML file"
+        ));
+    }
+    if url.chars().any(char::is_control) {
+        return Err("an address has no control characters".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr3_an_open_link_request_survives_the_copied_data() {
+        let bytes = encode_open_link("https://github.com/LogitAI").unwrap();
+        assert_eq!(&bytes[..4], b"RVL1");
+        assert_eq!(&bytes[4..], b"https://github.com/LogitAI");
+        assert_eq!(
+            decode_open_link(OPEN_LINK_DATA, &bytes).as_deref(),
+            Some("https://github.com/LogitAI")
+        );
+        assert_eq!(decode_open_link(OPEN_LINK_DATA + 1, &bytes), None);
+        assert_eq!(decode_open_link(OPEN_LINK_DATA, b"RVL0https://a.example/"), None);
+        assert_eq!(decode_open_link(OPEN_LINK_DATA, b"RVL1\xff"), None);
+    }
+
+    #[test]
+    fn fr3_an_open_link_request_carries_only_web_addresses() {
+        assert!(encode_open_link("HTTP://example.com/").is_ok());
+        assert!(encode_open_link("javascript:alert(1)").is_err());
+        assert!(encode_open_link("file:///C:/Windows/").is_err());
+        assert!(encode_open_link("file:///C:/Users/a/page.HTML").is_ok());
+        assert!(encode_open_link("file:///C:/Windows/system.ini").is_err());
+        assert!(encode_open_link("file:///C:/a.html?x=.html").is_err());
+        assert!(encode_open_link("file:///C:/Users/a/page.HTML").is_ok(), "an HTML file from Explorer");
+        assert!(encode_open_link("file:///C:/Windows/system.ini").is_err());
+        assert!(encode_open_link("https://a.example/\n").is_err());
+        assert!(encode_open_link(&format!("https://a.example/{}", "x".repeat(MAX_LINK_BYTES))).is_err());
+        assert_eq!(decode_open_link(OPEN_LINK_DATA, b"RVL1chrome://settings"), None);
+    }
 
     #[test]
     fn fr9_every_mini_window_command_survives_the_window_message() {

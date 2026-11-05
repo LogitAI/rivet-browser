@@ -68,6 +68,10 @@ pub(crate) unsafe fn tick(window: HWND) {
             "link tabs: moved {moved} of {} tabs from window {other:#x}",
             urls.len()
         ));
+        // A link opened in a new window is one tab. Its link rule may send it on from here.
+        if let ([url], 1) = (urls.as_slice(), moved) {
+            crate::features::link_rules::after_link_moved(window, url);
+        }
     }
 }
 

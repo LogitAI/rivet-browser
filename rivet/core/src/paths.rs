@@ -78,6 +78,10 @@ impl Layout {
     pub fn spaces(&self) -> PathBuf {
         self.state().join("spaces")
     }
+    /// Where links from other apps and sites open, one list for every browser and profile.
+    pub fn link_rules_file(&self) -> PathBuf {
+        self.state().join("link-rules.json")
+    }
     pub fn cache(&self) -> PathBuf {
         self.root.join("cache")
     }

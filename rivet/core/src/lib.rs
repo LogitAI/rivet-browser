@@ -7,6 +7,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub mod credentials;
+pub mod link_rules;
 pub mod paths;
 pub mod session;
 

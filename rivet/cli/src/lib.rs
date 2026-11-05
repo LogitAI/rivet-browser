@@ -6,6 +6,7 @@ pub mod config;
 pub mod detect;
 pub mod launch;
 pub mod model;
+pub mod open_link;
 pub mod pe;
 pub mod system;
 #[cfg(windows)]
