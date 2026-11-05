@@ -362,6 +362,16 @@ fn listed_in(row: &crate::builds::SidePanel, id: u32) -> bool {
     (matches!(id, 0..=4) || id == row.extension_entry) && !row.hidden_entries.contains(&id)
 }
 
+/// How many entries the registry's vector holds, from its first word `data` and its second word,
+/// which is a count or, where the row says so, the end pointer.
+pub(crate) fn registry_count(data: usize, second: usize, end_pointer: bool) -> usize {
+    if end_pointer {
+        second.saturating_sub(data) / 8
+    } else {
+        second
+    }
+}
+
 /// The entries Chrome registered for the window's side panel, in its own order.
 pub unsafe fn listed_entries(window: HWND) -> Vec<EntryKey> {
     // A build whose side panel is not recorded draws the rail with no entries.
@@ -383,7 +393,11 @@ pub unsafe fn listed_entries(window: HWND) -> Vec<EntryKey> {
         return Vec::new();
     }
     let data = *((registry + 0x38) as *const usize);
-    let count = *((registry + 0x40) as *const usize);
+    let count = registry_count(
+        data,
+        *((registry + 0x40) as *const usize),
+        bv().registry_end == Some(true),
+    );
     (0..count.min(32))
         .filter_map(|index| {
             let entry = *((data.wrapping_add(index * 8)) as *const usize);
@@ -977,6 +991,15 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr10_rail_counts_registry_entries_kept_as_a_count_or_an_end_pointer() {
+        let data = 0x2000_0000;
+        assert_eq!(registry_count(data, 5, false), 5);
+        assert_eq!(registry_count(data, data + 5 * 8, true), 5);
+        assert_eq!(registry_count(data, data, true), 0);
+        assert_eq!(registry_count(data, 0, true), 0, "a broken end gives no entries");
+    }
 
     #[test]
     fn fr10_open_panel_floats_over_the_page_and_leaves_its_width_alone() {
