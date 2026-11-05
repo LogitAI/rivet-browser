@@ -40,7 +40,7 @@ pub enum BrowserKind {
 }
 
 impl BrowserKind {
-    const ALL: [Self; 4] = [Self::Chrome, Self::Edge, Self::Whale, Self::Brave];
+    pub const ALL: [Self; 4] = [Self::Chrome, Self::Edge, Self::Whale, Self::Brave];
 
     /// The name the file keeps.
     pub fn key(self) -> &'static str {
@@ -258,7 +258,7 @@ pub fn handover_started(success: bool, stderr: &str) -> bool {
 /// The most spaces the footer has room for.
 pub const MAX_SPACES: usize = 6;
 
-const TINTS: [u32; MAX_SPACES] = [0xd08a52, 0x5b8bab, 0xc0577f, 0x6a9f58, 0x8a6fc4, 0xc9a227];
+pub const TINTS: [u32; MAX_SPACES] = [0xd08a52, 0x5b8bab, 0xc0577f, 0x6a9f58, 0x8a6fc4, 0xc9a227];
 
 #[derive(Clone, Debug)]
 pub struct Spaces {
@@ -301,6 +301,18 @@ impl Spaces {
 
     pub fn current(&self) -> usize {
         self.current
+    }
+
+    /// Changes what space `index` is called, how it is coloured or where it opens. False when there
+    /// is no such space.
+    pub fn edit(&mut self, index: usize, edit: impl FnOnce(&mut SpaceInfo)) -> bool {
+        match self.list.get_mut(index) {
+            Some(space) => {
+                edit(space);
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn can_add(&self) -> bool {

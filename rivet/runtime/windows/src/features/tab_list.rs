@@ -357,6 +357,22 @@ pub(crate) fn set_ctrl_t(window: HWND, value: CtrlT) {
     with(window, |state| state.store.settings.ctrl_t = value);
 }
 
+/// The archive period in whole hours. `None` never archives.
+pub(crate) fn archive_hours(window: HWND) -> Option<u64> {
+    with(window, |state| {
+        state
+            .store
+            .settings
+            .archive_after
+            .map(|secs| secs.div_ceil(3600))
+    })
+}
+
+/// A space was renamed, so its list moves to the new name. The window's timer writes the file.
+pub(crate) fn rename_space(window: HWND, old: &str, new: &str) -> bool {
+    with(window, |state| state.store.rename_space(old, new))
+}
+
 /// Sets the archive period in hours. `None` never archives.
 pub(crate) fn set_archive_hours(window: HWND, hours: Option<u64>) {
     with(window, |state| {
