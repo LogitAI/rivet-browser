@@ -229,6 +229,20 @@ unsafe fn window_rect(view: usize) -> [i32; 4] {
     [x, y, bounds[2], bounds[3]]
 }
 
+/// The place of a view's page in the window in DIPs. A view that keeps its page inside a border
+/// was grown by it, and its row and hit areas follow the page.
+unsafe fn page_rect(view: usize) -> [i32; 4] {
+    let bounds = bounds_of(view);
+    let children: Vec<[i32; 4]> = children_of(view)
+        .into_iter()
+        .map(|child| bounds_of(child))
+        .collect();
+    crate::features::page_fit::shrink(
+        window_rect(view),
+        crate::features::page_fit::holder_inset([bounds[2], bounds[3]], &children),
+    )
+}
+
 /// The slot that has the keyboard: an extra page of this window's tabs has it while its tab is
 /// active, a page of another window while it was clicked last, and the window's own page otherwise.
 unsafe fn active_slot(window: HWND, state: &Split, grid: &Grid) -> usize {
@@ -258,7 +272,7 @@ pub(crate) unsafe fn panes(window: HWND) -> Vec<crate::features::split::Pane> {
     let focused = active_slot(window, &state, &grid);
     let mut pages = Vec::new();
     for slot in grid.leaves() {
-        let rect = window_rect(view_of(&state, slot));
+        let rect = page_rect(view_of(&state, slot));
         if rect[2] <= 0 || rect[3] <= 0 {
             return Vec::new();
         }
@@ -283,8 +297,8 @@ pub(crate) unsafe fn slot_of_pane(
 ) -> Option<usize> {
     let state = split().filter(|split| split.window == window as isize)?;
     grid_of(window as isize).leaves().into_iter().find(|slot| {
-        let [x, y] = window_origin(view_of(&state, *slot));
-        x == pane.x && y == pane.y
+        let rect = page_rect(view_of(&state, *slot));
+        rect[0] == pane.x && rect[1] == pane.y
     })
 }
 
