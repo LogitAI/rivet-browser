@@ -16,6 +16,7 @@ param(
 )
 $Browsers = @($Browsers | ForEach-Object { $_ -split ',' })
 . (Join-Path $PSScriptRoot 'windows-features-lib.ps1')
+. (Join-Path $PSScriptRoot 'windows-processes.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $debug = Join-Path $repo 'rivet\target\debug'
 if (-not $OutDir) { $OutDir = Join-Path $repo '.scratch\launch-rate' }
@@ -43,7 +44,7 @@ foreach ($name in $Browsers) {
   $ok = 0
   foreach ($run in 1..$Runs) {
     $profile_ = Join-Path $OutDir "p-$name-$run"
-    Get-CimInstance Win32_Process -Filter "name='$exeName'" | Where-Object { $_.CommandLine -like "*$OutDir*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Get-ProcessList $exeName | Where-Object { $_.CommandLine -like "*$OutDir*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep $Gap
     Remove-Item -Recurse -Force $profile_ -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $profile_ | Out-Null
@@ -55,7 +56,7 @@ foreach ($name in $Browsers) {
     $reported = [bool]($out | Where-Object { $_.Contains('runtime_loaded') })
     $attached = $false; $alive = $false
     foreach ($i in 1..25) {
-      $mine = Get-CimInstance Win32_Process -Filter "name='$exeName'" | Where-Object { $_.CommandLine -like "*$profile_*" -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
+      $mine = Get-ProcessList $exeName | Where-Object { $_.CommandLine -like "*$profile_*" -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
       if ($mine) {
         $alive = $true
         $h = (Get-Process -Id $mine.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle
@@ -67,7 +68,7 @@ foreach ($name in $Browsers) {
     $row = [pscustomobject]@{ browser = $name; run = $run; reported = $reported; alive = $alive; attached = $attached; seconds = [int]((Get-Date) - $started).TotalSeconds; output = ($out -join ' | ') }
     $report += $row
     '{0} run {1}: reported={2} alive={3} attached={4} {5}' -f $name, $run, $reported, $alive, $attached, $(if (-not $reported) { $row.output } else { '' }) | Write-Host
-    Get-CimInstance Win32_Process -Filter "name='$exeName'" | Where-Object { $_.CommandLine -like "*$profile_*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Get-ProcessList $exeName | Where-Object { $_.CommandLine -like "*$profile_*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   }
   "{0}: {1} of {2} launches reported the runtime loaded and attached" -f $name, $ok, $Runs | Write-Host
 }
