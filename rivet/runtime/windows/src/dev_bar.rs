@@ -139,8 +139,8 @@ pub(crate) unsafe fn release(window: HWND, point: POINT) {
         return;
     };
     if let Some((action, _)) = actions.get(down) {
-        // Rivet's own buttons do their work here and run no browser command.
-        if action.rivet_own() && crate::features::dev_page::run_own(window, *action) {
+        // Rivet's own buttons, and the DevTools panels Rivet opens, run no browser command.
+        if crate::features::dev_page::run_own(window, *action) {
             return;
         }
     }
