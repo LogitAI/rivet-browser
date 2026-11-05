@@ -480,6 +480,18 @@ pub struct SidePanel {
     /// The registry keeps its entries as begin and end pointers at +0x38 and +0x40, where newer
     /// builds keep a pointer and a count.
     pub registry_end: Option<bool>,
+    /// Where the coordinator keeps the window's registry, for builds without
+    /// `SidePanelRegistry::From`. Unset means the registry comes from `registry_from`.
+    pub registry_in_coordinator: Option<usize>,
+    /// Where the registry keeps its entries' vector. Unset means +0x38.
+    pub registry_entries: Option<usize>,
+    /// Where the coordinator keeps its browser, which `registry_from` takes. Unset means +8.
+    pub coordinator_browser: Option<usize>,
+    /// The size of a `SidePanelEntryKey`. Unset means 0x28.
+    pub entry_key_size: Option<usize>,
+    /// The build's show by id stops the browser for an extension's entry, which then opens with
+    /// toggle and its key.
+    pub extensions_by_toggle: Option<bool>,
     /// The layout object keeps the host view at +0x38, the contents container at +0xb8, the side
     /// panel at +0xc0 and the content shown while the side panel animates at +0xc8.
     pub host_view: usize,
@@ -794,6 +806,11 @@ const UNCHECKED_SIDEPANEL: SidePanel = SidePanel {
     proposed: ABSENT,
     old_layout: None,
     registry_end: None,
+    registry_in_coordinator: None,
+    registry_entries: None,
+    coordinator_browser: None,
+    entry_key_size: None,
+    extensions_by_toggle: None,
     host_view: 0,
     page_area: 0,
     contents_container: 0,

@@ -35,38 +35,43 @@ fn bv() -> &'static crate::builds::SidePanel {
 /// What the Sidebar needs from the browser.
 pub(crate) fn needs(build: &Build) -> Needs {
     let row = &build.side_panel;
+    let mut targets = vec![
+        Target::new("side panel show", row.show, row.show_prologue),
+        Target::new(
+            "side panel entry id to string",
+            row.entry_id_to_string,
+            row.entry_id_to_string_prologue,
+        ),
+        Target::new("side panel toggle", row.toggle, row.toggle_prologue),
+        Target::new(
+            "side panel entry showing",
+            row.entry_showing,
+            row.entry_showing_prologue,
+        ),
+        Target::new(
+            "side panel registry from browser",
+            row.registry_from,
+            row.registry_from_prologue,
+        ),
+        Target::new(
+            "get colour provider",
+            row.get_color_provider,
+            row.get_color_provider_prologue,
+        ),
+        Target::new(
+            "generate colours css",
+            row.generate_colors_css,
+            row.generate_colors_css_prologue,
+        ),
+    ];
+    // A coordinator that keeps the registry itself has no `SidePanelRegistry::From` to check.
+    if row.registry_in_coordinator.is_some() {
+        targets.retain(|target| target.name != "side panel registry from browser");
+    }
     Needs::checked(
         row.supported,
         crate::builds::unchecked_reason(build, "sidebar"),
-        vec![
-            Target::new("side panel show", row.show, row.show_prologue),
-            Target::new(
-                "side panel entry id to string",
-                row.entry_id_to_string,
-                row.entry_id_to_string_prologue,
-            ),
-            Target::new("side panel toggle", row.toggle, row.toggle_prologue),
-            Target::new(
-                "side panel entry showing",
-                row.entry_showing,
-                row.entry_showing_prologue,
-            ),
-            Target::new(
-                "side panel registry from browser",
-                row.registry_from,
-                row.registry_from_prologue,
-            ),
-            Target::new(
-                "get colour provider",
-                row.get_color_provider,
-                row.get_color_provider_prologue,
-            ),
-            Target::new(
-                "generate colours css",
-                row.generate_colors_css,
-                row.generate_colors_css_prologue,
-            ),
-        ],
+        targets,
     )
 }
 
@@ -104,10 +109,14 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
     if base == 0 || !checked() {
         return None;
     }
-    let frame = frame_layout::frame_view(window)?;
-    // The frame view holds the `BrowserWindow` subobject of `BrowserView` at +0x340.
-    let browser_window =
-        *((frame + crate::builds::get().layout.frame_browser_window_offset) as *const usize);
+    // The frame view holds the `BrowserWindow` subobject of `BrowserView` at +0x340. A build whose
+    // frame view is not recorded has it from the layout, which lays that same view out.
+    let browser_window = match frame_layout::frame_view(window) {
+        Some(frame) => {
+            *((frame + crate::builds::get().layout.frame_browser_window_offset) as *const usize)
+        }
+        None => page_area::laid_out_host(window)?,
+    };
     if !readable(browser_window, 8) {
         return None;
     }
@@ -160,8 +169,63 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
     })
 }
 
+/// The most bytes a build's `SidePanelEntryKey` takes. A build with a smaller key reads only its
+/// own part, and the rest stays zero.
+pub const KEY_BYTES: usize = 0x48;
+
 /// A `SidePanelEntryKey`: the entry id, and the extension id of an extension's panel.
-pub type EntryKey = [u8; 0x28];
+pub type EntryKey = [u8; KEY_BYTES];
+
+/// Where a row's registry keeps its entries, how big its keys are and how they open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegistryShape {
+    /// The registry's offset in the coordinator, or `None` when `registry_from` finds it.
+    pub in_coordinator: Option<usize>,
+    pub coordinator_browser: usize,
+    pub entries: usize,
+    pub end_pointer: bool,
+    pub key_size: usize,
+    pub extensions_by_toggle: bool,
+}
+
+/// The shape a row describes, with Chrome 156's for every value it leaves unset.
+pub fn registry_shape(row: &crate::builds::SidePanel) -> RegistryShape {
+    RegistryShape {
+        in_coordinator: row.registry_in_coordinator,
+        coordinator_browser: row.coordinator_browser.unwrap_or(8),
+        entries: row.registry_entries.unwrap_or(0x38),
+        end_pointer: row.registry_end == Some(true),
+        key_size: row.entry_key_size.unwrap_or(0x28).min(KEY_BYTES),
+        extensions_by_toggle: row.extensions_by_toggle == Some(true),
+    }
+}
+
+/// A key from the first `size` bytes of `bytes`, with the rest zero.
+pub fn key_from(bytes: &[u8], size: usize) -> EntryKey {
+    let mut key = [0; KEY_BYTES];
+    let size = size.min(KEY_BYTES).min(bytes.len());
+    key[..size].copy_from_slice(&bytes[..size]);
+    key
+}
+
+/// The window's side panel registry, from the coordinator's own field or from `registry_from`.
+unsafe fn registry_of(coordinator: usize) -> Option<usize> {
+    let shape = registry_shape(bv());
+    if let Some(offset) = shape.in_coordinator {
+        let at = coordinator.wrapping_add(offset);
+        return readable(at, 8)
+            .then(|| *(at as *const usize))
+            .filter(|registry| *registry != 0);
+    }
+    let base = chrome_base();
+    if !prologue_is(base + bv().registry_from, bv().registry_from_prologue) {
+        return None;
+    }
+    let browser = *((coordinator + shape.coordinator_browser) as *const usize);
+    let from: unsafe extern "system" fn(usize) -> usize =
+        std::mem::transmute(base + bv().registry_from);
+    Some(from(browser)).filter(|registry| *registry != 0)
+}
 
 /// The id of a key.
 pub fn entry_id(key: &EntryKey) -> u32 {
@@ -378,30 +442,32 @@ pub unsafe fn listed_entries(window: HWND) -> Vec<EntryKey> {
     if !checked() {
         return Vec::new();
     }
-    let base = chrome_base();
     let Some(found) = objects(window).filter(|found| found.coordinator != 0) else {
         return Vec::new();
     };
-    if !prologue_is(base + bv().registry_from, bv().registry_from_prologue) {
+    let shape = registry_shape(bv());
+    let Some(registry) = registry_of(found.coordinator) else {
+        return Vec::new();
+    };
+    if !readable(registry.wrapping_add(shape.entries), 0x10) {
         return Vec::new();
     }
-    let browser = *((found.coordinator + 8) as *const usize);
-    let from: unsafe extern "system" fn(usize) -> usize =
-        std::mem::transmute(base + bv().registry_from);
-    let registry = from(browser);
-    if !readable(registry.wrapping_add(0x38), 0x10) {
-        return Vec::new();
-    }
-    let data = *((registry + 0x38) as *const usize);
+    let data = *((registry + shape.entries) as *const usize);
     let count = registry_count(
         data,
-        *((registry + 0x40) as *const usize),
-        bv().registry_end == Some(true),
+        *((registry + shape.entries + 8) as *const usize),
+        shape.end_pointer,
     );
     (0..count.min(32))
         .filter_map(|index| {
             let entry = *((data.wrapping_add(index * 8)) as *const usize);
-            readable(entry.wrapping_add(0x30), 0x28).then(|| *((entry + 0x30) as *const EntryKey))
+            let at = entry.wrapping_add(0x30);
+            readable(at, shape.key_size).then(|| {
+                key_from(
+                    std::slice::from_raw_parts(at as *const u8, shape.key_size),
+                    shape.key_size,
+                )
+            })
         })
         .filter(|key| listed(entry_id(key)))
         .collect()
@@ -449,12 +515,15 @@ pub unsafe fn open_entry(window: HWND, entry: u32) -> bool {
         return false;
     }
     // Chrome checks that the window registered the entry and crashes the browser when it did not.
-    if !listed_entries(window)
-        .iter()
-        .any(|key| entry_id(key) == entry)
-    {
+    let Some(key) = listed_entries(window)
+        .into_iter()
+        .find(|key| entry_id(key) == entry)
+    else {
         trace(&format!("entry {entry} is not registered in this window"));
         return false;
+    };
+    if registry_shape(bv()).extensions_by_toggle && entry == bv().extension_entry {
+        return toggle_entry(window, &key);
     }
     let show: Show = std::mem::transmute(base + bv().show);
     show(objects.coordinator as *mut c_void, entry, 0, 0);
@@ -487,8 +556,10 @@ unsafe fn entry_names() -> Vec<String> {
 // paint. The sheet is written for a Rivet window with the Rivet side panel colours in place, so
 // those pages take the paper, hairline and accent of the window. Two functions are involved.
 
+/// `GenerateColorsCss(out, provider, url, flag, flag)`. The last two pass whole registers and stack
+/// words: a build whose fourth argument is a pointer gets it back unchanged.
 type GenerateCss =
-    unsafe extern "system" fn(*mut c_void, *const c_void, *const c_void, u32, u32) -> usize;
+    unsafe extern "system" fn(*mut c_void, *const c_void, *const c_void, usize, usize) -> usize;
 static ORIGINAL_CSS: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
@@ -601,8 +672,8 @@ unsafe extern "system" fn generate_colors_css(
     out: *mut c_void,
     provider: *const c_void,
     url: *const c_void,
-    flag: u32,
-    last: u32,
+    flag: usize,
+    last: usize,
 ) -> usize {
     let original: GenerateCss = std::mem::transmute(ORIGINAL_CSS.load(Ordering::Acquire));
     let (asked, rivet) = ASKED.with(|asked| asked.get());
@@ -844,13 +915,16 @@ unsafe fn dump_entry_memory(window: HWND) {
     let Some(found) = objects(window).filter(|found| found.coordinator != 0) else {
         return;
     };
-    let base = chrome_base();
-    let browser = *((found.coordinator + 8) as *const usize);
-    let from: unsafe extern "system" fn(usize) -> usize =
-        std::mem::transmute(base + bv().registry_from);
-    let registry = from(browser);
-    let data = *((registry + 0x38) as *const usize);
-    let count = *((registry + 0x40) as *const usize);
+    let shape = registry_shape(bv());
+    let Some(registry) = registry_of(found.coordinator) else {
+        return;
+    };
+    let data = *((registry + shape.entries) as *const usize);
+    let count = registry_count(
+        data,
+        *((registry + shape.entries + 8) as *const usize),
+        shape.end_pointer,
+    );
     for index in 0..count.min(32) {
         let entry = *((data + index * 8) as *const usize);
         let words: Vec<String> = (0..0x24)
@@ -958,7 +1032,9 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
             page_area::relayout(window);
         }
         Some(Command::Hit(x, y)) => {
-            if let Some(found) = objects(window) {
+            if let Some(found) =
+                objects(window).filter(|_| bv().event_handler_for_point != crate::builds::ABSENT)
+            {
                 let base = chrome_base();
                 let target: unsafe extern "system" fn(usize, *const [i32; 2]) -> usize =
                     std::mem::transmute(base + bv().event_handler_for_point);
@@ -1002,6 +1078,41 @@ mod tests {
     }
 
     #[test]
+    fn fr10_rail_reads_longer_keys_and_leaves_shorter_ones_zero_filled() {
+        let mut bytes = [0u8; 0x48];
+        bytes[0] = 0x19;
+        bytes[0x40] = 1;
+        let key = key_from(&bytes, 0x48);
+        assert_eq!((entry_id(&key), key[0x40]), (0x19, 1));
+        let short = key_from(&bytes, 0x28);
+        assert_eq!(
+            (entry_id(&short), short[0x40]),
+            (0x19, 0),
+            "a short key leaves the rest zero"
+        );
+    }
+
+    #[test]
+    fn fr10_samsung_keeps_its_registry_in_the_coordinator_and_opens_extensions_by_toggle() {
+        let samsung = crate::builds::compiled()
+            .iter()
+            .find(|build| build.browser == "Samsung Internet")
+            .expect("Samsung Internet is compiled in");
+        let shape = registry_shape(&samsung.side_panel);
+        assert_eq!(shape.in_coordinator, Some(0x30));
+        assert_eq!(
+            (shape.entries, shape.end_pointer, shape.key_size),
+            (0x48, true, 0x48)
+        );
+        assert!(shape.extensions_by_toggle);
+        let chrome = registry_shape(&crate::builds::CHROME_156_80.side_panel);
+        assert_eq!(
+            (chrome.in_coordinator, chrome.coordinator_browser, chrome.entries, chrome.key_size),
+            (None, 8, 0x38, 0x28)
+        );
+    }
+
+    #[test]
     fn fr10_whale_and_samsung_record_their_side_panel_layouts() {
         let row = |browser: &str| {
             &crate::builds::compiled()
@@ -1014,7 +1125,8 @@ mod tests {
         assert!(whale.supported && whale.registry_end == Some(true));
         assert_eq!((whale.extension_entry, whale.entry_count), (0x15, 0x16));
         let samsung = row("Samsung Internet");
-        assert!(!samsung.supported, "the rail cannot read this build's registry yet");
+        assert!(samsung.supported);
+        assert_eq!(samsung.hidden_entries, &[20, 21, 22, 23, 24]);
         assert_eq!(samsung.old_layout, Some(true));
         assert_eq!((samsung.contents_container, samsung.side_panel), (0x80, 0x98));
     }
@@ -1203,7 +1315,7 @@ mod tests {
             .chunks(8)
             .map(|part| u64::from_le_bytes(part.try_into().unwrap()))
             .collect();
-        let mut key: EntryKey = [0; 0x28];
+        let mut key: EntryKey = [0; KEY_BYTES];
         key[..4].copy_from_slice(&bv().extension_entry.to_le_bytes());
         key[8..16].copy_from_slice(&(backing.as_ptr() as u64).to_le_bytes());
         key[16..24].copy_from_slice(&(id.len() as u64).to_le_bytes());
@@ -1215,7 +1327,7 @@ mod tests {
         );
         key[0x20] = 0;
         assert_eq!(extension_id(&key), None, "the optional holds no value");
-        let mut own: EntryKey = [0; 0x28];
+        let mut own: EntryKey = [0; KEY_BYTES];
         own[..4].copy_from_slice(&1u32.to_le_bytes());
         assert_eq!(
             extension_id(&own),
