@@ -86,7 +86,17 @@ unsafe fn in_front(window: HWND, rivet: &[isize]) -> bool {
 
 type Count = unsafe extern "system" fn(*mut c_void) -> i32;
 type Detach = unsafe extern "system" fn(*mut c_void, *mut usize, i32) -> *mut usize;
-type Insert = unsafe extern "system" fn(*mut c_void, i32, *mut usize, i32, *const [u64; 8]) -> i32;
+/// `InsertDetachedTabAt(model, index, tab, add types, group)`. Some builds take one more optional
+/// by pointer after the group, so a sixth empty one is always passed; a build that takes five
+/// ignores it.
+type Insert = unsafe extern "system" fn(
+    *mut c_void,
+    i32,
+    *mut usize,
+    i32,
+    *const [u64; 8],
+    *const [u64; 16],
+) -> i32;
 
 /// Moves every tab of `from` to the end of `window`'s tabs, the last one active. Returns how many
 /// moved. A build whose row has no detach and insert moves none.
@@ -111,8 +121,9 @@ unsafe fn move_all(window: HWND, from: HWND) -> usize {
             break;
         }
         let none = [0u64; 8];
+        let no_more = [0u64; 16];
         // At the end of the strip, active: `ADD_ACTIVE | ADD_FORCE_INDEX`.
-        function::<Insert>(base, insert)(target, count(target), &mut tab, 1 | 4, &none);
+        function::<Insert>(base, insert)(target, count(target), &mut tab, 1 | 4, &none, &no_more);
         moved += 1;
     }
     moved
@@ -129,6 +140,18 @@ mod tests {
             "devtools://devtools/bundled/inspector.html".into()
         ]));
         assert!(!takes_window(&[]));
+    }
+
+    #[test]
+    fn fr3_samsung_internet_records_detach_and_insert_like_the_other_browsers() {
+        let samsung = crate::builds::compiled()
+            .iter()
+            .find(|build| build.browser == "Samsung Internet" && build.version == [30, 0, 4, 29])
+            .and_then(|build| build.app_window.as_ref())
+            .expect("Samsung Internet 143.0.4.29 has an app window row");
+        assert_eq!(samsung.detach, Some(0x0877_3D90));
+        assert_eq!(samsung.insert, Some(0x0322_A3C0));
+        assert!(samsung.detach_prologue.len() >= 8 && samsung.insert_prologue.len() >= 8);
     }
 
     #[test]
