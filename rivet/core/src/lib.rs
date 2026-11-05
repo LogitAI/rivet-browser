@@ -6,8 +6,12 @@
 use std::fmt;
 use std::path::PathBuf;
 
+pub mod credentials;
+pub mod link_rules;
 pub mod paths;
 pub mod session;
+
+pub use credentials::CredentialProvider;
 
 /// The tint of the first space a window starts with.
 pub const WORK_TINT: u32 = 0xd08a52;
@@ -34,10 +38,10 @@ pub fn space_frame(tint: u32) -> u32 {
 
 /// The strong colour of marks and active controls in a space of this tint.
 pub fn space_accent(tint: u32) -> u32 {
-    DESIGNED
-        .iter()
-        .find(|row| row.0 == tint)
-        .map_or_else(|| channels(tint, |channel| channel.saturating_sub(0x30)), |row| row.2)
+    DESIGNED.iter().find(|row| row.0 == tint).map_or_else(
+        || channels(tint, |channel| channel.saturating_sub(0x30)),
+        |row| row.2,
+    )
 }
 
 /// The short name of the browser a program path is, or `None` for a program Rivet does not know.
@@ -163,6 +167,8 @@ pub struct LaunchRequest {
     pub url: String,
     pub user_data_dir: Option<PathBuf>,
     pub display: DisplayMode,
+    /// Who keeps the profile's passwords and passkeys.
+    pub credentials: CredentialProvider,
 }
 
 /// The exact process invocation Rivet gives to a Chromium browser.
@@ -230,6 +236,7 @@ pub fn build_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchEr
         reject_control_characters(&value)?;
         arguments.push(format!("--user-data-dir={value}"));
     }
+    arguments.extend(request.credentials.launch_arguments());
     match display {
         DisplayMode::Visible => {
             // An app window has no maker tab strip or toolbar.
@@ -273,19 +280,43 @@ mod tests {
             url: "https://example.test/".into(),
             user_data_dir: Some(PathBuf::from("C:/Profiles/rivet")),
             display,
+            credentials: CredentialProvider::Browser,
         }
     }
 
+    #[test]
+    fn nfr8_launch_carries_the_chosen_provider_switches() {
+        let mut input = request(DisplayMode::Visible);
+        input.credentials = CredentialProvider::System;
+        let plan = build_launch_plan(&input).unwrap();
+        assert!(plan
+            .arguments
+            .contains(&"--disable-features=WebAuthenticationEnclaveAuthenticator".into()));
+        let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
+        assert!(!plan
+            .arguments
+            .iter()
+            .any(|argument| argument.starts_with("--disable-features")));
+    }
+
+    #[cfg(windows)]
     #[test]
     fn fr1_rivet_never_enters_the_persons_own_profile() {
         let allowed = |path: &str| profile_allows_rivet(Some(std::path::Path::new(path)));
         assert!(!profile_allows_rivet(None));
         assert!(!allowed(""));
-        assert!(!allowed(r"C:\Users\me\AppData\Local\Naver\Naver Whale\User Data"));
-        assert!(!allowed(r"C:\Users\me\AppData\Local\Google\Chrome\user data\Default"));
-        assert!(allowed(r"C:\Users\me\AppData\Local\Rivet\profiles\whale\Personal"));
+        assert!(!allowed(
+            r"C:\Users\me\AppData\Local\Naver\Naver Whale\User Data"
+        ));
+        assert!(!allowed(
+            r"C:\Users\me\AppData\Local\Google\Chrome\user data\Default"
+        ));
+        assert!(allowed(
+            r"C:\Users\me\AppData\Local\Rivet\profiles\whale\Personal"
+        ));
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr1_rivet_reads_the_profile_from_the_process_arguments() {
         assert!(!process_allows_rivet(["whale.exe"]));
@@ -322,10 +353,14 @@ mod tests {
         assert_ne!(space_frame(0x6a9f58), space_frame(0x8a6fc4));
     }
 
+    #[cfg(windows)]
     #[test]
     fn fr3_browser_label_names_all_five_browsers() {
         for (program, label) in [
-            (r"C:\Program Files\Google\Chrome\Application\chrome.exe", Some("Chrome")),
+            (
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                Some("Chrome"),
+            ),
             (r"C:\Edge\MSEDGE.EXE", Some("Edge")),
             (r"C:\Naver\whale.exe", Some("Whale")),
             (r"C:\Brave\brave.exe", Some("Brave")),
@@ -339,7 +374,9 @@ mod tests {
     #[test]
     fn fr12_visible_opens_an_app_window_without_a_debugging_port() {
         let plan = build_launch_plan(&request(DisplayMode::Visible)).unwrap();
-        assert!(plan.arguments.contains(&"--app=https://example.test/".into()));
+        assert!(plan
+            .arguments
+            .contains(&"--app=https://example.test/".into()));
         assert!(!plan
             .arguments
             .iter()

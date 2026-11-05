@@ -2,7 +2,7 @@
 # when this passes on a launch like the installed build's. Unit tests and build rows do not count.
 #
 #   pwsh -NoProfile -File scripts/tests/windows-features.ps1 [-Browsers chrome,edge,...]
-#       [-Features split,sidebar,newtab,space,bar-layout] [-OutDir <dir>] [-NoBuild]
+#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview,link-rules] [-OutDir <dir>] [-NoBuild]
 #
 # One row per browser and feature: PASS, FAIL or NOT_DRIVEN. NOT_DRIVEN means the scene could not
 # be set up, so the feature was not exercised. Nothing is decided from build rows or `supported`.
@@ -13,9 +13,11 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'bar-layout'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules'),
   [string]$OutDir,
-  [switch]$NoBuild
+  [switch]$NoBuild,
+  # The run stops before a row when the output drive has less free space than this.
+  [double]$MinFreeGigabytes = 20
 )
 $ErrorActionPreference = 'Continue'
 # Under -File a comma list arrives as one string.
@@ -32,6 +34,7 @@ if (-not $OutDir) { $OutDir = Join-Path $repo '.scratch\features' }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 . (Join-Path $PSScriptRoot 'windows-features-lib.ps1')
+. (Join-Path $PSScriptRoot 'windows-processes.ps1')
 
 # Cargo comes from the caller's toolchain: CARGO_HOME when it is set, else cargo on the PATH.
 $cargo = if ($env:CARGO_HOME -and (Test-Path (Join-Path $env:CARGO_HOME 'bin\cargo.exe'))) { Join-Path $env:CARGO_HOME 'bin\cargo.exe' } else { 'cargo' }
@@ -92,6 +95,8 @@ function New-TestPage([string]$Name, [int]$Rgb) {
 }
 $urlA = New-TestPage 'page-a' $script:ColourA
 $urlB = New-TestPage 'page-b' $script:ColourB
+$urlC = New-TestPage 'page-c' $script:ColourC
+$urlD = New-TestPage 'page-d' $script:ColourD
 
 # The sub page's pages. `sub-b` is blue and a click anywhere in it follows a link to `sub-c`, which is
 # green, and yellow when it was loaded by a reload. Back and forward restore it green, so the colour
@@ -162,12 +167,12 @@ if ($NoBuild) {
 
 # --- Helpers for one launch -----------------------------------------------------------------
 function Stop-Mine($ExeName, $Profile) {
-  Get-CimInstance Win32_Process -Filter "name='$ExeName'" | Where-Object { $_.CommandLine -like "*$Profile*" } |
+  Get-ProcessList $ExeName | Where-Object { $_.CommandLine -like "*$Profile*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
 function Get-MyProcesses($ExeName, $Profile) {
-  @(Get-CimInstance Win32_Process -Filter "name='$ExeName'" | Where-Object { $_.CommandLine -like "*$Profile*" })
+  @(Get-ProcessList $ExeName | Where-Object { $_.CommandLine -like "*$Profile*" })
 }
 
 function Read-Log { Get-Content $logFile -ErrorAction SilentlyContinue }
@@ -207,6 +212,7 @@ function Open-Scene($ctx, $state, $Url, $Seed) {
     Start-Sleep 2
   }
   if (-not $session) { $ctx.Error = "rivet session start did not report the runtime loaded: $raw"; return }
+  $ctx | Add-Member -Force SessionId (($session | ConvertFrom-Json).session_id)
   $deadline = (Get-Date).AddSeconds(45)
   $attached = $false
   while ((Get-Date) -lt $deadline) {
@@ -274,7 +280,21 @@ function Send-Flag($ctx, [string]$File, [string]$Text) {
 # After a launch: a Rivet window that never attached is a failure of the browser build.
 function Test-Attached($ctx) { $ctx.Error -ne 'attach-failed' }
 
-function Stop-Scene($ctx) { Stop-Mine $ctx.ExeName $ctx.Profile }
+# Stops the scene's browser, keeps its trace under the run's `traces` folder and deletes its test
+# profile, so a long run does not fill the disk. Captures are kept where they were written.
+function Stop-Scene($ctx) {
+  Stop-Mine $ctx.ExeName $ctx.Profile
+  for ($i = 0; $i -lt 20 -and @(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count -gt 0; $i++) { Start-Sleep -Milliseconds 250 }
+  if (-not $ctx.Profile -or -not (Test-Path $ctx.Profile)) { return }
+  $traces = Join-Path $OutDir 'traces'
+  $debugDir = Join-Path $ctx.Profile 'rivet-debug'
+  if (Test-Path $debugDir) {
+    $keep = Join-Path $traces (Split-Path -Leaf $ctx.Profile)
+    New-Item -ItemType Directory -Force $keep | Out-Null
+    Copy-Item -Path (Join-Path $debugDir '*') -Destination $keep -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  Remove-Item -Recurse -Force $ctx.Profile -ErrorAction SilentlyContinue
+}
 
 # The visible browser windows of the test profile's processes.
 function Get-MyTops($ctx) {
@@ -438,11 +458,11 @@ function Invoke-Space($Name, $version, $shots) {
     Send-RivetMessage $ctx 'Rivet.NewStartPage'
     Start-Sleep 6
     $one = Get-Capture $ctx (Join-Path $shots 'space-1-first.png')
-    # Click the second dot of the footer. The footer layout is the appbar's: 268 DIP wide, 10 DIP
+    # Click the second dot of the footer. The footer layout is the appbar's: 276 DIP wide, 10 DIP
     # inset, dots 32 DIP apart and centred between the settings and add buttons, 24 DIP above the bottom.
     $f = $ctx.Dpi / 96.0
     $dots = 2 * 32 - 4
-    $x = 10 + 28 + (250 - 56 - $dots) / 2 + 32 + 14
+    $x = 10 + 28 + (258 - 56 - $dots) / 2 + 32 + 14
     $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
     Send-AppbarClick $ctx ([int]($x * $f)) ([int]($cr.B - 24 * $f))
     Start-Sleep 7
@@ -497,7 +517,7 @@ function Invoke-TabDrag($ctx, [int]$Tab, $shotPath) {
   $f = $ctx.Dpi / 96.0
   $x = [int](100 * $f); $y = [int](2 + (Get-TabRowY $Tab) * $f)
   $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
-  $left = [int]((268 + 8) * $f); $right = $cr.Ri - [int](8 * $f)
+  $left = [int]((276 + 8) * $f); $right = $cr.Ri - [int](8 * $f)
   $dropX = $left + [int](($right - $left) * 0.05); $dropY = [int]($cr.B / 2)
   Send-AppbarNc $ctx 0xA1 $x $y
   Start-Sleep -Milliseconds 150
@@ -540,7 +560,7 @@ function Invoke-SplitPath($Name, $shots, [string]$Feature, [string]$Path, [strin
       # One space switch first: the window keeps one start tab of the other space.
       $f = $ctx.Dpi / 96.0
       $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
-      $dx = 10 + 28 + (250 - 56 - 60) / 2 + 32 + 14
+      $dx = 10 + 28 + (258 - 56 - 60) / 2 + 32 + 14
       Send-AppbarClick $ctx ([int]($dx * $f)) ([int]($cr.B - 24 * $f))
       Start-Sleep 7
       if (-not (Read-Log | Where-Object { $_ -match 'space: to FeatureB' })) { return @('NOT_DRIVEN', $one.Path, 'the click did not switch space') }
@@ -609,6 +629,63 @@ function Invoke-SplitPath($Name, $shots, [string]$Feature, [string]$Path, [strin
     Stop-Scene $ctx
     if ($seeded) { Remove-Item $seeded -ErrorAction SilentlyContinue }
   }
+}
+
+# A split beyond two pages beside each other: a tab dropped on the top or bottom of the page stacks
+# the pages, and further drops make grids of three and four pages. The drops come from the drop
+# flag, which names a side and the slot of the page to split, as a tab drop on that page's edge does.
+# Every page must be one of Rivet's own page views.
+function Invoke-SplitGrid($Name, $shots, [string]$Feature) {
+  $ctx, $state = Start-Scene $Name $Feature $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    $one = Get-Capture $ctx (Join-Path $shots "$Feature-1-page-a.png")
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    $v = Test-OnePage $one $script:ColourA $script:ColourB
+    if ($v.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $one.Path, "the first test page was not shown: $($v.Reason)") }
+    # The pages, the drops and the arrangement they must give. The last page opened is active and
+    # is the window's own page; each drop takes the first tab that is not shown yet.
+    $plan = switch ($Feature) {
+      'split-drop-top' { @{ Urls = @($urlB); Drops = @('top'); Colours = @($script:ColourA, $script:ColourB); Shape = 'above' } }
+      'split-drop-bottom' { @{ Urls = @($urlB); Drops = @('bottom'); Colours = @($script:ColourB, $script:ColourA); Shape = 'above' } }
+      'split-grid-3' { @{ Urls = @($urlB, $urlC); Drops = @('right', 'bottom 1'); Colours = @($script:ColourC, $script:ColourA, $script:ColourB); Shape = 'three' } }
+      'split-grid-4' { @{ Urls = @($urlB, $urlC, $urlD); Drops = @('right', 'bottom', 'bottom 1'); Colours = @($script:ColourD, $script:ColourB, $script:ColourA, $script:ColourC); Shape = 'four' } }
+    }
+    foreach ($url in $plan.Urls) {
+      if (-not (Open-SecondPage $ctx $url)) { return @('NOT_DRIVEN', $one.Path, 'a page did not open as a tab of the app window alone') }
+    }
+    $before = Get-Capture $ctx (Join-Path $shots "$Feature-2-before.png")
+    # The check must fail on this window, which has its tabs and no split.
+    $control = Test-GridPages $before $plan.Colours $plan.Shape
+    if ($control.Verdict -ne 'FAIL') { return @('NOT_DRIVEN', $before.Path, "the grid check did not fail on a window without a split ($($control.Verdict)): $($control.Reason)") }
+    $opens = Get-ViewOpens 'Split'
+    $added = @(Read-Log | Where-Object { $_ -match 'second view: slot \d' }).Count
+    foreach ($drop in $plan.Drops) {
+      if (-not (Send-Flag $ctx 'rivet-drop.flag' $drop)) { return @('NOT_DRIVEN', $before.Path, "the runtime did not take the drop '$drop'") }
+      Start-Sleep 3
+    }
+    Start-Sleep 3
+    $grid = Get-Capture $ctx (Join-Path $shots "$Feature-3-grid.png")
+    $on = Test-GridPages $grid $plan.Colours $plan.Shape
+    if ($on.Verdict -ne 'PASS') {
+      $log = (Read-Log | Where-Object { $_ -match 'drop flag|second view' } | Select-Object -Last 4) -join ' / '
+      return @($on.Verdict, $grid.Path, "after the drops: $($on.Reason). trace: $log")
+    }
+    if (-not (Test-ViewOwns $opens 'Split')) { return @('FAIL', $grid.Path, 'the pages are shown, but the split did not open in a page view of Rivet') }
+    $more = @(Read-Log | Where-Object { $_ -match 'second view: slot \d' }).Count - $added
+    if ($more -lt $plan.Drops.Count - 1) { return @('FAIL', $grid.Path, "the pages are shown, but only $more of the $($plan.Drops.Count - 1) later pages are in Rivet's page views") }
+    $pages = Read-Log | Where-Object { $_ -match 'drop flag: .* pages \d+' } | Select-Object -Last 1
+    if (-not ($pages -match "pages $($plan.Colours.Count)\b")) { return @('FAIL', $grid.Path, "the runtime reports a split of another size: $pages") }
+    # Ending the split must leave one page.
+    Send-RivetMessage $ctx 'Rivet.ToggleSplit'
+    Start-Sleep 6
+    $off = Get-Capture $ctx (Join-Path $shots "$Feature-4-off.png")
+    if ((Test-GridPages $off $plan.Colours $plan.Shape).Verdict -eq 'PASS') { return @('FAIL', $off.Path, "$($on.Reason); but turning it off left the grid") }
+    if (Test-Blank $off) { return @('FAIL', $off.Path, "$($on.Reason); but turning it off left a blank window") }
+    @('PASS', $grid.Path, "$($on.Reason); off: the grid ended")
+  } finally { Stop-Scene $ctx }
 }
 
 # A click on a row button, with the client messages a real click makes, posted without moving the
@@ -736,6 +813,17 @@ function Invoke-SplitOneTab($Name, $shots) {
 # evidence beside the measured rectangles.
 # An elevated browser otherwise relaunches itself de-elevated and the first process exits with no output.
 $script:DemoGeometry = $null
+# A file another process may still hold open for writing, read without asking for sole access. The
+# read is tried again for a few seconds while the writer lets go. Null when it never could be read.
+function Read-SharedText([string]$Path) {
+  for ($try = 0; $try -lt 20; $try++) {
+    try {
+      $stream = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+      try { return (New-Object IO.StreamReader($stream)).ReadToEnd() } finally { $stream.Dispose() }
+    } catch [IO.IOException] { Start-Sleep -Milliseconds 500 }
+  }
+  $null
+}
 # The demo is rendered once with Chrome, whose headless mode works, and the render is kept beside
 # every browser's results, so each browser is compared with the same image. Brave's headless launch
 # left no screenshot. A render is reused only while the demo file is unchanged.
@@ -746,7 +834,8 @@ function Get-DemoGeometry {
   $ExePath, $ExeName = $table['chrome']
   if (-not (Test-Path $ExePath)) { return $null }
   $hash = (Get-FileHash -Algorithm SHA256 $source).Hash.Substring(0, 16)
-  $dir = Join-Path (Split-Path -Parent $OutDir) "demo-render\$hash"
+  # Each run renders into its own folder, so runs in parallel never write the same file.
+  $dir = Join-Path $OutDir "demo-render\$hash"
   New-Item -ItemType Directory -Force $dir | Out-Null
   $png = Join-Path $dir 'rivet-shell-demo.png'
   $kept = Join-Path $dir 'rivet-shell-demo.geometry.json'
@@ -780,13 +869,19 @@ function Get-DemoGeometry {
   Stop-Mine $ExeName $profile_
   $common = @('--headless=new', '--do-not-de-elevate', "--user-data-dir=`"$profile_`"", '--disable-sync', '--no-first-run', '--no-default-browser-check', '--disable-features=msImplicitSignin,msEdgeSignIn,Translate', '--lang=en-US', '--window-size=1600,1000', '--force-device-scale-factor=1', '--hide-scrollbars', '--virtual-time-budget=3000')
   $dom = Join-Path $dir 'rivet-shell-demo.dom.html'
+  $dump = $null
   try {
     $shot = Start-Process -FilePath $ExePath -ArgumentList ($common + @("--screenshot=`"$png`"", $url)) -PassThru -WindowStyle Hidden
     if (-not $shot.WaitForExit(60000)) { return $null }
     $dump = Start-Process -FilePath $ExePath -ArgumentList ($common + @('--dump-dom', $url)) -PassThru -WindowStyle Hidden -RedirectStandardOutput $dom
     if (-not $dump.WaitForExit(60000)) { return $null }
-  } finally { Stop-Mine $ExeName $profile_ }
-  $text = [IO.File]::ReadAllText($dom)
+  } finally {
+    Stop-Mine $ExeName $profile_
+    # The redirected output stays open while the process object or a child of the dump holds it.
+    if ($dump) { $dump.Dispose() }
+  }
+  $text = Read-SharedText $dom
+  if ($null -eq $text) { return $null }
   $m = [regex]::Match($text, '<pre id="rivet-geometry"[^>]*>([^<]*)</pre>')
   if (-not $m.Success) { return $null }
   $json = [Net.WebUtility]::HtmlDecode($m.Groups[1].Value)
@@ -823,6 +918,417 @@ function Invoke-BarLayout($Name, $shots) {
   } finally { Stop-Scene $ctx }
 }
 
+# A Mini Window command, posted the way `rivet session mini-window` posts it. The codes are the
+# protocol's: 1 pop out, 2 move (x | y << 16 in DIPs), 4 return (0 left, 1 right, 2 top, 3 bottom), 5 close.
+function Send-MiniCommand($ctx, [int]$Code, [int]$Low = 0, [int]$High = 0) {
+  $l = [IntPtr](($High -shl 16) -bor ($Low -band 0xffff))
+  [FeatureWin]::PostMessage($ctx.Hwnd, [FeatureWin]::RegisterWindowMessage('Rivet.MiniWindow'), [IntPtr]$Code, $l) | Out-Null
+}
+
+# Whether page B floats as a Mini Window over page A: B is a smaller rectangle that page A's region
+# surrounds, so A still fills the page area around it.
+function Test-MiniShown($capture) {
+  # The focused pane pops out. A posted click may not move the focus, so either page may float.
+  $one = Test-MiniOver $capture $script:ColourA $script:ColourB
+  if ($one.Verdict -eq 'PASS') { return $one }
+  $two = Test-MiniOver $capture $script:ColourB $script:ColourA
+  if ($two.Verdict -eq 'PASS') { $two.Reason = "page A floats, not the focused page B; $($two.Reason)"; return $two }
+  $one
+}
+
+# Whether the page of colour $Float floats over the page of colour $Behind. A and B in the result
+# are the behind and floating regions.
+function Test-MiniOver($capture, [int]$Behind, [int]$Float) {
+  $a = Get-PageRegion $capture $Behind
+  $b = Get-PageRegion $capture $Float
+  if ($b.Area -le 0) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'page B is not shown'; A = $a; B = $b } }
+  if ($a.Area -le 0) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'page A is not shown behind the Mini Window'; A = $a; B = $b } }
+  $inside = $b.X0 -gt $a.X0 -and $b.X1 -lt $a.X1 -and $b.Y0 -gt $a.Y0 -and $b.Y1 -lt $a.Y1
+  if (-not $inside) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = "page B ($($b.X0),$($b.Y0))-($($b.X1),$($b.Y1)) does not float inside page A ($($a.X0),$($a.Y0))-($($a.X1),$($a.Y1))"; A = $a; B = $b } }
+  if ($b.Area * 4 -gt $a.Area) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'page B is too large for a Mini Window'; A = $a; B = $b } }
+  [pscustomobject]@{ Verdict = 'PASS'; Reason = "page B floats at ($($b.X0),$($b.Y0)) $($b.Width)x$($b.Height) over page A"; A = $a; B = $b }
+}
+
+# The Mini Window from a split: pop out, then one of move, return or close.
+function Invoke-Mini($Name, $shots, [string]$Step) {
+  $ctx, $state = Start-Scene $Name "mini-$Step" $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if (-not (Open-SecondPage $ctx $urlB)) { return @('NOT_DRIVEN', $null, 'the second page did not open as a tab of the app window alone') }
+    Send-RivetMessage $ctx 'Rivet.ToggleSplit'
+    Start-Sleep 6
+    $split = Get-Capture $ctx (Join-Path $shots "mini-$Step-1-split.png")
+    $on = Test-TwoPages $split $script:ColourA $script:ColourB
+    if ($on.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $split.Path, "no split to pop out of: $($on.Reason)") }
+    # The checker must reject a split: both pages side by side are no Mini Window.
+    if ((Test-MiniShown $split).Verdict -ne 'FAIL') { return @('NOT_DRIVEN', $split.Path, 'the Mini Window check did not fail on a split') }
+    # Page B is the second pane, so it is focused first and then popped out.
+    $before = @(Read-Log).Count
+    $b = Get-PageRegion $split $script:ColourB
+    $p = New-Object FeatureWin+P; $p.X = [int](($b.X0 + $b.X1) / 2); $p.Y = [int](($b.Y0 + $b.Y1) / 2)
+    Send-ClientMouse $ctx 0x201 $p.X $p.Y 1
+    Send-ClientMouse $ctx 0x202 $p.X $p.Y 0
+    Start-Sleep 2
+    Send-MiniCommand $ctx 1
+    Start-Sleep 4
+    $mini = Get-Capture $ctx (Join-Path $shots "mini-$Step-2-popped.png")
+    $log = @(Read-Log | Select-Object -Skip $before)
+    if (-not ($log | Where-Object { $_ -match '^mini window: open tab' })) { return @('FAIL', $mini.Path, 'the runtime did not open a Mini Window for the pop-out command') }
+    $shown = Test-MiniShown $mini
+    if ($shown.Verdict -ne 'PASS') { return @('FAIL', $mini.Path, "pop out: $($shown.Reason)") }
+    if ($Step -eq 'pop-out') { return @('PASS', $mini.Path, $shown.Reason) }
+    $s = $ctx.Dpi / 96.0
+    switch ($Step) {
+      'move' {
+        $x = [int]($shown.A.X0 / $s) + 40; $y = [int]($shown.A.Y0 / $s) + 40
+        Send-MiniCommand $ctx 2 $x $y
+        Start-Sleep 3
+        $moved = Get-Capture $ctx (Join-Path $shots 'mini-move-3-moved.png')
+        $after = Test-MiniShown $moved
+        if ($after.Verdict -ne 'PASS') { return @('FAIL', $moved.Path, "after the move: $($after.Reason)") }
+        if ([Math]::Abs($after.B.X0 - $shown.B.X0) -lt 20 * $s -or $after.B.X0 -gt $shown.B.X0) { return @('FAIL', $moved.Path, "the Mini Window did not move to the upper left (from $($shown.B.X0),$($shown.B.Y0) to $($after.B.X0),$($after.B.Y0))") }
+        return @('PASS', $moved.Path, "moved from ($($shown.B.X0),$($shown.B.Y0)) to ($($after.B.X0),$($after.B.Y0))")
+      }
+      'return' {
+        Send-MiniCommand $ctx 4 0
+        Start-Sleep 6
+        $back = Get-Capture $ctx (Join-Path $shots 'mini-return-3-split.png')
+        $two = Test-TwoPages $back $script:ColourA $script:ColourB
+        if ($two.Verdict -ne 'PASS') { return @('FAIL', $back.Path, "after the return: $($two.Reason)") }
+        $floated, $stayed = if ($shown.Reason -match '^page A floats') { $script:ColourA, $script:ColourB } else { $script:ColourB, $script:ColourA }
+        $a = Get-PageRegion $back $stayed; $bb = Get-PageRegion $back $floated
+        if ($bb.X0 -ge $a.X0) { return @('FAIL', $back.Path, 'the floating page came back as a split, but not on the left edge') }
+        if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $back.Path, 'the runtime did not take the tab list command') }
+        $count = (Get-TabUrls).Count
+        if ($count -ne 2) { return @('FAIL', $back.Path, "the window has $count tabs after the return, not the same two") }
+        return @('PASS', $back.Path, "page B is back on the left as a split of the same tab; $($two.Reason)")
+      }
+      'close' {
+        Send-MiniCommand $ctx 5
+        Start-Sleep 3
+        $closed = Get-Capture $ctx (Join-Path $shots 'mini-close-3-closed.png')
+        $one = if ($shown.Reason -match '^page A floats') { Test-OnePage $closed $script:ColourB $script:ColourA } else { Test-OnePage $closed $script:ColourA $script:ColourB }
+        if ($one.Verdict -ne 'PASS') { return @('FAIL', $closed.Path, "after the close: $($one.Reason)") }
+        if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $closed.Path, 'the runtime did not take the tab list command') }
+        $count = (Get-TabUrls).Count
+        if ($count -ne 2) { return @('FAIL', $closed.Path, "the window has $count tabs after the close; the page should stay in its tab") }
+        return @('PASS', $closed.Path, 'the Mini Window closed and page B stays in its tab')
+      }
+    }
+  } finally { Stop-Scene $ctx }
+}
+
+# --- FR-3 tab list ------------------------------------------------------------------------
+# A page that is one link opening `page-c` in a new window. The window is asked for at the test
+# window's off-screen spot, so it never shows on a monitor even before Rivet takes its tab.
+$urlLink = & {
+  $path = Join-Path $pageDir 'page-link.html'
+  $hexA = '#{0:X6}' -f $script:ColourA
+  [IO.File]::WriteAllText($path, "<!doctype html><meta charset=utf-8><title>page-link</title><style>html,body{margin:0;height:100%;background:$hexA}</style><a href=`"page-c.html`" onclick=`"window.open(this.href,'_blank','left=9000,top=1000,width=800,height=600');return false`" style=`"display:block;width:100%;height:100%`"></a>")
+  'file:///' + ($path -replace '\\', '/')
+}
+
+Add-Type -TypeDefinition @'
+using System;using System.Runtime.InteropServices;
+public static class FeatureMonitor{
+ [StructLayout(LayoutKind.Sequential)] public struct R{public int L,T,Ri,B;}
+ [DllImport("user32.dll")] static extern IntPtr MonitorFromRect(ref R r,uint f);
+ [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out R r);
+ // Whether any part of the window lies on a monitor. MONITOR_DEFAULTTONULL answers none for a
+ // rectangle that touches no monitor.
+ public static bool OnMonitor(IntPtr h){R r;if(!GetWindowRect(h,out r))return false;return MonitorFromRect(ref r,0)!=IntPtr.Zero;}
+}
+'@
+
+# The last `tab sections` trace, split into its parts.
+function Get-Sections {
+  $line = Read-Log | Where-Object { $_ -match 'tab sections ' } | Select-Object -Last 1
+  if (-not $line) { return $null }
+  $part = { param($name) if ($line -match "$name (\[[^\]]*\])") { @([regex]::Matches($Matches[1], '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value }) } else { @() } }
+  [pscustomobject]@{
+    Line = $line
+    Pinned = & $part 'pinned'
+    Today = & $part 'today'
+    Order = & $part 'order'
+    Closed = if ($line -match 'closed (\d+)') { [int]$Matches[1] } else { -1 }
+    Archived = if ($line -match 'archived (\d+)') { [int]$Matches[1] } else { -1 }
+    CtrlT = if ($line -match 'ctrl_t (\S+)') { $Matches[1] } else { $null }
+  }
+}
+
+# A window with the pages a, b and c as its three tabs, or the reason it could not be made.
+function Open-ThreeTabs($ctx, $state, $shots, [string]$Prefix) {
+  Open-Scene $ctx $state $urlA $null
+  if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return $ctx.Error }
+  if (-not (Test-Attached $ctx)) { return 'Rivet did not attach to the window' }
+  if (-not (Open-SecondPage $ctx $urlB)) { return 'the second page did not open as a tab of the app window alone' }
+  if (-not (Open-SecondPage $ctx $urlC)) { return 'the third page did not open as a tab of the app window alone' }
+  $null
+}
+
+function Invoke-TabSections($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'tab-sections' $urlA
+  try {
+    $why = Open-ThreeTabs $ctx $state $shots 'tab-sections'
+    if ($why) { return @('NOT_DRIVEN', $null, $why) }
+    foreach ($command in 'pin 2', 'folder 1 Launch Atlas', 'into 0', 'sections') {
+      if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $null, "the runtime did not take '$command'") }
+    }
+    $shot = Get-Capture $ctx (Join-Path $shots 'tab-sections-1.png')
+    $s = Get-Sections
+    if (-not $s) { return @('NOT_DRIVEN', $shot.Path, 'the runtime reported no sections') }
+    if ($s.Pinned -notcontains 'page-c') { return @('FAIL', $shot.Path, "page-c is not pinned: $($s.Line)") }
+    if ($s.Line -notmatch 'Launch Atlas:2:open') { return @('FAIL', $shot.Path, "the folder does not hold two tabs: $($s.Line)") }
+    if (($s.Order -join ',') -ne 'page-c,page-b,page-a') { return @('FAIL', $shot.Path, "the order is not pinned, folder, today: $($s.Order -join ',')") }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'foldertoggle') -or -not (Send-Flag $ctx 'rivet-tab.txt' 'sections')) { return @('NOT_DRIVEN', $shot.Path, 'the folder toggle was not taken') }
+    if ((Get-Sections).Line -notmatch 'Launch Atlas:2:collapsed') { return @('FAIL', $shot.Path, 'the folder did not collapse') }
+    $closed = Get-Capture $ctx (Join-Path $shots 'tab-sections-2.png')
+    @('PASS', $closed.Path, "pinned page-c, folder Launch Atlas with 2 tabs collapsed, check the captures for the count and rows")
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-TabCloseSelect($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'tab-close-select' $urlA
+  try {
+    $why = Open-ThreeTabs $ctx $state $shots 'tab-close-select'
+    if ($why) { return @('NOT_DRIVEN', $null, $why) }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'activate 1')) { return @('NOT_DRIVEN', $null, 'activate was not taken') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'closesel 1')) { return @('NOT_DRIVEN', $null, 'closesel was not taken') }
+    $below = Get-ActiveTitle
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'closesel 1')) { return @('NOT_DRIVEN', $null, 'the second closesel was not taken') }
+    $above = Get-ActiveTitle
+    $shot = Get-Capture $ctx (Join-Path $shots 'tab-close-select-1.png')
+    if ($below -ne 'page-c') { return @('FAIL', $shot.Path, "closing page-b selected $below, not the tab below") }
+    if ($above -ne 'page-a') { return @('FAIL', $shot.Path, "closing the last tab selected $above, not the tab above") }
+    @('PASS', $shot.Path, 'below, then above')
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-TabReopen($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'tab-reopen' $urlA
+  try {
+    $why = Open-ThreeTabs $ctx $state $shots 'tab-reopen'
+    if ($why) { return @('NOT_DRIVEN', $null, $why) }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'closesel 1')) { return @('NOT_DRIVEN', $null, 'closesel was not taken') }
+    # Ctrl+Shift+T posts this message; posted keys do not change GetKeyState, so the message is sent.
+    Send-RivetMessage $ctx 'Rivet.ReopenTab'
+    Start-Sleep 5
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'sections')) { return @('NOT_DRIVEN', $null, 'sections was not taken') }
+    $shot = Get-Capture $ctx (Join-Path $shots 'tab-reopen-1.png')
+    $s = Get-Sections
+    if (($s.Order -join ',') -ne 'page-a,page-b,page-c') { return @('FAIL', $shot.Path, "the reopened tab is not where it was: $($s.Order -join ',')") }
+    @('PASS', $shot.Path, 'page-b came back between page-a and page-c')
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-TabArchive($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'tab-archive' $urlA
+  try {
+    $why = Open-ThreeTabs $ctx $state $shots 'tab-archive'
+    if ($why) { return @('NOT_DRIVEN', $null, $why) }
+    foreach ($command in 'sections', 'pin 0', 'archive 2', 'age 1', 'sections') { if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $null, "'$command' was not taken") } }
+    if ((Get-Sections).Archived -ne 0) { return @('FAIL', $null, 'tabs archived before the period') }
+    if ((Get-Sections).Line -notmatch 'archive_after Some\(7200\)') { return @('FAIL', $null, "the period setting was not kept: $((Get-Sections).Line)") }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'age 2')) { return @('NOT_DRIVEN', $null, 'age was not taken') }
+    Start-Sleep 3
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'sections')) { return @('NOT_DRIVEN', $null, 'sections was not taken') }
+    $shot = Get-Capture $ctx (Join-Path $shots 'tab-archive-1.png')
+    $s = Get-Sections
+    # page-c is active and page-a pinned, so only page-b is archived.
+    if ($s.Archived -ne 1 -or $s.Order -contains 'page-b') { return @('FAIL', $shot.Path, "expected page-b alone archived: $($s.Line)") }
+    @('PASS', $shot.Path, 'page-b archived after the 2 hour period, pinned and active tabs stayed')
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-CtrlTSetting($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'ctrl-t-setting' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    foreach ($command in 'ctrlt newtab', 'sections') { if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $null, "'$command' was not taken") } }
+    if ((Get-Sections).CtrlT -ne 'new_tab_page') { return @('FAIL', $null, 'the setting did not change') }
+    Send-RivetMessage $ctx 'Rivet.CtrlT'
+    Start-Sleep 6
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
+    $urls = Get-TabUrls
+    $shot = Get-Capture $ctx (Join-Path $shots 'ctrl-t-setting-1.png')
+    if ($urls.Count -ne 2 -or $urls[1] -notmatch 'start\.html') { return @('FAIL', $shot.Path, "Ctrl+T with the new tab page setting did not open the start page: $($urls -join ' ')") }
+    @('PASS', $shot.Path, 'the new tab page setting opens the start page; the command bar route is checked with the command bar')
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-LinkNewTab($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'link-new-tab' $urlLink
+  try {
+    Open-Scene $ctx $state $urlLink $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    $before = Get-MyTops $ctx
+    $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
+    $page = [FeatureWin]::Inside($ctx.Hwnd, (& { $p = New-Object FeatureWin+P; $p.X = [int]($cr.Ri * 0.7); $p.Y = [int]($cr.B / 2); [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$p) | Out-Null; $p }))
+    $l = [IntPtr](([int]($cr.B / 2) -shl 16) -bor ([int]($cr.Ri * 0.7) -band 0xffff))
+    $target = if ($page -ne [IntPtr]::Zero) { $page } else { $ctx.Hwnd }
+    [FeatureWin]::PostMessage($target, 0x201, [IntPtr]1, $l) | Out-Null
+    [FeatureWin]::PostMessage($target, 0x202, [IntPtr]0, $l) | Out-Null
+    # No window of the test may touch a visible monitor at any time. The popup is asked for
+    # off-screen; if any window still lands on a monitor the check fails, and the window is closed.
+    $extraSeen = $false; $onMonitor = $false
+    foreach ($i in 1..600) {
+      Start-Sleep -Milliseconds 10
+      foreach ($t in @(Get-MyTops $ctx)) {
+        if ($t -ne $ctx.Hwnd -and $before -notcontains $t) { $extraSeen = $true }
+        if ([FeatureMonitor]::OnMonitor($t)) {
+          $onMonitor = $true
+          [FeatureWin]::SetWindowPos($t, [IntPtr]::Zero, 9000, 1000, 800, 600, 0x14) | Out-Null
+          if ($t -ne $ctx.Hwnd) { [FeatureWin]::PostMessage($t, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
+        }
+      }
+    }
+    if ($onMonitor) { $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png'); return @('FAIL', $shot.Path, 'a window of the test appeared on a visible monitor') }
+    Start-Sleep 3
+    $left = @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ })
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
+    $urls = Get-TabUrls
+    $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png')
+    if (-not ($urls | Where-Object { $_ -match 'page-c' }) -and -not $extraSeen) { return @('NOT_DRIVEN', $shot.Path, 'the click did not open the link') }
+    if ($left.Count -gt 0) { foreach ($t in $left) { [FeatureWin]::PostMessage($t, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }; return @('FAIL', $shot.Path, 'the link stayed in a window of its own') }
+    if (-not ($urls | Where-Object { $_ -match 'page-c' })) { return @('FAIL', $shot.Path, "page-c is not a tab of the Rivet window: $($urls -join ' ')") }
+    @('PASS', $shot.Path, "the new-window link is a tab of the Rivet window; a window of its own showed first: $extraSeen")
+  } finally { Stop-Scene $ctx }
+}
+
+# The command bar opens over the page, finds what is typed, and opens it in a new tab of the window.
+function Invoke-CommandBar($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'command-bar' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    $one = Get-Capture $ctx (Join-Path $shots 'command-bar-1-before.png')
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'command')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the command bar command') }
+    Start-Sleep 1
+    if (-not (Read-Log | Where-Object { $_ -match 'command bar: open: true' })) { return @('FAIL', $one.Path, 'the command bar did not open') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' "commandtype $urlB")) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the typing command') }
+    Start-Sleep 1
+    $open = Get-Capture $ctx (Join-Path $shots 'command-bar-2-open.png')
+    if (-not (Read-Log | Where-Object { $_ -match 'command bar rows \[".+' })) { return @('FAIL', $open.Path, 'the command bar listed no rows for the typed address') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'commandrun 0')) { return @('NOT_DRIVEN', $open.Path, 'the runtime did not take the run command') }
+    Start-Sleep 4
+    $after = Get-Capture $ctx (Join-Path $shots 'command-bar-3-opened.png')
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $after.Path, 'the runtime did not take the tab list command') }
+    $urls = Get-TabUrls
+    if (-not $urls -or $urls.Count -ne 2) { return @('FAIL', $after.Path, "expected two tabs after Enter, the window has $($urls.Count)") }
+    $v = Test-OnePage $after $script:ColourB $script:ColourA
+    if ($v.Verdict -ne 'PASS') { return @($v.Verdict, $after.Path, "the new tab does not show the typed page: $($v.Reason)") }
+    @('PASS', $open.Path, "bar open, Enter opened a second tab on page-b; $($v.Reason)")
+  } finally { Stop-Scene $ctx }
+}
+
+# Rivet settings open as a card over the page without a window of their own, are walked with the
+# keyboard, and write the store that owns each setting: here Ctrl+T, which the tab list file keeps.
+function Invoke-RivetSettings($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'rivet-settings' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    $tops = @(Get-MyTops $ctx)
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'settings')) { return @('NOT_DRIVEN', $null, 'the runtime did not take the settings command') }
+    Start-Sleep 1
+    $open = Get-Capture $ctx (Join-Path $shots 'rivet-settings-1-open.png')
+    if (-not (Read-Log | Where-Object { $_ -match 'settings: open: true' })) { return @('FAIL', $open.Path, 'the settings card did not open') }
+    if (@(Get-MyTops $ctx | Where-Object { $tops -notcontains $_ }).Count -gt 0) { return @('FAIL', $open.Path, 'the settings card made a window of its own') }
+    foreach ($command in 'settingskey down', 'settingskey right') {
+      if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $open.Path, "'$command' was not taken") }
+    }
+    Start-Sleep 1
+    $changed = Get-Capture $ctx (Join-Path $shots 'rivet-settings-2-changed.png')
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'sections')) { return @('NOT_DRIVEN', $changed.Path, 'sections was not taken') }
+    if ((Get-Sections).CtrlT -ne 'new_tab_page') { return @('FAIL', $changed.Path, 'the keyboard did not change what Ctrl+T opens') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'settingskey esc')) { return @('NOT_DRIVEN', $changed.Path, 'esc was not taken') }
+    Start-Sleep 1
+    $closed = Get-Capture $ctx (Join-Path $shots 'rivet-settings-3-closed.png')
+    if (-not (Read-Log | Where-Object { $_ -match 'settings: closed' })) { return @('FAIL', $closed.Path, 'Esc did not close the card') }
+    @('PASS', $changed.Path, 'card opened without a window of its own, Down and Right set Ctrl+T to the new tab page, Esc closed it')
+  } finally { Stop-Scene $ctx }
+}
+
+# Link rules: links sent with `rivet session open` follow the rules in the test profile's own
+# rules file. A link no rule matches opens as a new tab of the current space, a link of a Mini
+# Window rule floats, and the panel opens over the page and changes a rule's target. The addresses
+# are on 127.0.0.1 port 9, which refuses them, so nothing leaves the machine; the tab keeps the
+# address it was asked to open.
+function Invoke-LinkRules($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'link-rules' $urlA
+  try {
+    $rulesFile = Join-Path $flagDir 'link-rules.json'
+    [IO.File]::WriteAllText($rulesFile, '{"rules":[{"pattern":{"kind":"prefix","value":"http://127.0.0.1:9/mini"},"target":{"kind":"mini-window"}}]}')
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if (-not $ctx.SessionId) { return @('NOT_DRIVEN', $null, 'the session reported no id') }
+    $rivet = Join-Path $debug 'rivet.exe'
+    & $rivet session open --id $ctx.SessionId --state $state 'http://127.0.0.1:9/plain' 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { return @('FAIL', $null, "rivet session open exited $LASTEXITCODE") }
+    Start-Sleep 3
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
+    $urls = @(Get-TabUrls)
+    $plain = Get-Capture $ctx (Join-Path $shots 'link-rules-1-plain.png')
+    if (-not ($urls | Where-Object { $_ -match '127\.0\.0\.1:9/plain' })) { return @('FAIL', $plain.Path, "a link no rule matches is not a tab of the window: $($urls -join ' ')") }
+    & $rivet session open --id $ctx.SessionId --state $state 'http://127.0.0.1:9/mini/1' 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { return @('FAIL', $plain.Path, "rivet session open exited $LASTEXITCODE for the Mini Window link") }
+    Start-Sleep 4
+    $mini = Get-Capture $ctx (Join-Path $shots 'link-rules-2-mini.png')
+    if (-not (Read-Log | Where-Object { $_ -match 'link rules: open http://127\.0\.0\.1:9/mini/1 to MiniWindow: true' })) { return @('FAIL', $mini.Path, 'the Mini Window rule did not float the link') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'linkrules')) { return @('NOT_DRIVEN', $mini.Path, 'the runtime did not take the panel command') }
+    Start-Sleep 1
+    $panel = Get-Capture $ctx (Join-Path $shots 'link-rules-3-panel.png')
+    if (-not (Read-Log | Where-Object { $_ -match 'link rules: open$' })) { return @('FAIL', $panel.Path, 'the panel did not open') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'linkrulestarget 0')) { return @('NOT_DRIVEN', $panel.Path, 'the runtime did not take the target click') }
+    $changed = Get-Capture $ctx (Join-Path $shots 'link-rules-4-changed.png')
+    $saved = Get-Content $rulesFile -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+    if ($saved.rules[0].target.kind -ne 'current-space') { return @('FAIL', $changed.Path, "a click on the target did not move it to the current space: $($saved.rules[0].target.kind)") }
+    @('PASS', $panel.Path, 'an unmatched link opened as a tab, the Mini Window rule floated its link, the panel opened and a click changed the saved target; check the panel capture against the study')
+  } finally { Stop-Scene $ctx }
+}
+
+# A tab's link preview floats over the page being read, then opens as a tab or goes away.
+function Invoke-LinkPreview($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'link-preview' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    $one = Get-Capture $ctx (Join-Path $shots 'link-preview-1.png')
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Open-SecondPage $ctx $urlB)) { return @('NOT_DRIVEN', $one.Path, 'the second page did not open as a tab of the app window alone') }
+    $opens = Get-ViewOpens 'Floating'
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'preview 0')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the preview command') }
+    Start-Sleep 3
+    $shown = Get-Capture $ctx (Join-Path $shots 'link-preview-2-shown.png')
+    $v = Test-FloatingPage $shown $script:ColourB $script:ColourA
+    if ($v.Verdict -ne 'PASS') { return @($v.Verdict, $shown.Path, $v.Reason) }
+    if (-not (Test-ViewOwns $opens 'Floating')) { return @('FAIL', $shown.Path, 'the preview page is not in the second page view') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'previewesc')) { return @('NOT_DRIVEN', $shown.Path, 'the runtime did not take the dismiss command') }
+    Start-Sleep 3
+    $gone = Get-Capture $ctx (Join-Path $shots 'link-preview-3-dismissed.png')
+    $back = Test-OnePage $gone $script:ColourB $script:ColourA
+    if ($back.Verdict -ne 'PASS') { return @('FAIL', $gone.Path, "after Esc: $($back.Reason)") }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'preview 0')) { return @('NOT_DRIVEN', $gone.Path, 'the runtime did not take the preview command') }
+    Start-Sleep 3
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'previewopen')) { return @('NOT_DRIVEN', $gone.Path, 'the runtime did not take the open as tab command') }
+    Start-Sleep 3
+    $tab = Get-Capture $ctx (Join-Path $shots 'link-preview-4-tab.png')
+    $opened = Test-OnePage $tab $script:ColourA $script:ColourB
+    if ($opened.Verdict -ne 'PASS') { return @('FAIL', $tab.Path, "after Open as tab: $($opened.Reason)") }
+    @('PASS', $shown.Path, "$($v.Reason); Esc and Open as tab both leave one page")
+  } finally { Stop-Scene $ctx }
+}
+
 # --- Run ---------------------------------------------------------------------------------
 foreach ($name in $Browsers) {
   $exePath, $exeName = $table[$name]
@@ -830,6 +1336,13 @@ foreach ($name in $Browsers) {
   $shots = Join-Path $OutDir $name
   New-Item -ItemType Directory -Force $shots | Out-Null
   foreach ($feature in $Features) {
+    # A full disk leaves a fresh profile half written: no key in Local State, an empty Web Data and
+    # a browser profile error dialog on the owner's screen. Stop the run before that can happen.
+    $free = Get-FreeGigabytes $OutDir
+    if ($free -lt $MinFreeGigabytes) {
+      Write-Host "run stopped before $name $feature`: $free GB free on the output drive, below $MinFreeGigabytes GB"
+      exit 2
+    }
     if (-not $built) { Add-Row $name $version $feature 'NOT_DRIVEN' $null "no browser was started: $buildNote"; continue }
     if (-not (Test-Path $exePath)) { Add-Row $name $version $feature 'NOT_DRIVEN' $null 'the browser is not installed'; continue }
     try {
@@ -849,7 +1362,25 @@ foreach ($name in $Browsers) {
         'split-space' { Invoke-SplitPath $name $shots 'split-space' 'message' 'colour' -AfterSpace }
         'split-click' { Invoke-SplitPath $name $shots 'split-click' 'message' 'colour' -ThenClick }
         'split-rows' { Invoke-SplitRows $name $shots }
+        'split-drop-top' { Invoke-SplitGrid $name $shots 'split-drop-top' }
+        'split-drop-bottom' { Invoke-SplitGrid $name $shots 'split-drop-bottom' }
+        'split-grid-3' { Invoke-SplitGrid $name $shots 'split-grid-3' }
+        'split-grid-4' { Invoke-SplitGrid $name $shots 'split-grid-4' }
         'bar-layout' { Invoke-BarLayout $name $shots }
+        'mini-pop-out' { Invoke-Mini $name $shots 'pop-out' }
+        'mini-move' { Invoke-Mini $name $shots 'move' }
+        'mini-return' { Invoke-Mini $name $shots 'return' }
+        'mini-close' { Invoke-Mini $name $shots 'close' }
+        'tab-sections' { Invoke-TabSections $name $shots }
+        'tab-close-select' { Invoke-TabCloseSelect $name $shots }
+        'tab-reopen' { Invoke-TabReopen $name $shots }
+        'tab-archive' { Invoke-TabArchive $name $shots }
+        'ctrl-t-setting' { Invoke-CtrlTSetting $name $shots }
+        'link-new-tab' { Invoke-LinkNewTab $name $shots }
+        'command-bar' { Invoke-CommandBar $name $shots }
+        'link-preview' { Invoke-LinkPreview $name $shots }
+        'rivet-settings' { Invoke-RivetSettings $name $shots }
+        'link-rules' { Invoke-LinkRules $name $shots }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason

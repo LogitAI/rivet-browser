@@ -16,6 +16,7 @@ mod brave;
 mod chrome;
 mod edge;
 mod omnibox_rows;
+pub mod page_tool_rows;
 mod samsung;
 mod whale;
 
@@ -24,9 +25,6 @@ pub use chrome::{CHROME, CHROME_150, CHROME_156_74, CHROME_156_80};
 pub use edge::EDGE;
 pub use samsung::SAMSUNG;
 pub use whale::{WHALE, WHALE_ADD_TAB_AT};
-
-#[allow(unused_imports)]
-use crate::features::look::{ACCENT_TINT, FOCUS_RING, HAIRLINE, INK, PAPER, SELECTION, SOFT_INK};
 
 /// An address the build does not have. Every check against it fails, so the feature that needs it
 /// stays off.
@@ -110,7 +108,6 @@ pub struct Omnibox {
     pub signatures: &'static [(usize, &'static [u8])],
 }
 }
-
 
 row_struct! {
 /// What a Rivet app window calls in Chromium: the window feature answer that keeps new tabs in the
@@ -333,6 +330,11 @@ pub struct Tabs {
     /// own new tab page after the command and would replace an address opened at once. Zero opens it
     /// in the command itself.
     pub new_tab_delay_ms: u32,
+    /// Whether a new tab of a Rivet window opens its first page through `WebContents::OpenURL`
+    /// with a new foreground tab, in place of the browser's new-tab command. Set for a build whose
+    /// own new tab page crashes the browser beside Rivet's second page view; the start page loads
+    /// first, so that page never loads in a Rivet window.
+    pub new_tab_by_open_url: Option<bool>,
     /// `WebContentsImpl::GetLastCommittedURL` and `GetVisibleURL`, which return a `const GURL&`.
     pub last_committed_url: usize,
     pub visible_url: usize,
@@ -476,6 +478,21 @@ pub struct SidePanel {
     /// The slot holds Chromium's older `BrowserViewLayoutImplOld::Layout` in place of
     /// `CalculateProposedLayout`, so the layout hook sets bounds after the browser's layout runs.
     pub old_layout: Option<bool>,
+    /// The registry keeps its entries as begin and end pointers at +0x38 and +0x40, where newer
+    /// builds keep a pointer and a count.
+    pub registry_end: Option<bool>,
+    /// Where the coordinator keeps the window's registry, for builds without
+    /// `SidePanelRegistry::From`. Unset means the registry comes from `registry_from`.
+    pub registry_in_coordinator: Option<usize>,
+    /// Where the registry keeps its entries' vector. Unset means +0x38.
+    pub registry_entries: Option<usize>,
+    /// Where the coordinator keeps its browser, which `registry_from` takes. Unset means +8.
+    pub coordinator_browser: Option<usize>,
+    /// The size of a `SidePanelEntryKey`. Unset means 0x28.
+    pub entry_key_size: Option<usize>,
+    /// The build's show by id stops the browser for an extension's entry, which then opens with
+    /// toggle and its key.
+    pub extensions_by_toggle: Option<bool>,
     /// The layout object keeps the host view at +0x38, the contents container at +0xb8, the side
     /// panel at +0xc0 and the content shown while the side panel animates at +0xc8.
     pub host_view: usize,
@@ -704,6 +721,7 @@ const UNCHECKED_TABS: Tabs = Tabs {
     new_tab_address: None,
     new_tab_takes_address: false,
     new_tab_delay_ms: 0,
+    new_tab_by_open_url: None,
     last_committed_url: ABSENT,
     visible_url: ABSENT,
     get_group: ABSENT,
@@ -788,6 +806,12 @@ const UNCHECKED_SIDEPANEL: SidePanel = SidePanel {
     proposed_slot: 0,
     proposed: ABSENT,
     old_layout: None,
+    registry_end: None,
+    registry_in_coordinator: None,
+    registry_entries: None,
+    coordinator_browser: None,
+    entry_key_size: None,
+    extensions_by_toggle: None,
     host_view: 0,
     page_area: 0,
     contents_container: 0,
@@ -868,15 +892,23 @@ pub fn unchecked_reason(build: &Build, feature: &str) -> &'static str {
 }
 
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 9] = [&CHROME_156_74, &CHROME_156_80, &CHROME, &EDGE, &CHROME_150, &WHALE, &BRAVE, &BRAVE_63, &SAMSUNG];
+static TABLE: [&Build; 9] = [
+    &CHROME_156_74,
+    &CHROME_156_80,
+    &CHROME,
+    &EDGE,
+    &CHROME_150,
+    &WHALE,
+    &BRAVE,
+    &BRAVE_63,
+    &SAMSUNG,
+];
 
 static CURRENT: OnceLock<Option<&'static Build>> = OnceLock::new();
 
 /// The row for the browser module loaded in this process, if any row matches its version.
 pub fn current() -> Option<&'static Build> {
-    *CURRENT.get_or_init(|| {
-        crate::chromium::image::recorded_build()
-    })
+    *CURRENT.get_or_init(crate::chromium::image::recorded_build)
 }
 
 /// The row of the verified build. Only code that already holds a recorded image calls this.
@@ -922,7 +954,11 @@ fn loaded() -> &'static Loaded {
         let mut frames = signed.frames;
         frames.extend(checked_in.frames);
         frames.extend(chrome_build::builds(chrome_build::TABLE));
-        Loaded { builds: in_order(signed.builds, &compiled), frames, note }
+        Loaded {
+            builds: in_order(signed.builds, &compiled),
+            frames,
+            note,
+        }
     })
 }
 
@@ -945,7 +981,6 @@ pub fn table_note() -> &'static str {
 pub fn compiled() -> &'static [&'static Build] {
     &TABLE
 }
-
 
 #[cfg(test)]
 mod tests;

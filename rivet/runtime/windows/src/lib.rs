@@ -17,40 +17,53 @@ pub extern "C" fn rivet_runtime_abi_version() -> u32 {
 }
 
 /// The default appbar width in device-independent pixels.
-const APPBAR_WIDTH: i32 = 268;
+#[cfg(any(windows, test))]
+const APPBAR_WIDTH: i32 = 276;
 
 /// The range the appbar width can be dragged between, in device-independent pixels.
+#[cfg(any(windows, test))]
 const APPBAR_MIN_WIDTH: i32 = 200;
+#[cfg(any(windows, test))]
 const APPBAR_MAX_WIDTH: i32 = 420;
 
 /// Width of the grab area on the appbar's right edge. Only the half inside the appbar is taken,
 /// because the page beside it belongs to the browser.
+#[cfg(any(windows, test))]
 const RESIZER_WIDTH: i32 = 6;
 
 /// The strip along the window's left edge that shows a hidden appbar when the pointer reaches it.
+#[cfg(any(windows, test))]
 const EDGE_WIDTH: i32 = 10;
 
 /// The gap between the window edge and the page of a hidden appbar, and between the window edge
 /// and the floating appbar.
+#[cfg(any(windows, test))]
 const FLOAT_INSET: i32 = 8;
 
 /// The empty leading space of the toolbar row, and the toggle button drawn in it.
+#[cfg(any(windows, test))]
 const TOGGLE_SIZE: i32 = 28;
 /// The toggle's distance from the page panel's leading edge, and the size of its glyph.
+#[cfg(any(windows, test))]
 const TOGGLE_LEFT: i32 = 8;
+#[cfg(any(windows, test))]
+#[cfg_attr(not(windows), allow(dead_code))]
 const TOGGLE_GLYPH: f32 = 16.0;
 /// Where the toggle sits, from the window's top edge in device-independent pixels: centred in the
 /// bar, which is the panel's 44 DIP top row one 8 DIP gap below the edge.
+#[cfg(any(windows, test))]
 const TOGGLE_TOP: i32 = 16;
 
 /// The appbar of one window: how wide it is, and whether it is docked, hidden or peeking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(windows, test))]
 struct AppbarLayout {
     side: i32,
     collapsed: bool,
     peek: bool,
 }
 
+#[cfg(any(windows, test))]
 impl AppbarLayout {
     const fn new() -> Self {
         Self {
@@ -116,37 +129,38 @@ impl AppbarLayout {
 /// What to reserve left of the client view so the page begins at `leading`, when the browser lays
 /// its own strip out at the view's leading edge with `strip` DIPs. The reservation is never
 /// negative, because the browser does not lay out a view that starts left of its window.
+#[cfg(any(windows, test))]
 fn reserved_for_strip(leading: i32, strip: i32) -> i32 {
     (leading - strip).max(0)
 }
 
 /// The toggle button's rectangle as (x, y, width, height) in device-independent pixels of the
 /// window's client area, for a page panel that begins at `leading`.
+#[cfg(any(windows, test))]
 fn toggle_rect(leading: i32) -> (i32, i32, i32, i32) {
-    (
-        leading + TOGGLE_LEFT,
-        TOGGLE_TOP,
-        TOGGLE_SIZE,
-        TOGGLE_SIZE,
-    )
+    (leading + TOGGLE_LEFT, TOGGLE_TOP, TOGGLE_SIZE, TOGGLE_SIZE)
 }
 
 /// Height of the appbar band that drags the window, matched to Chromium's app title bar.
+#[cfg(any(windows, test))]
 const CAPTION_HEIGHT: i32 = 32;
 
 /// Converts a device-independent length to physical pixels for a DPI.
+#[cfg(any(windows, test))]
 fn scale(value: i32, dpi: u32) -> i32 {
     (value * dpi as i32 + 48) / 96
 }
 
 /// The DPI that maps a browser layout width in device-independent pixels onto its client width
 /// in physical pixels.
+#[cfg(any(windows, test))]
 fn layout_scale_dpi(client_pixels: i32, layout_width: i32) -> u32 {
     ((client_pixels as i64 * 96 + layout_width as i64 / 2) / layout_width.max(1) as i64) as u32
 }
 
 /// The scale a window keeps after a DPI change: the one the browser laid the window out at during
 /// the change, or the new DPI Windows gave when no layout ran, so nothing keeps the old monitor's.
+#[cfg(any(windows, test))]
 fn dpi_after_change(laid_during_change: Option<u32>, new_dpi: u32) -> u32 {
     laid_during_change.unwrap_or(new_dpi).max(96)
 }
@@ -154,12 +168,14 @@ fn dpi_after_change(laid_during_change: Option<u32>, new_dpi: u32) -> u32 {
 /// The first row of the browser's title bar in a restored window, in physical pixels. The browser
 /// keeps one device-independent pixel, rounded up, for the top edge. The window's own border can
 /// be thicker and then covers it.
+#[cfg(any(windows, test))]
 fn title_bar_top(window_border: i32, dpi: u32) -> i32 {
     window_border.max(dpi.div_ceil(96) as i32)
 }
 
 /// What a point in the reserved strip does, given client coordinates of the browser window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(windows, test))]
 enum StripHit {
     /// The point belongs to the browser, not to the strip.
     Browser,
@@ -174,13 +190,17 @@ enum StripHit {
     /// Belongs to the appbar's own content.
     Appbar,
     /// The caption buttons, which Windows needs by name for Snap Layouts.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Minimize,
+    #[cfg_attr(not(windows), allow(dead_code))]
     Maximize,
+    #[cfg_attr(not(windows), allow(dead_code))]
     Close,
 }
 
 /// Classifies a point against a docked appbar `side` DIPs wide, which is zero while the appbar is
 /// hidden. `resize_border` is zero when the window is maximized.
+#[cfg(any(windows, test))]
 fn strip_hit(x: i32, y: i32, dpi: u32, resize_border: i32, side: i32) -> StripHit {
     if x < 0 || x >= scale(side, dpi) {
         return StripHit::Browser;
@@ -213,10 +233,10 @@ fn caption_of(hit: u32) -> Option<features::address_bar::Caption> {
 fn caption_command(button: features::address_bar::Caption, zoomed: bool) -> u32 {
     use features::address_bar::Caption;
     match button {
-        Caption::Minimize => 0xF020,            // SC_MINIMIZE
-        Caption::Maximize if zoomed => 0xF120,  // SC_RESTORE
-        Caption::Maximize => 0xF030,            // SC_MAXIMIZE
-        Caption::Close => 0xF060,               // SC_CLOSE
+        Caption::Minimize => 0xF020,           // SC_MINIMIZE
+        Caption::Maximize if zoomed => 0xF120, // SC_RESTORE
+        Caption::Maximize => 0xF030,           // SC_MAXIMIZE
+        Caption::Close => 0xF060,              // SC_CLOSE
     }
 }
 
@@ -224,7 +244,14 @@ fn caption_command(button: features::address_bar::Caption, zoomed: bool) -> u32 
 /// visible frame. The row runs from the panel's gap down 44 DIPs. Its caption buttons fill that whole
 /// height, its controls fill the 28 DIPs in the middle, and the rest of it moves the window.
 #[cfg(windows)]
-fn title_row_hit(x: f32, y: f32, width: f32, resizing: bool, leading: f32, zoomed: bool) -> StripHit {
+fn title_row_hit(
+    x: f32,
+    y: f32,
+    width: f32,
+    resizing: bool,
+    leading: f32,
+    zoomed: bool,
+) -> StripHit {
     const BUTTON: f32 = 46.0;
     /// The design's space between the field and the caption buttons.
     const FIELD_GAP: f32 = 10.0;
@@ -235,7 +262,11 @@ fn title_row_hit(x: f32, y: f32, width: f32, resizing: bool, leading: f32, zoome
         return StripHit::Browser;
     }
     if resizing {
-        return if x >= right { StripHit::Browser } else { StripHit::Top };
+        return if x >= right {
+            StripHit::Browser
+        } else {
+            StripHit::Top
+        };
     }
     if y >= gap + row || (x >= right && !zoomed) {
         return StripHit::Browser;
@@ -262,12 +293,15 @@ fn title_row_hit(x: f32, y: f32, width: f32, resizing: bool, leading: f32, zoome
 #[cfg(windows)]
 pub fn compiled_rows() -> Vec<serde_json::Value> {
     use row_data::RowValue;
-    let frames = rivet_platform_windows::chrome_build::builds(rivet_platform_windows::chrome_build::TABLE);
+    let frames =
+        rivet_platform_windows::chrome_build::builds(rivet_platform_windows::chrome_build::TABLE);
     builds::compiled()
         .iter()
         .map(|build| {
             let version = build.version.map(|part| part.to_string()).join(".");
-            let frame = frames.iter().find(|frame| frame.module == build.module && frame.version == version);
+            let frame = frames
+                .iter()
+                .find(|frame| frame.module == build.module && frame.version == version);
             serde_json::json!({ "frame": frame, "build": build.to_row() })
         })
         .collect()
@@ -306,39 +340,41 @@ mod address_display;
 #[cfg(windows)]
 mod appbar;
 #[cfg(windows)]
-mod installed_browsers;
-#[cfg(windows)]
 mod browsers;
 #[cfg(windows)]
-mod features;
+mod builds;
+#[cfg(windows)]
+mod chromium;
 #[cfg(windows)]
 mod dev_bar;
 #[cfg(windows)]
 mod dev_mode;
 #[cfg(windows)]
-mod builds;
+mod feature;
 #[cfg(windows)]
-mod hooks;
-#[cfg(windows)]
-mod chromium;
-#[cfg(windows)]
-mod row_data;
-#[cfg(windows)]
-mod side_rail;
+mod features;
 #[cfg(windows)]
 mod frame;
 #[cfg(windows)]
 mod ground;
-mod press;
-mod spaces;
 #[cfg(windows)]
-mod feature;
+mod hooks;
+#[cfg(windows)]
+mod installed_browsers;
+#[cfg(any(windows, test))]
+mod press;
+#[cfg(windows)]
+mod row_data;
+#[cfg(windows)]
+mod side_rail;
+#[cfg(any(windows, test))]
+mod spaces;
 #[cfg(windows)]
 mod targets;
 #[cfg(windows)]
-mod trace;
-#[cfg(windows)]
 mod taskbar;
+#[cfg(windows)]
+mod trace;
 
 #[cfg(test)]
 mod tests {
@@ -362,7 +398,10 @@ mod tests {
         let before = layout_scale_dpi(2400, 1200);
         assert_eq!(before, 192);
         // Moved to a 125% monitor, the browser lays the same 1200 DIPs out in 1500 pixels.
-        assert_eq!(dpi_after_change(Some(layout_scale_dpi(1500, 1200)), 120), 120);
+        assert_eq!(
+            dpi_after_change(Some(layout_scale_dpi(1500, 1200)), 120),
+            120
+        );
         // Without a layout during the change, the new DPI is taken, never the old monitor's.
         assert_eq!(dpi_after_change(None, 120), 120);
         // The bar's row starts at the page panel's top at either scale, so it stays at the top.
@@ -404,7 +443,10 @@ mod tests {
     #[test]
     fn fr3_appbar_width_stays_between_200_and_420() {
         let mut layout = AppbarLayout::new();
-        assert_eq!(layout.side, 268);
+        assert_eq!(
+            layout.side, 276,
+            "the default width is the study's 276 DIP sidebar"
+        );
         assert!(layout.set_width(100));
         assert_eq!(layout.side, 200);
         assert!(layout.set_width(900));
@@ -444,8 +486,8 @@ mod tests {
         let mut layout = AppbarLayout::new();
         layout.toggle();
         assert!(layout.keeps_peek(5, 400, 900));
-        assert!(layout.keeps_peek(FLOAT_INSET + 267, 400, 900));
-        assert!(!layout.keeps_peek(FLOAT_INSET + 268, 400, 900));
+        assert!(layout.keeps_peek(FLOAT_INSET + 275, 400, 900));
+        assert!(!layout.keeps_peek(FLOAT_INSET + 276, 400, 900));
         assert!(!layout.keeps_peek(100, 900, 900));
         layout.toggle();
         assert!(
@@ -504,7 +546,13 @@ mod tests {
     fn fr12_title_row_moves_the_window_outside_its_controls() {
         let hit = |x, y| title_row_hit(x, y, 800.0, false, 268.0, false);
         // Above and below the controls, the gap above the row, and beside the controls.
-        for (x, y) in [(400.0, 2.0), (400.0, 12.0), (400.0, 48.0), (272.0, 30.0), (650.0, 30.0)] {
+        for (x, y) in [
+            (400.0, 2.0),
+            (400.0, 12.0),
+            (400.0, 48.0),
+            (272.0, 30.0),
+            (650.0, 30.0),
+        ] {
             assert_eq!(hit(x, y), StripHit::Caption, "{x},{y}");
         }
         // A button or the field, and anything over the appbar.
@@ -515,9 +563,15 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn fr12_top_edge_resizes_over_the_caption_buttons_too() {
-        assert_eq!(title_row_hit(780.0, 3.0, 800.0, true, 268.0, false), StripHit::Top);
+        assert_eq!(
+            title_row_hit(780.0, 3.0, 800.0, true, 268.0, false),
+            StripHit::Top
+        );
         // The window's corner stays with the browser.
-        assert_eq!(title_row_hit(797.0, 3.0, 800.0, true, 268.0, false), StripHit::Browser);
+        assert_eq!(
+            title_row_hit(797.0, 3.0, 800.0, true, 268.0, false),
+            StripHit::Browser
+        );
     }
 
     #[test]
@@ -550,14 +604,23 @@ mod tests {
             assert_eq!(hit, expected);
         }
         // Empty bar space between the address and the buttons still drags the window.
-        assert_eq!(title_row_hit(bar_right - 138.0 - 2.0, 30.0, client, false, 268.0, false), StripHit::Caption);
+        assert_eq!(
+            title_row_hit(bar_right - 138.0 - 2.0, 30.0, client, false, 268.0, false),
+            StripHit::Caption
+        );
     }
 
     #[test]
     #[cfg(windows)]
     fn fr12_maximized_corner_stays_the_close_button() {
-        assert_eq!(title_row_hit(799.0, 0.0, 800.0, false, 268.0, true), StripHit::Close);
-        assert_eq!(title_row_hit(720.0, 0.0, 800.0, false, 268.0, true), StripHit::Maximize);
+        assert_eq!(
+            title_row_hit(799.0, 0.0, 800.0, false, 268.0, true),
+            StripHit::Close
+        );
+        assert_eq!(
+            title_row_hit(720.0, 0.0, 800.0, false, 268.0, true),
+            StripHit::Maximize
+        );
     }
 
     #[test]
@@ -577,3 +640,5 @@ mod tests {
 
 #[cfg(windows)]
 mod tab_rows;
+#[cfg(windows)]
+mod tab_sections;

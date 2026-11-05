@@ -1,11 +1,11 @@
 //! Chrome 156 tab operations on the browser UI thread. Calls are gated by code signatures.
+use crate::builds::Build;
+use crate::chromium::image;
+use crate::feature::{available_here, Needs};
+use crate::targets::Target;
 use std::ffi::c_void;
 use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::HWND;
-use crate::chromium::image;
-use crate::builds::Build;
-use crate::feature::{available_here, Needs};
-use crate::targets::Target;
 
 /// The values of the loaded browser build.
 fn bv() -> &'static crate::builds::Tabs {
@@ -18,7 +18,10 @@ pub(crate) fn needs(build: &Build) -> Needs {
     Needs::checked(
         row.supported,
         crate::builds::unchecked_reason(build, "tab control"),
-        row.signatures.iter().map(|(rva, bytes)| Target::new("tab function", *rva, bytes)).collect(),
+        row.signatures
+            .iter()
+            .map(|(rva, bytes)| Target::new("tab function", *rva, bytes))
+            .collect(),
     )
 }
 
@@ -63,7 +66,10 @@ pub(crate) unsafe fn contents_at(base: usize, model: *mut c_void, index: i32) ->
     if bv().tab_at != crate::builds::ABSENT {
         return function::<TabAt>(base, bv().tab_at)(model, index);
     }
-    if bv().tab_object == crate::builds::ABSENT || index < 0 || index >= function::<Count>(base, bv().tab_count)(model) {
+    if bv().tab_object == crate::builds::ABSENT
+        || index < 0
+        || index >= function::<Count>(base, bv().tab_count)(model)
+    {
         return std::ptr::null_mut();
     }
     let collection = *(model.cast::<u8>().add(bv().tab_collection) as *const *mut c_void);
@@ -143,11 +149,19 @@ unsafe fn scan_holder(holder: *mut u8) {
         return;
     }
     for offset in (0..0x400usize).step_by(8) {
-        let Some(model) = read::<usize>(holder as usize + offset) else { continue };
-        let Some(collection) = read::<usize>(model) else { continue };
-        let Some(count) = read::<i32>(collection + 0x18) else { continue };
+        let Some(model) = read::<usize>(holder as usize + offset) else {
+            continue;
+        };
+        let Some(collection) = read::<usize>(model) else {
+            continue;
+        };
+        let Some(count) = read::<i32>(collection + 0x18) else {
+            continue;
+        };
         if (1..=4).contains(&count) {
-            crate::trace::trace(&format!("scan: holder+{offset:#x} -> {model:#x} -> {collection:#x}, count word {count}"));
+            crate::trace::trace(&format!(
+                "scan: holder+{offset:#x} -> {model:#x} -> {collection:#x}, count word {count}"
+            ));
         }
     }
 }
@@ -212,7 +226,8 @@ pub unsafe fn tabs(window: HWND) -> Option<Vec<crate::tab_rows::Tab>> {
             id.copy_from_slice(&optional[..16]);
             let present = function::<HasGroup>(base, bv().has_group)(group_model, id.as_ptr());
             if present {
-                let ptr = function::<LookupGroup>(base, bv().lookup_group)(group_model, id.as_ptr());
+                let ptr =
+                    function::<LookupGroup>(base, bv().lookup_group)(group_model, id.as_ptr());
                 let visual = if ptr.is_null() {
                     std::ptr::null()
                 } else {
@@ -228,6 +243,7 @@ pub unsafe fn tabs(window: HWND) -> Option<Vec<crate::tab_rows::Tab>> {
                         title: chromium_string(visual).unwrap_or_default(),
                         color,
                         collapsed,
+                        count: 0,
                     })
                 }
             } else {
@@ -257,7 +273,10 @@ pub struct OpenTab {
 unsafe fn narrow_string(value: *const u8) -> Option<String> {
     let last = *value.add(23);
     let (data, size) = if last & 0x80 != 0 {
-        (*(value as *const *const u8), *(value.add(8) as *const usize))
+        (
+            *(value as *const *const u8),
+            *(value.add(8) as *const usize),
+        )
     } else {
         (value, last as usize)
     };
@@ -267,31 +286,12 @@ unsafe fn narrow_string(value: *const u8) -> Option<String> {
     Some(String::from_utf8_lossy(std::slice::from_raw_parts(data, size)).into_owned())
 }
 
-/// The title and the address of a page that is no tab of the strip, such as the page of Rivet's
-/// second page view. Empty when the build records no way to read them.
-pub(crate) unsafe fn page_summary(contents: *mut c_void) -> Option<(String, String)> {
-    let base = base()?;
-    if contents.is_null() {
-        return None;
-    }
-    let title = chromium_string(function::<Pointer>(base, bv().title)(contents).cast::<u8>()).unwrap_or_default();
-    let mut url = String::new();
-    for rva in [bv().last_committed_url, bv().visible_url] {
-        let gurl = function::<Pointer>(base, rva)(contents).cast::<u8>();
-        if !gurl.is_null() {
-            url = narrow_string(gurl).unwrap_or_default();
-        }
-        if !url.is_empty() {
-            break;
-        }
-    }
-    Some((title, url))
-}
-
 /// The address a page shows: the visible one while a navigation is pending, which is what an
 /// address bar shows, or the last committed one. Empty when the build records neither.
 pub(crate) unsafe fn page_address(contents: *mut c_void) -> String {
-    let Some(base) = base() else { return String::new() };
+    let Some(base) = base() else {
+        return String::new();
+    };
     if contents.is_null() {
         return String::new();
     }
@@ -300,7 +300,11 @@ pub(crate) unsafe fn page_address(contents: *mut c_void) -> String {
             continue;
         }
         let gurl = function::<Pointer>(base, rva)(contents).cast::<u8>();
-        if let Some(url) = (!gurl.is_null()).then(|| narrow_string(gurl)).flatten().filter(|url| !url.is_empty()) {
+        if let Some(url) = (!gurl.is_null())
+            .then(|| narrow_string(gurl))
+            .flatten()
+            .filter(|url| !url.is_empty())
+        {
             return url;
         }
     }
@@ -309,11 +313,14 @@ pub(crate) unsafe fn page_address(contents: *mut c_void) -> String {
 
 /// The page title of `contents`.
 pub(crate) unsafe fn page_title(contents: *mut c_void) -> String {
-    let Some(base) = base() else { return String::new() };
+    let Some(base) = base() else {
+        return String::new();
+    };
     if contents.is_null() {
         return String::new();
     }
-    chromium_string(function::<Pointer>(base, bv().title)(contents).cast::<u8>()).unwrap_or_default()
+    chromium_string(function::<Pointer>(base, bv().title)(contents).cast::<u8>())
+        .unwrap_or_default()
 }
 
 /// The window's tabs with their addresses and titles, in strip order.
@@ -406,16 +413,24 @@ pub(crate) unsafe fn install_new_tab(skip: &str) -> Result<(), String> {
     static HOOKED: OnceLock<Result<(), String>> = OnceLock::new();
     HOOKED
         .get_or_init(|| {
-            let image = image::recorded().ok_or("this browser build has no recorded new tab command")?;
+            let image =
+                image::recorded().ok_or("this browser build has no recorded new tab command")?;
             crate::targets::transaction(|| {
-                crate::targets::detour(image.base, tabs.new_tab, tabs.new_tab_prologue, new_tab_hook as usize, &ORIGINAL_NEW_TAB)
+                crate::targets::detour(
+                    image.base,
+                    tabs.new_tab,
+                    tabs.new_tab_prologue,
+                    new_tab_hook as *const () as usize,
+                    &ORIGINAL_NEW_TAB,
+                )
             })
         })
         .clone()
 }
 
 /// The code that runs the browser's new-tab command, which the new-tab hook leaves to its caller.
-pub(crate) static ORIGINAL_NEW_TAB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static ORIGINAL_NEW_TAB: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 thread_local! {
     /// Set while Rivet itself opens a tab, which then chooses its own page.
@@ -433,7 +448,11 @@ pub(crate) fn opening_tab() -> bool {
 /// Stands in for the browser's new-tab command. Every way of opening a tab ends in it, so the
 /// appbar, Ctrl+T and the browser's own menus all give a Rivet window's new tab the start page,
 /// and a window that is not Rivet's keeps the browser's own new tab page.
-pub(crate) unsafe extern "system" fn new_tab_hook(browser: *mut c_void, kind: i32, url: *const c_void) -> *mut c_void {
+pub(crate) unsafe extern "system" fn new_tab_hook(
+    browser: *mut c_void,
+    kind: i32,
+    url: *const c_void,
+) -> *mut c_void {
     IN_NEW_TAB.with(|depth| depth.set(depth.get() + 1));
     let contents = new_tab_scoped(browser, kind, url);
     IN_NEW_TAB.with(|depth| depth.set(depth.get() - 1));
@@ -441,11 +460,15 @@ pub(crate) unsafe extern "system" fn new_tab_hook(browser: *mut c_void, kind: i3
 }
 
 unsafe fn new_tab_scoped(browser: *mut c_void, kind: i32, url: *const c_void) -> *mut c_void {
-    let original: NewTab2 = std::mem::transmute_copy(&ORIGINAL_NEW_TAB.load(std::sync::atomic::Ordering::Acquire));
+    let original: NewTab2 =
+        std::mem::transmute_copy(&ORIGINAL_NEW_TAB.load(std::sync::atomic::Ordering::Acquire));
     // A build that passes an address opens that address, and only an empty one asks for the new tab page.
     let wanted = !bv().new_tab_takes_address || (!url.is_null() && gurl_is_empty(url));
     if let Some(window) = rivet_window_of(browser) {
         if let Some(contents) = add_in_app_window(browser, window, url, wanted) {
+            return contents;
+        }
+        if let Some(contents) = open_first_page(window, wanted) {
             return contents;
         }
     }
@@ -453,10 +476,14 @@ unsafe fn new_tab_scoped(browser: *mut c_void, kind: i32, url: *const c_void) ->
     // is never loaded and is not left behind in the tab's history.
     if bv().new_tab_takes_address {
         if wanted && !OWN_NEW_TAB.with(std::cell::Cell::get) {
-            if let Some(start) = rivet_window_of(browser)
-                .and_then(|window| crate::frame::start_url_of(window))
+            if let Some(start) =
+                rivet_window_of(browser).and_then(|window| crate::frame::start_url_of(window))
             {
-                if let Some(contents) = crate::features::navigation::with_address(&start, |address| original(browser, kind, address)) {
+                if let Some(contents) =
+                    crate::features::navigation::with_address(&start, |address| {
+                        original(browser, kind, address)
+                    })
+                {
                     crate::trace::trace("new tab in a Rivet window starts on the start page");
                     return contents;
                 }
@@ -473,19 +500,71 @@ unsafe fn new_tab_scoped(browser: *mut c_void, kind: i32, url: *const c_void) ->
                     return contents;
                 }
                 let opened = crate::features::navigation::open_page(contents, &url);
-                crate::trace::trace(&format!("new tab in a Rivet window opens the start page: {opened}"));
+                crate::trace::trace(&format!(
+                    "new tab in a Rivet window opens the start page: {opened}"
+                ));
             }
         }
     }
     contents
 }
+/// The first page of a new tab in a Rivet window of a build whose new tab page must not load
+/// there: Rivet's start page, or a blank page when Rivet opens an address in the tab itself.
+pub(crate) fn first_page(
+    by_open_url: bool,
+    wanted: bool,
+    own: bool,
+    start: Option<String>,
+) -> Option<String> {
+    if !by_open_url || !wanted {
+        return None;
+    }
+    Some(if own {
+        "about:blank".to_owned()
+    } else {
+        start.unwrap_or_else(|| "about:blank".to_owned())
+    })
+}
+
+/// Opens the new tab with its first page through the browser's `OpenURL`, for a build whose own
+/// new tab page crashes beside Rivet's second view. None leaves the command to the browser.
+unsafe fn open_first_page(window: HWND, wanted: bool) -> Option<*mut c_void> {
+    let own = OWN_NEW_TAB.with(std::cell::Cell::get);
+    let page = first_page(
+        bv().new_tab_by_open_url == Some(true),
+        wanted,
+        own,
+        crate::frame::start_url_of(window),
+    )?;
+    let active = crate::features::navigation::active_contents(window)?;
+    let contents = crate::features::navigation::open_in_new_tab(active, &page);
+    crate::trace::trace(&format!(
+        "new tab in a Rivet window opens {page} through OpenURL: {}",
+        !contents.is_null()
+    ));
+    (!contents.is_null()).then_some(contents)
+}
+
 /// `chrome::AddTabAt(browser, url, index, foreground, group, _, _)`.
-type AddTabAt = unsafe extern "system" fn(*mut c_void, *const c_void, i32, bool, *const [u8; 24], bool, bool) -> *mut c_void;
+type AddTabAt = unsafe extern "system" fn(
+    *mut c_void,
+    *const c_void,
+    i32,
+    bool,
+    *const [u8; 24],
+    bool,
+    bool,
+) -> *mut c_void;
 
 /// Adds the new tab to the Rivet window's own tab strip model with Chromium's `chrome::AddTabAt`,
 /// for a build whose new-tab command would send an app window's tab to a tabbed window. The tab
 /// opens the start page when the command asked for the new tab page. None for any other build.
-unsafe fn add_in_app_window(browser: *mut c_void, window: HWND, url: *const c_void, wanted: bool) -> Option<*mut c_void> {
+unsafe fn add_in_app_window(
+    browser: *mut c_void,
+    window: HWND,
+    url: *const c_void,
+    wanted: bool,
+) -> Option<*mut c_void> {
     let (rva, prologue) = crate::builds::add_tab_at_for(crate::builds::get())?;
     let base = base()?;
     if !crate::chromium::memory::prologue_is(base + rva, prologue) || url.is_null() {
@@ -499,7 +578,9 @@ unsafe fn add_in_app_window(browser: *mut c_void, window: HWND, url: *const c_vo
             if let Some(contents) = crate::features::navigation::with_address(&start, |address| {
                 add(browser, address, -1, true, &no_group, false, false)
             }) {
-                crate::trace::trace("new tab in a Rivet window starts on the start page, in its own tab strip");
+                crate::trace::trace(
+                    "new tab in a Rivet window starts on the start page, in its own tab strip",
+                );
                 return Some(contents);
             }
         }
@@ -532,7 +613,9 @@ unsafe fn gurl_is_empty(url: *const c_void) -> bool {
 /// Opens a tab that starts on the start page, for a build whose new-tab command takes the address.
 /// Returns false for any other build, which opens the tab and then its page.
 pub unsafe fn new_start_tab(window: HWND) -> bool {
-    if !bv().new_tab_takes_address || ORIGINAL_NEW_TAB.load(std::sync::atomic::Ordering::Acquire) == 0 {
+    if !bv().new_tab_takes_address
+        || ORIGINAL_NEW_TAB.load(std::sync::atomic::Ordering::Acquire) == 0
+    {
         return false;
     }
     open_new_tab(window)
@@ -689,18 +772,16 @@ pub unsafe fn probe_group(window: HWND) {
 }
 
 type Allocate = unsafe extern "system" fn(usize) -> *mut i32;
-type AddToNewGroup = unsafe extern "system" fn(
-    *mut c_void,
-    *mut [u8; 16],
-    *const [usize; 3],
-    bool,
-) -> *mut [u8; 16];
+type AddToNewGroup =
+    unsafe extern "system" fn(*mut c_void, *mut [u8; 16], *const [usize; 3], bool) -> *mut [u8; 16];
 
 /// Whether the two functions that make a group are the ones this build expects.
 fn group_calls_known() -> bool {
     static KNOWN: OnceLock<bool> = OnceLock::new();
     *KNOWN.get_or_init(|| unsafe {
-        let Some(image) = image::recorded() else { return false };
+        let Some(image) = image::recorded() else {
+            return false;
+        };
         image.has(bv().allocate, bv().allocate_prologue)
             && image.has(bv().add_to_new_group, bv().add_to_new_group_prologue)
     })
@@ -788,7 +869,9 @@ pub unsafe fn toggle_group(window: HWND, id: &[u8; 16]) -> bool {
     } else {
         std::ptr::null_mut()
     };
-    if group_model.is_null() || !function::<HasGroup>(base, bv().has_group)(group_model, id.as_ptr()) {
+    if group_model.is_null()
+        || !function::<HasGroup>(base, bv().has_group)(group_model, id.as_ptr())
+    {
         return false;
     }
     let group = function::<LookupGroup>(base, bv().lookup_group)(group_model, id.as_ptr());
@@ -803,4 +886,31 @@ pub unsafe fn toggle_group(window: HWND, id: &[u8; 16]) -> bool {
     let color = *(visual.add(24) as *const i32);
     let collapsed = *visual.add(28) != 0;
     set_group_visuals(base, model, id, &title, color, !collapsed).is_some()
+}
+
+#[cfg(test)]
+mod first_page_tests {
+    use super::first_page;
+
+    #[test]
+    fn fr13_a_new_tab_beside_the_second_view_never_loads_the_browsers_new_tab_page() {
+        // Samsung Internet 30.0.4.29 stopped in its own new tab page beside the second view.
+        let start = || Some("rivet://start".to_owned());
+        assert_eq!(
+            first_page(true, true, false, start()).as_deref(),
+            Some("rivet://start")
+        );
+        assert_eq!(
+            first_page(true, true, false, None).as_deref(),
+            Some("about:blank")
+        );
+        // Rivet opens its own address in the tab next, so the tab starts blank.
+        assert_eq!(
+            first_page(true, true, true, start()).as_deref(),
+            Some("about:blank")
+        );
+        // Other builds and commands that carry an address keep the browser's command.
+        assert_eq!(first_page(false, true, false, start()), None);
+        assert_eq!(first_page(true, false, false, start()), None);
+    }
 }

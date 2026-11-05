@@ -3,6 +3,8 @@
 //! It only opens a caller-selected Chromium executable. Future commands talk to the local Rivet
 //! runtime over the versioned control protocol instead of adding a remote-debugging port.
 
+mod links;
+
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -14,18 +16,24 @@ use rivet_core::{build_launch_plan, profile_allows_rivet, DisplayMode, LaunchReq
 use rivet_platform_windows::hold::{self, Launch};
 use rivet_platform_windows::signed_table;
 use rivet_platform_windows::{
-    browser_windows, close_browser_window, inject_runtime, launch_clock, process_tree_is_alive,
-    process_was_launched, resolve_browser_executable, wait_for_new_browser_window,
-    BrowserWindow,
+    browser_windows, close_browser_window, inject_runtime, launch_clock, post_window_command,
+    process_tree_is_alive, process_was_launched, resolve_browser_executable,
+    wait_for_new_browser_window, BrowserWindow,
 };
 
 const USAGE: &str = "\
 Usage:
-  rivet setup [--browser <path> [--profile <name>]] [--list] [--json]
+  rivet setup [--browser <path> [--profile <name>] [--credentials browser|system]] [--list] [--json]
   rivet session start --browser <path> [--url <url>] [--user-data-dir <path>] \\
-      [--display visible|hidden|auto] [--runtime <path>] [--state <path>] [--hold <path>] [--json]
+      [--display visible|hidden|auto] [--runtime <path>] [--state <path>] [--hold <path>]
+      [--credentials browser|system] [--json]
   rivet session list [--state <path>] [--json]
   rivet session close --id <id> [--state <path>] [--json]
+  rivet session mini-window --id <id> [--state <path>] \\
+      pop-out | close | return left|right|top|bottom | move <x> <y> | resize <width> <height>
+  rivet session open --id <id> [--state <path>] <http or https address>
+  rivet link-rules list | set <pattern> <space>|mini-window|current-space | remove <pattern>
+      | route <address> [--rules <path>] [--json]
   rivet hold refresh --browser <path> [--hold <path>]
 
 The browser executable is always explicit in this first release. Rivet does not guess a browser
@@ -41,6 +49,8 @@ struct StartOptions {
     state: Option<PathBuf>,
     /// Where held browser builds live, instead of the folder below local application data.
     hold: Option<PathBuf>,
+    /// Who keeps passwords and passkeys, when the caller chose. Otherwise the saved setup decides.
+    credentials: Option<rivet_core::CredentialProvider>,
     json: bool,
 }
 
@@ -72,14 +82,25 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
     if arguments.first().is_some_and(|command| command == "setup") {
         return run_setup(&arguments[1..]);
     }
+    if arguments
+        .first()
+        .is_some_and(|command| command == "link-rules")
+    {
+        let options = links::parse_rules(&arguments[1..])?;
+        let path = links::rules_path(options.rules)?;
+        println!("{}", links::run_rules_at(&path, options.request)?);
+        return Ok(());
+    }
     match arguments.get(0..2) {
         Some(command) if command == ["session", "start"] => run_start(parse_start(arguments)?),
         Some(command) if command == ["session", "list"] => run_list(parse_query(arguments)?),
         Some(command) if command == ["session", "close"] => run_close(parse_close(arguments)?),
+        Some(command) if command == ["session", "mini-window"] => run_mini_window(parse_mini_window(arguments)?),
+        Some(command) if command == ["session", "open"] => run_open(links::parse_open(&arguments)?),
         Some(command) if command == ["builds", "update"] => run_builds_update(&arguments[2..]),
         Some(command) if command == ["builds", "apply"] => run_builds_apply(&arguments[2..]),
         Some(command) if command == ["hold", "refresh"] => run_hold_refresh(arguments),
-        _ => Err("expected `setup`, `session start`, `session list`, `session close`, `builds update`, `builds apply` or `hold refresh`".into()),
+        _ => Err("expected `setup`, `session start`, `session list`, `session close`, `session mini-window`, `session open`, `link-rules`, `builds update`, `builds apply` or `hold refresh`".into()),
     }
 }
 
@@ -88,20 +109,41 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
 enum SetupRequest {
     /// Open the setup window.
     Window,
-    List { json: bool },
-    Choose { browser: PathBuf, profile: String, json: bool },
+    List {
+        json: bool,
+    },
+    Choose {
+        browser: PathBuf,
+        profile: String,
+        credentials: rivet_core::CredentialProvider,
+        json: bool,
+    },
 }
 
 fn parse_setup(arguments: &[String]) -> Result<SetupRequest, String> {
     let mut browser = None;
     let mut profile = None;
+    let mut credentials = None;
     let mut list = false;
     let mut json = false;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
-            "--browser" => browser = Some(PathBuf::from(next_value(arguments, &mut index, "--browser")?)),
+            "--browser" => {
+                browser = Some(PathBuf::from(next_value(
+                    arguments,
+                    &mut index,
+                    "--browser",
+                )?))
+            }
             "--profile" => profile = Some(next_value(arguments, &mut index, "--profile")?),
+            "--credentials" => {
+                credentials = Some(parse_credentials(&next_value(
+                    arguments,
+                    &mut index,
+                    "--credentials",
+                )?)?)
+            }
             "--list" => list = true,
             "--json" => json = true,
             option => return Err(format!("unknown option {option:?}")),
@@ -114,6 +156,7 @@ fn parse_setup(arguments: &[String]) -> Result<SetupRequest, String> {
         (false, Some(browser), profile) => Ok(SetupRequest::Choose {
             browser,
             profile: profile.unwrap_or_else(|| rivet_cli::config::DEFAULT_PROFILE.to_owned()),
+            credentials: credentials.unwrap_or_default(),
             json,
         }),
         (false, None, Some(_)) => Err("--profile needs --browser".into()),
@@ -153,21 +196,37 @@ fn run_setup(arguments: &[String]) -> Result<(), String> {
                 println!("no Chromium browser found");
             } else {
                 for browser in &browsers {
-                    println!("{}  {}  {}", browser.name, browser.version, browser.path.display());
+                    println!(
+                        "{}  {}  {}",
+                        browser.name,
+                        browser.version,
+                        browser.path.display()
+                    );
                     println!("    {}", browser.status.sentence(&browser.name));
                 }
             }
             Ok(())
         }
-        SetupRequest::Choose { browser, profile, json } => {
-            let found = system::inspect(&browser).map_err(|rejection| format!("{}: {rejection}", browser.display()))?;
+        SetupRequest::Choose {
+            browser,
+            profile,
+            credentials,
+            json,
+        } => {
+            let found = system::inspect(&browser)
+                .map_err(|rejection| format!("{}: {rejection}", browser.display()))?;
             let root = config::data_root()?;
-            let saved = model::choose(found, &profile, &root)?;
+            let mut saved = model::choose(found, &profile, &root)?;
+            saved.credentials = credentials;
             config::save(&root, &saved)?;
             if json {
                 println!("{}", config::to_json(&saved));
             } else {
-                println!("saved {} with Rivet profile {}", saved.browser.display(), saved.profile);
+                println!(
+                    "saved {} with Rivet profile {}",
+                    saved.browser.display(),
+                    saved.profile
+                );
             }
             Ok(())
         }
@@ -180,7 +239,8 @@ fn table_key() -> Result<&'static str, String> {
 }
 
 fn table_store() -> Result<PathBuf, String> {
-    signed_table::default_store().ok_or_else(|| "the local application data folder is unknown".to_owned())
+    signed_table::default_store()
+        .ok_or_else(|| "the local application data folder is unknown".to_owned())
 }
 
 /// `rivet builds apply <file>` applies a signed table that is already on this computer.
@@ -197,7 +257,8 @@ fn run_builds_apply(arguments: &[String]) -> Result<(), String> {
 /// `rivet builds update [--url <address>]` downloads the signed table and applies it now.
 fn run_builds_update(arguments: &[String]) -> Result<(), String> {
     let url = match arguments {
-        [] => signed_table::RELEASE_URL.ok_or("this build of Rivet has no table address; pass --url")?,
+        [] => signed_table::RELEASE_URL
+            .ok_or("this build of Rivet has no table address; pass --url")?,
         [flag, url] if flag == "--url" => url.as_str(),
         _ => return Err("usage: rivet builds update [--url <address>]".into()),
     };
@@ -216,10 +277,14 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         url: options.url.clone(),
         user_data_dir: options.user_data_dir.clone(),
         display: options.display,
+        credentials: options.credentials.unwrap_or_else(saved_credentials),
     };
     // Only a window with Rivet's surface may open. A hidden session has no window to protect.
     let held_root = options.hold.clone().or_else(hold::default_root);
-    let launch = match (&held_root, build_launch_plan(&request).map(|plan| plan.display)) {
+    let launch = match (
+        &held_root,
+        build_launch_plan(&request).map(|plan| plan.display),
+    ) {
         (Some(root), Ok(DisplayMode::Visible)) => {
             hold::plan(&request.browser, root, unix_now()).map_err(|refusal| refusal.to_string())?
         }
@@ -232,7 +297,8 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         held_version = Some(hold::format_version(*version));
         // Without one the copy would open the browser's own profile, which is not Rivet's to touch.
         if request.user_data_dir.is_none() {
-            request.user_data_dir = rivet_core::paths::Layout::current().and_then(|layout| default_held_profile(&layout.profiles(), program));
+            request.user_data_dir = rivet_core::paths::Layout::current()
+                .and_then(|layout| default_held_profile(&layout.profiles(), program));
         }
         if request.user_data_dir.is_none() {
             return Err("a held browser build needs a Rivet profile".to_owned());
@@ -249,6 +315,16 @@ fn run_start(options: StartOptions) -> Result<(), String> {
             "Rivet runs only on a profile of its own, so that it never enters your own browser; pass --user-data-dir with a folder outside the browser's User Data"
                 .into(),
         );
+    }
+    // The provider's preferences are written into a Rivet profile only, before the browser reads them.
+    if let Some(dir) = request
+        .user_data_dir
+        .as_deref()
+        .filter(|dir| profile_allows_rivet(Some(dir)))
+    {
+        if let Err(error) = rivet_core::credentials::prepare_profile(dir, request.credentials) {
+            eprintln!("rivet: {error}");
+        }
     }
     let launch_started = launch_clock();
     let existing_windows = if runtime.is_some() && plan.display == DisplayMode::Visible {
@@ -324,6 +400,19 @@ fn run_start(options: StartOptions) -> Result<(), String> {
     Ok(())
 }
 
+/// The provider in the saved setup, the browser's when nothing is saved.
+fn saved_credentials() -> rivet_core::CredentialProvider {
+    rivet_cli::config::data_root()
+        .ok()
+        .and_then(|root| rivet_cli::config::load(&root).ok().flatten())
+        .map_or_else(Default::default, |saved| saved.credentials)
+}
+
+fn parse_credentials(value: &str) -> Result<rivet_core::CredentialProvider, String> {
+    rivet_core::CredentialProvider::parse(value)
+        .ok_or_else(|| format!("--credentials must be browser or system, not {value:?}"))
+}
+
 fn resolve_runtime(explicit: Option<&std::path::Path>) -> Option<PathBuf> {
     if let Some(path) = explicit {
         return Some(path.to_path_buf());
@@ -344,11 +433,19 @@ fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
     let mut runtime = None;
     let mut state = None;
     let mut hold = None;
+    let mut credentials = None;
     let mut json = false;
     let mut index = 2;
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--hold" => hold = Some(PathBuf::from(next_value(&arguments, &mut index, "--hold")?)),
+            "--credentials" => {
+                credentials = Some(parse_credentials(&next_value(
+                    &arguments,
+                    &mut index,
+                    "--credentials",
+                )?)?)
+            }
             "--browser" => {
                 browser = Some(PathBuf::from(next_value(
                     &arguments,
@@ -411,6 +508,7 @@ fn parse_start(arguments: Vec<String>) -> Result<StartOptions, String> {
         runtime,
         state,
         hold,
+        credentials,
         json,
     })
 }
@@ -504,6 +602,85 @@ fn run_list(options: QueryOptions) -> Result<(), String> {
     Ok(())
 }
 
+/// What `rivet session mini-window` was asked to do.
+#[derive(Debug, PartialEq, Eq)]
+struct MiniWindowOptions {
+    id: String,
+    state: Option<PathBuf>,
+    command: rivet_protocol::window::MiniWindowCommand,
+}
+
+fn parse_mini_window(arguments: Vec<String>) -> Result<MiniWindowOptions, String> {
+    let mut id = None;
+    let mut state = None;
+    let mut words = Vec::new();
+    let mut index = 2;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--id" => id = Some(next_value(&arguments, &mut index, "--id")?),
+            "--state" => {
+                state = Some(PathBuf::from(next_value(
+                    &arguments, &mut index, "--state",
+                )?))
+            }
+            option if option.starts_with("--") => return Err(format!("unknown option {option:?}")),
+            word => words.push(word.to_owned()),
+        }
+        index += 1;
+    }
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    Ok(MiniWindowOptions {
+        id: id.ok_or_else(|| "--id is required".to_owned())?,
+        state,
+        command: rivet_protocol::window::MiniWindowCommand::parse(&words)?,
+    })
+}
+
+/// Sends a Mini Window command to the window of one Rivet session, the same command the window's
+/// own buttons run.
+fn run_mini_window(options: MiniWindowOptions) -> Result<(), String> {
+    let registry = SessionRegistry::load(&state_path(options.state.as_deref())?)
+        .map_err(|error| error.to_string())?;
+    let session = registry
+        .list()
+        .find(|session| session.id == options.id)
+        .ok_or_else(|| format!("Rivet session {:?} does not exist", options.id))?;
+    let (wparam, lparam) = options.command.encode();
+    post_window_command(
+        &session.browser,
+        BrowserWindow {
+            handle: session.window_handle,
+            process_id: session.process_id,
+        },
+        rivet_protocol::window::MINI_WINDOW_MESSAGE,
+        wparam,
+        lparam,
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Sends a link into the window of one Rivet session. The window routes it by its link rules,
+/// exactly as it routes a link a page opened in a new window.
+fn run_open(options: links::OpenOptions) -> Result<(), String> {
+    let registry = SessionRegistry::load(&state_path(options.state.as_deref())?)
+        .map_err(|error| error.to_string())?;
+    let session = registry
+        .list()
+        .find(|session| session.id == options.id)
+        .ok_or_else(|| format!("Rivet session {:?} does not exist", options.id))?;
+    let bytes = rivet_protocol::window::encode_open_link(&options.url)?;
+    rivet_platform_windows::send_window_data(
+        &session.browser,
+        BrowserWindow {
+            handle: session.window_handle,
+            process_id: session.process_id,
+        },
+        rivet_protocol::window::OPEN_LINK_DATA,
+        &bytes,
+    )
+    .map_err(|error| error.to_string())
+}
+
 fn run_close(options: CloseOptions) -> Result<(), String> {
     let state = state_path(options.state.as_deref())?;
     let mut registry = SessionRegistry::load(&state).map_err(|error| error.to_string())?;
@@ -533,13 +710,17 @@ fn state_path(override_path: Option<&std::path::Path>) -> Result<PathBuf, String
     }
     rivet_core::paths::Layout::current()
         .map(|layout| layout.sessions_file())
-        .ok_or_else(|| "the local application data folder is unknown; pass --state <path>".to_owned())
+        .ok_or_else(|| {
+            "the local application data folder is unknown; pass --state <path>".to_owned()
+        })
 }
 
 /// Moves files older builds left elsewhere into the layout and removes what is past its limit.
 /// A move that fails because a file is open is tried again on the next start.
 fn tidy_files() {
-    let Some(local) = rivet_core::paths::local_app_data() else { return };
+    let Some(local) = rivet_core::paths::local_app_data() else {
+        return;
+    };
     rivet_core::paths::migrate(&local);
     rivet_core::paths::prune(&rivet_core::paths::Layout::under(&local), SystemTime::now());
 }
@@ -572,7 +753,9 @@ fn start_json(
 }
 
 fn unix_now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 /// `<profiles>\<browser>\Default`, the Rivet profile a held build opens.
@@ -583,7 +766,9 @@ fn default_held_profile(profiles: &std::path::Path, program: &std::path::Path) -
 
 /// Copies the build that just proved itself, without delaying the window that opens from it.
 fn keep_build_in_background(browser: &std::path::Path, root: &std::path::Path) {
-    let Ok(rivet) = env::current_exe() else { return };
+    let Ok(rivet) = env::current_exe() else {
+        return;
+    };
     let _ = Command::new(rivet)
         .args(["hold", "refresh", "--browser"])
         .arg(browser)
@@ -601,14 +786,22 @@ fn run_hold_refresh(arguments: Vec<String>) -> Result<(), String> {
     let mut index = 2;
     while index < arguments.len() {
         match arguments[index].as_str() {
-            "--browser" => browser = Some(PathBuf::from(next_value(&arguments, &mut index, "--browser")?)),
+            "--browser" => {
+                browser = Some(PathBuf::from(next_value(
+                    &arguments,
+                    &mut index,
+                    "--browser",
+                )?))
+            }
             "--hold" => root = Some(PathBuf::from(next_value(&arguments, &mut index, "--hold")?)),
             option => return Err(format!("unknown option {option:?}")),
         }
         index += 1;
     }
     let browser = browser.ok_or("--browser is required")?;
-    let root = root.or_else(hold::default_root).ok_or("could not find the local application data folder")?;
+    let root = root
+        .or_else(hold::default_root)
+        .ok_or("could not find the local application data folder")?;
     match hold::refresh(&browser, &root)? {
         Some(version) => println!("held {}", hold::format_version(version)),
         None => println!("nothing to hold"),
@@ -625,22 +818,95 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fr9_cli_names_a_session_and_a_mini_window_command() {
+        use rivet_protocol::window::{Edge, MiniWindowCommand};
+        let words = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            parse_mini_window(words(&[
+                "session",
+                "mini-window",
+                "--id",
+                "s1",
+                "return",
+                "left"
+            ])),
+            Ok(MiniWindowOptions {
+                id: "s1".into(),
+                state: None,
+                command: MiniWindowCommand::Return(Edge::Left)
+            })
+        );
+        assert_eq!(
+            parse_mini_window(words(&["session", "mini-window", "pop-out", "--id", "s2"]))
+                .map(|options| options.command),
+            Ok(MiniWindowCommand::PopOut)
+        );
+        assert!(
+            parse_mini_window(words(&["session", "mini-window", "close"])).is_err(),
+            "the session is required"
+        );
+        assert!(
+            parse_mini_window(words(&["session", "mini-window", "--id", "s1"])).is_err(),
+            "a command is required"
+        );
+    }
+
+    #[test]
     fn fr1_setup_without_options_opens_the_window() {
         assert_eq!(parse_setup(&[]), Ok(SetupRequest::Window));
     }
 
     #[test]
     fn fr1_setup_chooses_a_browser_and_profile_without_a_window() {
-        let words = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect::<Vec<_>>();
+        let words = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
         assert_eq!(
-            parse_setup(&words(&["--browser", r"C:\B\chrome.exe", "--profile", "Work", "--json"])),
-            Ok(SetupRequest::Choose { browser: PathBuf::from(r"C:\B\chrome.exe"), profile: "Work".into(), json: true })
+            parse_setup(&words(&[
+                "--browser",
+                r"C:\B\chrome.exe",
+                "--profile",
+                "Work",
+                "--json"
+            ])),
+            Ok(SetupRequest::Choose {
+                browser: PathBuf::from(r"C:\B\chrome.exe"),
+                profile: "Work".into(),
+                credentials: Default::default(),
+                json: true
+            })
         );
         assert_eq!(
             parse_setup(&words(&["--browser", r"C:\B\chrome.exe"])),
-            Ok(SetupRequest::Choose { browser: PathBuf::from(r"C:\B\chrome.exe"), profile: "Default".into(), json: false })
+            Ok(SetupRequest::Choose {
+                browser: PathBuf::from(r"C:\B\chrome.exe"),
+                profile: "Default".into(),
+                credentials: Default::default(),
+                json: false
+            })
         );
-        assert_eq!(parse_setup(&words(&["--list", "--json"])), Ok(SetupRequest::List { json: true }));
+        assert_eq!(
+            parse_setup(&words(&["--browser", "b.exe", "--credentials", "system"])),
+            Ok(SetupRequest::Choose {
+                browser: PathBuf::from("b.exe"),
+                profile: "Default".into(),
+                credentials: rivet_core::CredentialProvider::System,
+                json: false
+            })
+        );
+        assert!(parse_setup(&words(&["--browser", "b.exe", "--credentials", "vault"])).is_err());
+        assert_eq!(
+            parse_setup(&words(&["--list", "--json"])),
+            Ok(SetupRequest::List { json: true })
+        );
         assert!(parse_setup(&words(&["--profile", "Work"])).is_err());
         assert!(parse_setup(&words(&["--list", "--browser", "x"])).is_err());
         assert!(parse_setup(&words(&["--nope"])).is_err());
@@ -648,16 +914,26 @@ mod tests {
 
     #[test]
     fn fr1_setup_refuses_a_file_that_is_not_a_chromium_browser() {
-        let error = run_setup(&["--browser".to_owned(), r"C:\Windows\System32\notepad.exe".to_owned()]).unwrap_err();
+        let error = run_setup(&[
+            "--browser".to_owned(),
+            r"C:\Windows\System32\notepad.exe".to_owned(),
+        ])
+        .unwrap_err();
         assert!(error.contains("notepad.exe"), "{error}");
     }
 
     #[test]
     fn nfr6_builds_commands_name_what_they_need() {
         let run_words = |words: &[&str]| run(words.iter().map(|word| (*word).to_owned()));
-        assert!(run_words(&["builds", "apply"]).unwrap_err().contains("usage"));
-        assert!(run_words(&["builds", "update", "--nope"]).unwrap_err().contains("usage"));
-        assert!(run_words(&["builds", "apply", "no-such-file"]).unwrap_err().contains("no-such-file"));
+        assert!(run_words(&["builds", "apply"])
+            .unwrap_err()
+            .contains("usage"));
+        assert!(run_words(&["builds", "update", "--nope"])
+            .unwrap_err()
+            .contains("usage"));
+        assert!(run_words(&["builds", "apply", "no-such-file"])
+            .unwrap_err()
+            .contains("no-such-file"));
     }
 
     #[test]
@@ -670,22 +946,30 @@ mod tests {
         ])
         .unwrap();
         assert!(options.url.starts_with("file:///"));
-        assert!(options
-            .url
-            .ends_with("/start.html?space=Work&browser=Chrome&profile=Work&tint=d08a52&accent=9a5424"));
-        let whale = parse_start(vec![
-            "session".into(),
-            "start".into(),
-            "--browser".into(),
-            r"C:\Naver\whale.exe".into(),
-        ])
-        .unwrap();
-        assert!(whale.url.contains("&browser=Whale&"), "the page names the browser it opens in");
+        assert!(options.url.ends_with(
+            "/start.html?space=Work&browser=Chrome&profile=Work&tint=d08a52&accent=9a5424"
+        ));
+        // A Windows path only names its file on Windows.
+        #[cfg(windows)]
+        {
+            let whale = parse_start(vec![
+                "session".into(),
+                "start".into(),
+                "--browser".into(),
+                r"C:\Naver\whale.exe".into(),
+            ])
+            .unwrap();
+            assert!(
+                whale.url.contains("&browser=Whale&"),
+                "the page names the browser it opens in"
+            );
+        }
         assert!(build_launch_plan(&LaunchRequest {
             browser: options.browser,
             url: options.url,
             user_data_dir: None,
-            display: DisplayMode::Visible
+            display: DisplayMode::Visible,
+            credentials: Default::default(),
         })
         .is_ok());
     }
@@ -745,8 +1029,15 @@ mod tests {
 
     #[test]
     fn nfr6_session_output_names_the_held_build() {
-        let parsed: serde_json::Value =
-            serde_json::from_str(&start_json(1, "visible", "u", true, None, Some("156.0.8078.74"))).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&start_json(
+            1,
+            "visible",
+            "u",
+            true,
+            None,
+            Some("156.0.8078.74"),
+        ))
+        .unwrap();
         assert_eq!(parsed["held_version"], "156.0.8078.74");
     }
 
@@ -756,15 +1047,27 @@ mod tests {
             std::path::Path::new("C:/Data/Rivet/profiles"),
             std::path::Path::new("C:/Data/Rivet/browsers/chrome/156.0.8078.74/chrome.exe"),
         );
-        assert_eq!(profile, Some(PathBuf::from("C:/Data/Rivet/profiles/chrome/Default")));
+        assert_eq!(
+            profile,
+            Some(PathBuf::from("C:/Data/Rivet/profiles/chrome/Default"))
+        );
     }
 
     #[test]
     fn nfr6_parses_the_hold_folder() {
         let options = parse_start(
-            ["session", "start", "--browser", "C:/B/chrome.exe", "--url", "about:blank", "--hold", "C:/H"]
-                .map(str::to_owned)
-                .to_vec(),
+            [
+                "session",
+                "start",
+                "--browser",
+                "C:/B/chrome.exe",
+                "--url",
+                "about:blank",
+                "--hold",
+                "C:/H",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
         )
         .unwrap();
         assert_eq!(options.hold, Some(PathBuf::from("C:/H")));
@@ -773,8 +1076,15 @@ mod tests {
     #[test]
     fn fr4_json_output_escapes_control_characters() {
         let url = "https://example.test/\"a\"\nb\t\u{1}";
-        let parsed: serde_json::Value =
-            serde_json::from_str(&start_json(7, "visible", url, true, Some("id\n\"x\""), None)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&start_json(
+            7,
+            "visible",
+            url,
+            true,
+            Some("id\n\"x\""),
+            None,
+        ))
+        .unwrap();
         assert_eq!(parsed["url"], url);
         assert_eq!(parsed["session_id"], "id\n\"x\"");
         assert_eq!(parsed["pid"], 7);

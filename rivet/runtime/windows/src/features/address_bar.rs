@@ -52,7 +52,12 @@ pub(crate) enum Part {
 /// wide whose right end carries the caption buttons. `toggle` leaves room for the appbar toggle.
 pub(crate) fn parts(width: f32, toggle: bool) -> Vec<(Part, f32, f32)> {
     // The toggle is a 28 DIP button of the row, with the row's 2 DIP gap after it.
-    let mut x = LEAD + if toggle { TOGGLE_ROOM + BUTTON_GAP } else { 0.0 };
+    let mut x = LEAD
+        + if toggle {
+            TOGGLE_ROOM + BUTTON_GAP
+        } else {
+            0.0
+        };
     let mut out = Vec::new();
     for part in [Part::Back, Part::Forward, Part::Reload] {
         out.push((part, x, BUTTON));
@@ -120,9 +125,10 @@ impl Security {
         let lower = url.to_ascii_lowercase();
         if lower.starts_with("https://") || lower.starts_with("wss://") {
             Security::Secure
-        } else if lower.starts_with("http://") {
-            let host = lower["http://".len()..].split(['/', ':']).next().unwrap_or("");
-            if matches!(host, "localhost" | "127.0.0.1" | "[") || lower.starts_with("http://[::1]") {
+        } else if let Some(rest) = lower.strip_prefix("http://") {
+            let host = rest.split(['/', ':']).next().unwrap_or("");
+            if matches!(host, "localhost" | "127.0.0.1" | "[") || lower.starts_with("http://[::1]")
+            {
                 Security::Local
             } else {
                 Security::NotSecure
@@ -193,7 +199,13 @@ pub(crate) fn looks_like_address(text: &str) -> bool {
         return true;
     }
     let host = lower.split(['/', '?', '#']).next().unwrap_or("");
-    let host = host.rsplit_once(':').map_or(host, |(name, port)| if port.chars().all(|c| c.is_ascii_digit()) { name } else { host });
+    let host = host.rsplit_once(':').map_or(host, |(name, port)| {
+        if port.chars().all(|c| c.is_ascii_digit()) {
+            name
+        } else {
+            host
+        }
+    });
     host.contains('.') && !host.starts_with('.') && !host.ends_with('.')
 }
 
@@ -221,6 +233,12 @@ pub(crate) struct View {
     pub pane: bool,
     pub title: String,
     pub rest: String,
+    /// Set while the page is in developer mode: the row takes the developer ground and the address
+    /// is shown whole in a monospace font.
+    pub dev: bool,
+    pub url: String,
+    /// The room in DIPs the developer buttons take before the caption buttons.
+    pub reserve: f32,
     pub security: Security,
     pub hover: Option<Part>,
     pub can_back: bool,
@@ -298,10 +316,13 @@ unsafe fn place(window: HWND) -> Option<[f32; 3]> {
         }
         let tabs = crate::features::tabs::tabs(window)?;
         let active = tabs.iter().find(|tab| tab.active).map(|tab| tab.index);
-        let pane = panes.iter().find(|pane| pane.active && pane.tab.is_some() && pane.tab == active)?;
-        let (_, x, width) = crate::features::split::row_buttons(pane.width as f32, pane.first, pane.caption)
-            .into_iter()
-            .find(|button| button.0 == crate::features::split::RowButton::Address)?;
+        let pane = panes
+            .iter()
+            .find(|pane| pane.active && pane.tab.is_some() && pane.tab == active)?;
+        let (_, x, width) =
+            crate::features::split::row_buttons(pane.width as f32, pane.first, pane.caption)
+                .into_iter()
+                .find(|button| button.0 == crate::features::split::RowButton::Address)?;
         return Some([pane.x as f32 + x, pane.row_y as f32, width]);
     }
     let panel = crate::features::frame_layout::panel_bounds(window)?;
@@ -309,13 +330,18 @@ unsafe fn place(window: HWND) -> Option<[f32; 3]> {
     GetClientRect(window, &mut client);
     let right = client.right as f32 / factor(window);
     // The bar is the panel's top row, so it ends where the panel does.
-    Some([panel.x as f32, panel.y as f32, (panel.width as f32).min(right - panel.x as f32)])
+    Some([
+        panel.x as f32,
+        panel.y as f32,
+        (panel.width as f32).min(right - panel.x as f32),
+    ])
 }
 
 /// Whether a window shows the bar, so the page area leaves its row free.
 pub(crate) unsafe fn shown_in(window: HWND) -> bool {
     crate::frame::attached_window(window)
-        && (crate::features::second_view::is_split(window) || crate::features::split::panes(window).is_empty())
+        && (crate::features::second_view::is_split(window)
+            || crate::features::split::panes(window).is_empty())
 }
 
 /// Whether the bar is only the address of a split pane's row.
@@ -325,10 +351,42 @@ unsafe fn in_pane(window: HWND) -> bool {
 
 /// The controls of the bar: the full row of a single page, or the address alone in a pane's row.
 pub(crate) fn parts_of(width: f32, pane: bool) -> Vec<(Part, f32, f32)> {
-    if pane {
-        vec![(Part::Chip, ADDRESS_PAD - 4.0, CHIP), (Part::Address, 0.0, width)]
+    parts_reserving(width, pane, 0.0)
+}
+
+/// The controls of the bar with `reserve` DIPs left free before the caption buttons, where the
+/// developer buttons of a page in developer mode sit.
+pub(crate) fn parts_reserving(width: f32, pane: bool, reserve: f32) -> Vec<(Part, f32, f32)> {
+    let mut out = if pane {
+        vec![
+            (Part::Chip, ADDRESS_PAD - 4.0, CHIP),
+            (Part::Address, 0.0, width),
+        ]
     } else {
         parts(width, TOGGLE_OVER_BAR)
+    };
+    if !pane && reserve > 0.0 {
+        out.retain_mut(|(part, _, w)| {
+            if *part == Part::Address {
+                *w -= reserve;
+                *w >= 56.0
+            } else {
+                true
+            }
+        });
+        if !out.iter().any(|p| p.0 == Part::Address) {
+            out.retain(|p| p.0 != Part::Chip);
+        }
+    }
+    out
+}
+
+/// The room the developer buttons take at the end of the bar of `window`, in DIPs.
+unsafe fn dev_reserve(window: HWND) -> f32 {
+    if crate::features::dev_page::window_in_dev_mode(window) {
+        crate::dev_mode::bar_width(crate::features::dev_page::dev_actions().len())
+    } else {
+        0.0
     }
 }
 
@@ -340,11 +398,25 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
         return;
     }
     let row = &crate::builds::get().side_panel;
-    let Some(contents) = area.bounds(row.contents_container) else { return };
+    let Some(contents) = area.bounds(row.contents_container) else {
+        crate::trace::trace_changed(
+            "bar layout",
+            "address bar: the layout has no page container",
+        );
+        return;
+    };
     // An app window's top container holds the browser's title row, which Rivet's bar replaces. When
     // it sits right on top of the page, the page takes its place and it keeps no height.
-    if let Some(toolbar) = area.bounds(row.toolbar).filter(|toolbar| *toolbar != contents) {
-        let between: Vec<_> = area.all_bounds().into_iter().map(|(_, b)| b).filter(|b| *b != toolbar && *b != contents).collect();
+    if let Some(toolbar) = area
+        .bounds(row.toolbar)
+        .filter(|toolbar| *toolbar != contents)
+    {
+        let between: Vec<_> = area
+            .all_bounds()
+            .into_iter()
+            .map(|(_, b)| b)
+            .filter(|b| *b != toolbar && *b != contents)
+            .collect();
         let views: Vec<[i32; 4]> = between.iter().map(|b| **b).collect();
         if let Some((top, page, moved)) = page_over_top_row(*toolbar, *contents, &views) {
             *toolbar = top;
@@ -365,34 +437,67 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
     let contents = &mut *contents;
     contents[1] += ROW_HEIGHT;
     contents[3] = (contents[3] - ROW_HEIGHT).max(1);
+    crate::trace::trace_changed(
+        "bar layout",
+        &format!("address bar: layout page {before:?} to {contents:?}"),
+    );
 }
+
+/// The top row, the page and the views that moved with them.
+pub(crate) type TopRowMove = ([i32; 4], [i32; 4], Vec<[i32; 4]>);
 
 /// The top row, the page and the other views after the page takes the place of a top row above
 /// it. The row keeps its place with no height. Views between the row and the page, such as an
 /// infobar, move up with the page, and the page grows up by the row's height.
-pub(crate) fn page_over_top_row(top: [i32; 4], contents: [i32; 4], views: &[[i32; 4]]) -> Option<([i32; 4], [i32; 4], Vec<[i32; 4]>)> {
+pub(crate) fn page_over_top_row(
+    top: [i32; 4],
+    contents: [i32; 4],
+    views: &[[i32; 4]],
+) -> Option<TopRowMove> {
     let bottom = top[1] + top[3];
     let across = |v: [i32; 4]| v[0] < contents[0] + contents[2] && v[0] + v[2] > contents[0];
     if top[3] <= 0 || bottom > contents[1] || !across(top) {
         return None;
     }
-    let between = |v: [i32; 4]| v[3] > 0 && v[1] >= bottom && v[1] + v[3] <= contents[1] && across(v);
+    let between =
+        |v: [i32; 4]| v[3] > 0 && v[1] >= bottom && v[1] + v[3] <= contents[1] && across(v);
     // The row must reach the page, directly or through the views between them.
-    let covered = views.iter().filter(|v| between(**v)).map(|v| v[3]).sum::<i32>();
+    let covered = views
+        .iter()
+        .filter(|v| between(**v))
+        .map(|v| v[3])
+        .sum::<i32>();
     if bottom + covered != contents[1] {
         return None;
     }
     let shift = top[3];
-    let moved = views.iter().map(|v| if between(*v) { [v[0], v[1] - shift, v[2], v[3]] } else { *v }).collect();
+    let moved = views
+        .iter()
+        .map(|v| {
+            if between(*v) {
+                [v[0], v[1] - shift, v[2], v[3]]
+            } else {
+                *v
+            }
+        })
+        .collect();
     let [x, y, width, height] = contents;
-    Some(([top[0], top[1], top[2], 0], [x, y - shift, width, height + shift], moved))
+    Some((
+        [top[0], top[1], top[2], 0],
+        [x, y - shift, width, height + shift],
+        moved,
+    ))
 }
 
 /// Whether a view the browser laid out sits right on top of the page and across it, so it moves
 /// down with the page below the bar.
 pub(crate) fn rides_above_page(view: [i32; 4], contents: [i32; 4]) -> bool {
     let [x, y, width, height] = view;
-    height > 0 && height < contents[3] && y + height == contents[1] && x < contents[0] + contents[2] && x + width > contents[0]
+    height > 0
+        && height < contents[3]
+        && y + height == contents[1]
+        && x < contents[0] + contents[2]
+        && x + width > contents[0]
 }
 
 /// The active page's title and address. The visible address is what the page shows now, including
@@ -438,20 +543,30 @@ unsafe fn ensure_layout(window: HWND) {
     if !DONE.with(|done| done.borrow_mut().insert(window as isize)) {
         return;
     }
-    let installed = crate::hooks::page_area::install().and_then(|()| crate::features::omnibox::install_app_layout());
+    let installed = crate::hooks::page_area::install()
+        .and_then(|()| crate::features::omnibox::install_app_layout());
     let reason = installed.as_ref().err().cloned().unwrap_or_default();
     match offset_for(installed, crate::features::second_view::available()) {
         Offset::Layout => {
+            crate::trace::trace("address bar: the browser's layout moves the page below the bar");
             BY_LAYOUT.store(true, std::sync::atomic::Ordering::Release);
-            let name: Vec<u16> = crate::features::split::RELAYOUT_MESSAGE.encode_utf16().chain(Some(0)).collect();
-            let message = windows_sys::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW(name.as_ptr());
+            let name: Vec<u16> = crate::features::split::RELAYOUT_MESSAGE
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
+            let message =
+                windows_sys::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW(name.as_ptr());
             PostMessageW(window, message, 0, 0);
         }
         Offset::PageView => {
-            crate::trace::trace(&format!("address bar: the page view moves below the bar ({reason})"));
+            crate::trace::trace(&format!(
+                "address bar: the page view moves below the bar ({reason})"
+            ));
             crate::features::second_view::set_top(window, ROW_HEIGHT);
         }
-        Offset::None(error) => crate::trace::trace(&format!("address bar: the page cannot move below the bar: {error}")),
+        Offset::None(error) => crate::trace::trace(&format!(
+            "address bar: the page cannot move below the bar: {error}"
+        )),
     }
 }
 
@@ -463,7 +578,13 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
     let (title, rest) = shown(&title, &url);
     let toggle = TOGGLE_OVER_BAR;
     let pane = in_pane(window);
+    let dev = crate::features::dev_page::window_in_dev_mode(window);
+    let reserve = dev_reserve(window);
+    let security = Security::from_level(crate::features::omnibox::security_level(window), &url);
     Some(with_bar(window, |bar| View {
+        dev,
+        url: url.clone(),
+        reserve: if pane { 0.0 } else { reserve },
         pane,
         x: x * f,
         y: y * f,
@@ -472,7 +593,7 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
         toggle,
         title,
         rest,
-        security: Security::from_level(crate::features::omnibox::security_level(window), &url),
+        security,
         hover: bar.hover,
         can_back: true,
         can_forward: true,
@@ -480,15 +601,36 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
         zoomed: windows_sys::Win32::UI::WindowsAndMessaging::IsZoomed(window) != 0,
         editing: bar.editing,
         generation: bar.generation,
-        suggestions: bar.suggestions.iter().map(|s| (s.contents.clone(), s.description.clone())).collect(),
+        suggestions: bar
+            .suggestions
+            .iter()
+            .map(|s| (s.contents.clone(), s.description.clone()))
+            .collect(),
         selected: bar.selected,
     }))
 }
 
-/// The field's rectangle in client pixels.
+/// The address and its security chip as left, top, width and height in client DIPs, which the
+/// browser's bubbles anchor to.
+pub(crate) unsafe fn anchors(window: HWND) -> Option<([f32; 4], [f32; 4])> {
+    let [x, y, width] = place(window)?;
+    let parts = parts_reserving(width, in_pane(window), dev_reserve(window));
+    let top = y + (ROW_HEIGHT as f32 - ADDRESS_HEIGHT) / 2.0;
+    let find = |part: Part| {
+        parts
+            .iter()
+            .find(|p| p.0 == part)
+            .map(|(_, left, w)| [x + left, top, *w, ADDRESS_HEIGHT])
+    };
+    let address = find(Part::Address)?;
+    Some((address, find(Part::Chip).unwrap_or(address)))
+}
+
 unsafe fn field_rect(window: HWND) -> Option<RECT> {
     let [x, y, width] = place(window)?;
-    let (_, left, w) = parts_of(width, in_pane(window)).into_iter().find(|p| p.0 == Part::Address)?;
+    let (_, left, w) = parts_reserving(width, in_pane(window), dev_reserve(window))
+        .into_iter()
+        .find(|p| p.0 == Part::Address)?;
     let f = factor(window);
     let top = y + (ROW_HEIGHT as f32 - ADDRESS_HEIGHT) / 2.0;
     let text_left = x + left + ADDRESS_PAD + CHIP + 4.0;
@@ -501,7 +643,10 @@ unsafe fn field_rect(window: HWND) -> Option<RECT> {
 }
 
 /// Lets the appbar draw the field's pixels at the field's place, in client pixels.
-pub(crate) unsafe fn with_field_pixels<R>(window: HWND, work: impl FnOnce(RECT, &[u8], i32, i32, Option<RECT>) -> R) -> Option<R> {
+pub(crate) unsafe fn with_field_pixels<R>(
+    window: HWND,
+    work: impl FnOnce(RECT, &[u8], i32, i32, Option<RECT>) -> R,
+) -> Option<R> {
     let rect = field_rect(window)?;
     with_bar(window, |bar| {
         let field = bar.field.as_mut()?;
@@ -521,7 +666,7 @@ unsafe fn part_at(window: HWND, point: POINT) -> Option<Part> {
     if py < 0.0 || py >= ROW_HEIGHT as f32 {
         return None;
     }
-    let parts = parts_of(width, in_pane(window));
+    let parts = parts_reserving(width, in_pane(window), dev_reserve(window));
     // The chip lies inside the address, so it is looked for first.
     parts
         .iter()
@@ -546,7 +691,9 @@ unsafe fn begin(window: HWND, bar: &mut Bar) {
             }
         }
     }
-    let Some(rect) = field_rect(window) else { return };
+    let Some(rect) = field_rect(window) else {
+        return;
+    };
     let url = page_text(window).1;
     let field = bar.field.as_mut().unwrap();
     field.place(rect, TEXT_SIZE, crate::frame::layout_dpi(window));
@@ -584,7 +731,9 @@ unsafe fn go(window: HWND, text: &str) -> bool {
     // opens plain addresses, and a search there does nothing rather than guess an engine.
     let opened = match crate::features::omnibox::open_typed(window, text) {
         Some(opened) => opened,
-        None if looks_like_address(text) => crate::features::navigation::open(window, &address_for(text)),
+        None if looks_like_address(text) => {
+            crate::features::navigation::open(window, &address_for(text))
+        }
         None => false,
     };
     crate::trace::trace(&format!("address bar: open {text:?}: {opened}"));
@@ -600,7 +749,10 @@ const SUGGESTIONS_SHOWN: usize = 8;
 /// The list of suggestions as left and width from the bar's left edge: under the address, of a
 /// single page's row or of a pane's address alone.
 pub(crate) fn dropdown_of(width: f32, pane: bool) -> Option<(f32, f32)> {
-    parts_of(width, pane).into_iter().find(|p| p.0 == Part::Address).map(|(_, x, w)| (x, w))
+    parts_of(width, pane)
+        .into_iter()
+        .find(|p| p.0 == Part::Address)
+        .map(|(_, x, w)| (x, w))
 }
 
 /// The suggestion row under a point in client pixels.
@@ -608,8 +760,17 @@ unsafe fn row_at(window: HWND, point: POINT) -> Option<usize> {
     let [x, y, width] = place(window)?;
     let (left, w) = dropdown_of(width, in_pane(window))?;
     let f = factor(window);
-    let (px, py) = (point.x as f32 / f - x, point.y as f32 / f - y - ROW_HEIGHT as f32 - SUGGESTION_PAD);
-    let count = with_bar(window, |bar| if bar.editing { bar.suggestions.len() } else { 0 });
+    let (px, py) = (
+        point.x as f32 / f - x,
+        point.y as f32 / f - y - ROW_HEIGHT as f32 - SUGGESTION_PAD,
+    );
+    let count = with_bar(window, |bar| {
+        if bar.editing {
+            bar.suggestions.len()
+        } else {
+            0
+        }
+    });
     if px < left || px >= left + w || py < 0.0 {
         return None;
     }
@@ -649,13 +810,18 @@ unsafe fn open_suggestion(window: HWND, index: usize) -> bool {
         return false;
     };
     let opened = crate::features::navigation::open(window, &destination);
-    crate::trace::trace(&format!("address bar: open suggestion {index} {destination:?}: {opened}"));
+    crate::trace::trace(&format!(
+        "address bar: open suggestion {index} {destination:?}: {opened}"
+    ));
     crate::frame::update_appbar(window);
     opened
 }
 
 fn point_of(lparam: LPARAM) -> POINT {
-    POINT { x: (lparam & 0xffff) as i16 as i32, y: ((lparam >> 16) & 0xffff) as i16 as i32 }
+    POINT {
+        x: (lparam & 0xffff) as i16 as i32,
+        y: ((lparam >> 16) & 0xffff) as i16 as i32,
+    }
 }
 
 const WM_SETFOCUS: u32 = 0x0007;
@@ -680,7 +846,12 @@ const WM_APPCOMMAND: u32 = 0x0319;
 
 /// Handles a message of the browser window for the bar. `Some` means the bar used it and the browser
 /// does not see it.
-pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+pub(crate) unsafe fn message(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> Option<LRESULT> {
     // The text engine and the input method send the window messages while the bar is busy with one,
     // such as a change of capture. Those are the browser's to handle.
     if !shown_in(window) || busy() {
@@ -690,7 +861,9 @@ pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam:
     let result = match message {
         WM_MOUSEMOVE if editing && row_at(window, point_of(lparam)).is_some() => {
             let row = row_at(window, point_of(lparam));
-            let changed = with_bar(window, |bar| std::mem::replace(&mut bar.selected, row) != row);
+            let changed = with_bar(window, |bar| {
+                std::mem::replace(&mut bar.selected, row) != row
+            });
             if changed {
                 with_bar(window, |bar| bar.generation += 1);
                 crate::frame::update_appbar(window);
@@ -804,7 +977,11 @@ pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam:
             }
             0x0D => {
                 let text = with_bar(window, |bar| {
-                    let text = bar.field.as_ref().map(|field| field.text()).unwrap_or_default();
+                    let text = bar
+                        .field
+                        .as_ref()
+                        .map(|field| field.text())
+                        .unwrap_or_default();
                     end(bar);
                     text
                 });
@@ -833,7 +1010,9 @@ pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam:
             _ => {
                 // Ctrl+L and F6 belong to the browser's own address bar, which an app window lacks.
                 if wparam as u16 == 0x4C && GetKeyState(0x11) < 0 {
-                    with_bar(window, |bar| bar.field.as_ref().map(|field| field.select_all()));
+                    with_bar(window, |bar| {
+                        bar.field.as_ref().map(|field| field.select_all())
+                    });
                     crate::frame::update_appbar(window);
                     return Some(0);
                 }
@@ -852,8 +1031,14 @@ pub(crate) unsafe fn message(window: HWND, message: u32, wparam: WPARAM, lparam:
             crate::frame::update_appbar(window);
             used.or(Some(0))
         }
-        WM_KEYUP | WM_IME_STARTCOMPOSITION | WM_IME_COMPOSITION | WM_IME_ENDCOMPOSITION | WM_IME_NOTIFY
-        | WM_IME_CHAR | WM_IME_REQUEST | WM_INPUTLANGCHANGE => {
+        WM_KEYUP
+        | WM_IME_STARTCOMPOSITION
+        | WM_IME_COMPOSITION
+        | WM_IME_ENDCOMPOSITION
+        | WM_IME_NOTIFY
+        | WM_IME_CHAR
+        | WM_IME_REQUEST
+        | WM_INPUTLANGCHANGE => {
             let used = forward(window, message, wparam, lparam);
             if matches!(message, WM_IME_COMPOSITION | WM_IME_ENDCOMPOSITION) {
                 refresh_suggestions(window);
@@ -899,7 +1084,9 @@ unsafe fn forward(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) ->
         Some((used, field.caret()))
     })?;
     // Placing the windows makes the input method send notices of its own, which need no placing.
-    if let Some(caret) = caret.filter(|_| !matches!(message, WM_IME_NOTIFY | WM_IME_SETCONTEXT | WM_IME_REQUEST)) {
+    if let Some(caret) =
+        caret.filter(|_| !matches!(message, WM_IME_NOTIFY | WM_IME_SETCONTEXT | WM_IME_REQUEST))
+    {
         place_input_method(window, caret);
     }
     used
@@ -915,13 +1102,19 @@ unsafe fn place_input_method(window: HWND, caret: RECT) {
     }
     let mut composition: COMPOSITIONFORM = std::mem::zeroed();
     composition.dwStyle = CFS_POINT;
-    composition.ptCurrentPos = POINT { x: caret.left, y: caret.top };
+    composition.ptCurrentPos = POINT {
+        x: caret.left,
+        y: caret.top,
+    };
     ImmSetCompositionWindow(context, &composition);
     // The candidate list opens below the caret and never covers the text being composed.
     let mut candidate: CANDIDATEFORM = std::mem::zeroed();
     candidate.dwIndex = 0;
     candidate.dwStyle = CFS_EXCLUDE;
-    candidate.ptCurrentPos = POINT { x: caret.left, y: caret.bottom };
+    candidate.ptCurrentPos = POINT {
+        x: caret.left,
+        y: caret.bottom,
+    };
     candidate.rcArea = caret;
     ImmSetCandidateWindow(context, &candidate);
     ImmReleaseContext(window, context);
@@ -966,160 +1159,14 @@ pub(crate) fn forget(window: HWND) {
     BARS.with(|bars| bars.borrow_mut().remove(&(window as isize)));
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fr12_a_bar_right_above_the_page_moves_below_the_address_bar_with_it() {
-        // Brave's first tab shows an infobar right above the page. Only the page moved, so the
-        // infobar sat under the address bar and an empty band of the bar's height was left above
-        // the page, which put the first pane of a split below the second.
-        let contents = [0, 56, 1164, 708];
-        assert!(rides_above_page([0, 0, 1164, 56], contents));
-        // The page itself, a view beside it and a view that ends above it stay.
-        assert!(!rides_above_page(contents, contents));
-        assert!(!rides_above_page([1164, 0, 40, 56], contents));
-        assert!(!rides_above_page([0, 0, 1164, 40], contents));
-        assert!(!rides_above_page([0, 56, 1164, 0], contents));
-    }
-
-    #[test]
-    fn fr12_page_sits_directly_below_the_bar_where_the_browser_kept_a_title_row() {
-        // Chrome's app window keeps a 23 DIP top container above the page once its client view
-        // reaches the window's top edge. Rivet's bar replaces it, so the page takes its place.
-        let (top, page, _) = page_over_top_row([0, 0, 1164, 23], [0, 23, 1164, 815], &[]).unwrap();
-        assert_eq!(top, [0, 0, 1164, 0]);
-        assert_eq!(page, [0, 0, 1164, 838]);
-        // A top row that does not reach the page is left alone.
-        assert_eq!(page_over_top_row([0, 0, 1164, 20], [0, 23, 1164, 815], &[]), None);
-        // Brave's notice bar between the row and the page moves up with the page.
-        let (_, page, moved) = page_over_top_row([0, 0, 1164, 23], [0, 79, 1164, 759], &[[0, 23, 1164, 56], [1164, 0, 40, 9]]).unwrap();
-        assert_eq!(page, [0, 56, 1164, 782]);
-        assert_eq!(moved, vec![[0, 0, 1164, 56], [1164, 0, 40, 9]]);
-    }
-
-    #[test]
-    fn fr12_the_page_moves_below_the_bar_without_a_sidebar_layout_row() {
-        // Edge 156.0.4314.58 and Whale 5.39.412.57 record no Sidebar layout, but both record the
-        // second view, which moves the page view itself.
-        let missing = || Err("this browser build has no recorded layout for the Sidebar".to_string());
-        assert_eq!(offset_for(missing(), true), Offset::PageView);
-        assert_eq!(offset_for(Ok(()), true), Offset::Layout, "a patched layout is used first");
-        assert_eq!(offset_for(Ok(()), false), Offset::Layout);
-        assert!(matches!(offset_for(missing(), false), Offset::None(_)));
-    }
-
-    #[test]
-    fn fr12_bar_has_back_forward_reload_and_an_address_left_of_the_caption_buttons() {
-        let parts = parts(1200.0, true);
-        let names: Vec<Part> = parts.iter().map(|p| p.0).collect();
-        assert_eq!(names, [Part::Back, Part::Forward, Part::Reload, Part::Chip, Part::Address]);
-        let (_, x, w) = parts[4];
-        assert!(x + w <= 1200.0 - CAPTION_ROOM);
-        assert_eq!(parts[0].1, LEAD + TOGGLE_ROOM + BUTTON_GAP);
-    }
-
-    #[test]
-    fn fr12_in_a_split_the_field_is_the_focused_panes_address_alone() {
-        let parts = super::parts_of(300.0, true);
-        let names: Vec<Part> = parts.iter().map(|part| part.0).collect();
-        assert_eq!(names, [Part::Chip, Part::Address], "the pane's row draws back, forward and reload");
-        assert_eq!((parts[1].1, parts[1].2), (0.0, 300.0));
-        assert_eq!(super::dropdown_of(300.0, true), Some((0.0, 300.0)));
-        assert_eq!(super::parts_of(1000.0, false), super::parts(1000.0, true));
-    }
-
-    #[test]
-    fn fr12_toggle_is_inline_before_back_forward_reload() {
-        // The study: padding 8, then toggle, back, forward and reload 28 wide with 2 between.
-        let parts = parts(1000.0, TOGGLE_OVER_BAR);
-        let xs: Vec<f32> = parts.iter().take(3).map(|p| p.1).collect();
-        assert_eq!(xs, [38.0, 68.0, 98.0]);
-        // The toggle at 8..36 ends before back begins.
-        assert!(8.0 + TOGGLE_ROOM < parts[0].1);
-    }
-
-    #[test]
-    fn fr12_address_ends_where_the_studys_caption_margin_begins() {
-        let (_, x, w) = *parts(1000.0, true).iter().find(|p| p.0 == Part::Address).unwrap();
-        // 4 DIP `.where` margin, 4 DIP `.caption` margin, then three 46 DIP buttons.
-        assert_eq!(x + w, 1000.0 - 4.0 - 4.0 - 138.0);
-    }
-
-    #[test]
-    fn fr12_caption_buttons_fill_the_bar_right_end() {
-        let buttons = caption_buttons(1000.0);
-        assert_eq!(buttons.map(|b| b.0), [Caption::Minimize, Caption::Maximize, Caption::Close]);
-        assert_eq!(buttons[0].1, 1000.0 - 138.0);
-        assert_eq!(buttons[2].1 + buttons[2].2, 1000.0);
-        assert_eq!(CAPTION_BUTTON * 3.0, CAPTION_ROOM);
-        assert_eq!(caption_glyph(Caption::Maximize, false), '\u{E922}');
-        assert_eq!(caption_glyph(Caption::Maximize, true), '\u{E923}');
-    }
-
-    #[test]
-    fn fr12_start_page_shows_new_tab_and_rivet_start_in_the_bar() {
-        let url = "file:///C:/Rivet%20files/start.html?space=Work&browser=Chrome";
-        assert!(is_start_page(url));
-        assert_eq!(shown("start", url), ("New tab".into(), " \u{b7} rivet://start".into()));
-        assert!(!is_start_page("https://example.com/start.html"));
-        assert!(!is_start_page("file:///D:/pages/page-top.html"));
-    }
-
-    #[test]
-    fn fr12_narrow_bar_keeps_its_buttons_and_drops_the_address() {
-        let names: Vec<Part> = parts(260.0, false).iter().map(|p| p.0).collect();
-        assert_eq!(names, [Part::Back, Part::Forward, Part::Reload]);
-    }
-
-    #[test]
-    fn fr12_address_shows_title_then_address_without_its_scheme() {
-        assert_eq!(shown("Docs", "https://docs.example/a"), ("Docs".into(), " \u{b7} docs.example/a".into()));
-        assert_eq!(shown("", "https://example.test/"), (String::new(), "example.test".into()));
-        assert_eq!(shown("example.test", "https://example.test/"), (String::new(), "example.test".into()));
-    }
-
-    #[test]
-    fn fr12_security_chip_follows_the_connection() {
-        assert_eq!(Security::of("https://a.test/"), Security::Secure);
-        assert_eq!(Security::of("http://a.test/"), Security::NotSecure);
-        assert_eq!(Security::of("http://localhost:8080/"), Security::Local);
-        assert_eq!(Security::of("file:///C:/a.html"), Security::Local);
-        assert_eq!(Security::of("chrome://settings"), Security::Internal);
-        assert_eq!(Security::NotSecure.look().1, "Not secure");
-    }
-
-    #[test]
-    fn fr12_security_chip_takes_chromiums_level_over_the_address() {
-        assert_eq!(Security::from_level(Some(3), "https://a.test/"), Security::Secure);
-        // A certificate error leaves an https address dangerous.
-        assert_eq!(Security::from_level(Some(5), "https://a.test/"), Security::NotSecure);
-        assert_eq!(Security::from_level(Some(0), "https://a.test/"), Security::NotSecure);
-        assert_eq!(Security::from_level(Some(0), "file:///C:/a.html"), Security::Local);
-        assert_eq!(Security::from_level(None, "http://a.test/"), Security::NotSecure);
-    }
-
-    #[test]
-    fn fr12_typed_text_is_an_address_only_when_it_plainly_is_one() {
-        for address in ["example.test", "localhost:3000", "a.b:8080/x", "file:///C:/x"] {
-            assert!(looks_like_address(address), "{address}");
-        }
-        for search in ["hello world", "rust", "한국어 검색", ".hidden", "what is a.b?"] {
-            assert!(!looks_like_address(search), "{search}");
-        }
-        assert_eq!(address_for("example.test"), "https://example.test");
-        assert_eq!(address_for("localhost:3000"), "http://localhost:3000");
-        assert_eq!(address_for("file:///C:/x"), "file:///C:/x");
-    }
-}
-
 /// Types `text` as a composition of the Korean input method, as a person typing on its keyboard
 /// would, and traces where the input method placed its windows. Tests cannot press keys without
 /// taking the focus, so the input method is asked for the composition directly.
 pub(crate) unsafe fn compose_for_test(window: HWND, text: &str) -> bool {
     use windows_sys::Win32::UI::Input::Ime::*;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ActivateKeyboardLayout, LoadKeyboardLayoutW, KLF_ACTIVATE};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        ActivateKeyboardLayout, LoadKeyboardLayoutW, KLF_ACTIVATE,
+    };
     let layout: Vec<u16> = "00000412\0".encode_utf16().collect();
     let korean = LoadKeyboardLayoutW(layout.as_ptr(), KLF_ACTIVATE);
     ActivateKeyboardLayout(korean, 0);
@@ -1158,4 +1205,245 @@ pub(crate) unsafe fn finish_composition_for_test(window: HWND) -> bool {
     ImmReleaseContext(window, context);
     crate::frame::update_appbar(window);
     done != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fr12_a_bar_right_above_the_page_moves_below_the_address_bar_with_it() {
+        // Brave's first tab shows an infobar right above the page. Only the page moved, so the
+        // infobar sat under the address bar and an empty band of the bar's height was left above
+        // the page, which put the first pane of a split below the second.
+        let contents = [0, 56, 1164, 708];
+        assert!(rides_above_page([0, 0, 1164, 56], contents));
+        // The page itself, a view beside it and a view that ends above it stay.
+        assert!(!rides_above_page(contents, contents));
+        assert!(!rides_above_page([1164, 0, 40, 56], contents));
+        assert!(!rides_above_page([0, 0, 1164, 40], contents));
+        assert!(!rides_above_page([0, 56, 1164, 0], contents));
+    }
+
+    #[test]
+    fn fr12_page_sits_directly_below_the_bar_where_the_browser_kept_a_title_row() {
+        // Chrome's app window keeps a 23 DIP top container above the page once its client view
+        // reaches the window's top edge. Rivet's bar replaces it, so the page takes its place.
+        let (top, page, _) = page_over_top_row([0, 0, 1164, 23], [0, 23, 1164, 815], &[]).unwrap();
+        assert_eq!(top, [0, 0, 1164, 0]);
+        assert_eq!(page, [0, 0, 1164, 838]);
+        // A top row that does not reach the page is left alone.
+        assert_eq!(
+            page_over_top_row([0, 0, 1164, 20], [0, 23, 1164, 815], &[]),
+            None
+        );
+        // Brave's notice bar between the row and the page moves up with the page.
+        let (_, page, moved) = page_over_top_row(
+            [0, 0, 1164, 23],
+            [0, 79, 1164, 759],
+            &[[0, 23, 1164, 56], [1164, 0, 40, 9]],
+        )
+        .unwrap();
+        assert_eq!(page, [0, 56, 1164, 782]);
+        assert_eq!(moved, vec![[0, 0, 1164, 56], [1164, 0, 40, 9]]);
+    }
+
+    #[test]
+    fn fr12_the_page_moves_below_the_bar_without_a_sidebar_layout_row() {
+        // Edge 156.0.4314.58 and Whale 5.39.412.57 record no Sidebar layout, but both record the
+        // second view, which moves the page view itself.
+        let missing =
+            || Err("this browser build has no recorded layout for the Sidebar".to_string());
+        assert_eq!(offset_for(missing(), true), Offset::PageView);
+        assert_eq!(
+            offset_for(Ok(()), true),
+            Offset::Layout,
+            "a patched layout is used first"
+        );
+        assert_eq!(offset_for(Ok(()), false), Offset::Layout);
+        assert!(matches!(offset_for(missing(), false), Offset::None(_)));
+    }
+
+    #[test]
+    fn fr12_bar_has_back_forward_reload_and_an_address_left_of_the_caption_buttons() {
+        let parts = parts(1200.0, true);
+        let names: Vec<Part> = parts.iter().map(|p| p.0).collect();
+        assert_eq!(
+            names,
+            [
+                Part::Back,
+                Part::Forward,
+                Part::Reload,
+                Part::Chip,
+                Part::Address
+            ]
+        );
+        let (_, x, w) = parts[4];
+        assert!(x + w <= 1200.0 - CAPTION_ROOM);
+        assert_eq!(parts[0].1, LEAD + TOGGLE_ROOM + BUTTON_GAP);
+    }
+
+    #[test]
+    fn fr12_in_a_split_the_field_is_the_focused_panes_address_alone() {
+        let parts = super::parts_of(300.0, true);
+        let names: Vec<Part> = parts.iter().map(|part| part.0).collect();
+        assert_eq!(
+            names,
+            [Part::Chip, Part::Address],
+            "the pane's row draws back, forward and reload"
+        );
+        assert_eq!((parts[1].1, parts[1].2), (0.0, 300.0));
+        assert_eq!(super::dropdown_of(300.0, true), Some((0.0, 300.0)));
+        assert_eq!(super::parts_of(1000.0, false), super::parts(1000.0, true));
+    }
+
+    #[test]
+    fn fr12_toggle_is_inline_before_back_forward_reload() {
+        // The study: padding 8, then toggle, back, forward and reload 28 wide with 2 between.
+        let parts = parts(1000.0, TOGGLE_OVER_BAR);
+        let xs: Vec<f32> = parts.iter().take(3).map(|p| p.1).collect();
+        assert_eq!(xs, [38.0, 68.0, 98.0]);
+        // The toggle at 8..36 ends before back begins.
+        assert!(8.0 + TOGGLE_ROOM < parts[0].1);
+    }
+
+    #[test]
+    fn fr12_address_ends_where_the_studys_caption_margin_begins() {
+        let (_, x, w) = *parts(1000.0, true)
+            .iter()
+            .find(|p| p.0 == Part::Address)
+            .unwrap();
+        // 4 DIP `.where` margin, 4 DIP `.caption` margin, then three 46 DIP buttons.
+        assert_eq!(x + w, 1000.0 - 4.0 - 4.0 - 138.0);
+    }
+
+    #[test]
+    fn fr11_developer_buttons_sit_between_the_address_and_the_caption_buttons() {
+        let plain = super::parts_of(1000.0, false);
+        let dev = super::parts_reserving(1000.0, false, 216.0);
+        let address = |parts: &[(Part, f32, f32)]| {
+            parts
+                .iter()
+                .find(|p| p.0 == Part::Address)
+                .map(|p| p.1 + p.2)
+        };
+        assert_eq!(address(&dev).unwrap() + 216.0, address(&plain).unwrap());
+        // Too narrow for both: the buttons keep their room and the address goes.
+        let narrow = super::parts_reserving(330.0, false, 216.0);
+        assert!(narrow
+            .iter()
+            .all(|p| p.0 != Part::Address && p.0 != Part::Chip));
+        // A split pane's address carries no developer buttons.
+        assert_eq!(
+            super::parts_reserving(300.0, true, 216.0),
+            super::parts_of(300.0, true)
+        );
+    }
+
+    #[test]
+    fn fr12_caption_buttons_fill_the_bar_right_end() {
+        let buttons = caption_buttons(1000.0);
+        assert_eq!(
+            buttons.map(|b| b.0),
+            [Caption::Minimize, Caption::Maximize, Caption::Close]
+        );
+        assert_eq!(buttons[0].1, 1000.0 - 138.0);
+        assert_eq!(buttons[2].1 + buttons[2].2, 1000.0);
+        assert_eq!(CAPTION_BUTTON * 3.0, CAPTION_ROOM);
+        assert_eq!(caption_glyph(Caption::Maximize, false), '\u{E922}');
+        assert_eq!(caption_glyph(Caption::Maximize, true), '\u{E923}');
+    }
+
+    #[test]
+    fn fr12_start_page_shows_new_tab_and_rivet_start_in_the_bar() {
+        let url = "file:///C:/Rivet%20files/start.html?space=Work&browser=Chrome";
+        assert!(is_start_page(url));
+        assert_eq!(
+            shown("start", url),
+            ("New tab".into(), " \u{b7} rivet://start".into())
+        );
+        assert!(!is_start_page("https://example.com/start.html"));
+        assert!(!is_start_page("file:///D:/pages/page-top.html"));
+    }
+
+    #[test]
+    fn fr12_narrow_bar_keeps_its_buttons_and_drops_the_address() {
+        let names: Vec<Part> = parts(260.0, false).iter().map(|p| p.0).collect();
+        assert_eq!(names, [Part::Back, Part::Forward, Part::Reload]);
+    }
+
+    #[test]
+    fn fr12_address_shows_title_then_address_without_its_scheme() {
+        assert_eq!(
+            shown("Docs", "https://docs.example/a"),
+            ("Docs".into(), " \u{b7} docs.example/a".into())
+        );
+        assert_eq!(
+            shown("", "https://example.test/"),
+            (String::new(), "example.test".into())
+        );
+        assert_eq!(
+            shown("example.test", "https://example.test/"),
+            (String::new(), "example.test".into())
+        );
+    }
+
+    #[test]
+    fn fr12_security_chip_follows_the_connection() {
+        assert_eq!(Security::of("https://a.test/"), Security::Secure);
+        assert_eq!(Security::of("http://a.test/"), Security::NotSecure);
+        assert_eq!(Security::of("http://localhost:8080/"), Security::Local);
+        assert_eq!(Security::of("file:///C:/a.html"), Security::Local);
+        assert_eq!(Security::of("chrome://settings"), Security::Internal);
+        assert_eq!(Security::NotSecure.look().1, "Not secure");
+    }
+
+    #[test]
+    fn fr12_security_chip_takes_chromiums_level_over_the_address() {
+        assert_eq!(
+            Security::from_level(Some(3), "https://a.test/"),
+            Security::Secure
+        );
+        // A certificate error leaves an https address dangerous.
+        assert_eq!(
+            Security::from_level(Some(5), "https://a.test/"),
+            Security::NotSecure
+        );
+        assert_eq!(
+            Security::from_level(Some(0), "https://a.test/"),
+            Security::NotSecure
+        );
+        assert_eq!(
+            Security::from_level(Some(0), "file:///C:/a.html"),
+            Security::Local
+        );
+        assert_eq!(
+            Security::from_level(None, "http://a.test/"),
+            Security::NotSecure
+        );
+    }
+
+    #[test]
+    fn fr12_typed_text_is_an_address_only_when_it_plainly_is_one() {
+        for address in [
+            "example.test",
+            "localhost:3000",
+            "a.b:8080/x",
+            "file:///C:/x",
+        ] {
+            assert!(looks_like_address(address), "{address}");
+        }
+        for search in [
+            "hello world",
+            "rust",
+            "한국어 검색",
+            ".hidden",
+            "what is a.b?",
+        ] {
+            assert!(!looks_like_address(search), "{search}");
+        }
+        assert_eq!(address_for("example.test"), "https://example.test");
+        assert_eq!(address_for("localhost:3000"), "http://localhost:3000");
+        assert_eq!(address_for("file:///C:/x"), "file:///C:/x");
+    }
 }

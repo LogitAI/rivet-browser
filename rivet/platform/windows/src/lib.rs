@@ -5,14 +5,17 @@
 //! ownership checks.
 
 pub mod chrome_build;
+pub mod hold;
 pub mod row_port;
 pub mod row_watch;
 pub mod signed_table;
-pub mod hold;
+#[cfg(windows)]
 pub mod textservices;
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 /// A top-level browser window and the browser process that owns it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +39,8 @@ pub enum WindowCloseError {
     UnsupportedPlatform,
     WindowIsNotOwnedByTheSelectedBrowser,
     CloseMessageFailed,
+    /// The window did not take the request, or Rivet is not running in it.
+    RequestNotTaken,
 }
 
 impl std::fmt::Display for WindowCloseError {
@@ -51,6 +56,7 @@ impl std::fmt::Display for WindowCloseError {
             Self::CloseMessageFailed => {
                 write!(f, "could not request the Rivet browser window to close")
             }
+            Self::RequestNotTaken => write!(f, "the Rivet window did not take the request"),
         }
     }
 }
@@ -465,6 +471,97 @@ pub fn wait_for_new_browser_window(
     Err(WindowDiscoveryError::UnsupportedPlatform)
 }
 
+/// Posts the registered window message `name` with `wparam` and `lparam` to exactly one previously
+/// discovered browser window. The handle and process are checked again first, as for a close.
+#[cfg(windows)]
+pub fn post_window_command(
+    browser: &Path,
+    window: BrowserWindow,
+    name: &str,
+    wparam: usize,
+    lparam: isize,
+) -> Result<(), WindowCloseError> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, RegisterWindowMessageW};
+
+    let windows = browser_windows(browser)
+        .map_err(|_| WindowCloseError::WindowIsNotOwnedByTheSelectedBrowser)?;
+    if !windows.contains(&window) {
+        return Err(WindowCloseError::WindowIsNotOwnedByTheSelectedBrowser);
+    }
+    let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    let message = unsafe { RegisterWindowMessageW(name.as_ptr()) };
+    if message == 0 || unsafe { PostMessageW(window.handle as _, message, wparam, lparam) } == 0 {
+        return Err(WindowCloseError::CloseMessageFailed);
+    }
+    Ok(())
+}
+
+/// Sends `bytes` as a `WM_COPYDATA` message tagged `data` to exactly one previously discovered
+/// browser window, checked again first as for a close. The window answers within five seconds or
+/// the send fails, so a hung browser never holds the caller.
+#[cfg(windows)]
+pub fn send_window_data(
+    browser: &Path,
+    window: BrowserWindow,
+    data: usize,
+    bytes: &[u8],
+) -> Result<(), WindowCloseError> {
+    use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_COPYDATA,
+    };
+
+    let windows = browser_windows(browser)
+        .map_err(|_| WindowCloseError::WindowIsNotOwnedByTheSelectedBrowser)?;
+    if !windows.contains(&window) {
+        return Err(WindowCloseError::WindowIsNotOwnedByTheSelectedBrowser);
+    }
+    let copy = COPYDATASTRUCT {
+        dwData: data,
+        cbData: bytes.len() as u32,
+        lpData: bytes.as_ptr() as *mut _,
+    };
+    let mut answer: usize = 0;
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            window.handle as _,
+            WM_COPYDATA,
+            0,
+            &copy as *const COPYDATASTRUCT as isize,
+            SMTO_ABORTIFHUNG,
+            5000,
+            &mut answer,
+        )
+    };
+    if sent == 0 || answer == 0 {
+        return Err(WindowCloseError::RequestNotTaken);
+    }
+    Ok(())
+}
+
+/// Reports that window data is unavailable on non-Windows targets.
+#[cfg(not(windows))]
+pub fn send_window_data(
+    _browser: &Path,
+    _window: BrowserWindow,
+    _data: usize,
+    _bytes: &[u8],
+) -> Result<(), WindowCloseError> {
+    Err(WindowCloseError::UnsupportedPlatform)
+}
+
+/// Reports that window commands are unavailable on non-Windows targets.
+#[cfg(not(windows))]
+pub fn post_window_command(
+    _browser: &Path,
+    _window: BrowserWindow,
+    _name: &str,
+    _wparam: usize,
+    _lparam: isize,
+) -> Result<(), WindowCloseError> {
+    Err(WindowCloseError::UnsupportedPlatform)
+}
+
 /// Reports that browser-window closing is unavailable on non-Windows targets.
 #[cfg(not(windows))]
 pub fn close_browser_window(
@@ -776,6 +873,7 @@ fn remote_export_address(
 ///
 /// `read(offset, buffer)` fills `buffer` from `offset` bytes after the image base and reports
 /// whether it succeeded. Forwarded exports are rejected because they do not point into the image.
+#[cfg(any(windows, test))]
 fn find_export_rva(read: &mut dyn FnMut(usize, &mut [u8]) -> bool, export: &str) -> Option<u32> {
     fn u16_at(read: &mut dyn FnMut(usize, &mut [u8]) -> bool, offset: usize) -> Option<u16> {
         let mut bytes = [0u8; 2];
@@ -1004,16 +1102,24 @@ mod tests {
     #[test]
     fn fr1_module_snapshot_gives_up_after_its_attempts_and_on_other_errors() {
         let mut tries = 0;
-        let outcome: Result<(), u32> = retry_while_modules_change(3, || {}, || {
-            tries += 1;
-            Err(24)
-        });
+        let outcome: Result<(), u32> = retry_while_modules_change(
+            3,
+            || {},
+            || {
+                tries += 1;
+                Err(24)
+            },
+        );
         assert_eq!((outcome, tries), (Err(24), 3));
         let mut tries = 0;
-        let outcome: Result<(), u32> = retry_while_modules_change(3, || {}, || {
-            tries += 1;
-            Err(5)
-        });
+        let outcome: Result<(), u32> = retry_while_modules_change(
+            3,
+            || {},
+            || {
+                tries += 1;
+                Err(5)
+            },
+        );
         assert_eq!((outcome, tries), (Err(5), 1));
     }
 
@@ -1217,7 +1323,11 @@ mod tests {
         let root = rivet_core::paths::TestDir::new("rivet-samsung");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("143.0.4.29")).unwrap();
-        for name in ["samsunginternet.dll", "notification_helper.exe", "chrome_pwa_launcher.exe"] {
+        for name in [
+            "samsunginternet.dll",
+            "notification_helper.exe",
+            "chrome_pwa_launcher.exe",
+        ] {
             std::fs::write(root.join("143.0.4.29").join(name), b"x").unwrap();
         }
         std::fs::write(root.join("samsunginternet.exe"), b"x").unwrap();
@@ -1228,7 +1338,8 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
         // The installed build resolves the same way.
-        let installed = Path::new(r"C:\Program Files\Samsung\Internet\Application\samsunginternet.exe");
+        let installed =
+            Path::new(r"C:\Program Files\Samsung\Internet\Application\samsunginternet.exe");
         if installed.is_file() {
             assert_eq!(resolve_browser_executable(installed), installed);
         }
@@ -1241,7 +1352,10 @@ mod tests {
         std::fs::create_dir_all(root.join("156.0.8078.48")).unwrap();
         std::fs::write(root.join("156.0.8078.48").join("chrome.dll"), b"x").unwrap();
         std::fs::write(root.join("chrome.exe"), b"x").unwrap();
-        assert_eq!(resolve_browser_executable(&root.join("chrome.exe")), root.join("chrome.exe"));
+        assert_eq!(
+            resolve_browser_executable(&root.join("chrome.exe")),
+            root.join("chrome.exe")
+        );
         assert_eq!(
             resolve_browser_executable(&root.join("missing").join("a.exe")),
             root.join("missing").join("a.exe")

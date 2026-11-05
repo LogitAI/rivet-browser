@@ -29,12 +29,6 @@ pub(crate) fn layout_hook() -> usize {
     }
 }
 
-/// Whether split view reads the page area the layout hook records. With the older layout the split
-/// works from its own bounds, so the hook serves the Sidebar alone.
-pub(crate) fn split_reads_page_area() -> bool {
-    crate::builds::get().side_panel.old_layout != Some(true)
-}
-
 /// The key of the Rivet window a view of the browser belongs to, or none when the window is not one
 /// of Rivet's. Views are asked from inside the browser's layout, which runs on the UI thread.
 pub(crate) unsafe fn rivet_owner(view: *mut std::ffi::c_void) -> Option<usize> {
@@ -70,8 +64,6 @@ pub(crate) trait SplitBackend: Sync {
     unsafe fn page_area(&self, window: HWND) -> Option<[i32; 4]>;
     /// What the page area layout does for a split.
     unsafe fn on_page_area(&self, _area: &mut crate::hooks::page_area::PageArea) {}
-    /// Puts the address back to the focused page once the toolbar is laid out.
-    unsafe fn place_address(&self, _toolbar: *mut std::ffi::c_void) {}
     /// Whether the browser's own address follows the focused page.
     fn address_follows_page(&self) -> bool;
     /// The title and address of a page of the split that is no tab of the strip.
@@ -79,12 +71,22 @@ pub(crate) trait SplitBackend: Sync {
         None
     }
     /// What a button of the row of a page that is no tab does. Returns whether it did anything.
-    unsafe fn pane_action(&self, _window: HWND, _pane: &Pane, _button: crate::features::split::RowButton) -> bool {
+    unsafe fn pane_action(
+        &self,
+        _window: HWND,
+        _pane: &Pane,
+        _button: crate::features::split::RowButton,
+    ) -> bool {
         false
     }
     /// Whether a button of the row of a page that is no tab can act now. A button that cannot is drawn
     /// faded and does not react.
-    unsafe fn pane_can(&self, _window: HWND, _pane: &Pane, _button: crate::features::split::RowButton) -> bool {
+    unsafe fn pane_can(
+        &self,
+        _window: HWND,
+        _pane: &Pane,
+        _button: crate::features::split::RowButton,
+    ) -> bool {
         true
     }
 }

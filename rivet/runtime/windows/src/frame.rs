@@ -17,25 +17,26 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     TME_NONCLIENT, TRACKMOUSEEVENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CallWindowProcW, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos, PeekMessageW,
-    GetPropW, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, IsZoomed, KillTimer, LoadCursorW, PostMessageW, RegisterWindowMessageW,
+    CallNextHookEx, CallWindowProcW, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos,
+    GetPropW, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
+    IsZoomed, KillTimer, LoadCursorW, PeekMessageW, PostMessageW, RegisterWindowMessageW,
     RemovePropW, SetCursor, SetPropW, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW,
-    WindowFromPoint, GA_ROOT, GWLP_WNDPROC, GWL_STYLE, HTBORDER, HTCAPTION, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HTTOP, HTTOPLEFT,
-    ICON_BIG, ICON_SMALL, IDC_SIZEWE, MSG, PM_REMOVE, SM_CXICON, SM_CXPADDEDBORDER, SM_CXSMICON,
-    SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, WH_GETMESSAGE, WM_CAPTURECHANGED, WM_CLOSE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN,
-    WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL,
-    WM_SETCURSOR, WM_SETICON, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
+    WindowFromPoint, GA_ROOT, GWLP_WNDPROC, GWL_STYLE, HTBORDER, HTCAPTION, HTCLOSE, HTMAXBUTTON,
+    HTMINBUTTON, HTTOP, HTTOPLEFT, ICON_BIG, ICON_SMALL, IDC_SIZEWE, MSG, PM_REMOVE, SM_CXICON,
+    SM_CXPADDEDBORDER, SM_CXSMICON, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, WH_GETMESSAGE, WM_CAPTURECHANGED, WM_CLOSE, WM_DPICHANGED,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST,
+    WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+    WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_SETCURSOR, WM_SETICON, WM_SYSCOMMAND,
+    WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
 };
 
 use super::appbar::Appbar;
 use super::features::frame_layout;
 use super::taskbar;
 use super::{
-    dpi_after_change, layout_scale_dpi, scale, strip_hit, title_bar_top, toggle_rect, AppbarLayout, StripHit,
-    APPBAR_WIDTH, FLOAT_INSET, RESIZER_WIDTH,
+    dpi_after_change, layout_scale_dpi, scale, strip_hit, title_bar_top, toggle_rect, AppbarLayout,
+    StripHit, APPBAR_WIDTH, FLOAT_INSET, RESIZER_WIDTH,
 };
 use crate::feature::Step;
 use crate::press::Presses;
@@ -73,8 +74,16 @@ pub(crate) enum AppbarHit {
     NewSpace,
     ProfileSettings,
     ManageProfiles,
+    /// The settings entry that switches who keeps passwords and passkeys.
+    Credentials,
+    /// The settings entry that opens the Rivet settings card over the page.
+    RivetSettings,
     /// The entry of a tab's menu that shows the tab beside the one after it.
     SplitTab(usize),
+    /// The entry of a tab's menu that pins the tab, or unpins a pinned one.
+    PinTab(usize),
+    /// The entry of a tab's menu that puts the tab into a new folder.
+    FolderTab(usize),
     /// The button in the toolbar row that hides and shows the appbar.
     Toggle,
     /// The seam on the appbar's right edge that drags its width.
@@ -94,14 +103,54 @@ pub(crate) enum Menu {
 }
 
 /// The entries of a tab's menu.
-pub(crate) const TAB_ITEMS: [&str; 1] = ["Split with next tab"];
+pub(crate) const TAB_ITEMS: [&str; 3] = [
+    "Split with next tab",
+    "Pin or unpin tab",
+    "Move to new folder",
+];
+
+/// The action of a tab menu entry.
+pub(crate) fn tab_item_hit(row: usize, index: usize) -> Option<AppbarHit> {
+    match row {
+        0 => Some(AppbarHit::SplitTab(index)),
+        1 => Some(AppbarHit::PinTab(index)),
+        2 => Some(AppbarHit::FolderTab(index)),
+        _ => None,
+    }
+}
 
 /// The entries of the settings menu. An entry without an action is shown dimmed.
-pub(crate) const SETTINGS_ITEMS: [(&str, Option<AppbarHit>); 3] = [
+pub(crate) const SETTINGS_ITEMS: [(&str, Option<AppbarHit>); 4] = [
     ("Profile settings", Some(AppbarHit::ProfileSettings)),
     ("Manage profiles", Some(AppbarHit::ManageProfiles)),
-    ("Rivet settings", None),
+    ("Passwords and passkeys", Some(AppbarHit::Credentials)),
+    ("Rivet settings", Some(AppbarHit::RivetSettings)),
 ];
+
+/// The title of a settings entry as drawn. The provider entry names the current choice.
+pub(crate) fn settings_title(
+    title: &'static str,
+    hit: Option<AppbarHit>,
+    provider: rivet_core::CredentialProvider,
+) -> String {
+    if hit == Some(AppbarHit::Credentials) {
+        format!("Passwords: {}", provider.label())
+    } else {
+        title.to_owned()
+    }
+}
+
+/// The setup file this window's Rivet profile was started from.
+fn setup_file() -> Option<std::path::PathBuf> {
+    rivet_core::paths::Layout::current().map(|layout| layout.setup_file())
+}
+
+/// The saved provider, which the next start of a Rivet profile uses.
+pub(crate) fn saved_credentials() -> rivet_core::CredentialProvider {
+    setup_file().map_or_else(Default::default, |path| {
+        rivet_core::credentials::load_from_setup(&path)
+    })
+}
 
 const WORKSPACE_MENU_TOP: f32 = 138.0;
 const WORKSPACE_ROW: f32 = 48.0;
@@ -115,16 +164,27 @@ fn held_warning() -> Option<String> {
     use rivet_platform_windows::hold;
     use std::sync::OnceLock;
     static STATUS: OnceLock<Option<hold::Clock>> = OnceLock::new();
-    let clock = STATUS.get_or_init(|| hold::held_status(&std::env::current_exe().ok()?)).as_ref()?;
+    let clock = STATUS
+        .get_or_init(|| hold::held_status(&std::env::current_exe().ok()?))
+        .as_ref()?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
-    Some(hold::warning_text(&clock.installed, clock.first_detected, now))
+    Some(hold::warning_text(
+        &clock.installed,
+        clock.first_detected,
+        now,
+    ))
 }
 
 /// The rectangle of a menu as (x, y, width, height) in the appbar's own coordinates, for an
 /// appbar of `width` by `height` DIPs with `spaces` spaces.
-pub(crate) fn menu_area(menu: Menu, width: f32, height: f32, spaces: usize) -> (f32, f32, f32, f32) {
+pub(crate) fn menu_area(
+    menu: Menu,
+    width: f32,
+    height: f32,
+    spaces: usize,
+) -> (f32, f32, f32, f32) {
     let (x, w) = (10.0, width - 18.0);
     match menu {
         Menu::Workspace => (x, WORKSPACE_MENU_TOP, w, spaces as f32 * WORKSPACE_ROW),
@@ -136,7 +196,11 @@ pub(crate) fn menu_area(menu: Menu, width: f32, height: f32, spaces: usize) -> (
             let h = TAB_ITEMS.len() as f32 * SETTINGS_ROW + 2.0 * SETTINGS_PAD;
             // Below the row, or above it when the menu would run past the appbar's bottom.
             let below = top as f32 + 4.0;
-            let y = if below + h > height - FOOT_HEIGHT { top as f32 - 34.0 - 4.0 - h } else { below };
+            let y = if below + h > height - FOOT_HEIGHT {
+                top as f32 - 34.0 - 4.0 - h
+            } else {
+                below
+            };
             (x, y, w, h)
         }
     }
@@ -167,11 +231,18 @@ fn menu_hit(
         }
         Menu::Tab { index, .. } => {
             let row = ((y - ay - SETTINGS_PAD) / SETTINGS_ROW).floor();
-            (row == 0.0).then_some(AppbarHit::SplitTab(index))
+            if row < 0.0 {
+                None
+            } else {
+                tab_item_hit(row as usize, index)
+            }
         }
     };
     (true, hit)
 }
+
+/// The appbar control a pointer is over, the one it went down on, and the tint of the space shown.
+type AppbarState = (Option<AppbarHit>, Option<AppbarHit>, u32);
 
 thread_local! {
     /// Appbars of the browser windows owned by this UI thread.
@@ -182,7 +253,7 @@ thread_local! {
     static SPACES: RefCell<HashMap<isize, Spaces>> = RefCell::new(HashMap::new());
     /// The controls of each window that are being pressed or springing back.
     static PRESSES: RefCell<HashMap<isize, Presses<AppbarHit>>> = RefCell::new(HashMap::new());
-    static APPBAR_STATE: RefCell<HashMap<isize, (Option<AppbarHit>, Option<AppbarHit>, u32)>> = RefCell::new(HashMap::new());
+    static APPBAR_STATE: RefCell<HashMap<isize, AppbarState>> = RefCell::new(HashMap::new());
     static KEYBOARD_HOOK: RefCell<isize> = const { RefCell::new(0) };
     /// The width and the hidden or peeking state of each window's appbar. It lives as long as the
     /// window does.
@@ -249,7 +320,12 @@ thread_local! {
 }
 
 fn tab_dragging(window: HWND) -> bool {
-    TAB_DRAGS.with(|drags| drags.borrow().get(&(window as isize)).is_some_and(|drag| drag.live))
+    TAB_DRAGS.with(|drags| {
+        drags
+            .borrow()
+            .get(&(window as isize))
+            .is_some_and(|drag| drag.live)
+    })
 }
 
 /// How far the pointer travels before a press on a tab becomes a drag, in device-independent
@@ -261,27 +337,36 @@ const DROP_GAP: f32 = 8.0;
 /// Where a dragged tab would land.
 struct Drop {
     side: Option<crate::features::split::Side>,
+    /// The slot of the split page the drop lands on, or none for the window's page.
+    slot: Option<usize>,
     view: crate::appbar::DropView,
 }
 
 /// The drop under a point in client pixels, or none when the point is off the page.
 unsafe fn drop_at(window: HWND, point: POINT) -> Option<Drop> {
     use crate::features::split::Side;
-    let [area_left, area_top, area_right, area_bottom] = crate::features::split::page_area(window)?;
     let factor = layout_dpi(window) as f32 / 96.0;
-    let (left, top) = (area_left as f32 * factor, area_top as f32 * factor);
-    let (width, height) = (
-        (area_right - area_left) as f32 * factor,
-        (area_bottom - area_top) as f32 * factor,
-    );
     let (x, y) = (point.x as f32, point.y as f32);
+    // A drop splits the page under the pointer, which is one page of a split or the whole area.
+    let ([page_x, page_y, page_w, page_h], slot) = crate::features::split::drop_page(
+        window,
+        (x / factor).floor() as i32,
+        (y / factor).floor() as i32,
+    )?;
+    let (left, top) = (page_x as f32 * factor, page_y as f32 * factor);
+    let (width, height) = (page_w as f32 * factor, page_h as f32 * factor);
     if x < left || x > left + width || y < top || y > top + height {
         return None;
     }
-    // Chrome keeps two pages in a split, so a window that has one only offers to open here.
-    let full = crate::features::split::active_is_split(window);
-    let (side, [zone_x, zone_y, w, h]) =
-        crate::features::split::drop_zone([left, top, width, height], x, y, full, DROP_GAP * factor);
+    // A split that holds all the pages it can only offers to open here.
+    let full = crate::features::split::split_full(window);
+    let (side, [zone_x, zone_y, w, h]) = crate::features::split::drop_zone(
+        [left, top, width, height],
+        x,
+        y,
+        full,
+        DROP_GAP * factor,
+    );
     let label = match side {
         Some(Side::Left) => "Split left",
         Some(Side::Right) => "Split right",
@@ -291,6 +376,7 @@ unsafe fn drop_at(window: HWND, point: POINT) -> Option<Drop> {
     };
     Some(Drop {
         side,
+        slot,
         view: crate::appbar::DropView {
             x: zone_x,
             y: zone_y,
@@ -301,10 +387,31 @@ unsafe fn drop_at(window: HWND, point: POINT) -> Option<Drop> {
     })
 }
 
+/// Highlights where something dragged to client pixel `point` would land, as a tab drag does, or
+/// clears the highlight for none. The Mini Window's grip drag uses it.
+pub(crate) unsafe fn show_drop_zone(window: HWND, point: Option<POINT>) {
+    let dpi = layout_dpi(window);
+    let zone = point
+        .and_then(|point| drop_at(window, point))
+        .map(|drop| drop.view);
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.update_drag(zone.as_ref(), None, dpi) {
+                log(&format!("rivet: could not draw the drop target: {error}"));
+            }
+        }
+    });
+}
+
 unsafe fn show_tab_drag(window: HWND, point: Option<POINT>) {
     let dpi = layout_dpi(window);
     let factor = dpi as f32 / 96.0;
-    let title = TAB_DRAGS.with(|drags| drags.borrow().get(&(window as isize)).map(|d| d.title.clone()));
+    let title = TAB_DRAGS.with(|drags| {
+        drags
+            .borrow()
+            .get(&(window as isize))
+            .map(|d| d.title.clone())
+    });
     let (zone, ghost) = match (point, title) {
         (Some(point), Some(title)) => (
             drop_at(window, point).map(|drop| drop.view),
@@ -331,8 +438,11 @@ unsafe fn show_tab_drag(window: HWND, point: Option<POINT>) {
 unsafe fn tab_drag_press(window: HWND, hit: Option<AppbarHit>, lparam: LPARAM) {
     let Some(AppbarHit::Tab(index)) = hit else {
         TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize)));
+        crate::features::link_preview::cancel_hold(window);
         return;
     };
+    // Held long enough, the press opens the tab's link preview instead.
+    crate::features::link_preview::press(window, index);
     let title = crate::features::tabs::tabs(window)
         .and_then(|tabs| tabs.into_iter().find(|tab| tab.index == index))
         .map(|tab| tab.title)
@@ -340,7 +450,12 @@ unsafe fn tab_drag_press(window: HWND, hit: Option<AppbarHit>, lparam: LPARAM) {
     TAB_DRAGS.with(|drags| {
         drags.borrow_mut().insert(
             window as isize,
-            TabDrag { index, title, press: client_point(window, lparam), live: false },
+            TabDrag {
+                index,
+                title,
+                press: client_point(window, lparam),
+                live: false,
+            },
         )
     });
 }
@@ -359,6 +474,8 @@ unsafe fn tab_drag_start(window: HWND, lparam: LPARAM) {
         drag.live
     });
     if start {
+        // A press that became a drag is no long press.
+        crate::features::link_preview::cancel_hold(window);
         SetCapture(window);
         // The press no longer clicks the tab.
         press_up(window);
@@ -369,6 +486,18 @@ unsafe fn tab_drag_start(window: HWND, lparam: LPARAM) {
         });
         show_tab_drag(window, Some(point));
     }
+}
+
+/// Ends a press on the appbar without its click, for a press that did something else, such as
+/// opening a link preview.
+pub(crate) unsafe fn cancel_appbar_press(window: HWND) {
+    TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize)));
+    press_up(window);
+    APPBAR_STATE.with(|states| {
+        if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+            entry.1 = None;
+        }
+    });
 }
 
 /// The pointer moves, with the window capturing it, while a tab is dragged.
@@ -393,9 +522,20 @@ unsafe fn tab_drag_end(window: HWND, release: Option<LPARAM>) {
             x: (lparam & 0xffff) as i16 as i32,
             y: ((lparam >> 16) & 0xffff) as i16 as i32,
         };
-        if let Some(drop) = drop_at(window, point) {
+        let (x, y) = local_dip(window, point.x, point.y);
+        if x >= 0.0
+            && x < layout_of(window).side as f32
+            && crate::features::tab_list::drop_on_list(window, drag.index, y)
+        {
+            crate::trace::trace(&format!(
+                "tab drag: moved tab {} in the tab list",
+                drag.index
+            ));
+        } else if let Some(drop) = drop_at(window, point) {
             let done = match drop.side {
-                Some(side) => crate::features::split::split_beside(window, drag.index, side),
+                Some(side) => {
+                    crate::features::split::split_beside_page(window, drag.index, side, drop.slot)
+                }
                 None => crate::features::tabs::activate_tab(window, drag.index),
             };
             crate::trace::trace(&format!(
@@ -415,15 +555,25 @@ thread_local! {
     static ROW_PRESS: RefCell<HashMap<isize, RowHit>> = RefCell::new(HashMap::new());
 }
 
+/// The caption button a pointer is over, and the one it went down on.
+type CaptionState = (
+    Option<crate::features::address_bar::Caption>,
+    Option<crate::features::address_bar::Caption>,
+);
+
 thread_local! {
     /// The caption button each window's pointer is over, and the one it went down on.
-    static CAPTION_STATE: RefCell<HashMap<isize, (Option<crate::features::address_bar::Caption>, Option<crate::features::address_bar::Caption>)>> =
+    static CAPTION_STATE: RefCell<HashMap<isize, CaptionState>> =
         RefCell::new(HashMap::new());
 }
 
 /// The caption button under the pointer of a window, for drawing its hover.
 pub(crate) fn caption_hover(window: HWND) -> Option<crate::features::address_bar::Caption> {
-    CAPTION_STATE.with(|all| all.borrow().get(&(window as isize)).and_then(|state| state.0))
+    CAPTION_STATE.with(|all| {
+        all.borrow()
+            .get(&(window as isize))
+            .and_then(|state| state.0)
+    })
 }
 
 /// Records the caption button under the pointer. Returns whether it changed.
@@ -444,15 +594,17 @@ unsafe fn row_hit(window: HWND, point: POINT) -> Option<RowHit> {
     let (x, y) = (point.x as f32 / factor, point.y as f32 / factor);
     for (index, pane) in crate::features::split::panes(window).iter().enumerate() {
         let top = pane.row_y as f32;
-        if x < pane.x as f32 || x >= (pane.x + pane.width) as f32 || y < top || y >= top + ROW_HEIGHT as f32 {
+        if x < pane.x as f32
+            || x >= (pane.x + pane.width) as f32
+            || y < top
+            || y >= top + ROW_HEIGHT as f32
+        {
             continue;
         }
         let local = x - pane.x as f32;
         let button = row_buttons(pane.width as f32, pane.first, pane.caption)
             .into_iter()
-            .find(|(button, left, width)| {
-                local >= *left && local < left + width
-            })
+            .find(|(_button, left, width)| local >= *left && local < left + width)
             .map(|(button, _, _)| button);
         return match (button, pane.active) {
             (Some(button), _) => Some((index, button)),
@@ -482,7 +634,11 @@ unsafe fn pane_rows(window: HWND) -> Vec<crate::appbar::PaneRow> {
         .map(|(index, pane)| {
             let saved = pane.tab.and_then(|tab| tabs.get(tab)).map(|tab| &tab.saved);
             // A page that is no tab of the strip says its own title and address.
-            let own = if pane.tab.is_none() && !second_view { crate::browsers::split_backend().pane_text(window, pane) } else { None };
+            let own = if pane.tab.is_none() && !second_view {
+                crate::browsers::split_backend().pane_text(window, pane)
+            } else {
+                None
+            };
             let shows_active = saved.is_some_and(|tab| tab.active);
             let mut row = crate::appbar::PaneRow {
                 x: pane.x as f32 * factor,
@@ -503,17 +659,32 @@ unsafe fn pane_rows(window: HWND) -> Vec<crate::appbar::PaneRow> {
                 ),
                 first: pane.first,
                 last: pane.last,
-                title: saved.map(|tab| tab.title.clone()).or_else(|| own.as_ref().map(|text| text.0.clone())).unwrap_or_default(),
+                title: saved
+                    .map(|tab| tab.title.clone())
+                    .or_else(|| own.as_ref().map(|text| text.0.clone()))
+                    .unwrap_or_default(),
                 url: saved
                     .map(|tab| tab.url.clone())
                     .or_else(|| own.as_ref().map(|text| text.1.clone()))
-                    .map(|url| url.trim_start_matches("https://").trim_start_matches("http://").to_owned())
+                    .map(|url| {
+                        url.trim_start_matches("https://")
+                            .trim_start_matches("http://")
+                            .to_owned()
+                    })
                     .unwrap_or_default(),
-                hover: hover.filter(|(over, _)| *over == index).map(|(_, button)| button),
-                can_back: pane.tab.is_some() || (!second_view && backend.pane_can(window, pane, RowButton::Back)),
-                can_forward: pane.tab.is_some() || (!second_view && backend.pane_can(window, pane, RowButton::Forward)),
+                hover: hover
+                    .filter(|(over, _)| *over == index)
+                    .map(|(_, button)| button),
+                can_back: pane.tab.is_some()
+                    || (!second_view && backend.pane_can(window, pane, RowButton::Back)),
+                can_forward: pane.tab.is_some()
+                    || (!second_view && backend.pane_can(window, pane, RowButton::Forward)),
                 read_only: pane.tab.is_none(),
-                caption_hover: if pane.caption > 0.0 { caption_hover(window) } else { None },
+                caption_hover: if pane.caption > 0.0 {
+                    caption_hover(window)
+                } else {
+                    None
+                },
                 zoomed: IsZoomed(window) != 0,
             };
             // The start page is shown as Rivet's new tab, as in the single page bar.
@@ -557,21 +728,23 @@ unsafe fn navigate(window: HWND, button: crate::features::split::RowButton) {
 
 /// A button of a page's row in a split of Rivet's second view is released. A press on a pane that
 /// is not focused focuses it first, so the address field and the browser's commands follow it.
-unsafe fn second_view_row_action(window: HWND, panes: &[crate::features::split::Pane], hit: RowHit) {
+unsafe fn second_view_row_action(
+    window: HWND,
+    panes: &[crate::features::split::Pane],
+    hit: RowHit,
+) {
     use crate::features::second_view;
     use crate::features::split::RowButton;
     let Some(pane) = panes.get(hit.0) else { return };
+    let slot = second_view::slot_of_pane(window, pane).unwrap_or(0);
     let focus = |pane: &crate::features::split::Pane| {
-        let second = second_view::is_second_pane(window, pane);
-        second_view::set_second_focused(second);
+        second_view::set_focused(slot);
         if let Some(tab) = pane.tab {
             crate::features::tabs::activate_tab(window, tab);
-            // Activating the second view's tab moves its page; both pages go back where they were.
+            // Activating an extra view's tab moves its page; every page goes back where it was.
             second_view::hold(window);
         }
-        if second {
-            second_view::focus(window);
-        }
+        second_view::focus_pane(window, slot);
     };
     let done = match hit.1 {
         RowButton::Grip => true,
@@ -586,13 +759,9 @@ unsafe fn second_view_row_action(window: HWND, panes: &[crate::features::split::
             }
             pane.tab.is_some()
         }
-        RowButton::Popout | RowButton::Unsplit => {
-            // The other page stays: its tab becomes active, so the window shows it alone.
-            if let Some(tab) = panes.iter().enumerate().find(|(index, _)| *index != hit.0).and_then(|(_, other)| other.tab) {
-                crate::features::tabs::activate_tab(window, tab);
-            }
-            second_view::close(window)
-        }
+        // The other pages stay. The split ends when one page is left.
+        RowButton::Popout => crate::features::split::pop_out(window, slot),
+        RowButton::Unsplit => second_view::close_pane(window, slot),
     };
     crate::trace::trace(&format!("split row: {:?} of page {}: {done}", hit.1, hit.0));
 }
@@ -626,7 +795,11 @@ unsafe fn row_action(window: HWND, hit: RowHit) {
             }
             navigate(window, hit.1);
         }
-        RowButton::Popout | RowButton::Unsplit => {
+        RowButton::Popout => {
+            let done = crate::features::mini_window::pop_out_pane(window, hit.0);
+            crate::trace::trace(&format!("split row: {:?} of page {}: {done}", hit.1, hit.0));
+        }
+        RowButton::Unsplit => {
             crate::features::tabs::activate_tab(window, tab);
             let done = crate::features::split::unsplit_active(window);
             crate::trace::trace(&format!("split row: {:?} of page {}: {done}", hit.1, hit.0));
@@ -692,6 +865,61 @@ fn with_spaces<R>(window: HWND, edit: impl FnOnce(&mut Spaces) -> R) -> R {
     })
 }
 
+/// The appbar width in DIPs and whether it is hidden. The spaces file keeps both.
+pub(crate) fn appbar_settings(window: HWND) -> (i32, bool) {
+    let layout = layout_of(window);
+    (layout.side, layout.collapsed)
+}
+
+/// Sets the appbar width as a drag of its edge would.
+pub(crate) unsafe fn set_appbar_width(window: HWND, width: i32) {
+    if edit_layout(window, |layout| layout.set_width(width)) {
+        sync_strip(window);
+        update_appbar(window);
+        relayout(window);
+    }
+}
+
+/// Hides or shows the appbar as its toggle would.
+pub(crate) unsafe fn set_appbar_hidden(window: HWND, hidden: bool) {
+    if layout_of(window).collapsed != hidden {
+        toggle_appbar(window);
+    }
+}
+
+/// The spaces of a window and the index of the one it shows.
+pub(crate) fn spaces_snapshot(window: HWND) -> (Vec<crate::spaces::SpaceInfo>, usize) {
+    with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()))
+}
+
+/// Changes one space. The window's frame follows a new colour of the space it shows, and the
+/// spaces file is written on the window's timer.
+pub(crate) unsafe fn edit_space(
+    window: HWND,
+    index: usize,
+    edit: impl FnOnce(&mut crate::spaces::SpaceInfo),
+) -> bool {
+    let (done, tint) = with_spaces(window, |spaces| {
+        let done = spaces.edit(index, edit);
+        (done, spaces.list()[spaces.current()].tint)
+    });
+    APPBAR_STATE.with(|states| {
+        if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+            entry.2 = tint;
+        }
+    });
+    windows_sys::Win32::Graphics::Gdi::InvalidateRect(window, std::ptr::null(), 0);
+    update_appbar(window);
+    done
+}
+
+/// The name of the space a window shows now.
+pub(crate) fn space_name(window: HWND) -> String {
+    with_spaces(window, |spaces| {
+        spaces.list()[spaces.current()].name.clone()
+    })
+}
+
 /// The address of the Rivet start page for the space called `space`.
 unsafe fn start_url(space: &crate::spaces::SpaceInfo) -> Option<String> {
     let browser = crate::installed_browsers::sole_label().unwrap_or(space.browser.label());
@@ -739,23 +967,26 @@ unsafe fn switch_space(window: HWND, index: usize) {
     };
     let target = with_spaces(window, |spaces| spaces.list()[index].clone());
     let root = rivet_core::paths::local_app_data();
-    if let Some(hand_over) = root
-        .as_deref()
-        .and_then(|root| crate::spaces::hand_over(&target, crate::installed_browsers::current(), root))
-    {
+    if let Some(hand_over) = root.as_deref().and_then(|root| {
+        crate::spaces::hand_over(&target, crate::installed_browsers::current(), root)
+    }) {
         let saved: Vec<SavedTab> = open.into_iter().map(|tab| tab.saved).collect();
         hand_over_to(window, index, saved, hand_over, start);
         return;
     }
     let old: Vec<usize> = open.iter().map(|tab| tab.id).collect();
     let saved: Vec<SavedTab> = open.into_iter().map(|tab| tab.saved).collect();
+    crate::features::tab_list::leave_space(window);
     let Some(restore) = with_spaces(window, |spaces| spaces.switch_to(index, saved, &start)) else {
         return;
     };
     crate::trace::trace(&format!(
         "space: to {}, restoring {:?}",
         name.name,
-        restore.iter().map(|tab| tab.url.as_str()).collect::<Vec<_>>()
+        restore
+            .iter()
+            .map(|tab| tab.url.as_str())
+            .collect::<Vec<_>>()
     ));
     let tint = with_spaces(window, |spaces| spaces.list()[spaces.current()].tint);
     APPBAR_STATE.with(|states| {
@@ -765,6 +996,53 @@ unsafe fn switch_space(window: HWND, index: usize) {
     });
     show_tabs(window, old, &restore);
     windows_sys::Win32::Graphics::Gdi::InvalidateRect(window, std::ptr::null(), 0);
+}
+
+/// The names of the window's spaces, in order, for the link rules.
+pub(crate) fn space_names(window: HWND) -> Vec<String> {
+    with_spaces(window, |spaces| {
+        spaces
+            .list()
+            .iter()
+            .map(|space| space.name.clone())
+            .collect()
+    })
+}
+
+/// The name of the space the window shows.
+pub(crate) fn current_space_name(window: HWND) -> Option<String> {
+    with_spaces(window, |spaces| {
+        spaces
+            .list()
+            .get(spaces.current())
+            .map(|space| space.name.clone())
+    })
+}
+
+fn space_index(window: HWND, name: &str) -> Option<usize> {
+    with_spaces(window, |spaces| {
+        spaces
+            .list()
+            .iter()
+            .position(|space| space.name.eq_ignore_ascii_case(name))
+    })
+}
+
+/// Whether the window has a space of this name.
+pub(crate) fn has_space_named(window: HWND, name: &str) -> bool {
+    space_index(window, name).is_some()
+}
+
+/// Makes the space of this name the one the window shows, for a link a rule sends there. False
+/// when there is no such space, or when it lives in another browser and so opened its own window.
+pub(crate) unsafe fn show_space_named(window: HWND, name: &str) -> bool {
+    let Some(index) = space_index(window, name) else {
+        return false;
+    };
+    if with_spaces(window, |spaces| spaces.current()) != index {
+        switch_space(window, index);
+    }
+    with_spaces(window, |spaces| spaces.current()) == index
 }
 
 /// Shows a space that lives in another browser. A window cannot move between browser processes,
@@ -782,7 +1060,10 @@ unsafe fn hand_over_to(
     save_spaces(window, saved.clone());
     let running = crate::installed_browsers::raise_existing(&hand_over.user_data_dir);
     if crate::spaces::show_for(running) == crate::spaces::Show::BringForward {
-        crate::trace::trace(&format!("space: bringing forward the {} window", hand_over.browser.label()));
+        crate::trace::trace(&format!(
+            "space: bringing forward the {} window",
+            hand_over.browser.label()
+        ));
         return;
     }
     let Some(directory) = runtime_directory() else {
@@ -803,7 +1084,9 @@ unsafe fn hand_over_to(
     let text = next.to_json(&restore, layout.side, layout.collapsed, &dir);
     let path = crate::spaces::store_path(&root, Some(&dir));
     if let Err(error) = crate::spaces::write_atomic(&path, &text) {
-        log(&format!("rivet: could not save the spaces for the other browser: {error}"));
+        log(&format!(
+            "rivet: could not save the spaces for the other browser: {error}"
+        ));
         return;
     }
     crate::trace::trace(&format!("space: starting {}", hand_over.browser.label()));
@@ -816,7 +1099,10 @@ unsafe fn show_tabs(window: HWND, old: Vec<usize>, restore: &[SavedTab]) {
     let start = start_url_of(window).unwrap_or_default();
     for tab in restore {
         if crate::features::tabs::new_tab(window) && !tab.url.is_empty() {
-            crate::features::navigation::open(window, crate::spaces::restored_url(&tab.url, &start));
+            crate::features::navigation::open(
+                window,
+                crate::spaces::restored_url(&tab.url, &start),
+            );
         }
     }
     let shown: Vec<usize> = crate::features::tabs::open_tabs(window)
@@ -849,7 +1135,10 @@ unsafe fn show_tabs(window: HWND, old: Vec<usize>, restore: &[SavedTab]) {
             .filter(|(_, other)| other.group.as_ref().is_some_and(|g| g.key == group.key))
             .filter_map(|(slot, _)| shown.get(slot).copied())
             .collect();
-        crate::trace::trace(&format!("space: grouping {members:x?} as {:?}", group.title));
+        crate::trace::trace(&format!(
+            "space: grouping {members:x?} as {:?}",
+            group.title
+        ));
         let made = crate::features::tabs::group_tabs(window, &members, &group.title, group.color);
         crate::trace::trace(&format!("space: grouped {made:02x?}"));
         if let Some(id) = made {
@@ -865,7 +1154,10 @@ unsafe fn show_tabs(window: HWND, old: Vec<usize>, restore: &[SavedTab]) {
         }
     }
     // A collapsed group is folded last, and never over the tab that is shown.
-    let active_group = restore.get(wanted).and_then(|tab| tab.group.as_ref()).map(|g| g.key.clone());
+    let active_group = restore
+        .get(wanted)
+        .and_then(|tab| tab.group.as_ref())
+        .map(|g| g.key.clone());
     for (key, id) in &groups {
         let collapsed = restore
             .iter()
@@ -900,7 +1192,7 @@ thread_local! {
 }
 
 /// The spaces file of this process's browser profile.
-fn spaces_file() -> Option<(std::path::PathBuf, String)> {
+pub(crate) fn spaces_file() -> Option<(std::path::PathBuf, String)> {
     let root = rivet_core::paths::local_app_data()?;
     let dir = crate::spaces::user_data_dir_of(
         std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()),
@@ -933,7 +1225,9 @@ unsafe fn load_persisted(window: HWND) {
         return;
     };
     let pending = stored.spaces.take_current_tabs();
-    stored.spaces.adopt_browser(crate::installed_browsers::current());
+    stored
+        .spaces
+        .adopt_browser(crate::installed_browsers::current());
     let tint = stored.spaces.list()[stored.spaces.current()].tint;
     edit_layout(window, |layout| {
         layout.set_width(stored.width);
@@ -960,7 +1254,11 @@ unsafe fn persist_tick(window: HWND) {
         return;
     };
     if let Some(tabs) = PERSIST.with(|persist| persist.borrow_mut().pending.take()) {
-        if !tabs.is_empty() && open.iter().all(|tab| crate::spaces::is_blank_tab(&tab.saved.url)) {
+        if !tabs.is_empty()
+            && open
+                .iter()
+                .all(|tab| crate::spaces::is_blank_tab(&tab.saved.url))
+        {
             show_tabs(window, open.iter().map(|tab| tab.id).collect(), &tabs);
             return;
         }
@@ -1072,6 +1370,25 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
                 message.message = WM_NULL;
             }
         }
+        // Ctrl+Shift+T reopens the closed tab where it was.
+        if message.message == WM_KEYDOWN
+            && message.wParam == b'T' as usize
+            && GetKeyState(0x11) < 0
+            && GetKeyState(0x10) < 0
+            && GetKeyState(0x12) >= 0
+        {
+            let window = GetAncestor(message.hwnd, GA_ROOT);
+            if attached(window) {
+                PostMessageW(
+                    window,
+                    RegisterWindowMessageW(wide("Rivet.ReopenTab").as_ptr()),
+                    0,
+                    0,
+                );
+                message.message = WM_NULL;
+            }
+        }
+        // Ctrl+T opens the command bar or the new tab page, as the setting says.
         if message.message == WM_KEYDOWN
             && message.wParam == b'T' as usize
             && GetKeyState(0x11) < 0
@@ -1082,7 +1399,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
             if attached(window) {
                 PostMessageW(
                     window,
-                    RegisterWindowMessageW(wide("Rivet.NewStartPage").as_ptr()),
+                    RegisterWindowMessageW(wide("Rivet.CtrlT").as_ptr()),
                     0,
                     0,
                 );
@@ -1172,13 +1489,13 @@ fn tab_row_end(rows: &[Row], y: f32) -> Option<(usize, i32)> {
         if matches!(row, Row::NewTab) && top > 138.0 {
             top += 17.0;
         }
-        if (top..top + 34.0).contains(&y) {
+        if (top..top + tab_rows::height(row)).contains(&y) {
             return match row {
-                Row::Tab { index, .. } => Some((*index, (top + 34.0) as i32)),
+                Row::Tab { index, .. } => Some((*index, (top + tab_rows::height(row)) as i32)),
                 _ => None,
             };
         }
-        top += 34.0;
+        top += tab_rows::height(row);
     }
     None
 }
@@ -1216,15 +1533,17 @@ fn appbar_hit(
         if matches!(row, Row::NewTab) && top > 138.0 {
             top += 17.0;
         }
-        if (top..top + 34.0).contains(&y) {
+        if (top..top + tab_rows::height(row)).contains(&y) {
             return Some(match row {
                 Row::Group(group) => AppbarHit::Folder(group.id),
+                // The title of the split group answers nothing.
+                Row::SplitTitle { .. } => return None,
                 Row::NewTab => AppbarHit::NewTab,
                 Row::Tab { index, .. } if x >= left + inner - 34.0 => AppbarHit::CloseTab(*index),
                 Row::Tab { index, .. } => AppbarHit::Tab(*index),
             });
         }
-        top += 34.0;
+        top += tab_rows::height(row);
     }
     let foot = height - FOOT_HEIGHT;
     if (foot..foot + 28.0).contains(&y) {
@@ -1249,8 +1568,12 @@ fn appbar_hit(
 }
 
 fn appbar_model(window: HWND) -> Vec<Row> {
+    let split = unsafe { crate::features::split::shown_tabs(window) };
+    if let Some(rows) = unsafe { crate::features::tab_list::rows(window) } {
+        return tab_rows::group_split(rows, &split);
+    }
     let tabs = unsafe { crate::features::tabs::tabs(window) }.unwrap_or_default();
-    tab_rows::build_rows(&tabs)
+    tab_rows::group_split(tab_rows::build_rows(&tabs), &split)
 }
 
 unsafe fn appbar_point(window: HWND, lparam: LPARAM) -> Option<AppbarHit> {
@@ -1337,6 +1660,23 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
                 open_menu(window, menu);
             }
         }
+        AppbarHit::Credentials => {
+            // The browser reads the provider's switches and preferences when a Rivet profile
+            // starts, so the choice applies from the next start.
+            let next = saved_credentials().other();
+            if let Some(path) = setup_file() {
+                let saved = rivet_core::credentials::save_to_setup(&path, next);
+                crate::trace::trace(&format!(
+                    "passwords and passkeys: {} saved {saved:?}",
+                    next.as_str()
+                ));
+            }
+            crate::frame::update_appbar(window);
+        }
+        AppbarHit::RivetSettings => {
+            close_menu(window);
+            crate::features::settings::open(window);
+        }
         AppbarHit::ProfileSettings | AppbarHit::ManageProfiles => {
             close_menu(window);
             let url = if hit == AppbarHit::ProfileSettings {
@@ -1359,7 +1699,15 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
             crate::trace::trace(&format!("tab menu: split tab {index}: {activated} {split}"));
         }
         AppbarHit::CloseTab(index) => {
-            crate::features::tabs::close_tab(window, index);
+            crate::features::tab_list::close(window, index);
+        }
+        AppbarHit::PinTab(index) => {
+            close_menu(window);
+            crate::features::tab_list::toggle_pinned(window, index);
+        }
+        AppbarHit::FolderTab(index) => {
+            close_menu(window);
+            crate::features::tab_list::new_folder(window, index, "New folder");
         }
         AppbarHit::NewTab => {
             start_page(window);
@@ -1385,7 +1733,9 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
             }
         }
         AppbarHit::Folder(id) => {
-            crate::features::tabs::toggle_group(window, &id);
+            if !crate::features::tab_list::toggle_folder(window, &id) {
+                crate::features::tabs::toggle_group(window, &id);
+            }
         }
         AppbarHit::Toggle => toggle_appbar(window),
         AppbarHit::Resizer => {}
@@ -1616,10 +1966,14 @@ const DRAG_TIMER: usize = 0x5249_5653 + 1;
 /// The shortest time between two layouts of the width drag, one displayed frame.
 const DRAG_FRAME_MS: f32 = 16.0;
 
+/// The pointer x of a pending width drag, when the browser was last laid out for it, and whether
+/// its timer is running.
+type DragPending = (Option<i32>, f32, bool);
+
 thread_local! {
     /// The latest pointer x of a width drag that has not been laid out yet, and when the browser
     /// was last laid out for the drag.
-    static DRAG_PENDING: RefCell<HashMap<isize, (Option<i32>, f32, bool)>> = RefCell::new(HashMap::new());
+    static DRAG_PENDING: RefCell<HashMap<isize, DragPending>> = RefCell::new(HashMap::new());
 }
 
 /// Follows a drag of the resizer: the appbar's right edge goes to the pointer and the browser lays
@@ -1636,7 +1990,9 @@ unsafe fn drag_to(window: HWND, x: i32) {
     let now = now_ms();
     let due = DRAG_PENDING.with(|pending| {
         let mut all = pending.borrow_mut();
-        let entry = all.entry(window as isize).or_insert((None, f32::MIN, false));
+        let entry = all
+            .entry(window as isize)
+            .or_insert((None, f32::MIN, false));
         entry.0 = Some(x);
         let wait = DRAG_FRAME_MS - (now - entry.1);
         if wait <= 0.0 {
@@ -1659,11 +2015,14 @@ unsafe fn drag_to(window: HWND, x: i32) {
 unsafe fn apply_drag(window: HWND) {
     let now = now_ms();
     let latest = DRAG_PENDING.with(|pending| {
-        pending.borrow_mut().get_mut(&(window as isize)).and_then(|entry| {
-            entry.1 = now;
-            entry.2 = false;
-            entry.0.take()
-        })
+        pending
+            .borrow_mut()
+            .get_mut(&(window as isize))
+            .and_then(|entry| {
+                entry.1 = now;
+                entry.2 = false;
+                entry.0.take()
+            })
     });
     KillTimer(window, DRAG_TIMER);
     let Some(x) = latest else { return };
@@ -1708,6 +2067,7 @@ static SECOND_VIEW_IDLE: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomi
 
 /// Lays the second page view out now and keeps doing so for a few ticks.
 pub(crate) unsafe fn follow_second_view(window: HWND) {
+    crate::features::pane_infobar::follow(window);
     if !crate::features::second_view::is_open(window) {
         return;
     }
@@ -1745,7 +2105,13 @@ fn report_vertical_tabs(controller: usize) {
 
 /// The windows of this process that show the Rivet frame. Call it on the browser UI thread.
 pub(crate) fn rivet_windows() -> Vec<HWND> {
-    APPBARS.with(|appbars| appbars.borrow().keys().map(|window| *window as HWND).collect())
+    APPBARS.with(|appbars| {
+        appbars
+            .borrow()
+            .keys()
+            .map(|window| *window as HWND)
+            .collect()
+    })
 }
 
 /// Every top-level browser window of this process, whoever made it. For the app window spike.
@@ -1759,7 +2125,12 @@ pub(crate) fn browser_windows_of_process() -> Vec<HWND> {
         1
     }
     let mut found: Vec<HWND> = Vec::new();
-    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows(Some(each), &mut found as *mut _ as LPARAM) };
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows(
+            Some(each),
+            &mut found as *mut _ as LPARAM,
+        )
+    };
     found
 }
 
@@ -1784,7 +2155,8 @@ unsafe fn dpi(window: HWND) -> u32 {
 /// profile has one, else the one in Rivet's own data. Never the install folder, which an update
 /// replaces and the person's account cannot write.
 pub(crate) fn debug_directory() -> Option<std::path::PathBuf> {
-    own_debug_directory().or_else(|| rivet_core::paths::Layout::current().map(|layout| layout.debug()))
+    own_debug_directory()
+        .or_else(|| rivet_core::paths::Layout::current().map(|layout| layout.debug()))
 }
 
 /// The folder of debug switches that belong to this browser process alone: `rivet-debug` inside the
@@ -1796,7 +2168,11 @@ pub(crate) fn own_debug_directory() -> Option<std::path::PathBuf> {
 
 fn own_debug_directory_in(arguments: impl Iterator<Item = String>) -> Option<std::path::PathBuf> {
     arguments
-        .filter_map(|argument| argument.strip_prefix("--user-data-dir=").map(|dir| std::path::PathBuf::from(dir.trim_matches('"'))))
+        .filter_map(|argument| {
+            argument
+                .strip_prefix("--user-data-dir=")
+                .map(|dir| std::path::PathBuf::from(dir.trim_matches('"')))
+        })
         .next()
         .map(|profile| profile.join("rivet-debug"))
         .filter(|dir| dir.is_dir())
@@ -1924,7 +2300,14 @@ fn top_inset_extra(window: HWND) -> Option<i32> {
 fn attach_steps() -> Vec<Step<Attach>> {
     use crate::feature::{Feature, FeatureStep, OnFailure, Step};
     let feature = |feature, needs, install, on_failure, skip_when_unavailable, log_failure| {
-        Step::Feature(FeatureStep { feature, needs, install, on_failure, skip_when_unavailable, log_failure })
+        Step::Feature(FeatureStep {
+            feature,
+            needs,
+            install,
+            on_failure,
+            skip_when_unavailable,
+            log_failure,
+        })
     };
     vec![
         feature(
@@ -2013,6 +2396,8 @@ fn attach_steps() -> Vec<Step<Attach>> {
         Step::Setup(|_| unsafe {
             let new_tab = crate::features::tabs::install_new_tab(crate::builds::get().toolbar.skip);
             crate::trace::trace(&format!("new tab: {new_tab:?}"));
+            let links = crate::features::page_links::install();
+            crate::trace::trace(&format!("links in pages: {links:?}"));
             true
         }),
         feature(
@@ -2068,14 +2453,21 @@ fn attach_steps() -> Vec<Step<Attach>> {
                 PostMessageW(window, group_probe_message(), 0, 0);
             }
             // Tab titles and selection can change without a window title change.
-            windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(window, TAB_REFRESH_TIMER, 500, None);
+            windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(
+                window,
+                TAB_REFRESH_TIMER,
+                500,
+                None,
+            );
             if attach.vertical_tabs {
                 for controller in crate::features::vertical_tabs::reported() {
                     PostMessageW(window, vertical_tabs_message(), controller, 0);
                 }
             }
             if let Err(error) = taskbar::apply(window as isize, runtime_directory().as_deref()) {
-                log(&format!("rivet: could not set the taskbar identity: {error}"));
+                log(&format!(
+                    "rivet: could not set the taskbar identity: {error}"
+                ));
             }
             set_rivet_icons(window);
             true
@@ -2117,14 +2509,20 @@ unsafe fn create_appbar(window: HWND) {
     if attached(window) {
         return;
     }
-    if let Some(path) = own_debug_directory().map(|dir| dir.join("rivet-vertical-tabs.log")).filter(|path| path.is_file()) {
+    if let Some(path) = own_debug_directory()
+        .map(|dir| dir.join("rivet-vertical-tabs.log"))
+        .filter(|path| path.is_file())
+    {
         crate::trace::set_trace(path);
     } else if let Some(path) = trace_file("rivet-vertical-tabs.log") {
         crate::trace::set_trace(path);
     }
     // Without the layout hook the browser would draw underneath the appbar, so an unknown
     // browser build keeps working without Rivet instead.
-    let mut attach = Attach { window, vertical_tabs: false };
+    let mut attach = Attach {
+        window,
+        vertical_tabs: false,
+    };
     crate::feature::run(&attach_steps(), &mut attach, log);
 }
 
@@ -2180,23 +2578,79 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     .get(&(window as isize))
                     .and_then(|state| state.0)
             });
-            let rows = if visible { pane_rows(window) } else { Vec::new() };
+            let rows = if visible {
+                pane_rows(window)
+            } else {
+                Vec::new()
+            };
             if let Err(error) = appbar.update_rows(&rows, dpi) {
                 log(&format!("rivet: could not draw the page rows: {error}"));
             }
             // A repaint asked for from inside the bar's own work waits for the next one.
             if !crate::features::address_bar::busy() {
-                let top_bar = if visible { crate::features::address_bar::view(window) } else { None };
+                let top_bar = if visible {
+                    crate::features::address_bar::view(window)
+                } else {
+                    None
+                };
                 if let Err(error) = appbar.update_address(window as isize, top_bar.as_ref(), dpi) {
                     log(&format!("rivet: could not draw the top bar: {error}"));
                 }
             }
-            let bar = if visible { crate::dev_bar::view(window) } else { None };
+            let preview = if visible {
+                crate::features::link_preview::view(window)
+            } else {
+                None
+            };
+            if let Err(error) = appbar.update_preview(preview.as_ref(), dpi) {
+                log(&format!("rivet: could not draw the link preview: {error}"));
+            }
+            let rules = if visible {
+                crate::features::link_rules::view(window)
+            } else {
+                None
+            };
+            if let Err(error) = appbar.update_link_rules(rules.as_ref(), dpi) {
+                log(&format!("rivet: could not draw the link rules: {error}"));
+            }
+            if !crate::features::command_bar::busy() {
+                let command = if visible {
+                    crate::features::command_bar::view(window)
+                } else {
+                    None
+                };
+                if let Err(error) = appbar.update_command(window as isize, command.as_ref(), dpi) {
+                    log(&format!("rivet: could not draw the command bar: {error}"));
+                }
+            }
+            if !crate::features::settings::busy() {
+                let card = if visible {
+                    crate::features::settings::view(window)
+                } else {
+                    None
+                };
+                if let Err(error) = appbar.update_settings(window as isize, card.as_ref(), dpi) {
+                    log(&format!(
+                        "rivet: could not draw the Rivet settings: {error}"
+                    ));
+                }
+            }
+            let bar = if visible {
+                crate::dev_bar::view(window)
+            } else {
+                None
+            };
             if let Err(error) = appbar.update_dev(bar.as_ref(), dpi) {
                 log(&format!("rivet: could not draw the developer bar: {error}"));
             }
-            if let Err(error) = appbar.update_held(held_warning().as_deref(), (client.right, client.bottom), dpi) {
-                log(&format!("rivet: could not draw the held build warning: {error}"));
+            if let Err(error) = appbar.update_held(
+                held_warning().as_deref(),
+                (client.right, client.bottom),
+                dpi,
+            ) {
+                log(&format!(
+                    "rivet: could not draw the held build warning: {error}"
+                ));
             }
             let (spaces, current) =
                 with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()));
@@ -2238,6 +2692,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             }
             sync_ground(window, appbar, visible, dpi);
             crate::side_rail::update(window, appbar, visible, dpi);
+            crate::features::mini_window::update(window, appbar, visible, dpi);
         }
     });
 }
@@ -2253,25 +2708,45 @@ unsafe fn ground_holes(window: HWND) -> Vec<crate::ground::Hole> {
             .map(|pane| {
                 // The hole runs from the page's row to its end, with any bars of the browser between.
                 let y = pane.row_y + crate::features::split::ROW_HEIGHT;
-                frame_layout::Rect { x: pane.x, y, width: pane.width, height: pane.y + pane.height - y }
+                frame_layout::Rect {
+                    x: pane.x,
+                    y,
+                    width: pane.width,
+                    height: pane.y + pane.height - y,
+                }
             })
             .collect();
         let active = panes.iter().position(|pane| pane.active).unwrap_or(0);
-        let mut holes = crate::ground::split_holes(&pages, active, crate::features::split::ROW_HEIGHT);
-        // The Sidebar's rail and the caption buttons sit at the window's right edge, in the panel
-        // of the last page as in a window that is not split.
-        if let (Some(last), Some(panel)) = (holes.last_mut(), frame_layout::panel_bounds(window)) {
-            last.rect.width = last.rect.width.max(panel.x + panel.width - last.rect.x);
+        let mut holes =
+            crate::ground::split_holes(&pages, active, crate::features::split::ROW_HEIGHT);
+        // The Sidebar's rail and the caption buttons sit at the window's right edge, in the panels
+        // of the right-most pages as in a window that is not split.
+        let right = panes
+            .iter()
+            .map(|pane| pane.x + pane.width)
+            .max()
+            .unwrap_or(0);
+        if let Some(panel) = frame_layout::panel_bounds(window) {
+            for (hole, pane) in holes.iter_mut().zip(&panes) {
+                if pane.x + pane.width == right {
+                    hole.rect.width = hole.rect.width.max(panel.x + panel.width - hole.rect.x);
+                }
+            }
         }
         return holes;
     }
-    let leading = LAID_LEADING.with(|all| all.borrow().get(&(window as isize)).copied()).unwrap_or(0);
+    let leading = LAID_LEADING
+        .with(|all| all.borrow().get(&(window as isize)).copied())
+        .unwrap_or(0);
     frame_layout::panel_bounds(window)
         .map(|mut rect| {
             let cut = (leading - rect.x).max(0).min(rect.width - 1);
             rect.x += cut;
             rect.width -= cut;
-            vec![Hole { rect, raise: Raise::Page }]
+            vec![Hole {
+                rect,
+                raise: Raise::Page,
+            }]
         })
         .unwrap_or_default()
 }
@@ -2420,7 +2895,10 @@ unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
     let strip = strip_hit(point.x, point.y, dpi, border, layout.strip());
     let factor = dpi as f32 / 96.0;
     // The split's own rows and the developer bar take their input from the client area.
-    if strip == StripHit::Browser && row_hit(window, point).is_none() && crate::dev_bar::hit(window, point).is_none() {
+    if strip == StripHit::Browser
+        && row_hit(window, point).is_none()
+        && crate::dev_bar::hit(window, point).is_none()
+    {
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(window, &mut client);
         // The panel starts one gap below the client area's top edge, so the row is measured from it.
@@ -2436,10 +2914,11 @@ unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
     let x = point.x as f32 / factor;
     let y = (point.y - top_border(window)) as f32 / factor;
     let side = layout.side as f32;
-    if strip == StripHit::Caption && x >= side - 36.0 && x < side - 8.0 && (12.0..40.0).contains(&y)
-    {
-        StripHit::Appbar
-    } else if strip == StripHit::Resizer {
+    let on_caption_button = strip == StripHit::Caption
+        && x >= side - 36.0
+        && x < side - 8.0
+        && (12.0..40.0).contains(&y);
+    if on_caption_button || strip == StripHit::Resizer {
         StripHit::Appbar
     } else {
         strip
@@ -2460,7 +2939,19 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         start_page(window);
         return 0;
     }
-    if message == RegisterWindowMessageW(wide(crate::features::second_view::LAYOUT_MESSAGE).as_ptr())
+    if message == RegisterWindowMessageW(wide("Rivet.CtrlT").as_ptr()) && attached(window) {
+        if !crate::features::tab_list::open_command_bar(window) {
+            start_page(window);
+        }
+        return 0;
+    }
+    if message == RegisterWindowMessageW(wide("Rivet.ReopenTab").as_ptr()) && attached(window) {
+        crate::features::tab_list::reopen(window);
+        update_appbar(window);
+        return 0;
+    }
+    if message
+        == RegisterWindowMessageW(wide(crate::features::second_view::LAYOUT_MESSAGE).as_ptr())
         && attached(window)
     {
         crate::features::second_view::relayout(window);
@@ -2479,10 +2970,51 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         update_appbar(window);
         return 0;
     }
+    if message == RegisterWindowMessageW(wide(rivet_protocol::window::MINI_WINDOW_MESSAGE).as_ptr())
+        && attached(window)
+    {
+        crate::features::mini_window::command(window, wparam, lparam);
+        update_appbar(window);
+        return 0;
+    }
+    if message == windows_sys::Win32::UI::WindowsAndMessaging::WM_COPYDATA && attached(window) {
+        if let Some(result) = crate::features::link_rules::copy_data(window, lparam) {
+            return result;
+        }
+    }
+    // The command bar's scrim and the link preview's header lie over the pages, and the Mini
+    // Window floats over them, so they take the pointer and the keyboard before the pages do.
+    if attached(window) {
+        if let Some(result) = crate::features::settings::message(window, message, wparam, lparam) {
+            return result;
+        }
+        if let Some(result) = crate::features::link_rules::message(window, message, wparam, lparam)
+        {
+            return result;
+        }
+        if let Some(result) = crate::features::command_bar::message(window, message, wparam, lparam)
+        {
+            return result;
+        }
+        if let Some(result) =
+            crate::features::link_preview::message(window, message, wparam, lparam)
+        {
+            return result;
+        }
+        if let Some(result) = crate::features::page_links::message(window, message, wparam, lparam)
+        {
+            return result;
+        }
+        if let Some(result) = crate::features::mini_window::on_mouse(window, message, lparam) {
+            return result;
+        }
+    }
     if attached(window) {
         // The second page view's divider and its keyboard focus take the mouse before the rest.
         let browser = || call_browser(window, message, wparam, lparam);
-        if let Some(result) = crate::features::second_view::on_mouse(window, message, lparam, &browser) {
+        if let Some(result) =
+            crate::features::second_view::on_mouse(window, message, lparam, &browser)
+        {
             return result;
         }
     }
@@ -2493,7 +3025,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
     // Rivet's top bar takes the pointer over it and, while its address is edited, the keyboard and
     // the input method.
     if attached(window) && !menu_open(window) && !tab_dragging(window) && !dragging(window) {
-        if let Some(result) = crate::features::address_bar::message(window, message, wparam, lparam) {
+        if let Some(result) = crate::features::address_bar::message(window, message, wparam, lparam)
+        {
             return result;
         }
     }
@@ -2570,6 +3103,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             );
             if let Some(hit) = hit {
                 ROW_PRESS.with(|all| all.borrow_mut().insert(window as isize, hit));
+                // A grip drag may end anywhere, so its release comes back to this window.
+                if hit.1 == crate::features::split::RowButton::Grip {
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::SetCapture(window);
+                }
             }
             0
         }
@@ -2585,7 +3122,25 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     y: ((lparam >> 16) & 0xffff) as i16 as i32,
                 },
             );
-            if let Some(hit) = pressed.filter(|pressed| Some(*pressed) == now) {
+            let (x, y) = (
+                (lparam & 0xffff) as i16 as i32,
+                ((lparam >> 16) & 0xffff) as i16 as i32,
+            );
+            // A grip released outside the pages makes its page a Mini Window.
+            let grip =
+                pressed.filter(|pressed| pressed.1 == crate::features::split::RowButton::Grip);
+            if grip.is_some() {
+                windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+            }
+            if let Some(hit) =
+                grip.filter(|hit| crate::features::mini_window::grip_released(window, hit.0, x, y))
+            {
+                crate::trace::trace(&format!(
+                    "split row: grip of page {} dropped outside the pages",
+                    hit.0
+                ));
+                update_appbar(window);
+            } else if let Some(hit) = pressed.filter(|pressed| Some(*pressed) == now) {
                 row_action(window, hit);
             }
             0
@@ -2772,15 +3327,31 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             call_browser(window, message, wparam, lparam)
         }
         // Rivet's caption buttons act on release over the button they went down on, as Windows' own.
-        WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK if attached(window) && crate::caption_of(wparam as u32).is_some() => {
-            CAPTION_STATE.with(|all| all.borrow_mut().entry(window as isize).or_default().1 = crate::caption_of(wparam as u32));
+        WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK
+            if attached(window) && crate::caption_of(wparam as u32).is_some() =>
+        {
+            CAPTION_STATE.with(|all| {
+                all.borrow_mut().entry(window as isize).or_default().1 =
+                    crate::caption_of(wparam as u32)
+            });
             0
         }
         WM_NCLBUTTONUP if attached(window) && crate::caption_of(wparam as u32).is_some() => {
             let button = crate::caption_of(wparam as u32);
-            let pressed = CAPTION_STATE.with(|all| all.borrow_mut().entry(window as isize).or_default().1.take());
+            let pressed = CAPTION_STATE.with(|all| {
+                all.borrow_mut()
+                    .entry(window as isize)
+                    .or_default()
+                    .1
+                    .take()
+            });
             if let Some(button) = button.filter(|button| pressed == Some(*button)) {
-                PostMessageW(window, WM_SYSCOMMAND, crate::caption_command(button, IsZoomed(window) != 0) as usize, lparam);
+                PostMessageW(
+                    window,
+                    WM_SYSCOMMAND,
+                    crate::caption_command(button, IsZoomed(window) != 0) as usize,
+                    lparam,
+                );
             }
             0
         }
@@ -2803,6 +3374,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         }
         WM_NCLBUTTONUP if wparam as u32 == APPBAR_HIT && attached(window) => {
             TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize)));
+            crate::features::link_preview::cancel_hold(window);
             let hit = appbar_point(window, lparam);
             let action = APPBAR_STATE.with(|states| {
                 let mut states = states.borrow_mut();
@@ -2893,7 +3465,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             // One scale serves the appbar, the address bar and the page offset. A browser that did
             // not lay out during the change still moved to the new monitor's DPI, so the old
             // monitor's scale is never kept.
-            let laid = LAID_DURING_DPI_CHANGE.with(|laid| laid.borrow_mut().remove(&(window as isize)));
+            let laid =
+                LAID_DURING_DPI_CHANGE.with(|laid| laid.borrow_mut().remove(&(window as isize)));
             let now = dpi_after_change(laid, (wparam & 0xffff) as u32);
             LAYOUT_DPI.with(|layouts| layouts.borrow_mut().insert(window as isize, now));
             // The browser relays out inside this call and reports its scale through the layout
@@ -2920,6 +3493,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             KillTimer(window, PEEK_TIMER);
             KillTimer(window, SECOND_VIEW_TIMER);
             crate::features::second_view::forget(window);
+            crate::features::sidebar_page::forget(window);
+            crate::features::pane_infobar::forget(window);
             LAYOUTS.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
             DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize)));
@@ -2929,12 +3504,18 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             PRESSES.with(|all| all.borrow_mut().remove(&(window as isize)));
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
             crate::features::address_bar::forget(window);
+            crate::features::command_bar::forget(window);
+            crate::features::settings::forget(window);
+            crate::features::link_rules::forget(window);
+            crate::features::link_preview::forget(window);
+            crate::features::page_links::forget(window);
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::features::vertical_tabs::forget(window);
             crate::features::tab_strip::forget(window);
             frame_layout::forget_view(window);
             crate::features::widgets::forget(window);
             crate::side_rail::forget(window);
+            crate::features::mini_window::forget(window);
             LAYOUT_DPI.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             let key = wide(ORIGINAL_PROC);
             let original = GetPropW(window, key.as_ptr());
@@ -2947,13 +3528,17 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, OPEN_LATER_TIMER);
             let due: Vec<_> = OPEN_LATER.with(|later| {
                 let mut later = later.borrow_mut();
-                let (mine, rest): (Vec<_>, Vec<_>) = later.drain(..).partition(|(owner, ..)| *owner == window as isize);
+                let (mine, rest): (Vec<_>, Vec<_>) = later
+                    .drain(..)
+                    .partition(|(owner, ..)| *owner == window as isize);
                 *later = rest;
                 mine
             });
             for (_, contents, url) in due {
                 let opened = crate::features::navigation::open_if_active(window, contents, &url);
-                crate::trace::trace(&format!("new tab in a Rivet window opens the start page later: {opened}"));
+                crate::trace::trace(&format!(
+                    "new tab in a Rivet window opens the start page later: {opened}"
+                ));
             }
             0
         }
@@ -2973,6 +3558,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
             crate::features::side_panel::tick(window, debug_directory().as_deref());
+            crate::features::tab_list::tick(window);
+            crate::features::command_bar::tick(window);
             // A browser can write its own identity again, for example when a profile finishes
             // loading. The taskbar groups by that identity, so Rivet puts its own back.
             if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
@@ -2991,54 +3578,129 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 if let Ok(text) = std::fs::read_to_string(&flag) {
                     let _ = std::fs::remove_file(&flag);
                     let mut words = text.split_whitespace();
-                    let index = words.clone().nth(1).and_then(|word| word.parse::<usize>().ok()).unwrap_or(0);
+                    let index = words
+                        .clone()
+                        .nth(1)
+                        .and_then(|word| word.parse::<usize>().ok())
+                        .unwrap_or(0);
                     let done = match words.next() {
                         // `new ADDRESS` opens the tab on that address at once, as the start page does, so the
                         // browser's own new tab page is never shown in the app window first.
                         Some("new") => {
                             let address = text.trim().trim_start_matches("new").trim();
-                            crate::features::tabs::new_tab(window) && (address.is_empty() || crate::features::navigation::open(window, address))
+                            crate::features::tabs::new_tab(window)
+                                && (address.is_empty()
+                                    || crate::features::navigation::open(window, address))
                         }
                         Some("activate") => crate::features::tabs::activate_tab(window, index),
                         Some("close") => crate::features::tabs::close_tab(window, index),
+                        Some("closesel") => crate::features::tab_list::close(window, index),
                         // App window spike: a tab added through Chromium's own tab strip functions.
-                        Some(word @ ("back" | "forward" | "reload" | "stop")) => crate::features::page_bar::Command::parse(word)
-                            .is_some_and(|command| crate::features::page_bar::run(window, command)),
+                        Some(word @ ("back" | "forward" | "reload" | "stop")) => {
+                            crate::features::page_bar::Command::parse(word).is_some_and(|command| {
+                                crate::features::page_bar::run(window, command)
+                            })
+                        }
                         Some("pages") => {
-                            let pages = crate::features::page_bar::pages(window).unwrap_or_default();
+                            let pages =
+                                crate::features::page_bar::pages(window).unwrap_or_default();
                             for page in &pages {
-                                crate::trace::trace(&format!("page {} active {} title {:?} url {:?}", page.index, page.active, page.title, page.url));
+                                crate::trace::trace(&format!(
+                                    "page {} active {} title {:?} url {:?}",
+                                    page.index, page.active, page.title, page.url
+                                ));
                             }
                             !pages.is_empty()
                         }
                         Some("viewclose") => crate::features::second_view::close(window),
                         Some("viewfocus") => crate::features::second_view::focus(window),
-                        Some("share") => crate::features::second_view::set_share(window, index as u32),
+                        Some("share") => {
+                            crate::features::second_view::set_share(window, index as u32)
+                        }
                         Some("tree") => crate::features::app_window::view_tree(window),
                         Some("dump") => crate::features::app_window::dump_small(window),
                         Some("scan") => crate::features::app_window::scan_type(window),
                         Some("flip") => {
-                            let offsets: Vec<usize> = text.split_whitespace().skip(1).filter_map(|word| word.parse().ok()).collect();
+                            let offsets: Vec<usize> = text
+                                .split_whitespace()
+                                .skip(1)
+                                .filter_map(|word| word.parse().ok())
+                                .collect();
                             crate::features::app_window::flip_new_tab(window, &offsets)
                         }
-                        Some("view") => crate::features::second_view::open_from_other_window(window),
+                        Some("view") => {
+                            crate::features::second_view::open_from_other_window(window)
+                        }
                         // The Sidebar: `dock N` shows tab N's page in the second view docked at the
                         // right, `undock` gives it back to its tab.
                         Some("dock") => crate::features::second_view::open_tab(
                             window,
                             index,
-                            crate::features::second_view::Mode::Docked { width: crate::features::second_view::SIDEBAR_WIDTH },
+                            crate::features::second_view::Mode::Docked {
+                                width: crate::features::second_view::SIDEBAR_WIDTH,
+                            },
                         ),
-                        Some("undock") => crate::features::second_view::is_docked(window) && crate::features::second_view::close(window),
+                        Some("undock") => {
+                            crate::features::second_view::is_docked(window)
+                                && crate::features::second_view::close(window)
+                        }
                         // The top bar: `bar` starts editing the address, `bartext` traces what it holds,
                         // `barsecurity` the page's security level and `barinfo` opens the page info bubble.
                         Some("bar") => crate::features::address_bar::focus(window),
+                        // The command bar: `command` opens it, `commandtype TEXT` puts text in its
+                        // field, `commandrun N` runs row N. The link preview: `preview N` shows tab N
+                        // floating, `previewopen` opens it as a tab and `previewesc` dismisses it.
+                        // Rivet settings: `settings` opens the card, `settingskey KEY [TEXT]` presses
+                        // up, down, left, right, enter, esc or tab on it, or `type` puts TEXT in the
+                        // row being edited.
+                        Some("settings") => crate::features::settings::open(window),
+                        Some("settingskey") => {
+                            let rest = text.trim().trim_start_matches("settingskey").trim();
+                            let (key, typed) = rest.split_once(' ').unwrap_or((rest, ""));
+                            crate::features::settings::key_for_test(window, key, typed)
+                        }
+                        Some("command") => crate::features::command_bar::open(window),
+                        Some("commandtype") => {
+                            let text = text.trim().trim_start_matches("commandtype").trim();
+                            crate::features::command_bar::type_for_test(window, text)
+                        }
+                        Some("commandrun") => {
+                            crate::features::command_bar::run_for_test(window, index)
+                        }
+                        Some("preview") => crate::features::link_preview::open(window, index),
+                        // Link rules: `linkrules` opens the panel, `linkrulesadd` adds the page's
+                        // site, `linkrulestarget N` and `linkrulesremove N` click rule N, and
+                        // `linkopen ADDRESS` routes an address as `rivet session open` does.
+                        Some("linkrules") => crate::features::link_rules::open(window),
+                        Some(word @ ("linkrulesadd" | "linkrulestarget" | "linkrulesremove")) => {
+                            use crate::features::link_rules::{click_for_test, describe, Hit};
+                            let hit = match word {
+                                "linkrulesadd" => Hit::AddSite,
+                                "linkrulestarget" => Hit::Target(index),
+                                _ => Hit::Remove(index),
+                            };
+                            let done = click_for_test(window, hit);
+                            crate::trace::trace(&format!("link rules now [{}]", describe(window)));
+                            done
+                        }
+                        Some("linkopen") => {
+                            let address = text.trim().trim_start_matches("linkopen").trim();
+                            crate::features::link_rules::open_request(window, address)
+                        }
+                        Some("previewopen") => crate::features::link_preview::open_as_tab(window),
+                        Some("previewesc") => crate::features::link_preview::dismiss(window),
                         Some("bartext") => {
-                            crate::trace::trace(&format!("address bar text {:?}", crate::features::address_bar::text(window)));
+                            crate::trace::trace(&format!(
+                                "address bar text {:?}",
+                                crate::features::address_bar::text(window)
+                            ));
                             true
                         }
                         Some("barsecurity") => {
-                            crate::trace::trace(&format!("address bar security {:?}", crate::features::omnibox::security_level(window)));
+                            crate::trace::trace(&format!(
+                                "address bar security {:?}",
+                                crate::features::omnibox::security_level(window)
+                            ));
                             true
                         }
                         Some("barinfo") => crate::features::omnibox::page_info(window),
@@ -3048,14 +3710,19 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                             crate::trace::trace(&format!("address bar suggestions {found:?}"));
                             found.is_some()
                         }
-                        Some("barimedone") => crate::features::address_bar::finish_composition_for_test(window),
+                        Some("barimedone") => {
+                            crate::features::address_bar::finish_composition_for_test(window)
+                        }
                         Some("barime") => {
                             let text = text.trim().trim_start_matches("barime").trim();
                             crate::features::address_bar::compose_for_test(window, text)
                         }
                         Some("barclassify") => {
                             let text = text.trim().trim_start_matches("barclassify").trim();
-                            crate::trace::trace(&format!("address bar classify {:?}", crate::features::omnibox::classify(window, text)));
+                            crate::trace::trace(&format!(
+                                "address bar classify {:?}",
+                                crate::features::omnibox::classify(window, text)
+                            ));
                             true
                         }
                         Some("move") => crate::features::app_window::move_tab_in(window),
@@ -3069,12 +3736,21 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                             let address = text.trim().trim_start_matches("navigate").trim();
                             crate::features::navigation::open(window, address)
                         }
-                        _ => false,
+                        _ => crate::features::tab_list::command(window, &text).unwrap_or(false),
                     };
                     let titles: Vec<String> = crate::features::tabs::tabs(window)
-                        .map(|tabs| tabs.iter().map(|tab| format!("{}{}", if tab.active { "*" } else { "" }, tab.title)).collect())
+                        .map(|tabs| {
+                            tabs.iter()
+                                .map(|tab| {
+                                    format!("{}{}", if tab.active { "*" } else { "" }, tab.title)
+                                })
+                                .collect()
+                        })
                         .unwrap_or_default();
-                    crate::trace::trace(&format!("tab command {:?}: {done} tabs {titles:?}", text.trim()));
+                    crate::trace::trace(&format!(
+                        "tab command {:?}: {done} tabs {titles:?}",
+                        text.trim()
+                    ));
                     let urls: Vec<String> = crate::features::tabs::open_tabs(window)
                         .map(|tabs| tabs.into_iter().map(|tab| tab.saved.url).collect())
                         .unwrap_or_default();
@@ -3086,16 +3762,29 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 if let Ok(text) = std::fs::read_to_string(&flag) {
                     let _ = std::fs::remove_file(&flag);
                     use crate::features::split::Side;
-                    let side = match text.trim() {
+                    // The flag reads a side, then optionally the slot of the page to split.
+                    let mut words = text.split_whitespace();
+                    let side = match words.next().unwrap_or("") {
                         "left" => Side::Left,
                         "top" => Side::Top,
                         "bottom" => Side::Bottom,
                         _ => Side::Right,
                     };
+                    let slot = words.next().and_then(|word| word.parse::<usize>().ok());
+                    // The first tab that is neither active nor shown in the split yet.
+                    let shown = crate::features::split::shown_tabs(window);
                     let tabs = crate::features::tabs::tabs(window).unwrap_or_default();
-                    let other = tabs.iter().find(|tab| !tab.active).map(|tab| tab.index);
-                    let done = other.is_some_and(|index| crate::features::split::split_beside(window, index, side));
-                    crate::trace::trace(&format!("drop flag: {side:?} {other:?} {done}"));
+                    let other = tabs
+                        .iter()
+                        .find(|tab| !tab.active && !shown.contains(&tab.index))
+                        .map(|tab| tab.index);
+                    let done = other.is_some_and(|index| {
+                        crate::features::split::split_beside_page(window, index, side, slot)
+                    });
+                    let pages = crate::features::split::panes(window).len();
+                    crate::trace::trace(&format!(
+                        "drop flag: {side:?} of {slot:?} {other:?} {done} pages {pages}"
+                    ));
                 }
             }
             persist_tick(window);
@@ -3116,6 +3805,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ if message == attach_message() => {
+            crate::features::tab_list::connect_command_bar();
             create_appbar(window);
             0
         }
@@ -3129,7 +3819,11 @@ mod tests {
     fn nfr3_a_build_without_frame_paint_still_attaches_the_rivet_frame() {
         let steps = super::attach_steps();
         let colour = steps.iter().find_map(|step| match step {
-            crate::feature::Step::Feature(step) if step.feature == crate::feature::Feature::FrameColour => Some(step),
+            crate::feature::Step::Feature(step)
+                if step.feature == crate::feature::Feature::FrameColour =>
+            {
+                Some(step)
+            }
             _ => None,
         });
         assert!(colour.expect("the frame colour step").skip_when_unavailable);
@@ -3138,13 +3832,24 @@ mod tests {
     #[test]
     fn test_switches_are_read_from_the_browsers_own_profile() {
         let profile = rivet_core::paths::TestDir::new("rivet-own-debug");
-        let given = || ["chrome.exe".to_owned(), format!("--user-data-dir={}", profile.path().display())].into_iter();
+        let given = || {
+            [
+                "chrome.exe".to_owned(),
+                format!("--user-data-dir={}", profile.path().display()),
+            ]
+            .into_iter()
+        };
         assert_eq!(super::own_debug_directory_in(given()), None);
         std::fs::create_dir_all(profile.path().join("rivet-debug")).unwrap();
-        assert_eq!(super::own_debug_directory_in(given()), Some(profile.path().join("rivet-debug")));
+        assert_eq!(
+            super::own_debug_directory_in(given()),
+            Some(profile.path().join("rivet-debug"))
+        );
     }
 
-    use super::{appbar_hit, menu_hit, tab_row_end, AppbarHit, Menu};
+    use super::{
+        appbar_hit, menu_hit, settings_title, tab_row_end, AppbarHit, Menu, SETTINGS_ITEMS,
+    };
 
     #[test]
     fn fr3_workspace_menu_opens_from_header_and_chevron() {
@@ -3187,16 +3892,52 @@ mod tests {
     }
 
     #[test]
-    fn fr3_settings_menu_rises_from_the_footer_with_a_disabled_last_entry() {
+    fn fr3_settings_menu_rises_from_the_footer_and_opens_rivet_settings() {
         let (_, top, _, height) = super::menu_area(Menu::Settings, 268.0, 700.0, 3);
-        assert!(top + height <= 700.0 - 38.0, "the menu stays above the footer");
-        let hit = |row: f32| menu_hit(Menu::Settings, 20.0, top + 4.0 + row * 34.0 + 5.0, 268.0, 700.0, 3);
+        assert!(
+            top + height <= 700.0 - 38.0,
+            "the menu stays above the footer"
+        );
+        let hit = |row: f32| {
+            menu_hit(
+                Menu::Settings,
+                20.0,
+                top + 4.0 + row * 34.0 + 5.0,
+                268.0,
+                700.0,
+                3,
+            )
+        };
         assert_eq!(hit(0.0), (true, Some(AppbarHit::ProfileSettings)));
         assert_eq!(hit(1.0), (true, Some(AppbarHit::ManageProfiles)));
-        assert_eq!(hit(2.0), (true, None), "Rivet settings has no action yet");
+        assert_eq!(hit(2.0), (true, Some(AppbarHit::Credentials)));
+        assert_eq!(hit(3.0), (true, Some(AppbarHit::RivetSettings)));
         assert_eq!(
             menu_hit(Menu::Settings, 20.0, top - 1.0, 268.0, 700.0, 3),
             (false, None)
+        );
+    }
+
+    #[test]
+    fn nfr8_rivet_settings_name_the_chosen_password_and_passkey_provider() {
+        use rivet_core::CredentialProvider;
+        let (title, hit) = SETTINGS_ITEMS[2];
+        assert_eq!(hit, Some(AppbarHit::Credentials));
+        assert_eq!(
+            settings_title(title, hit, CredentialProvider::System),
+            "Passwords: Windows passkeys"
+        );
+        assert_eq!(
+            settings_title(title, hit, CredentialProvider::Browser),
+            "Passwords: Browser password manager"
+        );
+        assert_eq!(
+            settings_title(
+                "Manage profiles",
+                Some(AppbarHit::ManageProfiles),
+                CredentialProvider::System
+            ),
+            "Manage profiles"
         );
     }
 
@@ -3224,6 +3965,7 @@ mod tests {
             title: "Work".into(),
             color: 3,
             collapsed: false,
+            count: 0,
         };
         let tabs = vec![crate::tab_rows::Tab {
             index: 4,
@@ -3271,10 +4013,7 @@ mod tests {
             appbar_hit(205.0, 207.0, 220.0, 700.0, &test_rows(), 3),
             Some(AppbarHit::CloseTab(1))
         );
-        assert_eq!(
-            appbar_hit(40.0, 300.0, 220.0, 700.0, &test_rows(), 3),
-            None
-        );
+        assert_eq!(appbar_hit(40.0, 300.0, 220.0, 700.0, &test_rows(), 3), None);
     }
 
     #[test]
@@ -3309,9 +4048,16 @@ mod tests {
     fn fr3_footer_follows_the_number_of_spaces_and_dims_new_space_when_full() {
         let foot = |x, spaces| appbar_hit(x, 675.0, 268.0, 700.0, &[], spaces);
         let start = 10.0 + 28.0 + (250.0 - 56.0 - (6.0 * 32.0 - 4.0)) / 2.0;
-        assert_eq!(foot(start + 5.0 * 32.0 + 14.0, 6), Some(AppbarHit::Space(5)));
+        assert_eq!(
+            foot(start + 5.0 * 32.0 + 14.0, 6),
+            Some(AppbarHit::Space(5))
+        );
         assert_eq!(foot(start + 5.0 * 32.0 + 14.0, 3), None);
-        assert_eq!(foot(240.0, 6), None, "a full footer has no room for a space");
+        assert_eq!(
+            foot(240.0, 6),
+            None,
+            "a full footer has no room for a space"
+        );
         assert_eq!(foot(240.0, 5), Some(AppbarHit::NewSpace));
     }
 
@@ -3320,8 +4066,18 @@ mod tests {
         use crate::tab_rows::Row;
         let rows = vec![
             Row::NewTab,
-            Row::Tab { index: 0, title: "a".into(), active: true, child: false },
-            Row::Tab { index: 1, title: "b".into(), active: false, child: false },
+            Row::Tab {
+                index: 0,
+                title: "a".into(),
+                active: true,
+                child: false,
+            },
+            Row::Tab {
+                index: 1,
+                title: "b".into(),
+                active: false,
+                child: false,
+            },
         ];
         // The new tab row has no menu, and the tab rows follow it after the 17 DIP divider.
         assert_eq!(tab_row_end(&rows, 150.0), None);
@@ -3334,7 +4090,10 @@ mod tests {
             menu_hit(menu, 20.0, y + 4.0 + 10.0, 268.0, 700.0, 3),
             (true, Some(AppbarHit::SplitTab(1)))
         );
-        assert_eq!(menu_hit(menu, 20.0, y + h + 2.0, 268.0, 700.0, 3), (false, None));
+        assert_eq!(
+            menu_hit(menu, 20.0, y + h + 2.0, 268.0, 700.0, 3),
+            (false, None)
+        );
         assert_eq!(menu_hit(menu, 20.0, y + 1.0, 268.0, 700.0, 3), (true, None));
     }
 

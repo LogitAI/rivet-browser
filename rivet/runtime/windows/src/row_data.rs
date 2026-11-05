@@ -267,7 +267,9 @@ mod tests {
     }
 
     /// A signed table holding one row: Chrome's, marked so it can be told from the compiled one.
-    fn signed_table_with_row(folder: &str) -> (std::path::PathBuf, String, rivet_core::paths::TestDir) {
+    fn signed_table_with_row(
+        folder: &str,
+    ) -> (std::path::PathBuf, String, rivet_core::paths::TestDir) {
         let (private, public) = signed_table::generate_key().unwrap();
         let mut row = builds::CHROME_156_74.to_row();
         row["toolbar"]["skip"] = json!("signed");
@@ -318,7 +320,10 @@ mod tests {
         assert!(build.app_window.is_none());
         // A required value that is missing still refuses the row.
         row["toolbar"].as_object_mut().unwrap().remove("get_color");
-        assert!(builds::Build::from_row(&row).err().unwrap().contains("get_color is missing"));
+        assert!(builds::Build::from_row(&row)
+            .err()
+            .unwrap()
+            .contains("get_color is missing"));
     }
 
     #[test]
@@ -367,7 +372,10 @@ mod tests {
     #[test]
     fn nfr6_a_row_without_a_field_is_refused_and_named() {
         let mut row = builds::CHROME.to_row();
-        row["toolbar"].as_object_mut().unwrap().remove("get_widget_slot");
+        row["toolbar"]
+            .as_object_mut()
+            .unwrap()
+            .remove("get_widget_slot");
         let error = match builds::Build::from_row(&row) {
             Err(error) => error,
             Ok(_) => panic!("a row with no widget slot was accepted"),
@@ -387,9 +395,7 @@ mod tests {
     fn nfr6_written_values_tell_addresses_from_colours_and_bytes() {
         let row = builds::CHROME.to_row();
         assert_eq!(
-            row["toolbar"]["get_color"]
-                .as_str()
-                .map(|text| &text[..2]),
+            row["toolbar"]["get_color"].as_str().map(|text| &text[..2]),
             Some("0x")
         );
         assert!(row["layout"]["caption_ink_ids"][0].is_number());

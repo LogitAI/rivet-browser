@@ -8,7 +8,8 @@ use crate::chromium::memory::readable;
 use crate::features::frame_layout;
 use crate::hooks::page_area::{self, LayoutBounds};
 
-type ProposedLayout = unsafe extern "system" fn(*mut c_void, *mut c_void, *const c_void) -> *mut c_void;
+type ProposedLayout =
+    unsafe extern "system" fn(*mut c_void, *mut c_void, *const c_void) -> *mut c_void;
 
 /// The bounds Chrome's layout gave one view, from the layout map's red-black tree. The map keeps
 /// its root at +0x20, nodes hold left at +0, right at +8, the view at +0x20 and the bounds as
@@ -36,7 +37,12 @@ impl LayoutBounds for Map {
     }
 
     unsafe fn dump(&self, this: *const c_void, trace: &dyn Fn(&str)) {
-        dump_node(this, *(self.out.cast::<u8>().add(0x20) as *const usize), 0, trace);
+        dump_node(
+            this,
+            *(self.out.cast::<u8>().add(0x20) as *const usize),
+            0,
+            trace,
+        );
     }
 
     unsafe fn views(&self) -> Vec<usize> {
@@ -81,7 +87,16 @@ pub(crate) unsafe extern "system" fn proposed_layout(
 ) -> *mut c_void {
     let original: ProposedLayout = std::mem::transmute(page_area::original());
     let result = original(this, out, params);
-    let host = *(this.cast::<u8>().add(crate::builds::get().side_panel.host_view) as *const usize);
+    let host = *(this
+        .cast::<u8>()
+        .add(crate::builds::get().side_panel.host_view) as *const usize);
+    crate::trace::trace_changed(
+        "layout hook",
+        &format!(
+            "layout hook: host {host:x} window {}",
+            frame_layout::hwnd_of_view(host as *const c_void).is_some()
+        ),
+    );
     if let Some(window) = frame_layout::hwnd_of_view(host as *const c_void) {
         page_area::run(this, host, window, &mut Map { out });
     }
@@ -97,9 +112,19 @@ unsafe extern "system" fn app_proposed_layout(
     out: *mut c_void,
     params: *const c_void,
 ) -> *mut c_void {
-    let original: ProposedLayout = std::mem::transmute(APP_ORIGINAL.load(std::sync::atomic::Ordering::Acquire));
+    let original: ProposedLayout =
+        std::mem::transmute(APP_ORIGINAL.load(std::sync::atomic::Ordering::Acquire));
     let result = original(this, out, params);
-    let host = *(this.cast::<u8>().add(crate::builds::get().side_panel.host_view) as *const usize);
+    let host = *(this
+        .cast::<u8>()
+        .add(crate::builds::get().side_panel.host_view) as *const usize);
+    crate::trace::trace_changed(
+        "layout hook",
+        &format!(
+            "layout hook: host {host:x} window {}",
+            frame_layout::hwnd_of_view(host as *const c_void).is_some()
+        ),
+    );
     if let Some(window) = frame_layout::hwnd_of_view(host as *const c_void) {
         page_area::run(this, host, window, &mut Map { out });
     }
@@ -108,7 +133,11 @@ unsafe extern "system" fn app_proposed_layout(
 
 /// Patches the app window's layout once: slot `slot` of the vtable at `vtable` must point at
 /// `proposed`, or nothing is changed.
-pub(crate) unsafe fn install_app_layout(vtable: usize, slot: usize, proposed: usize) -> Result<(), String> {
+pub(crate) unsafe fn install_app_layout(
+    vtable: usize,
+    slot: usize,
+    proposed: usize,
+) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     if APP_ORIGINAL.load(Ordering::Acquire) != 0 {
         return Ok(());
@@ -120,7 +149,13 @@ pub(crate) unsafe fn install_app_layout(vtable: usize, slot: usize, proposed: us
     }
     let at = (image.base + slot_rva) as *mut usize;
     let mut previous: windows_sys::Win32::System::Memory::PAGE_PROTECTION_FLAGS = 0;
-    if windows_sys::Win32::System::Memory::VirtualProtect(at.cast(), 8, windows_sys::Win32::System::Memory::PAGE_READWRITE, &mut previous) == 0 {
+    if windows_sys::Win32::System::Memory::VirtualProtect(
+        at.cast(),
+        8,
+        windows_sys::Win32::System::Memory::PAGE_READWRITE,
+        &mut previous,
+    ) == 0
+    {
         return Err("could not unprotect the app window's layout".into());
     }
     APP_ORIGINAL.store(at.read(), Ordering::Release);

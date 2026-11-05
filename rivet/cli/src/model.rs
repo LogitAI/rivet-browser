@@ -21,25 +21,46 @@ pub struct Model {
     pub error: Option<String>,
     /// The first browser row shown, when more rows exist than fit.
     pub scroll: usize,
+    /// Who keeps passwords and passkeys in the profile.
+    pub credentials: rivet_core::CredentialProvider,
 }
 
 impl Model {
     /// A setup with the detected `browsers`. `choose` is the browser that was chosen before, which
     /// stays chosen when it is still listed.
-    pub fn new(browsers: Vec<Browser>, root: PathBuf, reason: Option<String>, choose: Option<&Saved>) -> Self {
+    pub fn new(
+        browsers: Vec<Browser>,
+        root: PathBuf,
+        reason: Option<String>,
+        choose: Option<&Saved>,
+    ) -> Self {
         let mut model = Self {
             browsers,
             selected: None,
-            profile: choose.map_or_else(|| config::DEFAULT_PROFILE.to_owned(), |saved| saved.profile.clone()),
+            profile: choose.map_or_else(
+                || config::DEFAULT_PROFILE.to_owned(),
+                |saved| saved.profile.clone(),
+            ),
             profiles: Vec::new(),
             root,
             reason,
             error: None,
             scroll: 0,
+            credentials: choose.map_or_else(Default::default, |saved| saved.credentials),
         };
         let first = choose
-            .and_then(|saved| model.browsers.iter().position(|browser| same_file(&browser.path, &saved.browser)))
-            .or_else(|| model.browsers.iter().position(|browser| browser.status.can_open()));
+            .and_then(|saved| {
+                model
+                    .browsers
+                    .iter()
+                    .position(|browser| same_file(&browser.path, &saved.browser))
+            })
+            .or_else(|| {
+                model
+                    .browsers
+                    .iter()
+                    .position(|browser| browser.status.can_open())
+            });
         if let Some(first) = first {
             model.select(first);
         }
@@ -60,7 +81,11 @@ impl Model {
 
     /// Adds a browser chosen by hand and chooses it. One that is listed already is only chosen.
     pub fn add_by_hand(&mut self, browser: Browser) {
-        let index = match self.browsers.iter().position(|known| same_file(&known.path, &browser.path)) {
+        let index = match self
+            .browsers
+            .iter()
+            .position(|known| same_file(&known.path, &browser.path))
+        {
             Some(index) => index,
             None => {
                 self.browsers.push(browser);
@@ -117,7 +142,8 @@ impl Model {
 
     /// Whether Finish can work: a browser Rivet can open is chosen.
     pub fn can_finish(&self) -> bool {
-        self.selected_browser().is_some_and(|browser| browser.status.can_open())
+        self.selected_browser()
+            .is_some_and(|browser| browser.status.can_open())
     }
 
     /// The sentence under the list about the chosen browser.
@@ -130,7 +156,9 @@ impl Model {
 
     pub fn finish(&self) -> Result<Saved, String> {
         let browser = self.selected_browser().ok_or("Choose a browser first.")?;
-        config::finish(browser, &self.profile)
+        let mut saved = config::finish(browser, &self.profile)?;
+        saved.credentials = self.credentials;
+        Ok(saved)
     }
 }
 
@@ -144,7 +172,9 @@ pub fn choose(browser: Browser, profile: &str, root: &Path) -> Result<Saved, Str
 }
 
 fn same_file(left: &Path, right: &Path) -> bool {
-    left.to_string_lossy().replace('/', "\\").eq_ignore_ascii_case(&right.to_string_lossy().replace('/', "\\"))
+    left.to_string_lossy()
+        .replace('/', "\\")
+        .eq_ignore_ascii_case(&right.to_string_lossy().replace('/', "\\"))
 }
 
 /// A rectangle in device-independent pixels.
@@ -175,7 +205,10 @@ impl Rect {
 
     #[cfg(test)]
     fn overlaps(&self, other: &Self) -> bool {
-        self.x < other.right() && other.x < self.right() && self.y < other.bottom() && other.y < self.bottom()
+        self.x < other.right()
+            && other.x < self.right()
+            && self.y < other.bottom()
+            && other.y < self.bottom()
     }
 }
 
@@ -189,7 +222,7 @@ pub const MANUAL_ROW: f32 = 44.0;
 const GROUP_PAD: f32 = 4.0;
 const HEADER_END: f32 = 96.0;
 /// The height of everything except the browser rows, without a notice.
-const FIXED: f32 = 450.0;
+const FIXED: f32 = 518.0;
 
 /// Where everything sits, for one set of counts.
 #[derive(Clone, Debug, PartialEq)]
@@ -210,6 +243,9 @@ pub struct Layout {
     pub chips: Vec<Rect>,
     pub chip_hint: Rect,
     pub preview: Rect,
+    pub credentials_label: Rect,
+    /// The password and passkey providers, in the order of `CredentialProvider::ALL`.
+    pub credentials: [Rect; 2],
     pub message: Rect,
     pub finish: Rect,
 }
@@ -245,9 +281,21 @@ pub fn layout(visible: usize, notice: bool, chip_widths: &[f32]) -> Layout {
     let group_height = GROUP_PAD * 2.0 + visible as f32 * (ROW + ROW_GAP) + MANUAL_ROW;
     let group = Rect::new(PAD, y, WIDTH - 2.0 * PAD, group_height);
     let rows = (0..visible)
-        .map(|index| Rect::new(group.x + GROUP_PAD, group.y + GROUP_PAD + index as f32 * (ROW + ROW_GAP), group.w - 2.0 * GROUP_PAD, ROW))
+        .map(|index| {
+            Rect::new(
+                group.x + GROUP_PAD,
+                group.y + GROUP_PAD + index as f32 * (ROW + ROW_GAP),
+                group.w - 2.0 * GROUP_PAD,
+                ROW,
+            )
+        })
         .collect();
-    let manual = Rect::new(group.x + GROUP_PAD, group.y + GROUP_PAD + visible as f32 * (ROW + ROW_GAP), group.w - 2.0 * GROUP_PAD, MANUAL_ROW);
+    let manual = Rect::new(
+        group.x + GROUP_PAD,
+        group.y + GROUP_PAD + visible as f32 * (ROW + ROW_GAP),
+        group.w - 2.0 * GROUP_PAD,
+        MANUAL_ROW,
+    );
     y += group_height + 12.0;
     let note = Rect::new(PAD + 4.0, y, WIDTH - 2.0 * PAD - 8.0, 34.0);
     y += 46.0;
@@ -266,6 +314,14 @@ pub fn layout(visible: usize, notice: bool, chip_widths: &[f32]) -> Layout {
     y += 36.0;
     let preview = Rect::new(PAD + 4.0, y, WIDTH - 2.0 * PAD - 8.0, 16.0);
     y += 30.0;
+    let credentials_label = Rect::new(PAD + 4.0, y, 320.0, 14.0);
+    y += 22.0;
+    let half = (WIDTH - 2.0 * PAD - 8.0) / 2.0;
+    let credentials = [
+        Rect::new(PAD, y, half, 36.0),
+        Rect::new(PAD + half + 8.0, y, half, 36.0),
+    ];
+    y += 46.0;
     let finish = Rect::new(WIDTH - PAD - 132.0, y, 132.0, 44.0);
     let message = Rect::new(PAD + 4.0, y, finish.x - PAD - 16.0, 44.0);
     y += 44.0 + 28.0;
@@ -284,6 +340,8 @@ pub fn layout(visible: usize, notice: bool, chip_widths: &[f32]) -> Layout {
         chips,
         chip_hint,
         preview,
+        credentials_label,
+        credentials,
         message,
         finish,
     }
@@ -301,6 +359,8 @@ pub enum Hit {
     Manual,
     Field,
     Chip(usize),
+    /// A password and passkey provider, by its place in `CredentialProvider::ALL`.
+    Credentials(usize),
     Finish,
 }
 
@@ -319,6 +379,13 @@ pub fn hit(layout: &Layout, x: f32, y: f32) -> Hit {
     }
     if let Some(index) = layout.chips.iter().position(|chip| chip.contains(x, y)) {
         return Hit::Chip(index);
+    }
+    if let Some(index) = layout
+        .credentials
+        .iter()
+        .position(|option| option.contains(x, y))
+    {
+        return Hit::Credentials(index);
     }
     if layout.finish.contains(x, y) {
         return Hit::Finish;
@@ -345,13 +412,24 @@ mod tests {
     }
 
     fn model(statuses: &[(&str, Status)]) -> Model {
-        let list = statuses.iter().map(|(name, status)| browser(name, status.clone())).collect();
-        Model::new(list, rivet_core::paths::TestDir::new("rivet-model-none").to_path_buf(), None, None)
+        let list = statuses
+            .iter()
+            .map(|(name, status)| browser(name, status.clone()))
+            .collect();
+        Model::new(
+            list,
+            rivet_core::paths::TestDir::new("rivet-model-none").to_path_buf(),
+            None,
+            None,
+        )
     }
 
     #[test]
     fn fr1_the_first_browser_rivet_can_open_is_chosen_and_the_profile_is_default() {
-        let model = model(&[("aside", Status::NotYet("no".into())), ("chrome", Status::Ready)]);
+        let model = model(&[
+            ("aside", Status::NotYet("no".into())),
+            ("chrome", Status::Ready),
+        ]);
         assert_eq!(model.selected, Some(1));
         assert_eq!(model.profile, "Default");
         assert!(model.can_finish());
@@ -359,7 +437,13 @@ mod tests {
 
     #[test]
     fn fr1_a_browser_that_cannot_be_opened_is_listed_chosen_and_explained_but_cannot_finish() {
-        let mut model = model(&[("chrome", Status::Ready), ("aside", Status::NotYet("Rivet has no verified build of this browser yet.".into()))]);
+        let mut model = model(&[
+            ("chrome", Status::Ready),
+            (
+                "aside",
+                Status::NotYet("Rivet has no verified build of this browser yet.".into()),
+            ),
+        ]);
         model.select(1);
         assert!(!model.can_finish());
         assert!(model.note().contains("no verified build"));
@@ -367,21 +451,41 @@ mod tests {
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_finishing_saves_the_browser_and_the_cleaned_profile_name() {
         let mut model = model(&[("chrome", Status::Ready)]);
         model.profile = "Work: 1".into();
         let saved = model.finish().unwrap();
         assert_eq!(saved.profile, "Work_ 1");
         assert!(saved.browser.ends_with("chrome.exe"));
-        assert_eq!(model.preview(), r"%LOCALAPPDATA%\Rivet\profiles\chrome\Work_ 1");
+        assert_eq!(
+            model.preview(),
+            r"%LOCALAPPDATA%\Rivet\profiles\chrome\Work_ 1"
+        );
     }
 
     #[test]
+    // The paths here are Windows paths, which only Windows splits into folders.
+    #[cfg(windows)]
     fn fr1_the_command_line_makes_the_same_choice_as_the_window() {
         let root = rivet_core::paths::TestDir::new("rivet-model-choose");
         let saved = choose(browser("chrome", Status::Ready), "Lab 2", &root).unwrap();
-        assert_eq!((saved.profile.as_str(), saved.browser.ends_with("chrome.exe")), ("Lab 2", true));
-        let refused = choose(browser("aside", Status::NotYet("Rivet has no verified build of this browser yet.".into())), "Default", &root);
+        assert_eq!(
+            (
+                saved.profile.as_str(),
+                saved.browser.ends_with("chrome.exe")
+            ),
+            ("Lab 2", true)
+        );
+        let refused = choose(
+            browser(
+                "aside",
+                Status::NotYet("Rivet has no verified build of this browser yet.".into()),
+            ),
+            "Default",
+            &root,
+        );
         assert!(refused.unwrap_err().contains("no verified build"));
     }
 
@@ -396,9 +500,21 @@ mod tests {
 
     #[test]
     fn fr1_the_browser_chosen_before_stays_chosen() {
-        let list = vec![browser("chrome", Status::Ready), browser("brave", Status::Ready)];
-        let saved = Saved { browser: PathBuf::from(r"c:\b\brave\BRAVE.exe"), profile: "Lab".into() };
-        let model = Model::new(list, rivet_core::paths::TestDir::new("rivet-model-none").to_path_buf(), Some("gone".into()), Some(&saved));
+        let list = vec![
+            browser("chrome", Status::Ready),
+            browser("brave", Status::Ready),
+        ];
+        let saved = Saved {
+            browser: PathBuf::from(r"c:\b\brave\BRAVE.exe"),
+            profile: "Lab".into(),
+            credentials: Default::default(),
+        };
+        let model = Model::new(
+            list,
+            rivet_core::paths::TestDir::new("rivet-model-none").to_path_buf(),
+            Some("gone".into()),
+            Some(&saved),
+        );
         assert_eq!(model.selected, Some(1));
         assert_eq!(model.profile, "Lab");
     }
@@ -428,7 +544,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let first = browser("chrome", Status::Ready);
         std::fs::create_dir_all(config::profile_dir(&root, &first.path, "Work")).unwrap();
-        let mut model = Model::new(vec![first, browser("brave", Status::Ready)], root.to_path_buf(), None, None);
+        let mut model = Model::new(
+            vec![first, browser("brave", Status::Ready)],
+            root.to_path_buf(),
+            None,
+            None,
+        );
         assert_eq!(model.profiles, ["Work"]);
         model.select(1);
         assert!(model.profiles.is_empty());
@@ -437,16 +558,42 @@ mod tests {
 
     #[test]
     fn fr1_setup_controls_sit_inside_the_window_and_never_overlap() {
-        for (visible, notice, chips) in [(0, false, vec![]), (2, false, vec![60.0]), (6, true, vec![70.0, 90.0, 110.0]), (8, false, vec![])] {
+        for (visible, notice, chips) in [
+            (0, false, vec![]),
+            (2, false, vec![60.0]),
+            (6, true, vec![70.0, 90.0, 110.0]),
+            (8, false, vec![]),
+        ] {
             let layout = layout(visible, notice, &chips);
-            let mut all = vec![layout.close, layout.browser_label, layout.group, layout.note, layout.profile_label, layout.field, layout.preview, layout.finish];
+            let mut all = vec![
+                layout.close,
+                layout.browser_label,
+                layout.group,
+                layout.note,
+                layout.profile_label,
+                layout.field,
+                layout.preview,
+                layout.credentials_label,
+                layout.credentials[0],
+                layout.credentials[1],
+                layout.finish,
+            ];
             all.extend(layout.notice);
             all.extend(&layout.chips);
             all.retain(|rect| rect.w > 0.0);
             for first in 0..all.len() {
-                assert!(all[first].right() <= WIDTH && all[first].bottom() <= layout.height, "{:?}", all[first]);
+                assert!(
+                    all[first].right() <= WIDTH && all[first].bottom() <= layout.height,
+                    "{:?}",
+                    all[first]
+                );
                 for second in first + 1..all.len() {
-                    assert!(!all[first].overlaps(&all[second]), "{:?} overlaps {:?}", all[first], all[second]);
+                    assert!(
+                        !all[first].overlaps(&all[second]),
+                        "{:?} overlaps {:?}",
+                        all[first],
+                        all[second]
+                    );
                 }
             }
             for row in layout.rows.iter().chain(Some(&layout.manual)) {
@@ -476,6 +623,24 @@ mod tests {
         assert_eq!(hit(&layout, x, y), Hit::Close);
         assert_eq!(hit(&layout, 100.0, 20.0), Hit::Caption);
         assert_eq!(hit(&layout, 5.0, layout.height - 4.0), Hit::None);
+    }
+
+    #[test]
+    fn nfr8_setup_window_offers_both_providers_and_finishes_with_the_choice() {
+        let layout = layout(2, false, &[]);
+        for (index, option) in layout.credentials.iter().enumerate() {
+            assert_eq!(
+                hit(&layout, option.x + 4.0, option.y + 4.0),
+                Hit::Credentials(index)
+            );
+        }
+        let mut model = model(&[("chrome", Status::Ready)]);
+        assert_eq!(model.credentials, rivet_core::CredentialProvider::Browser);
+        model.credentials = rivet_core::CredentialProvider::ALL[1];
+        assert_eq!(
+            model.finish().unwrap().credentials,
+            rivet_core::CredentialProvider::System
+        );
     }
 
     #[test]

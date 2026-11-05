@@ -1,0 +1,171 @@
+//! Links and new-window links of a Rivet window open as new tabs of its current space.
+//!
+//! Chromium sends a link that asks for a new tab or a new window out of an app window into a
+//! window of its own. This takes such a window's tabs back into the Rivet window with Chromium's
+//! own tab strip functions, `DetachTabAtForInsertion` and `InsertDetachedTabAt`, which keep the
+//! page, its history and its opener. The emptied window is closed by the browser itself.
+
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::ffi::c_void;
+
+use windows_sys::Win32::Foundation::HWND;
+
+thread_local! {
+    /// The browser windows of this process seen so far. `None` until the first look, so windows
+    /// that were there before any Rivet window are left alone.
+    static KNOWN: RefCell<Option<HashSet<isize>>> = const { RefCell::new(None) };
+}
+
+/// Whether a window that just appeared holds pages that belong in a Rivet window. Developer tools
+/// keep their own window.
+pub fn takes_window(urls: &[String]) -> bool {
+    !urls.is_empty() && urls.iter().all(|url| !url.starts_with("devtools://"))
+}
+
+/// The windows that appeared since `known`, and the new set of known windows.
+pub fn appeared(known: &HashSet<isize>, now: &[isize], rivet: &[isize]) -> Vec<isize> {
+    now.iter()
+        .copied()
+        .filter(|window| !known.contains(window) && !rivet.contains(window))
+        .collect()
+}
+
+/// Looks for new browser windows of this process and moves their tabs into `window`, the Rivet
+/// window that is now in front of the others of this process.
+pub(crate) unsafe fn tick(window: HWND) {
+    let rivet: Vec<isize> = crate::frame::rivet_windows()
+        .into_iter()
+        .map(|window| window as isize)
+        .collect();
+    let now: Vec<isize> = crate::frame::browser_windows_of_process()
+        .into_iter()
+        .map(|window| window as isize)
+        .collect();
+    let fresh = KNOWN.with(|known| {
+        let mut known = known.borrow_mut();
+        let fresh = known
+            .as_ref()
+            .map(|seen| appeared(seen, &now, &rivet))
+            .unwrap_or_default();
+        *known = Some(now.iter().copied().collect());
+        fresh
+    });
+    if fresh.is_empty() || !in_front(window, &rivet) {
+        return;
+    }
+    for other in fresh {
+        let urls: Vec<String> = crate::features::tabs::open_tabs(other as HWND)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tab| tab.saved.url)
+            .collect();
+        if !takes_window(&urls) {
+            continue;
+        }
+        let moved = move_all(window, other as HWND);
+        crate::trace::trace(&format!(
+            "link tabs: moved {moved} of {} tabs from window {other:#x}",
+            urls.len()
+        ));
+        // A link opened in a new window is one tab. Its link rule may send it on from here.
+        if let ([url], 1) = (urls.as_slice(), moved) {
+            crate::features::link_rules::after_link_moved(window, url);
+        }
+    }
+}
+
+/// Whether `window` is above every other Rivet window, which makes it the one a link came from.
+unsafe fn in_front(window: HWND, rivet: &[isize]) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDPREV};
+    let mut above = GetWindow(window, GW_HWNDPREV);
+    while !above.is_null() {
+        if rivet.contains(&(above as isize)) {
+            return false;
+        }
+        above = GetWindow(above, GW_HWNDPREV);
+    }
+    true
+}
+
+type Count = unsafe extern "system" fn(*mut c_void) -> i32;
+type Detach = unsafe extern "system" fn(*mut c_void, *mut usize, i32) -> *mut usize;
+/// `InsertDetachedTabAt(model, index, tab, add types, group)`. Some builds take one more optional
+/// by pointer after the group, so a sixth empty one is always passed; a build that takes five
+/// ignores it.
+type Insert = unsafe extern "system" fn(
+    *mut c_void,
+    i32,
+    *mut usize,
+    i32,
+    *const [u64; 8],
+    *const [u64; 16],
+) -> i32;
+
+/// Moves every tab of `from` to the end of `window`'s tabs, the last one active. Returns how many
+/// moved. A build whose row has no detach and insert moves none.
+unsafe fn move_all(window: HWND, from: HWND) -> usize {
+    use crate::features::tabs::{base, function, tab_model};
+    let (Some(base), Some(detach), Some(insert)) = (
+        base(),
+        crate::features::app_window::recorded("detach"),
+        crate::features::app_window::recorded("insert"),
+    ) else {
+        return 0;
+    };
+    let (Some(source), Some(target)) = (tab_model(base, from), tab_model(base, window)) else {
+        return 0;
+    };
+    let count = function::<Count>(base, crate::builds::get().tabs.tab_count);
+    let mut moved = 0;
+    while count(source) > 0 && moved < 64 {
+        let mut tab: usize = 0;
+        function::<Detach>(base, detach)(source, &mut tab, 0);
+        if tab == 0 {
+            break;
+        }
+        let none = [0u64; 8];
+        let no_more = [0u64; 16];
+        // At the end of the strip, active: `ADD_ACTIVE | ADD_FORCE_INDEX`.
+        function::<Insert>(base, insert)(target, count(target), &mut tab, 1 | 4, &none, &no_more);
+        moved += 1;
+    }
+    moved
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fr3_a_window_a_link_opened_is_taken_but_developer_tools_are_not() {
+        assert!(takes_window(&["https://example.com/".into()]));
+        assert!(!takes_window(&[
+            "devtools://devtools/bundled/inspector.html".into()
+        ]));
+        assert!(!takes_window(&[]));
+    }
+
+    #[test]
+    fn fr3_samsung_internet_records_detach_and_insert_like_the_other_browsers() {
+        let samsung = crate::builds::compiled()
+            .iter()
+            .find(|build| build.browser == "Samsung Internet" && build.version == [30, 0, 4, 29])
+            .and_then(|build| build.app_window.as_ref())
+            .expect("Samsung Internet 143.0.4.29 has an app window row");
+        assert_eq!(samsung.detach, Some(0x0877_3D90));
+        assert_eq!(samsung.insert, Some(0x0322_A3C0));
+        assert!(samsung.detach_prologue.len() >= 8 && samsung.insert_prologue.len() >= 8);
+    }
+
+    #[test]
+    fn fr3_only_windows_that_appeared_after_the_first_look_are_new() {
+        let known: HashSet<isize> = [1, 2].into_iter().collect();
+        assert_eq!(
+            appeared(&known, &[1, 2, 3, 4], &[4]),
+            vec![3],
+            "a Rivet window is never taken"
+        );
+        assert!(appeared(&known, &[1], &[]).is_empty());
+    }
+}

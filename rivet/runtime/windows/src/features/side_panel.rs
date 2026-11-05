@@ -19,12 +19,12 @@ use windows_sys::Win32::System::Memory::{
     VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE,
 };
 
-use crate::features::frame_layout::{self};
-use crate::chromium::image;
-use crate::hooks::page_area::{self, PageArea};
-use crate::chromium::memory::{prologue_is, readable};
 use crate::builds::Build;
+use crate::chromium::image;
+use crate::chromium::memory::{prologue_is, readable};
 use crate::feature::{available_here, Needs};
+use crate::features::frame_layout::{self};
+use crate::hooks::page_area::{self, PageArea};
 use crate::targets::Target;
 
 /// The values of the loaded browser build.
@@ -35,18 +35,43 @@ fn bv() -> &'static crate::builds::SidePanel {
 /// What the Sidebar needs from the browser.
 pub(crate) fn needs(build: &Build) -> Needs {
     let row = &build.side_panel;
+    let mut targets = vec![
+        Target::new("side panel show", row.show, row.show_prologue),
+        Target::new(
+            "side panel entry id to string",
+            row.entry_id_to_string,
+            row.entry_id_to_string_prologue,
+        ),
+        Target::new("side panel toggle", row.toggle, row.toggle_prologue),
+        Target::new(
+            "side panel entry showing",
+            row.entry_showing,
+            row.entry_showing_prologue,
+        ),
+        Target::new(
+            "side panel registry from browser",
+            row.registry_from,
+            row.registry_from_prologue,
+        ),
+        Target::new(
+            "get colour provider",
+            row.get_color_provider,
+            row.get_color_provider_prologue,
+        ),
+        Target::new(
+            "generate colours css",
+            row.generate_colors_css,
+            row.generate_colors_css_prologue,
+        ),
+    ];
+    // A coordinator that keeps the registry itself has no `SidePanelRegistry::From` to check.
+    if row.registry_in_coordinator.is_some() {
+        targets.retain(|target| target.name != "side panel registry from browser");
+    }
     Needs::checked(
         row.supported,
         crate::builds::unchecked_reason(build, "sidebar"),
-        vec![
-            Target::new("side panel show", row.show, row.show_prologue),
-            Target::new("side panel entry id to string", row.entry_id_to_string, row.entry_id_to_string_prologue),
-            Target::new("side panel toggle", row.toggle, row.toggle_prologue),
-            Target::new("side panel entry showing", row.entry_showing, row.entry_showing_prologue),
-            Target::new("side panel registry from browser", row.registry_from, row.registry_from_prologue),
-            Target::new("get colour provider", row.get_color_provider, row.get_color_provider_prologue),
-            Target::new("generate colours css", row.generate_colors_css, row.generate_colors_css_prologue),
-        ],
+        targets,
     )
 }
 
@@ -56,14 +81,12 @@ fn checked() -> bool {
     *CHECKED.get_or_init(|| available_here(needs))
 }
 
-
 type Show = unsafe extern "system" fn(*mut c_void, u32, u64, u32);
 type EntryIdToString = unsafe extern "system" fn(*mut [u8; 24], u32) -> *mut [u8; 24];
 
 fn trace(message: &str) {
     crate::trace::trace(&format!("side panel: {message}"));
 }
-
 
 /// The base of the recorded browser module, or 0 in any other build or process.
 fn chrome_base() -> usize {
@@ -73,7 +96,6 @@ fn chrome_base() -> usize {
 /// The objects of one browser window that the Sidebar works with.
 #[derive(Debug, Clone, Copy)]
 pub struct Objects {
-    pub browser_view: usize,
     pub coordinator: usize,
     pub side_panel: usize,
     /// The `views::View` part of `BrowserView`, which the browser's layout manager works on.
@@ -87,9 +109,14 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
     if base == 0 || !checked() {
         return None;
     }
-    let frame = frame_layout::frame_view(window)?;
-    // The frame view holds the `BrowserWindow` subobject of `BrowserView` at +0x340.
-    let browser_window = *((frame + crate::builds::get().layout.frame_browser_window_offset) as *const usize);
+    // The frame view holds the `BrowserWindow` subobject of `BrowserView` at +0x340. A build whose
+    // frame view is not recorded has it from the layout, which lays that same view out.
+    let browser_window = match frame_layout::frame_view(window) {
+        Some(frame) => {
+            *((frame + crate::builds::get().layout.frame_browser_window_offset) as *const usize)
+        }
+        None => page_area::laid_out_host(window)?,
+    };
     if !readable(browser_window, 8) {
         return None;
     }
@@ -99,17 +126,31 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
             .map(|index| browser_view + index * 8)
             .filter(|slot| readable(*slot, 8))
             .map(|slot| *(slot as *const usize))
-            .find(|candidate| readable(*candidate, 8) && *(*candidate as *const usize) == base + vtable)
+            .find(|candidate| {
+                readable(*candidate, 8) && *(*candidate as *const usize) == base + vtable
+            })
             .unwrap_or(0)
     };
     // `BrowserView` points to its `Browser` at +0x560. The browser owns the window's
     // `BrowserWindowFeatures` at +0xd0, and the features own the coordinator.
     let step = |from: usize, offset: usize| {
         let at = from.wrapping_add(offset);
-        if readable(at, 8) { *(at as *const usize) } else { 0 }
+        if readable(at, 8) {
+            *(at as *const usize)
+        } else {
+            0
+        }
     };
-    let coordinator = step(step(step(browser_view, bv().browser_offset), bv().features_offset), bv().features_coordinator);
-    let coordinator = if readable(coordinator, 8) && *(coordinator as *const usize) == base + bv().coordinator_vtable {
+    let coordinator = step(
+        step(
+            step(browser_view, bv().browser_offset),
+            bv().features_offset,
+        ),
+        bv().features_coordinator,
+    );
+    let coordinator = if readable(coordinator, 8)
+        && *(coordinator as *const usize) == base + bv().coordinator_vtable
+    {
         coordinator
     } else {
         0
@@ -117,15 +158,74 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
     let side_panel = find(bv().side_panel_vtable);
     let view = (0..0x400)
         .map(|index| browser_view + index * 8)
-        .find(|slot| readable(*slot, 8) && *(*slot as *const usize) == base + bv().browser_view_view_vtable)
+        .find(|slot| {
+            readable(*slot, 8) && *(*slot as *const usize) == base + bv().browser_view_view_vtable
+        })
         .unwrap_or(0);
-    Some(Objects { browser_view, coordinator, side_panel, view })
+    Some(Objects {
+        coordinator,
+        side_panel,
+        view,
+    })
 }
 
-
+/// The most bytes a build's `SidePanelEntryKey` takes. A build with a smaller key reads only its
+/// own part, and the rest stays zero.
+pub const KEY_BYTES: usize = 0x48;
 
 /// A `SidePanelEntryKey`: the entry id, and the extension id of an extension's panel.
-pub type EntryKey = [u8; 0x28];
+pub type EntryKey = [u8; KEY_BYTES];
+
+/// Where a row's registry keeps its entries, how big its keys are and how they open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegistryShape {
+    /// The registry's offset in the coordinator, or `None` when `registry_from` finds it.
+    pub in_coordinator: Option<usize>,
+    pub coordinator_browser: usize,
+    pub entries: usize,
+    pub end_pointer: bool,
+    pub key_size: usize,
+    pub extensions_by_toggle: bool,
+}
+
+/// The shape a row describes, with Chrome 156's for every value it leaves unset.
+pub fn registry_shape(row: &crate::builds::SidePanel) -> RegistryShape {
+    RegistryShape {
+        in_coordinator: row.registry_in_coordinator,
+        coordinator_browser: row.coordinator_browser.unwrap_or(8),
+        entries: row.registry_entries.unwrap_or(0x38),
+        end_pointer: row.registry_end == Some(true),
+        key_size: row.entry_key_size.unwrap_or(0x28).min(KEY_BYTES),
+        extensions_by_toggle: row.extensions_by_toggle == Some(true),
+    }
+}
+
+/// A key from the first `size` bytes of `bytes`, with the rest zero.
+pub fn key_from(bytes: &[u8], size: usize) -> EntryKey {
+    let mut key = [0; KEY_BYTES];
+    let size = size.min(KEY_BYTES).min(bytes.len());
+    key[..size].copy_from_slice(&bytes[..size]);
+    key
+}
+
+/// The window's side panel registry, from the coordinator's own field or from `registry_from`.
+unsafe fn registry_of(coordinator: usize) -> Option<usize> {
+    let shape = registry_shape(bv());
+    if let Some(offset) = shape.in_coordinator {
+        let at = coordinator.wrapping_add(offset);
+        return readable(at, 8)
+            .then(|| *(at as *const usize))
+            .filter(|registry| *registry != 0);
+    }
+    let base = chrome_base();
+    if !prologue_is(base + bv().registry_from, bv().registry_from_prologue) {
+        return None;
+    }
+    let browser = *((coordinator + shape.coordinator_browser) as *const usize);
+    let from: unsafe extern "system" fn(usize) -> usize =
+        std::mem::transmute(base + bv().registry_from);
+    Some(from(browser)).filter(|registry| *registry != 0)
+}
 
 /// The id of a key.
 pub fn entry_id(key: &EntryKey) -> u32 {
@@ -139,7 +239,8 @@ pub fn extension_id(key: &EntryKey) -> Option<String> {
     if key[0x20] == 0 || entry_id(key) != bv().extension_entry {
         return None;
     }
-    let word = |at: usize| u64::from_le_bytes(key[at..at + 8].try_into().expect("eight bytes")) as usize;
+    let word =
+        |at: usize| u64::from_le_bytes(key[at..at + 8].try_into().expect("eight bytes")) as usize;
     let long = key[8 + 23] & 0x80 != 0;
     let text = if long {
         let (data, size) = (word(8), word(16));
@@ -164,7 +265,11 @@ pub struct ExtensionLook {
 /// The value of the first `"key": "value"` string pair in JSON text, with its escapes resolved.
 fn json_string(text: &str, key: &str) -> Option<String> {
     let at = text.find(&format!("\"{key}\""))?;
-    let rest = text[at + key.len() + 2..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    let rest = text[at + key.len() + 2..]
+        .trim_start()
+        .strip_prefix(':')?
+        .trim_start()
+        .strip_prefix('"')?;
     let mut out = String::new();
     let mut chars = rest.chars();
     while let Some(c) = chars.next() {
@@ -203,7 +308,10 @@ fn manifest_icon(manifest: &str) -> Option<String> {
         }
         // A picture at least 32 pixels wide stays sharp, so a smaller one only wins when none is.
         let distance = |size: u32| (size < 32, size.abs_diff(32));
-        if best.as_ref().map_or(true, |(other, _)| distance(size) < distance(*other)) {
+        if best
+            .as_ref()
+            .is_none_or(|(other, _)| distance(size) < distance(*other))
+        {
             best = Some((size, path));
         }
     }
@@ -213,19 +321,34 @@ fn manifest_icon(manifest: &str) -> Option<String> {
 /// The name a manifest gives, resolving a `__MSG_name__` reference in its default locale.
 fn manifest_name(directory: &std::path::Path, manifest: &str) -> Option<String> {
     let name = json_string(manifest, "name")?;
-    let Some(message) = name.strip_prefix("__MSG_").and_then(|rest| rest.strip_suffix("__")) else {
+    let Some(message) = name
+        .strip_prefix("__MSG_")
+        .and_then(|rest| rest.strip_suffix("__"))
+    else {
         return Some(name);
     };
     let locale = json_string(manifest, "default_locale").unwrap_or_else(|| "en".into());
-    let messages = std::fs::read_to_string(directory.join("_locales").join(locale).join("messages.json")).ok()?;
-    let at = messages.to_ascii_lowercase().find(&format!("\"{}\"", message.to_ascii_lowercase()))?;
+    let messages = std::fs::read_to_string(
+        directory
+            .join("_locales")
+            .join(locale)
+            .join("messages.json"),
+    )
+    .ok()?;
+    let at = messages
+        .to_ascii_lowercase()
+        .find(&format!("\"{}\"", message.to_ascii_lowercase()))?;
     json_string(&messages[at..], "message")
 }
 
 /// The `--user-data-dir` the browser was started with, and nothing when it has none.
 fn own_user_data(arguments: impl Iterator<Item = String>) -> Option<std::path::PathBuf> {
     arguments
-        .filter_map(|argument| argument.strip_prefix("--user-data-dir=").map(std::path::PathBuf::from))
+        .filter_map(|argument| {
+            argument
+                .strip_prefix("--user-data-dir=")
+                .map(std::path::PathBuf::from)
+        })
         .next()
 }
 
@@ -233,10 +356,14 @@ fn own_user_data(arguments: impl Iterator<Item = String>) -> Option<std::path::P
 fn extension_roots() -> Vec<std::path::PathBuf> {
     // Only the session's own profile. Rivet always starts the browser with one, and a browser's
     // default user data belongs to the person, not to Rivet.
-    let Some(data) = own_user_data(std::env::args_os().filter_map(|argument| argument.into_string().ok())) else {
+    let Some(data) =
+        own_user_data(std::env::args_os().filter_map(|argument| argument.into_string().ok()))
+    else {
         return Vec::new();
     };
-    let Ok(profiles) = std::fs::read_dir(&data) else { return Vec::new() };
+    let Ok(profiles) = std::fs::read_dir(&data) else {
+        return Vec::new();
+    };
     let mut roots: Vec<_> = profiles
         .flatten()
         .map(|profile| profile.path())
@@ -255,15 +382,23 @@ fn extension_roots() -> Vec<std::path::PathBuf> {
 /// the extension's own manifest, locale messages and icon are read.
 pub fn extension_look(id: &str) -> Option<ExtensionLook> {
     for root in extension_roots() {
-        let Ok(versions) = std::fs::read_dir(root.join(id)) else { continue };
+        let Ok(versions) = std::fs::read_dir(root.join(id)) else {
+            continue;
+        };
         let mut versions: Vec<_> = versions.flatten().map(|version| version.path()).collect();
         versions.sort();
-        let Some(directory) = versions.pop() else { continue };
-        let Ok(manifest) = std::fs::read_to_string(directory.join("manifest.json")) else { continue };
+        let Some(directory) = versions.pop() else {
+            continue;
+        };
+        let Ok(manifest) = std::fs::read_to_string(directory.join("manifest.json")) else {
+            continue;
+        };
         let manifest = manifest.trim_start_matches('\u{feff}');
         return Some(ExtensionLook {
             name: manifest_name(&directory, manifest).unwrap_or_else(|| id.to_owned()),
-            icon: manifest_icon(manifest).map(|path| directory.join(path)).filter(|path| path.is_file()),
+            icon: manifest_icon(manifest)
+                .map(|path| directory.join(path))
+                .filter(|path| path.is_file()),
         });
     }
     None
@@ -291,29 +426,48 @@ fn listed_in(row: &crate::builds::SidePanel, id: u32) -> bool {
     (matches!(id, 0..=4) || id == row.extension_entry) && !row.hidden_entries.contains(&id)
 }
 
+/// How many entries the registry's vector holds, from its first word `data` and its second word,
+/// which is a count or, where the row says so, the end pointer.
+pub(crate) fn registry_count(data: usize, second: usize, end_pointer: bool) -> usize {
+    if end_pointer {
+        second.saturating_sub(data) / 8
+    } else {
+        second
+    }
+}
+
 /// The entries Chrome registered for the window's side panel, in its own order.
 pub unsafe fn listed_entries(window: HWND) -> Vec<EntryKey> {
     // A build whose side panel is not recorded draws the rail with no entries.
     if !checked() {
         return Vec::new();
     }
-    let base = chrome_base();
-    let Some(found) = objects(window).filter(|found| found.coordinator != 0) else { return Vec::new() };
-    if !prologue_is(base + bv().registry_from, &bv().registry_from_prologue) {
+    let Some(found) = objects(window).filter(|found| found.coordinator != 0) else {
+        return Vec::new();
+    };
+    let shape = registry_shape(bv());
+    let Some(registry) = registry_of(found.coordinator) else {
+        return Vec::new();
+    };
+    if !readable(registry.wrapping_add(shape.entries), 0x10) {
         return Vec::new();
     }
-    let browser = *((found.coordinator + 8) as *const usize);
-    let from: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + bv().registry_from);
-    let registry = from(browser);
-    if !readable(registry.wrapping_add(0x38), 0x10) {
-        return Vec::new();
-    }
-    let data = *((registry + 0x38) as *const usize);
-    let count = *((registry + 0x40) as *const usize);
+    let data = *((registry + shape.entries) as *const usize);
+    let count = registry_count(
+        data,
+        *((registry + shape.entries + 8) as *const usize),
+        shape.end_pointer,
+    );
     (0..count.min(32))
         .filter_map(|index| {
             let entry = *((data.wrapping_add(index * 8)) as *const usize);
-            readable(entry.wrapping_add(0x30), 0x28).then(|| *((entry + 0x30) as *const EntryKey))
+            let at = entry.wrapping_add(0x30);
+            readable(at, shape.key_size).then(|| {
+                key_from(
+                    std::slice::from_raw_parts(at as *const u8, shape.key_size),
+                    shape.key_size,
+                )
+            })
         })
         .filter(|key| listed(entry_id(key)))
         .collect()
@@ -326,8 +480,10 @@ pub unsafe fn entry_showing(window: HWND, key: &EntryKey) -> bool {
         return false;
     }
     let base = chrome_base();
-    let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else { return false };
-    if !prologue_is(base + bv().entry_showing, &bv().entry_showing_prologue) {
+    let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else {
+        return false;
+    };
+    if !prologue_is(base + bv().entry_showing, bv().entry_showing_prologue) {
         return false;
     }
     let showing: unsafe extern "system" fn(*mut c_void, *const u8) -> bool =
@@ -338,8 +494,10 @@ pub unsafe fn entry_showing(window: HWND, key: &EntryKey) -> bool {
 /// Opens an entry, or closes it when it is the one showing.
 pub unsafe fn toggle_entry(window: HWND, key: &EntryKey) -> bool {
     let base = chrome_base();
-    let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else { return false };
-    if !prologue_is(base + bv().toggle, &bv().toggle_prologue) {
+    let Some(objects) = objects(window).filter(|found| found.coordinator != 0) else {
+        return false;
+    };
+    if !prologue_is(base + bv().toggle, bv().toggle_prologue) {
         return false;
     }
     let toggle: unsafe extern "system" fn(*mut c_void, *const u8, u32) =
@@ -350,14 +508,22 @@ pub unsafe fn toggle_entry(window: HWND, key: &EntryKey) -> bool {
 
 /// Opens one of Chrome's side panel entries by its id through the coordinator.
 pub unsafe fn open_entry(window: HWND, entry: u32) -> bool {
-    let (Some(objects), base) = (objects(window), chrome_base()) else { return false };
-    if objects.coordinator == 0 || !prologue_is(base + bv().show, &bv().show_prologue) {
+    let (Some(objects), base) = (objects(window), chrome_base()) else {
+        return false;
+    };
+    if objects.coordinator == 0 || !prologue_is(base + bv().show, bv().show_prologue) {
         return false;
     }
     // Chrome checks that the window registered the entry and crashes the browser when it did not.
-    if !listed_entries(window).iter().any(|key| entry_id(key) == entry) {
+    let Some(key) = listed_entries(window)
+        .into_iter()
+        .find(|key| entry_id(key) == entry)
+    else {
         trace(&format!("entry {entry} is not registered in this window"));
         return false;
+    };
+    if registry_shape(bv()).extensions_by_toggle && entry == bv().extension_entry {
+        return toggle_entry(window, &key);
     }
     let show: Show = std::mem::transmute(base + bv().show);
     show(objects.coordinator as *mut c_void, entry, 0, 0);
@@ -367,7 +533,10 @@ pub unsafe fn open_entry(window: HWND, entry: u32) -> bool {
 /// Names of the entry ids, for the trace.
 unsafe fn entry_names() -> Vec<String> {
     let base = chrome_base();
-    if !prologue_is(base + bv().entry_id_to_string, &bv().entry_id_to_string_prologue) {
+    if !prologue_is(
+        base + bv().entry_id_to_string,
+        bv().entry_id_to_string_prologue,
+    ) {
         return Vec::new();
     }
     let to_string: EntryIdToString = std::mem::transmute(base + bv().entry_id_to_string);
@@ -387,7 +556,10 @@ unsafe fn entry_names() -> Vec<String> {
 // paint. The sheet is written for a Rivet window with the Rivet side panel colours in place, so
 // those pages take the paper, hairline and accent of the window. Two functions are involved.
 
-type GenerateCss = unsafe extern "system" fn(*mut c_void, *const c_void, *const c_void, u32, u32) -> usize;
+/// `GenerateColorsCss(out, provider, url, flag, flag)`. The last two pass whole registers and stack
+/// words: a build whose fourth argument is a pointer gets it back unchanged.
+type GenerateCss =
+    unsafe extern "system" fn(*mut c_void, *const c_void, *const c_void, usize, usize) -> usize;
 static ORIGINAL_CSS: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
@@ -449,7 +621,13 @@ fn warm(colour: u32) -> Option<u32> {
 
 unsafe fn write_code(target: *mut u8, bytes: &[u8]) -> Result<(), String> {
     let mut previous = 0;
-    if VirtualProtect(target.cast(), bytes.len(), PAGE_EXECUTE_READWRITE, &mut previous) == 0 {
+    if VirtualProtect(
+        target.cast(),
+        bytes.len(),
+        PAGE_EXECUTE_READWRITE,
+        &mut previous,
+    ) == 0
+    {
         return Err("could not unprotect browser code".into());
     }
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
@@ -482,7 +660,8 @@ fn rivet_source(source: usize) -> Option<usize> {
 unsafe extern "system" fn get_color_provider(contents: *mut c_void) -> *const c_void {
     let source = *(contents.cast::<u8>().add(bv().color_source) as *const *mut c_void);
     let table = *(source as *const *const usize);
-    let provider: unsafe extern "system" fn(*mut c_void) -> *const c_void = std::mem::transmute(*table.add(1));
+    let provider: unsafe extern "system" fn(*mut c_void) -> *const c_void =
+        std::mem::transmute(*table.add(1));
     let provider = provider(source);
     let rivet = rivet_source(source as usize);
     ASKED.with(|asked| asked.set((provider as usize, rivet.is_some())));
@@ -493,19 +672,28 @@ unsafe extern "system" fn generate_colors_css(
     out: *mut c_void,
     provider: *const c_void,
     url: *const c_void,
-    flag: u32,
-    last: u32,
+    flag: usize,
+    last: usize,
 ) -> usize {
     let original: GenerateCss = std::mem::transmute(ORIGINAL_CSS.load(Ordering::Acquire));
     let (asked, rivet) = ASKED.with(|asked| asked.get());
     if !rivet || asked != provider as usize {
         return original(out, provider, url, flag, last);
     }
-    let experiment = EXPERIMENT.lock().unwrap_or_else(|error| error.into_inner()).clone();
+    let experiment = EXPERIMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
     let map = |id: i32, value: u32| {
-        experiment.iter().find(|(wanted, _)| *wanted == id).map(|(_, colour)| *colour).or_else(|| warm(value))
+        experiment
+            .iter()
+            .find(|(wanted, _)| *wanted == id)
+            .map(|(_, colour)| *colour)
+            .or_else(|| warm(value))
     };
-    crate::features::look::with_colour_map(provider.cast(), map, || original(out, provider, url, flag, last))
+    crate::features::look::with_colour_map(provider.cast(), map, || {
+        original(out, provider, url, flag, last)
+    })
 }
 
 /// Makes the style sheets of the side panel's pages in Rivet windows use the Rivet colours. It
@@ -532,14 +720,22 @@ pub unsafe fn install_page_colours() -> Result<(), String> {
     let mut trampoline = bv().generate_colors_css_prologue.to_vec();
     trampoline.extend_from_slice(&[0xFF, 0x25, 0, 0, 0, 0]);
     trampoline.extend_from_slice(&((base + bv().generate_colors_css + 12) as u64).to_le_bytes());
-    let memory = VirtualAlloc(std::ptr::null(), trampoline.len(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) as *mut u8;
+    let memory = VirtualAlloc(
+        std::ptr::null(),
+        trampoline.len(),
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_EXECUTE_READWRITE,
+    ) as *mut u8;
     if memory.is_null() {
         return Err("could not allocate executable memory".into());
     }
     std::ptr::copy_nonoverlapping(trampoline.as_ptr(), memory, trampoline.len());
     ORIGINAL_CSS.store(memory as usize, Ordering::Release);
     write_code(css, &jump_to(generate_colors_css as *const () as usize, 12))?;
-    write_code(provider, &jump_to(get_color_provider as *const () as usize, 14))
+    write_code(
+        provider,
+        &jump_to(get_color_provider as *const () as usize, 14),
+    )
 }
 
 /// How wide the rail is, in device-independent pixels. The mock-up's rail is 40 DIPs.
@@ -568,7 +764,6 @@ fn rail_of(window: HWND) -> i32 {
     }
 }
 
-
 /// The width of an open side panel, in DIPs. The mock-up's extension panel is 240 DIPs wide.
 pub const PANEL_WIDTH: i32 = 240;
 /// The height Rivet keeps free above an open side panel for its own header row.
@@ -592,7 +787,14 @@ fn make_room(
     let panel = side_panel
         .as_ref()
         .filter(|bounds| bounds[2] > 0)
-        .map(|bounds| (page.1 - rail, bounds[2].min(PANEL_WIDTH), bounds[1], bounds[3]));
+        .map(|bounds| {
+            (
+                page.1 - rail,
+                bounds[2].min(PANEL_WIDTH),
+                bounds[1],
+                bounds[3],
+            )
+        });
     for bounds in [side_panel, animation].into_iter().flatten() {
         bounds[0] = match panel {
             Some((edge, width, _, _)) => {
@@ -654,9 +856,14 @@ pub(crate) unsafe fn on_page_area(area: &mut PageArea) {
             let animation = area.bounds(bv().side_panel_animation);
             let outline = area.bounds(bv().contents_outline);
             let panel_view = area.field(bv().side_panel);
-            let page = area.bounds(bv().page_area).map(|bounds| *bounds).unwrap_or([0; 4]);
+            let page = area
+                .bounds(bv().page_area)
+                .map(|bounds| *bounds)
+                .unwrap_or([0; 4]);
             // The page starts where the browser's vertical tab list ends.
-            let left = area.bounds(bv().vertical_tabs).map_or((*contents)[0], |tabs| (*tabs)[0] + (*tabs)[2]);
+            let left = area
+                .bounds(bv().vertical_tabs)
+                .map_or((*contents)[0], |tabs| (*tabs)[0] + (*tabs)[2]);
             make_room(
                 &mut *contents,
                 outline.map(|bounds| &mut *bounds),
@@ -705,16 +912,24 @@ pub unsafe fn set_unfolded(window: HWND, unfolded: bool) {
 }
 
 unsafe fn dump_entry_memory(window: HWND) {
-    let Some(found) = objects(window).filter(|found| found.coordinator != 0) else { return };
-    let base = chrome_base();
-    let browser = *((found.coordinator + 8) as *const usize);
-    let from: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + bv().registry_from);
-    let registry = from(browser);
-    let data = *((registry + 0x38) as *const usize);
-    let count = *((registry + 0x40) as *const usize);
+    let Some(found) = objects(window).filter(|found| found.coordinator != 0) else {
+        return;
+    };
+    let shape = registry_shape(bv());
+    let Some(registry) = registry_of(found.coordinator) else {
+        return;
+    };
+    let data = *((registry + shape.entries) as *const usize);
+    let count = registry_count(
+        data,
+        *((registry + shape.entries + 8) as *const usize),
+        shape.end_pointer,
+    );
     for index in 0..count.min(32) {
         let entry = *((data + index * 8) as *const usize);
-        let words: Vec<String> = (0..0x24).map(|word| format!("{:x}", *((entry + word * 8) as *const usize))).collect();
+        let words: Vec<String> = (0..0x24)
+            .map(|word| format!("{:x}", *((entry + word * 8) as *const usize)))
+            .collect();
         trace(&format!("entry {index} at {entry:x}: {}", words.join(" ")));
     }
 }
@@ -753,7 +968,9 @@ impl Command {
             "entries" => return Some(Self::Entries),
             "colours" => return Some(Self::Colours),
             _ if text.starts_with("hit ") => {
-                let mut numbers = text["hit ".len()..].split_whitespace().filter_map(|word| word.parse().ok());
+                let mut numbers = text["hit ".len()..]
+                    .split_whitespace()
+                    .filter_map(|word| word.parse().ok());
                 return Some(Self::Hit(numbers.next()?, numbers.next()?));
             }
             _ if text.starts_with("paint") => {
@@ -763,18 +980,28 @@ impl Command {
                 });
                 return Some(Self::Paint(pairs.collect()));
             }
-            _ if text.starts_with("sim ") => return Some(Self::Click(text["sim ".len()..].to_owned())),
+            _ if text.starts_with("sim ") => {
+                return Some(Self::Click(text["sim ".len()..].to_owned()))
+            }
             _ => {}
         }
-        text.strip_prefix("open ")?.trim().parse().ok().map(Self::Open)
+        text.strip_prefix("open ")?
+            .trim()
+            .parse()
+            .ok()
+            .map(Self::Open)
     }
 }
 
 /// Reads the test flag file and acts on it. A flag holds `dump` or `open <entry id>`. The file is
 /// how a checked build is driven without moving the pointer or focusing the window.
 pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
-    let Some(flag) = directory.map(|dir| dir.join("rivet-sidepanel.flag")) else { return };
-    let Ok(text) = std::fs::read_to_string(&flag) else { return };
+    let Some(flag) = directory.map(|dir| dir.join("rivet-sidepanel.flag")) else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&flag) else {
+        return;
+    };
     let _ = std::fs::remove_file(&flag);
     trace(&format!("command {:?}", text.trim()));
     match Command::parse(&text) {
@@ -789,7 +1016,9 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
         }
         Some(Command::Rail(on)) => set_unfolded(window, on),
         Some(Command::Entries) => dump_entries(window),
-        Some(Command::Paint(list)) => *EXPERIMENT.lock().unwrap_or_else(|error| error.into_inner()) = list,
+        Some(Command::Paint(list)) => {
+            *EXPERIMENT.lock().unwrap_or_else(|error| error.into_inner()) = list
+        }
         Some(Command::Colours) => {
             let (provider, _) = ASKED.with(|asked| asked.get());
             if provider != 0 {
@@ -803,7 +1032,9 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
             page_area::relayout(window);
         }
         Some(Command::Hit(x, y)) => {
-            if let Some(found) = objects(window) {
+            if let Some(found) =
+                objects(window).filter(|_| bv().event_handler_for_point != crate::builds::ABSENT)
+            {
                 let base = chrome_base();
                 let target: unsafe extern "system" fn(usize, *const [i32; 2]) -> usize =
                     std::mem::transmute(base + bv().event_handler_for_point);
@@ -814,7 +1045,15 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
                         break;
                     }
                     let vtable = *(view as *const usize);
-                    chain.push(format!("{view:x}{}(vt {:x})", if view == found.side_panel { "=side panel" } else { "" }, vtable.wrapping_sub(base)));
+                    chain.push(format!(
+                        "{view:x}{}(vt {:x})",
+                        if view == found.side_panel {
+                            "=side panel"
+                        } else {
+                            ""
+                        },
+                        vtable.wrapping_sub(base)
+                    ));
                     view = *((view + 0x198) as *const usize);
                 }
                 trace(&format!("hit {x} {y}: {}", chain.join(" < ")));
@@ -830,13 +1069,109 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fr10_rail_counts_registry_entries_kept_as_a_count_or_an_end_pointer() {
+        let data = 0x2000_0000;
+        assert_eq!(registry_count(data, 5, false), 5);
+        assert_eq!(registry_count(data, data + 5 * 8, true), 5);
+        assert_eq!(registry_count(data, data, true), 0);
+        assert_eq!(
+            registry_count(data, 0, true),
+            0,
+            "a broken end gives no entries"
+        );
+    }
+
+    #[test]
+    fn fr10_rail_reads_longer_keys_and_leaves_shorter_ones_zero_filled() {
+        let mut bytes = [0u8; 0x48];
+        bytes[0] = 0x19;
+        bytes[0x40] = 1;
+        let key = key_from(&bytes, 0x48);
+        assert_eq!((entry_id(&key), key[0x40]), (0x19, 1));
+        let short = key_from(&bytes, 0x28);
+        assert_eq!(
+            (entry_id(&short), short[0x40]),
+            (0x19, 0),
+            "a short key leaves the rest zero"
+        );
+    }
+
+    #[test]
+    fn fr10_samsung_keeps_its_registry_in_the_coordinator_and_opens_extensions_by_toggle() {
+        let samsung = crate::builds::compiled()
+            .iter()
+            .find(|build| build.browser == "Samsung Internet")
+            .expect("Samsung Internet is compiled in");
+        let shape = registry_shape(&samsung.side_panel);
+        assert_eq!(shape.in_coordinator, Some(0x30));
+        assert_eq!(
+            (shape.entries, shape.end_pointer, shape.key_size),
+            (0x48, true, 0x48)
+        );
+        assert!(shape.extensions_by_toggle);
+        let chrome = registry_shape(&crate::builds::CHROME_156_80.side_panel);
+        assert_eq!(
+            (
+                chrome.in_coordinator,
+                chrome.coordinator_browser,
+                chrome.entries,
+                chrome.key_size
+            ),
+            (None, 8, 0x38, 0x28)
+        );
+    }
+
+    #[test]
+    fn fr10_whale_and_samsung_record_their_side_panel_layouts() {
+        let row = |browser: &str| {
+            &crate::builds::compiled()
+                .iter()
+                .find(|build| build.browser == browser)
+                .expect("the build is compiled in")
+                .side_panel
+        };
+        let whale = row("Naver Whale");
+        assert!(whale.supported && whale.registry_end == Some(true));
+        assert_eq!((whale.extension_entry, whale.entry_count), (0x15, 0x16));
+        // The traced app window layout keeps the page area, the top row and the page container here.
+        assert_eq!(
+            (whale.page_area, whale.toolbar, whale.contents_container),
+            (0x28, 0x40, 0x90)
+        );
+        let samsung = row("Samsung Internet");
+        assert!(samsung.supported);
+        assert_eq!(samsung.hidden_entries, &[20, 21, 22, 23, 24]);
+        assert_eq!(samsung.old_layout, Some(true));
+        assert_eq!(
+            (samsung.contents_container, samsung.side_panel),
+            (0x80, 0x98)
+        );
+    }
+
+    #[test]
     fn fr10_open_panel_floats_over_the_page_and_leaves_its_width_alone() {
         let mut contents = [8, 47, 692, 591];
         let mut panel = [700, 46, 378, 600];
         let mut animation = [700, 46, 378, 600];
-        make_room(&mut contents, None, Some(&mut panel), Some(&mut animation), (0, 1078), RAIL_WIDTH, 46);
-        assert_eq!(panel, [799, 46 + HEADER_ROW, PANEL_WIDTH - 1, 600 - HEADER_ROW], "ends at the rail, below Rivet's header row, after its hairline");
-        assert_eq!(contents, [0, 46, 1038, 600], "the page is as wide as with no panel open: up to the rail");
+        make_room(
+            &mut contents,
+            None,
+            Some(&mut panel),
+            Some(&mut animation),
+            (0, 1078),
+            RAIL_WIDTH,
+            46,
+        );
+        assert_eq!(
+            panel,
+            [799, 46 + HEADER_ROW, PANEL_WIDTH - 1, 600 - HEADER_ROW],
+            "ends at the rail, below Rivet's header row, after its hairline"
+        );
+        assert_eq!(
+            contents,
+            [0, 46, 1038, 600],
+            "the page is as wide as with no panel open: up to the rail"
+        );
         assert_eq!(animation, panel);
     }
 
@@ -846,17 +1181,40 @@ mod tests {
         // where Rivet's header row is. The panel starts right under that row all the same.
         let mut contents = [267, 101, 747, 737];
         let mut panel = [1014, 101, 418, 737];
-        make_room(&mut contents, None, Some(&mut panel), None, (267, 1432), RAIL_WIDTH, 45);
+        make_room(
+            &mut contents,
+            None,
+            Some(&mut panel),
+            None,
+            (267, 1432),
+            RAIL_WIDTH,
+            45,
+        );
         assert_eq!(panel[1], 45 + HEADER_ROW);
-        assert_eq!(panel[1] + panel[3], 101 + 737, "its bottom stays where the browser put it");
-        assert_eq!(contents[1], 101, "the page keeps its place under the infobar");
+        assert_eq!(
+            panel[1] + panel[3],
+            101 + 737,
+            "its bottom stays where the browser put it"
+        );
+        assert_eq!(
+            contents[1], 101,
+            "the page keeps its place under the infobar"
+        );
     }
 
     #[test]
     fn fr10_rail_leaves_a_closed_side_panel_without_width_and_the_page_whole() {
         let mut contents = [0, 46, 1078, 600];
         let mut panel = [1078, 46, 0, 600];
-        make_room(&mut contents, None, Some(&mut panel), None, (0, 1078), RAIL_WIDTH, 46);
+        make_room(
+            &mut contents,
+            None,
+            Some(&mut panel),
+            None,
+            (0, 1078),
+            RAIL_WIDTH,
+            46,
+        );
         assert_eq!(contents, [0, 46, 1038, 600]);
         assert_eq!(panel[2], 0);
     }
@@ -866,13 +1224,24 @@ mod tests {
         // Chrome animates the panel in from outside the window and shifts the contents with it.
         let mut contents = [270, 45, 900, 681];
         let mut panel = [1200, 44, 120, 690];
-        make_room(&mut contents, None, Some(&mut panel), None, (268, 1092), RAIL_WIDTH, 44);
+        make_room(
+            &mut contents,
+            None,
+            Some(&mut panel),
+            None,
+            (268, 1092),
+            RAIL_WIDTH,
+            44,
+        );
         assert_eq!(contents, [268, 44, 784, 690]);
     }
 
     #[test]
     fn fr10_test_flag_asks_which_view_takes_a_click() {
-        assert!(matches!(Command::parse("hit 900 300"), Some(Command::Hit(900, 300))));
+        assert!(matches!(
+            Command::parse("hit 900 300"),
+            Some(Command::Hit(900, 300))
+        ));
     }
 
     #[test]
@@ -893,23 +1262,45 @@ mod tests {
         assert_eq!(warm(0xff1f1f1f), None);
         assert_eq!(warm(0xffffffff), None);
         assert_eq!(warm(0xffd93025), None, "red stays red");
-        assert_eq!(warm(0x1f0b57d0).map(|c| c >> 24), Some(0x1f), "alpha is kept");
+        assert_eq!(
+            warm(0x1f0b57d0).map(|c| c >> 24),
+            Some(0x1f),
+            "alpha is kept"
+        );
     }
 
     #[test]
     fn fr10_rail_reads_an_extension_name_and_icon_from_its_manifest() {
         let manifest = r#"{"name": "Notes \u00e9 Panel", "icons": {"16": "a16.png", "48": "icons\/a48.png", "128": "a128.png"}}"#;
-        assert_eq!(json_string(manifest, "name").as_deref(), Some("Notes é Panel"));
-        assert_eq!(manifest_icon(manifest).as_deref(), Some("icons/a48.png"), "the smallest icon of at least 32 pixels");
-        assert_eq!(manifest_icon(r#"{"icons": {"16": "a.svg"}}"#), None, "only PNG icons are drawn");
+        assert_eq!(
+            json_string(manifest, "name").as_deref(),
+            Some("Notes é Panel")
+        );
+        assert_eq!(
+            manifest_icon(manifest).as_deref(),
+            Some("icons/a48.png"),
+            "the smallest icon of at least 32 pixels"
+        );
+        assert_eq!(
+            manifest_icon(r#"{"icons": {"16": "a.svg"}}"#),
+            None,
+            "only PNG icons are drawn"
+        );
         assert_eq!(manifest_icon(r#"{"name": "x"}"#), None);
     }
 
     #[test]
     fn nfr7_extensions_are_read_only_from_the_sessions_own_profile() {
         let given = ["chrome.exe", "--user-data-dir=C:/R/profiles/chrome/Work"].map(str::to_owned);
-        assert_eq!(own_user_data(given.into_iter()), Some(std::path::PathBuf::from("C:/R/profiles/chrome/Work")));
-        assert_eq!(own_user_data(["chrome.exe".to_owned()].into_iter()), None, "no maker default is guessed");
+        assert_eq!(
+            own_user_data(given.into_iter()),
+            Some(std::path::PathBuf::from("C:/R/profiles/chrome/Work"))
+        );
+        assert_eq!(
+            own_user_data(["chrome.exe".to_owned()].into_iter()),
+            None,
+            "no maker default is guessed"
+        );
     }
 
     #[test]
@@ -917,38 +1308,64 @@ mod tests {
         let directory = rivet_core::paths::TestDir::new("rivet-ext");
         let locale = directory.join("_locales").join("ko");
         std::fs::create_dir_all(&locale).unwrap();
-        std::fs::write(locale.join("messages.json"), r#"{"appDesc": {"message": "x"}, "appName": {"message": "메모 패널"}}"#).unwrap();
+        std::fs::write(
+            locale.join("messages.json"),
+            r#"{"appDesc": {"message": "x"}, "appName": {"message": "메모 패널"}}"#,
+        )
+        .unwrap();
         let manifest = r#"{"name": "__MSG_appName__", "default_locale": "ko"}"#;
-        assert_eq!(manifest_name(&directory, manifest).as_deref(), Some("메모 패널"));
-        assert_eq!(manifest_name(&directory, r#"{"name": "Plain"}"#).as_deref(), Some("Plain"));
+        assert_eq!(
+            manifest_name(&directory, manifest).as_deref(),
+            Some("메모 패널")
+        );
+        assert_eq!(
+            manifest_name(&directory, r#"{"name": "Plain"}"#).as_deref(),
+            Some("Plain")
+        );
         std::fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
     fn fr10_rail_takes_an_extension_id_from_a_long_string_in_the_key() {
         let id = b"abcdefghijklmnopabcdefghijklmnop".to_vec();
-        let backing: Vec<u64> = id.chunks(8).map(|part| u64::from_le_bytes(part.try_into().unwrap())).collect();
-        let mut key: EntryKey = [0; 0x28];
+        let backing: Vec<u64> = id
+            .chunks(8)
+            .map(|part| u64::from_le_bytes(part.try_into().unwrap()))
+            .collect();
+        let mut key: EntryKey = [0; KEY_BYTES];
         key[..4].copy_from_slice(&bv().extension_entry.to_le_bytes());
         key[8..16].copy_from_slice(&(backing.as_ptr() as u64).to_le_bytes());
         key[16..24].copy_from_slice(&(id.len() as u64).to_le_bytes());
         key[24..32].copy_from_slice(&(0x8000_0000_0000_0000u64 | 33).to_le_bytes());
         key[0x20] = 1;
-        assert_eq!(extension_id(&key).as_deref(), Some("abcdefghijklmnopabcdefghijklmnop"));
+        assert_eq!(
+            extension_id(&key).as_deref(),
+            Some("abcdefghijklmnopabcdefghijklmnop")
+        );
         key[0x20] = 0;
         assert_eq!(extension_id(&key), None, "the optional holds no value");
-        let mut own: EntryKey = [0; 0x28];
+        let mut own: EntryKey = [0; KEY_BYTES];
         own[..4].copy_from_slice(&1u32.to_le_bytes());
-        assert_eq!(extension_id(&own), None, "Chrome's own entries are not extensions");
+        assert_eq!(
+            extension_id(&own),
+            None,
+            "Chrome's own entries are not extensions"
+        );
     }
 
     #[test]
     fn fr10_rail_lists_what_a_build_can_show_and_leaves_out_what_it_cannot() {
         let chrome = &crate::builds::CHROME.side_panel;
         assert!((0..=4).all(|id| listed_in(chrome, id)));
-        assert!(listed_in(chrome, 0x17) && !listed_in(chrome, 0x18), "Chrome's extension entry is 0x17");
+        assert!(
+            listed_in(chrome, 0x17) && !listed_in(chrome, 0x18),
+            "Chrome's extension entry is 0x17"
+        );
         let brave = &crate::builds::BRAVE_63.side_panel;
-        assert!(listed_in(brave, 0x1b) && !listed_in(brave, 0x17), "Brave's extension entry is 0x1b");
+        assert!(
+            listed_in(brave, 0x1b) && !listed_in(brave, 0x17),
+            "Brave's extension entry is 0x1b"
+        );
         // Edge registers the Reading list and has no page for it, so listing it would offer a click
         // that stops the browser.
         let edge = &crate::builds::EDGE.side_panel;
@@ -959,8 +1376,13 @@ mod tests {
 
     #[test]
     fn fr10_test_flag_opens_an_entry_by_id() {
-        assert_eq!(Command::parse("open 1
-"), Some(Command::Open(1)));
+        assert_eq!(
+            Command::parse(
+                "open 1
+"
+            ),
+            Some(Command::Open(1))
+        );
         assert_eq!(Command::parse("dump"), Some(Command::Dump));
         assert_eq!(Command::parse("open x"), None);
     }

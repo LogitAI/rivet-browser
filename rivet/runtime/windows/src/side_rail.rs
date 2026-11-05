@@ -8,15 +8,10 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use windows::core::{Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{GENERIC_READ, POINT};
-use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICBitmapSource, IWICImagingFactory,
-    WICBitmapDitherTypeNone, WICBitmapPaletteTypeMedianCut, WICDecodeMetadataCacheOnDemand,
-};
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows::Win32::Graphics::Direct2D::{
     ID2D1DeviceContext, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
@@ -26,12 +21,18 @@ use windows::Win32::Graphics::DirectComposition::{
     IDCompositionDesktopDevice, IDCompositionVisual, IDCompositionVisual2,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    IDWriteFactory5, IDWriteTextLayout, DWRITE_FONT_STRETCH_NORMAL, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+    IDWriteFactory5, IDWriteTextLayout, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
 };
+use windows::Win32::Graphics::Imaging::{
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICBitmapSource, IWICImagingFactory,
+    WICBitmapDitherTypeNone, WICBitmapPaletteTypeMedianCut, WICDecodeMetadataCacheOnDemand,
+};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows_numerics::{Matrix3x2, Vector2};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT as SysPoint, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
@@ -81,16 +82,31 @@ struct EntryLook {
 }
 
 /// How an entry of Chrome's side panel looks in the rail.
-fn entry_look(key: &panel::EntryKey, extensions: &mut HashMap<String, Option<panel::ExtensionLook>>) -> EntryLook {
+fn entry_look(
+    key: &panel::EntryKey,
+    extensions: &mut HashMap<String, Option<panel::ExtensionLook>>,
+) -> EntryLook {
     let Some(id) = panel::extension_id(key) else {
         let id = panel::entry_id(key);
-        return EntryLook { name: panel::builtin_name(id).to_owned(), look: Look::Glyph(glyph_for(id)) };
+        return EntryLook {
+            name: panel::builtin_name(id).to_owned(),
+            look: Look::Glyph(glyph_for(id)),
+        };
     };
-    let found = extensions.entry(id.clone()).or_insert_with(|| panel::extension_look(&id)).clone();
-    let name = found.as_ref().map_or_else(|| id.clone(), |found| found.name.clone());
+    let found = extensions
+        .entry(id.clone())
+        .or_insert_with(|| panel::extension_look(&id))
+        .clone();
+    let name = found
+        .as_ref()
+        .map_or_else(|| id.clone(), |found| found.name.clone());
     let look = match found.and_then(|found| found.icon) {
         Some(path) => Look::Picture(path),
-        None => Look::Letter(name.chars().next().map_or('?', |c| c.to_uppercase().next().unwrap_or(c))),
+        None => Look::Letter(
+            name.chars()
+                .next()
+                .map_or('?', |c| c.to_uppercase().next().unwrap_or(c)),
+        ),
     };
     EntryLook { name, look }
 }
@@ -141,7 +157,8 @@ pub fn rail_hit(x: f32, y: f32, height: f32, entries: usize) -> Option<RailHit> 
     let inside = |top: f32| {
         x >= (RAIL_WIDTH as f32 - BUTTON) / 2.0
             && x < (RAIL_WIDTH as f32 + BUTTON) / 2.0
-            && y >= top && y < top + BUTTON
+            && y >= top
+            && y < top + BUTTON
     };
     for index in 0..entries {
         if inside(RAIL_PAD + index as f32 * (BUTTON + BUTTON_GAP)) {
@@ -292,7 +309,6 @@ struct Rail {
     near: bool,
     over: bool,
     opacity: f32,
-    opening: bool,
     /// The geometry of the last update, for hit testing in physical pixels.
     scale: f32,
     geometry: Option<PageGeometry>,
@@ -336,13 +352,19 @@ impl Rail {
             near: false,
             over: false,
             opacity: 0.0,
-            opening: false,
             scale: 1.0,
             geometry: None,
         })
     }
 
-    unsafe fn icon(&self, context: &ID2D1DeviceContext, glyph: char, area: D2D_RECT_F, size: f32, colour: D2D1_COLOR_F) -> Result<()> {
+    unsafe fn icon(
+        &self,
+        context: &ID2D1DeviceContext,
+        glyph: char,
+        area: D2D_RECT_F,
+        size: f32,
+        colour: D2D1_COLOR_F,
+    ) -> Result<()> {
         let locale = HSTRING::from("en-us");
         let format = self.dwrite.CreateTextFormat(
             &HSTRING::from(ICONS),
@@ -364,7 +386,10 @@ impl Rail {
         )?;
         let brush = context.CreateSolidColorBrush(&colour, None)?;
         context.DrawTextLayout(
-            Vector2 { X: area.left, Y: area.top },
+            Vector2 {
+                X: area.left,
+                Y: area.top,
+            },
             &layout,
             &brush,
             D2D1_DRAW_TEXT_OPTIONS_NONE,
@@ -373,20 +398,45 @@ impl Rail {
     }
 
     /// Draws an extension's icon, 16 DIPs square in the middle of a button.
-    unsafe fn picture(&self, context: &ID2D1DeviceContext, path: &PathBuf, area: D2D_RECT_F, ink: u32) -> Result<()> {
+    unsafe fn picture(
+        &self,
+        context: &ID2D1DeviceContext,
+        path: &PathBuf,
+        area: D2D_RECT_F,
+        ink: u32,
+    ) -> Result<()> {
         let Some(Some(source)) = self.pictures.get(path) else {
             return self.letter(context, '?', area, ink);
         };
         let bitmap = context.CreateBitmapFromWicBitmap(source, None)?;
-        let (x, y) = ((area.left + area.right) / 2.0 - 8.0, (area.top + area.bottom) / 2.0 - 8.0);
+        let (x, y) = (
+            (area.left + area.right) / 2.0 - 8.0,
+            (area.top + area.bottom) / 2.0 - 8.0,
+        );
         let target = rect(x, y, 16.0, 16.0);
-        context.DrawBitmap(&bitmap, Some(&target), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
+        context.DrawBitmap(
+            &bitmap,
+            Some(&target),
+            1.0,
+            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+            None,
+            None,
+        );
         Ok(())
     }
 
     /// The initial of an extension that has no icon on disk, in a small rounded square.
-    unsafe fn letter(&self, context: &ID2D1DeviceContext, letter: char, area: D2D_RECT_F, ink: u32) -> Result<()> {
-        let (x, y) = ((area.left + area.right) / 2.0 - 8.0, (area.top + area.bottom) / 2.0 - 8.0);
+    unsafe fn letter(
+        &self,
+        context: &ID2D1DeviceContext,
+        letter: char,
+        area: D2D_RECT_F,
+        ink: u32,
+    ) -> Result<()> {
+        let (x, y) = (
+            (area.left + area.right) / 2.0 - 8.0,
+            (area.top + area.bottom) / 2.0 - 8.0,
+        );
         self.rounded(context, rect(x, y, 16.0, 16.0), 5.0, rgb(INK, 0.08))?;
         let locale = HSTRING::from("en-us");
         let format = self.dwrite.CreateTextFormat(
@@ -403,7 +453,12 @@ impl Rail {
         let text: Vec<u16> = letter.to_string().encode_utf16().collect();
         let layout = self.dwrite.CreateTextLayout(&text, &format, 16.0, 16.0)?;
         let brush = context.CreateSolidColorBrush(&rgb(ink, 1.0), None)?;
-        context.DrawTextLayout(Vector2 { X: x, Y: y }, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        context.DrawTextLayout(
+            Vector2 { X: x, Y: y },
+            &layout,
+            &brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+        );
         Ok(())
     }
 
@@ -429,22 +484,46 @@ impl Rail {
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         let text: Vec<u16> = text.encode_utf16().collect();
-        self.dwrite.CreateTextLayout(&text, &format, width, TIP_HEIGHT)
+        self.dwrite
+            .CreateTextLayout(&text, &format, width, TIP_HEIGHT)
     }
 
     /// The label that names a button, drawn like the mock-up's tooltip: ink with light text.
     unsafe fn draw_tip(&self, context: &ID2D1DeviceContext, text: &str, width: f32) -> Result<()> {
-        self.rounded(context, rect(0.0, 0.0, width, TIP_HEIGHT), 8.0, rgb(INK, 0.94))?;
+        self.rounded(
+            context,
+            rect(0.0, 0.0, width, TIP_HEIGHT),
+            8.0,
+            rgb(INK, 0.94),
+        )?;
         let layout = self.tip_layout(text, width - 2.0 * TIP_PAD_X)?;
         let brush = context.CreateSolidColorBrush(&rgb(0xffffff, 1.0), None)?;
-        context.DrawTextLayout(Vector2 { X: TIP_PAD_X, Y: 0.0 }, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        context.DrawTextLayout(
+            Vector2 {
+                X: TIP_PAD_X,
+                Y: 0.0,
+            },
+            &layout,
+            &brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+        );
         Ok(())
     }
 
-    unsafe fn rounded(&self, context: &ID2D1DeviceContext, area: D2D_RECT_F, radius: f32, colour: D2D1_COLOR_F) -> Result<()> {
+    unsafe fn rounded(
+        &self,
+        context: &ID2D1DeviceContext,
+        area: D2D_RECT_F,
+        radius: f32,
+        colour: D2D1_COLOR_F,
+    ) -> Result<()> {
         let brush = context.CreateSolidColorBrush(&colour, None)?;
         context.FillRoundedRectangle(
-            &D2D1_ROUNDED_RECT { rect: area, radiusX: radius, radiusY: radius },
+            &D2D1_ROUNDED_RECT {
+                rect: area,
+                radiusX: radius,
+                radiusY: radius,
+            },
             &brush,
         );
         Ok(())
@@ -469,7 +548,10 @@ impl Rail {
         let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
         let scale = dpi as f32 / 96.0;
         context.SetDpi(dpi as f32, dpi as f32);
-        context.SetTransform(&Matrix3x2::translation(offset.x as f32 / scale, offset.y as f32 / scale));
+        context.SetTransform(&Matrix3x2::translation(
+            offset.x as f32 / scale,
+            offset.y as f32 / scale,
+        ));
         context.Clear(Some(&rgb(PAPER, 0.0)));
         let result = draw(&context);
         surface.EndDraw()?;
@@ -477,7 +559,13 @@ impl Rail {
         visual.SetContent(&surface)
     }
 
-    unsafe fn draw_column(&self, context: &ID2D1DeviceContext, width: f32, height: f32, key: &ColumnKey) -> Result<()> {
+    unsafe fn draw_column(
+        &self,
+        context: &ID2D1DeviceContext,
+        width: f32,
+        height: f32,
+        key: &ColumnKey,
+    ) -> Result<()> {
         let ground = mix(PAPER, key.tint, 0.04);
         // The page panel rounds its lower right corner. The rail is cut from the same shape: its
         // top edge lies below the top row, so only the lower corner shows.
@@ -485,11 +573,19 @@ impl Rail {
         context.FillRectangle(&rect(0.0, 0.0, width - PANEL_RADIUS, height), &square);
         self.rounded(
             context,
-            rect(width - 2.0 * PANEL_RADIUS, -PANEL_RADIUS, 2.0 * PANEL_RADIUS, height + PANEL_RADIUS),
+            rect(
+                width - 2.0 * PANEL_RADIUS,
+                -PANEL_RADIUS,
+                2.0 * PANEL_RADIUS,
+                height + PANEL_RADIUS,
+            ),
             PANEL_RADIUS,
             rgb(ground, 1.0),
         )?;
-        context.FillRectangle(&rect(0.0, 0.0, 1.0, height), &context.CreateSolidColorBrush(&rgb(INK, 0.08), None)?);
+        context.FillRectangle(
+            &rect(0.0, 0.0, 1.0, height),
+            &context.CreateSolidColorBrush(&rgb(INK, 0.08), None)?,
+        );
         let left = (width - BUTTON) / 2.0;
         let button = |top: f32, hit: RailHit, look: &Look, on: bool| -> Result<()> {
             let area = rect(left, top, BUTTON, BUTTON);
@@ -497,9 +593,20 @@ impl Rail {
             if on {
                 self.rounded(context, area, 8.0, rgb(mix(0xffffff, key.tint, 0.14), 1.0))?;
             } else if pressed || key.hover == Some(hit) {
-                self.rounded(context, area, 8.0, rgb(INK, if pressed { 0.1 } else { 0.06 }))?;
+                self.rounded(
+                    context,
+                    area,
+                    8.0,
+                    rgb(INK, if pressed { 0.1 } else { 0.06 }),
+                )?;
             }
-            let ink = if on { rivet_core::space_accent(key.tint) } else if key.hover == Some(hit) { INK } else { SOFT_INK };
+            let ink = if on {
+                rivet_core::space_accent(key.tint)
+            } else if key.hover == Some(hit) {
+                INK
+            } else {
+                SOFT_INK
+            };
             match look {
                 Look::Glyph(glyph) => self.icon(context, *glyph, area, 14.0, rgb(ink, 1.0)),
                 Look::Picture(path) => self.picture(context, path, area, ink),
@@ -516,20 +623,39 @@ impl Rail {
             &rect((width - 18.0) / 2.0, rule, 18.0, 1.0),
             &context.CreateSolidColorBrush(&rgb(INK, 0.08), None)?,
         );
-        button(add_top(key.looks.len()), RailHit::Add, &Look::Glyph(ADD_GLYPH), false)?;
-        button(height - RAIL_PAD - BUTTON, RailHit::Fold, &Look::Glyph(FOLD_GLYPH), false)
+        button(
+            add_top(key.looks.len()),
+            RailHit::Add,
+            &Look::Glyph(ADD_GLYPH),
+            false,
+        )?;
+        button(
+            height - RAIL_PAD - BUTTON,
+            RailHit::Fold,
+            &Look::Glyph(FOLD_GLYPH),
+            false,
+        )
     }
 
     /// The header of an open extension panel, drawn like the mock-up's `.ext-panel header`: the
     /// accent icon, the name in 13 DIP semibold and a close button, over a hairline-bordered column.
-    unsafe fn draw_panel(&self, context: &ID2D1DeviceContext, width: f32, height: f32, key: &PanelKey) -> Result<()> {
+    unsafe fn draw_panel(
+        &self,
+        context: &ID2D1DeviceContext,
+        width: f32,
+        height: f32,
+        key: &PanelKey,
+    ) -> Result<()> {
         // The surface starts `SHADOW_REACH` left of the panel. A column at a time, the shadow falls
         // off smoothly from the panel's edge.
         let columns = SHADOW_REACH as i32;
         for column in 0..columns {
             let distance = (columns - column) as f32 / SHADOW_REACH;
             let alpha = SHADOW_PEAK * (1.0 - distance).powi(2);
-            context.FillRectangle(&rect(column as f32, 0.0, 1.0, height), &context.CreateSolidColorBrush(&rgb(SHADOW_INK, alpha), None)?);
+            context.FillRectangle(
+                &rect(column as f32, 0.0, 1.0, height),
+                &context.CreateSolidColorBrush(&rgb(SHADOW_INK, alpha), None)?,
+            );
         }
         let mut base = Matrix3x2::identity();
         context.GetTransform(&mut base);
@@ -537,7 +663,10 @@ impl Rail {
         let width = width - SHADOW_REACH;
         let hairline = context.CreateSolidColorBrush(&rgb(INK, 0.08), None)?;
         context.FillRectangle(&rect(0.0, 0.0, 1.0, height), &hairline);
-        context.FillRectangle(&rect(1.0, 0.0, width - 1.0, HEADER_HEIGHT), &context.CreateSolidColorBrush(&rgb(PAPER, 1.0), None)?);
+        context.FillRectangle(
+            &rect(1.0, 0.0, width - 1.0, HEADER_HEIGHT),
+            &context.CreateSolidColorBrush(&rgb(PAPER, 1.0), None)?,
+        );
         context.FillRectangle(&rect(1.0, HEADER_HEIGHT - 1.0, width - 1.0, 1.0), &hairline);
         let icon = rect(1.0 + HEADER_PAD_LEFT, 0.0, 16.0, HEADER_HEIGHT - 1.0);
         let accent = rivet_core::space_accent(key.tint);
@@ -546,11 +675,22 @@ impl Rail {
             Look::Picture(path) => self.picture(context, path, icon, accent)?,
             Look::Letter(letter) => self.letter(context, *letter, icon, accent)?,
         }
-        let close = rect(width - HEADER_PAD_RIGHT - CLOSE_BUTTON, (HEADER_HEIGHT - 1.0 - CLOSE_BUTTON) / 2.0, CLOSE_BUTTON, CLOSE_BUTTON);
+        let close = rect(
+            width - HEADER_PAD_RIGHT - CLOSE_BUTTON,
+            (HEADER_HEIGHT - 1.0 - CLOSE_BUTTON) / 2.0,
+            CLOSE_BUTTON,
+            CLOSE_BUTTON,
+        );
         if key.close_hover {
             self.rounded(context, close, 8.0, rgb(INK, 0.06))?;
         }
-        self.icon(context, CLOSE_GLYPH, close, 10.0, rgb(if key.close_hover { INK } else { SOFT_INK }, 1.0))?;
+        self.icon(
+            context,
+            CLOSE_GLYPH,
+            close,
+            10.0,
+            rgb(if key.close_hover { INK } else { SOFT_INK }, 1.0),
+        )?;
         let name_left = 1.0 + HEADER_PAD_LEFT + 16.0 + HEADER_GAP;
         let locale = HSTRING::from("en-us");
         let format = self.dwrite.CreateTextFormat(
@@ -565,15 +705,37 @@ impl Rail {
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         let text: Vec<u16> = key.look.name.encode_utf16().collect();
-        let layout = self.dwrite.CreateTextLayout(&text, &format, close.left - HEADER_GAP - name_left, HEADER_HEIGHT - 1.0)?;
+        let layout = self.dwrite.CreateTextLayout(
+            &text,
+            &format,
+            close.left - HEADER_GAP - name_left,
+            HEADER_HEIGHT - 1.0,
+        )?;
         let brush = context.CreateSolidColorBrush(&rgb(INK, 1.0), None)?;
-        context.DrawTextLayout(Vector2 { X: name_left, Y: 0.0 }, &layout, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        context.DrawTextLayout(
+            Vector2 {
+                X: name_left,
+                Y: 0.0,
+            },
+            &layout,
+            &brush,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+        );
         Ok(())
     }
 
-    unsafe fn draw_open(&self, context: &ID2D1DeviceContext, opacity: f32, over: bool) -> Result<()> {
+    unsafe fn draw_open(
+        &self,
+        context: &ID2D1DeviceContext,
+        opacity: f32,
+        over: bool,
+    ) -> Result<()> {
         let area = rect(0.0, 0.0, BUTTON, BUTTON);
-        let ground = if over { rgb(INK, 0.06 * opacity) } else { rgb(0xffffff, 0.4 * opacity) };
+        let ground = if over {
+            rgb(INK, 0.06 * opacity)
+        } else {
+            rgb(0xffffff, 0.4 * opacity)
+        };
         self.rounded(context, area, 8.0, ground)?;
         let ink = if over { INK } else { SOFT_INK };
         self.icon(context, OPEN_GLYPH, area, 14.0, rgb(ink, opacity))
@@ -581,7 +743,12 @@ impl Rail {
 }
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> D2D_RECT_F {
-    D2D_RECT_F { left: x, top: y, right: x + width, bottom: y + height }
+    D2D_RECT_F {
+        left: x,
+        top: y,
+        right: x + width,
+        bottom: y + height,
+    }
 }
 
 /// Which of the entries Chrome's side panel shows, as a bit mask over the listed ones.
@@ -599,7 +766,12 @@ unsafe fn showing_mask(window: HWND, entries: &[panel::EntryKey]) -> u32 {
 unsafe fn rail_geometry(window: HWND) -> Option<crate::hooks::page_area::PageGeometry> {
     if crate::features::second_view::available() {
         let [x, top, right, bottom] = crate::features::second_view::full_page_area(window)?;
-        return Some(crate::hooks::page_area::PageGeometry { x, right, top, bottom });
+        return Some(crate::hooks::page_area::PageGeometry {
+            x,
+            right,
+            top,
+            bottom,
+        });
     }
     crate::hooks::page_area::page_geometry(window).filter(|_| panel::sidebar_checked())
 }
@@ -610,9 +782,9 @@ pub unsafe fn update(window: HWND, appbar: &Appbar, visible: bool, dpi: u32) {
     let geometry = rail_geometry(window).filter(|_| visible);
     RAILS.with(|rails| {
         let mut rails = rails.borrow_mut();
-        if !rails.contains_key(&(window as isize)) {
+        if let std::collections::hash_map::Entry::Vacant(e) = rails.entry(window as isize) {
             let Ok(rail) = Rail::new(appbar) else { return };
-            rails.insert(window as isize, rail);
+            e.insert(rail);
             // The page area is known once the browser has laid out with the patched layout.
             if let Err(error) = crate::hooks::page_area::install() {
                 crate::trace::trace(&format!("side rail: {error}"));
@@ -630,7 +802,12 @@ pub unsafe fn update(window: HWND, appbar: &Appbar, visible: bool, dpi: u32) {
     });
 }
 
-unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>, dpi: u32) -> Result<()> {
+unsafe fn refresh(
+    window: HWND,
+    rail: &mut Rail,
+    geometry: Option<PageGeometry>,
+    dpi: u32,
+) -> Result<()> {
     let scale = dpi as f32 / 96.0;
     rail.scale = scale;
     rail.geometry = geometry;
@@ -646,7 +823,11 @@ unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>,
         return refresh_open(rail, geometry.filter(|_| !unfolded), dpi);
     };
     rail.entries = panel::listed_entries(window);
-    let looks: Vec<EntryLook> = rail.entries.iter().map(|key| entry_look(key, &mut rail.extensions)).collect();
+    let looks: Vec<EntryLook> = rail
+        .entries
+        .iter()
+        .map(|key| entry_look(key, &mut rail.extensions))
+        .collect();
     rail.looks = looks;
     rail.looks.extend(FAKE.with(|fake| fake.borrow().clone()));
     for look in rail.looks.clone() {
@@ -657,10 +838,15 @@ unsafe fn refresh(window: HWND, rail: &mut Rail, geometry: Option<PageGeometry>,
         }
     }
     let (left, top, height) = rail_rect(geometry);
-    let (width_px, height_px) = ((RAIL_WIDTH as f32 * scale).round() as i32, (height * scale).round() as i32);
+    let (width_px, height_px) = (
+        (RAIL_WIDTH as f32 * scale).round() as i32,
+        (height * scale).round() as i32,
+    );
     rail.column.SetOffsetX2((left * scale).round())?;
     rail.column.SetOffsetY2((top * scale).round())?;
-    let tint = FORCED_TINT.with(|forced| forced.get()).unwrap_or_else(|| crate::frame::space_tint(window));
+    let tint = FORCED_TINT
+        .with(|forced| forced.get())
+        .unwrap_or_else(|| crate::frame::space_tint(window));
     let key = ColumnKey {
         width: width_px,
         height: height_px,
@@ -706,23 +892,42 @@ fn on_header(geometry: PageGeometry, x: f32, y: f32) -> (bool, bool) {
         && y >= geometry.top as f32
         && y < geometry.top as f32 + HEADER_HEIGHT;
     let (close_left, close_top) = close_button(geometry);
-    let on_close = (close_left..close_left + CLOSE_BUTTON).contains(&x) && (close_top..close_top + CLOSE_BUTTON).contains(&y);
+    let on_close = (close_left..close_left + CLOSE_BUTTON).contains(&x)
+        && (close_top..close_top + CLOSE_BUTTON).contains(&y);
     (inside, inside && on_close)
 }
 
 /// Places and paints the header of the panel the browser shows, or removes it when none shows.
-unsafe fn refresh_panel(rail: &mut Rail, geometry: PageGeometry, height: f32, dpi: u32, tint: u32) -> Result<()> {
+unsafe fn refresh_panel(
+    rail: &mut Rail,
+    geometry: PageGeometry,
+    height: f32,
+    dpi: u32,
+    tint: u32,
+) -> Result<()> {
     let Some(look) = rail.shown.and_then(|index| rail.looks.get(index)).cloned() else {
         rail.panel.SetContent(None)?;
         rail.panel_key = None;
         return Ok(());
     };
     let scale = dpi as f32 / 96.0;
-    rail.panel.SetOffsetX2(((panel_left(geometry) - SHADOW_REACH) * scale).round())?;
-    rail.panel.SetOffsetY2((geometry.top as f32 * scale).round())?;
+    rail.panel
+        .SetOffsetX2(((panel_left(geometry) - SHADOW_REACH) * scale).round())?;
+    rail.panel
+        .SetOffsetY2((geometry.top as f32 * scale).round())?;
     let panel_width = PANEL_WIDTH as f32 + SHADOW_REACH;
-    let (width_px, height_px) = ((panel_width * scale).round() as i32, (height * scale).round() as i32);
-    let key = PanelKey { width: width_px, height: height_px, dpi, look, close_hover: rail.close_hover, tint };
+    let (width_px, height_px) = (
+        (panel_width * scale).round() as i32,
+        (height * scale).round() as i32,
+    );
+    let key = PanelKey {
+        width: width_px,
+        height: height_px,
+        dpi,
+        look,
+        close_hover: rail.close_hover,
+        tint,
+    };
     if rail.panel_key.as_ref() != Some(&key) && width_px > 0 && height_px > 0 {
         let shown = key.clone();
         rail.paint(&rail.panel, width_px, height_px, dpi, |context| {
@@ -736,7 +941,11 @@ unsafe fn refresh_panel(rail: &mut Rail, geometry: PageGeometry, height: f32, dp
 /// What a rail button is called.
 fn hit_name(rail: &Rail, hit: RailHit) -> String {
     match hit {
-        RailHit::Entry(index) => rail.looks.get(index).map(|look| look.name.clone()).unwrap_or_default(),
+        RailHit::Entry(index) => rail
+            .looks
+            .get(index)
+            .map(|look| look.name.clone())
+            .unwrap_or_default(),
         RailHit::Add => "Get extensions".to_owned(),
         RailHit::Fold => "Hide the Sidebar".to_owned(),
     }
@@ -752,7 +961,12 @@ fn hit_top(hit: RailHit, height: f32, entries: usize) -> f32 {
 }
 
 /// Shows the name of the hovered button to its left, or nothing when no button is hovered.
-unsafe fn refresh_tip(rail: &mut Rail, geometry: PageGeometry, height: f32, dpi: u32) -> Result<()> {
+unsafe fn refresh_tip(
+    rail: &mut Rail,
+    geometry: PageGeometry,
+    height: f32,
+    dpi: u32,
+) -> Result<()> {
     let Some(hit) = rail.hover.filter(|hit| match hit {
         RailHit::Entry(index) => *index < rail.looks.len(),
         _ => true,
@@ -766,21 +980,31 @@ unsafe fn refresh_tip(rail: &mut Rail, geometry: PageGeometry, height: f32, dpi:
     let (width, tall) = rail.tip_size(&text)?;
     let (left, top, _) = rail_rect(geometry);
     let button = top + hit_top(hit, height, rail.looks.len());
-    rail.tip.SetOffsetX2(((left - TIP_GAP - width) * scale).round())?;
-    rail.tip.SetOffsetY2(((button + (BUTTON - tall) / 2.0) * scale).round())?;
-    let key = TipKey { text: text.clone(), dpi };
+    rail.tip
+        .SetOffsetX2(((left - TIP_GAP - width) * scale).round())?;
+    rail.tip
+        .SetOffsetY2(((button + (BUTTON - tall) / 2.0) * scale).round())?;
+    let key = TipKey {
+        text: text.clone(),
+        dpi,
+    };
     if rail.tip_key.as_ref() != Some(&key) {
-        rail.paint(&rail.tip, (width * scale).ceil() as i32, (tall * scale).ceil() as i32, dpi, |context| {
-            rail.draw_tip(context, &text, width)
-        })?;
+        rail.paint(
+            &rail.tip,
+            (width * scale).ceil() as i32,
+            (tall * scale).ceil() as i32,
+            dpi,
+            |context| rail.draw_tip(context, &text, width),
+        )?;
         rail.tip_key = Some(key);
     }
     Ok(())
 }
 
 /// Decodes an icon file into pixels Direct2D can draw.
-unsafe fn load_picture(path: &PathBuf) -> Option<IWICBitmapSource> {
-    let factory: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
+unsafe fn load_picture(path: &Path) -> Option<IWICBitmapSource> {
+    let factory: IWICImagingFactory =
+        CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
     let name = HSTRING::from(path.to_string_lossy().as_ref());
     let decoder = factory
         .CreateDecoderFromFilename(&name, None, GENERIC_READ, WICDecodeMetadataCacheOnDemand)
@@ -788,7 +1012,14 @@ unsafe fn load_picture(path: &PathBuf) -> Option<IWICBitmapSource> {
     let frame = decoder.GetFrame(0).ok()?;
     let converter = factory.CreateFormatConverter().ok()?;
     converter
-        .Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut)
+        .Initialize(
+            &frame,
+            &GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            None,
+            0.0,
+            WICBitmapPaletteTypeMedianCut,
+        )
         .ok()?;
     converter.cast().ok()
 }
@@ -803,11 +1034,17 @@ unsafe fn refresh_open(rail: &mut Rail, geometry: Option<PageGeometry>, dpi: u32
     let scale = dpi as f32 / 96.0;
     rail.open.SetOffsetX2((left * scale).round())?;
     rail.open.SetOffsetY2((top * scale).round())?;
-    let key = OpenKey { dpi, opacity: (rail.opacity * 20.0).round() as i32, over: rail.over };
+    let key = OpenKey {
+        dpi,
+        opacity: (rail.opacity * 20.0).round() as i32,
+        over: rail.over,
+    };
     if rail.open_key.as_ref() != Some(&key) {
         let size = (BUTTON * scale).round() as i32;
         let (opacity, over) = (rail.opacity, rail.over);
-        rail.paint(&rail.open, size, size, dpi, |context| rail.draw_open(context, opacity, over))?;
+        rail.paint(&rail.open, size, size, dpi, |context| {
+            rail.draw_open(context, opacity, over)
+        })?;
         rail.open_key = Some(key);
     }
     rail.device.Commit()
@@ -830,10 +1067,8 @@ enum Target {
 fn target_at(rail: &Rail, unfolded: bool, x: f32, y: f32) -> Option<Target> {
     let geometry = rail.geometry?;
     if unfolded {
-        if rail.shown.is_some() {
-            if on_header(geometry, x, y).1 {
-                return Some(Target::PanelClose);
-            }
+        if rail.shown.is_some() && on_header(geometry, x, y).1 {
+            return Some(Target::PanelClose);
         }
         let (left, top, height) = rail_rect(geometry);
         return rail_hit(x - left, y - top, height, rail.entries.len()).map(Target::Rail);
@@ -848,7 +1083,14 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
         return;
     }
     ScreenToClient(window, &mut pointer);
-    let known = RAILS.with(|rails| rails.borrow().get(&(window as isize)).is_some_and(|rail| rail.geometry.is_some()));
+    // An extension page may load into the browser's side panel after the click that opened it.
+    crate::features::sidebar_page::follow(window);
+    let known = RAILS.with(|rails| {
+        rails
+            .borrow()
+            .get(&(window as isize))
+            .is_some_and(|rail| rail.geometry.is_some())
+    });
     if !known {
         // Not laid out since the layout hook went in. Lay out outside any layout of the browser's.
         crate::hooks::page_area::relayout(window);
@@ -857,10 +1099,18 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
     }
     let changed = RAILS.with(|rails| {
         let mut rails = rails.borrow_mut();
-        let Some(rail) = rails.get_mut(&(window as isize)) else { return false };
+        let Some(rail) = rails.get_mut(&(window as isize)) else {
+            return false;
+        };
         let unfolded = panel::is_unfolded(window);
         let (x, y) = to_dips(pointer, rail.scale);
-        let before = (rail.hover, rail.near, rail.over, rail.opacity, rail.close_hover);
+        let before = (
+            rail.hover,
+            rail.near,
+            rail.over,
+            rail.opacity,
+            rail.close_hover,
+        );
         let forced = FORCED_POINTER.with(|forced| forced.get());
         rail.near = !unfolded
             && forced.map_or_else(
@@ -872,14 +1122,24 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
                 || rail.geometry.is_some_and(|g| on_open_button(g, x, y)),
                 |(_, over)| over,
             );
-        rail.hover = FORCED_HOVER.with(|forced| forced.get()).filter(|_| unfolded).or(match target_at(rail, unfolded, x, y) {
-            Some(Target::Rail(hit)) => Some(hit),
-            _ => None,
-        });
+        rail.hover = FORCED_HOVER
+            .with(|forced| forced.get())
+            .filter(|_| unfolded)
+            .or(match target_at(rail, unfolded, x, y) {
+                Some(Target::Rail(hit)) => Some(hit),
+                _ => None,
+            });
         rail.close_hover = (FORCED_CLOSE.with(|forced| forced.get()) && rail.shown.is_some())
             || (unfolded && target_at(rail, unfolded, x, y) == Some(Target::PanelClose));
         rail.opacity = fade(rail.opacity, open_opacity(rail.near, rail.over), 0.2);
-        before != (rail.hover, rail.near, rail.over, rail.opacity, rail.close_hover)
+        before
+            != (
+                rail.hover,
+                rail.near,
+                rail.over,
+                rail.opacity,
+                rail.close_hover,
+            )
     });
     if changed {
         crate::frame::update_appbar(window);
@@ -889,7 +1149,12 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
 unsafe fn install_hook() {
     HOOK.with(|hook| {
         if *hook.borrow() == 0 {
-            let installed = SetWindowsHookExW(WH_GETMESSAGE, Some(mouse_hook), std::ptr::null_mut(), GetCurrentThreadId());
+            let installed = SetWindowsHookExW(
+                WH_GETMESSAGE,
+                Some(mouse_hook),
+                std::ptr::null_mut(),
+                GetCurrentThreadId(),
+            );
             *hook.borrow_mut() = installed as isize;
         }
     });
@@ -945,11 +1210,27 @@ unsafe fn click(message: &MSG) -> bool {
 
 /// The entries the rail lists for a window.
 fn entries_of(window: HWND) -> Vec<panel::EntryKey> {
-    RAILS.with(|rails| rails.borrow().get(&(window as isize)).map(|rail| rail.entries.clone()).unwrap_or_default())
+    RAILS.with(|rails| {
+        rails
+            .borrow()
+            .get(&(window as isize))
+            .map(|rail| rail.entries.clone())
+            .unwrap_or_default()
+    })
 }
 
 /// What a click on a target does.
 unsafe fn perform(window: HWND, target: Target) {
+    // The browser destroys an entry's page when the entry closes, so a page in the second view
+    // goes back to the browser's view before any entry changes.
+    if !matches!(target, Target::Open | Target::Rail(RailHit::Add)) {
+        crate::features::sidebar_page::give_back(window);
+    }
+    perform_target(window, target);
+    crate::features::sidebar_page::follow(window);
+}
+
+unsafe fn perform_target(window: HWND, target: Target) {
     match target {
         Target::Open => panel::set_unfolded(window, true),
         Target::PanelClose => {
@@ -998,7 +1279,10 @@ thread_local! {
 /// `near`, `over` and `away`.
 pub unsafe fn simulate(window: HWND, command: &str) {
     let mut words = command.split_whitespace();
-    let target = match (words.next(), words.next().and_then(|n| n.parse::<usize>().ok())) {
+    let target = match (
+        words.next(),
+        words.next().and_then(|n| n.parse::<usize>().ok()),
+    ) {
         (Some("open"), _) => Some(Target::Open),
         (Some("close"), _) => Some(Target::PanelClose),
         (Some("fold"), _) => Some(Target::Rail(RailHit::Fold)),
@@ -1017,7 +1301,8 @@ pub unsafe fn simulate(window: HWND, command: &str) {
             None
         }
         (Some("hover"), None) => {
-            FORCED_CLOSE.with(|forced| forced.set(command.split_whitespace().nth(1) == Some("close")));
+            FORCED_CLOSE
+                .with(|forced| forced.set(command.split_whitespace().nth(1) == Some("close")));
             let hit = match words.next() {
                 Some("add") => Some(RailHit::Add),
                 Some("fold") => Some(RailHit::Fold),
@@ -1027,7 +1312,10 @@ pub unsafe fn simulate(window: HWND, command: &str) {
             None
         }
         (Some("tint"), _) => {
-            let tint = command.split_whitespace().nth(1).and_then(|hex| u32::from_str_radix(hex, 16).ok());
+            let tint = command
+                .split_whitespace()
+                .nth(1)
+                .and_then(|hex| u32::from_str_radix(hex, 16).ok());
             FORCED_TINT.with(|forced| forced.set(tint));
             None
         }
@@ -1067,23 +1355,45 @@ mod tests {
     #[test]
     fn fr10_rail_buttons_are_thirty_dips_two_apart_after_six() {
         assert_eq!(rail_hit(20.0, 20.0, 600.0, 3), Some(RailHit::Entry(0)));
-        assert_eq!(rail_hit(20.0, 6.0 + 32.0 + 5.0, 600.0, 3), Some(RailHit::Entry(1)));
-        assert_eq!(rail_hit(20.0, 6.0 + 31.0, 600.0, 3), None, "the gap between buttons is not a button");
-        assert_eq!(rail_hit(2.0, 20.0, 600.0, 3), None, "the rail's padding is not a button");
+        assert_eq!(
+            rail_hit(20.0, 6.0 + 32.0 + 5.0, 600.0, 3),
+            Some(RailHit::Entry(1))
+        );
+        assert_eq!(
+            rail_hit(20.0, 6.0 + 31.0, 600.0, 3),
+            None,
+            "the gap between buttons is not a button"
+        );
+        assert_eq!(
+            rail_hit(2.0, 20.0, 600.0, 3),
+            None,
+            "the rail's padding is not a button"
+        );
     }
 
     #[test]
     fn fr10_rail_ends_with_a_fold_button_after_the_add_button() {
-        assert_eq!(rail_hit(20.0, 600.0 - 6.0 - 15.0, 600.0, 3), Some(RailHit::Fold));
+        assert_eq!(
+            rail_hit(20.0, 600.0 - 6.0 - 15.0, 600.0, 3),
+            Some(RailHit::Fold)
+        );
         let add = add_top(3) + 10.0;
         assert_eq!(rail_hit(20.0, add, 600.0, 3), Some(RailHit::Add));
         assert!(add_top(3) > 6.0 + 3.0 * 32.0);
-        assert!(add_top(2) < add_top(3), "the add button follows however many entries there are");
+        assert!(
+            add_top(2) < add_top(3),
+            "the add button follows however many entries there are"
+        );
     }
 
     #[test]
     fn fr10_open_button_sits_four_from_the_right_and_six_from_the_bottom() {
-        let page = PageGeometry { x: 268, right: 1092, top: 46, bottom: 734 };
+        let page = PageGeometry {
+            x: 268,
+            right: 1092,
+            top: 46,
+            bottom: 734,
+        };
         assert_eq!(open_button(page), (1058.0, 698.0));
         assert!(in_hot_area(page, 1091.0, 733.0));
         assert!(!in_hot_area(page, 1019.0, 733.0));
@@ -1101,10 +1411,16 @@ mod tests {
     #[test]
     fn fr10_rail_labels_chromes_entries_and_draws_their_glyphs() {
         let mut known = HashMap::new();
-        let mut key: panel::EntryKey = [0; 0x28];
+        let mut key: panel::EntryKey = [0; panel::KEY_BYTES];
         key[..4].copy_from_slice(&1u32.to_le_bytes());
         let look = entry_look(&key, &mut known);
-        assert_eq!(look, EntryLook { name: "Bookmarks".into(), look: Look::Glyph('\u{E736}') });
+        assert_eq!(
+            look,
+            EntryLook {
+                name: "Bookmarks".into(),
+                look: Look::Glyph('\u{E736}')
+            }
+        );
         assert!(known.is_empty(), "Chrome's own entries need no disk");
     }
 
@@ -1117,14 +1433,31 @@ mod tests {
 
     #[test]
     fn fr10_open_panel_header_is_forty_dips_with_a_close_button_six_from_the_rail() {
-        let page = PageGeometry { x: 268, right: 1092, top: 44, bottom: 734 };
-        assert_eq!(panel_left(page), 812.0, "the panel is 240 wide and ends at the 40 wide rail");
+        let page = PageGeometry {
+            x: 268,
+            right: 1092,
+            top: 44,
+            bottom: 734,
+        };
+        assert_eq!(
+            panel_left(page),
+            812.0,
+            "the panel is 240 wide and ends at the 40 wide rail"
+        );
         assert_eq!(on_header(page, 900.0, 60.0), (true, false));
-        assert_eq!(on_header(page, 900.0, 85.0), (false, false), "below the header row is the browser's own panel");
+        assert_eq!(
+            on_header(page, 900.0, 85.0),
+            (false, false),
+            "below the header row is the browser's own panel"
+        );
         assert_eq!(on_header(page, 811.0, 60.0), (false, false));
         assert_eq!(close_button(page), (1018.0, 44.0 + 5.5));
         assert_eq!(on_header(page, 1030.0, 58.0), (true, true));
-        assert_eq!(on_header(page, 1055.0, 58.0), (false, false), "the rail is not the header");
+        assert_eq!(
+            on_header(page, 1055.0, 58.0),
+            (false, false),
+            "the rail is not the header"
+        );
     }
 
     #[test]

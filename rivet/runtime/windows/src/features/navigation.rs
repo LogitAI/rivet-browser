@@ -6,11 +6,11 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-use windows_sys::Win32::Foundation::HWND;
-use crate::chromium::image;
 use crate::builds::Build;
+use crate::chromium::image;
 use crate::feature::Needs;
 use crate::targets::Target;
+use windows_sys::Win32::Foundation::HWND;
 
 /// Size of a `GURL`, which Chromium 156 lays out the same way in every build it ships.
 const GURL_SIZE: usize = 0x78;
@@ -26,12 +26,18 @@ pub(crate) fn needs(build: &Build) -> Needs {
     Needs::checked(
         row.supported,
         crate::builds::unchecked_reason(build, "opening addresses"),
-        row.signatures.iter().map(|(rva, bytes)| Target::new("navigation function", *rva, bytes)).collect(),
+        row.signatures
+            .iter()
+            .map(|(rva, bytes)| Target::new("navigation function", *rva, bytes))
+            .collect(),
     )
 }
 
 const REFERRER_POLICY_DEFAULT: i32 = 1;
 const CURRENT_TAB: i32 = 1;
+/// `WindowOpenDisposition::NEW_FOREGROUND_TAB` and `NEW_BACKGROUND_TAB`.
+const NEW_FOREGROUND_TAB: i32 = 3;
+const NEW_BACKGROUND_TAB: i32 = 4;
 /// `ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR`.
 const TYPED_IN_ADDRESS_BAR: u32 = 0x0200_0001;
 
@@ -62,17 +68,14 @@ impl<const N: usize> Raw<N> {
 
 static BASE: OnceLock<Option<usize>> = OnceLock::new();
 
-
 fn base() -> Option<usize> {
     *BASE.get_or_init(|| unsafe {
         let image = image::recorded()?;
-        crate::feature::needs_here(needs).verify(&image).ok().map(|()| image.base)
+        crate::feature::needs_here(needs)
+            .verify(&image)
+            .ok()
+            .map(|()| image.base)
     })
-}
-
-/// Whether this build can open addresses, with every function it needs matching the record.
-pub(crate) fn ready() -> bool {
-    base().is_some()
 }
 
 unsafe fn function<T: Copy>(base: usize, rva: usize) -> T {
@@ -118,7 +121,10 @@ pub unsafe fn open_if_active(window: HWND, contents: usize, url: &str) -> bool {
 }
 
 /// Runs `work` with `url` as a `GURL`, which lives only for the call.
-pub(crate) unsafe fn with_address<R>(url: &str, work: impl FnOnce(*const c_void) -> R) -> Option<R> {
+pub(crate) unsafe fn with_address<R>(
+    url: &str,
+    work: impl FnOnce(*const c_void) -> R,
+) -> Option<R> {
     let base = base()?;
     let mut target = Raw::<GURL_SIZE>::zeroed();
     let wide: Vec<u16> = url.encode_utf16().collect();
@@ -134,6 +140,29 @@ pub(crate) unsafe fn with_address<R>(url: &str, work: impl FnOnce(*const c_void)
 }
 
 unsafe fn open_in(base: usize, contents: *mut c_void, url: &str) -> bool {
+    !open_as(base, contents, url, CURRENT_TAB).is_null()
+}
+
+/// Opens `url` in a new foreground tab of the window that holds the page `contents`, through the
+/// browser's own `OpenURL`, and returns the new tab's page or null. The tab's first page is `url`,
+/// so the browser's new tab page never loads in it.
+pub(crate) unsafe fn open_in_new_tab(contents: *mut c_void, url: &str) -> *mut c_void {
+    let Some(base) = base() else {
+        return std::ptr::null_mut();
+    };
+    open_as(base, contents, url, NEW_FOREGROUND_TAB)
+}
+
+/// Opens `url` in a new background tab of the window that holds the page `contents`, and returns
+/// the new tab's page or null. The active tab stays active.
+pub(crate) unsafe fn open_in_background_tab(contents: *mut c_void, url: &str) -> *mut c_void {
+    let Some(base) = base() else {
+        return std::ptr::null_mut();
+    };
+    open_as(base, contents, url, NEW_BACKGROUND_TAB)
+}
+
+unsafe fn open_as(base: usize, contents: *mut c_void, url: &str, disposition: i32) -> *mut c_void {
     let mut target = Raw::<GURL_SIZE>::zeroed();
     let wide: Vec<u16> = url.encode_utf16().collect();
     let text = if bv().gurl_wide {
@@ -151,7 +180,7 @@ unsafe fn open_in(base: usize, contents: *mut c_void, url: &str) -> bool {
         params.at(),
         target.at(),
         referrer.at(),
-        CURRENT_TAB,
+        disposition,
         TYPED_IN_ADDRESS_BAR,
         false,
     );
@@ -161,7 +190,7 @@ unsafe fn open_in(base: usize, contents: *mut c_void, url: &str) -> bool {
     function::<Construct>(base, bv().open_url_params_drop)(params.at());
     function::<Construct>(base, bv().gurl_drop)(referrer.at());
     function::<Construct>(base, bv().gurl_drop)(target.at());
-    !opened.is_null()
+    opened
 }
 
 /// The active page of `window`, for Chromium functions that act on a page.

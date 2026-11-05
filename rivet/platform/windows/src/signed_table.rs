@@ -22,6 +22,7 @@ pub const SCHEMA: u64 = 1;
 const MAGIC: &[u8] = b"RVTB1\n";
 const SIGNATURE: usize = 64;
 /// More than any real table, so a wrong answer from a server cannot fill the disk.
+#[cfg(windows)]
 const LARGEST: usize = 64 * 1024 * 1024;
 
 /// Decodes hex, or names what it was for.

@@ -113,7 +113,9 @@ impl<'a> PeFile<'a> {
             .map(|index| {
                 let header = table + 40 * index;
                 let executable = u32_at(bytes, header + 36)? & 0x2000_0000 != 0;
-                Some(executable.then_some((u32_at(bytes, header + 12)?, u32_at(bytes, header + 8)?)))
+                Some(
+                    executable.then_some((u32_at(bytes, header + 12)?, u32_at(bytes, header + 8)?)),
+                )
             })
             .collect::<Option<Vec<_>>>()?
             .into_iter()
@@ -147,7 +149,9 @@ impl<'a> PeFile<'a> {
 
     /// Whether an RVA lies in a section of instructions.
     pub fn is_code(&self, rva: u32) -> bool {
-        self.code_sections.iter().any(|(address, size)| (*address..address.saturating_add(*size)).contains(&rva))
+        self.code_sections
+            .iter()
+            .any(|(address, size)| (*address..address.saturating_add(*size)).contains(&rva))
     }
 
     /// Reads bytes at an RVA.
@@ -256,9 +260,15 @@ mod tests {
         assert!(table.iter().any(|build| build.version == "156.0.8078.48"));
         assert!(table.iter().any(|build| build.version == "156.0.8078.80"));
         assert!(table.iter().any(|build| build.version == "150.0.7871.187"));
-        assert!(table.iter().any(|build| build.module == "whale.dll" && build.version == "5.39.412.57"));
-        assert!(table.iter().any(|build| build.browser == "Brave" && build.version == "156.1.98.62"));
-        assert!(table.iter().any(|build| build.browser == "Brave" && build.version == "156.1.98.63"));
+        assert!(table
+            .iter()
+            .any(|build| build.module == "whale.dll" && build.version == "5.39.412.57"));
+        assert!(table
+            .iter()
+            .any(|build| build.browser == "Brave" && build.version == "156.1.98.62"));
+        assert!(table
+            .iter()
+            .any(|build| build.browser == "Brave" && build.version == "156.1.98.63"));
         assert!(table
             .iter()
             .any(|build| build.module == "samsunginternet.dll" && build.version == "30.0.4.29"));
