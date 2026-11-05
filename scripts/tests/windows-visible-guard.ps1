@@ -48,6 +48,12 @@ function Test-OnMonitor([int[]]$Rect, $Monitors) {
   $false
 }
 
+# Whether `child` was started by `parent`. Windows reuses process ids, so a process whose parent
+# died long ago can name a test process as its parent; a real parent is older than its child.
+function Test-Child($child, $parent) {
+  $parent -and $child.CreationDate -and $parent.CreationDate -and $parent.CreationDate -le $child.CreationDate
+}
+
 if ($SelfTest) {
   $monitors = @([pscustomobject]@{ L = 0; T = 0; Ri = 1920; B = 1080 }, [pscustomobject]@{ L = 1920; T = 0; Ri = 3840; B = 1080 })
   $cases = @(
@@ -63,6 +69,14 @@ if ($SelfTest) {
     $ok = $got -eq $case[1]
     if (-not $ok) { $failed++ }
     '{0} {1}: {2}' -f ($(if ($ok) { 'ok  ' } else { 'FAIL' })), $case[2], $got
+  }
+  $old = [pscustomobject]@{ CreationDate = [datetime]'2026-11-05 08:00' }
+  $new = [pscustomobject]@{ CreationDate = [datetime]'2026-11-05 10:00' }
+  foreach ($case in @(@($new, $old, $true, 'a child started by a test process'), @($old, $new, $false, 'a process whose dead parent id a test process took over'), @($new, $null, $false, 'a process whose parent is gone'))) {
+    $got = [bool](Test-Child $case[0] $case[1])
+    $ok = $got -eq $case[2]
+    if (-not $ok) { $failed++ }
+    '{0} {1}: {2}' -f ($(if ($ok) { 'ok  ' } else { 'FAIL' })), $case[3], $got
   }
   $real = [GuardWin]::Monitors()
   "monitors on this machine: $($real.Count)"
@@ -82,6 +96,8 @@ New-Item -ItemType File -Force $Log | Out-Null
 function Get-TestProcesses {
   $all = @(Get-CimInstance Win32_Process)
   $test = New-Object 'System.Collections.Generic.HashSet[uint32]'
+  $byId = @{}
+  foreach ($p in $all) { $byId[[uint32]$p.ProcessId] = $p }
   foreach ($p in $all) {
     if ((Test-Names $p.CommandLine) -and $p.ProcessId -ne $PID) { [void]$test.Add([uint32]$p.ProcessId) }
   }
@@ -89,7 +105,7 @@ function Get-TestProcesses {
   do {
     $grew = $false
     foreach ($p in $all) {
-      if (-not $test.Contains([uint32]$p.ProcessId) -and $test.Contains([uint32]$p.ParentProcessId) -and $p.Name -ne 'pwsh.exe' -and $p.Name -ne 'conhost.exe') {
+      if (-not $test.Contains([uint32]$p.ProcessId) -and $test.Contains([uint32]$p.ParentProcessId) -and $p.Name -ne 'pwsh.exe' -and $p.Name -ne 'conhost.exe' -and (Test-Child $p $byId[[uint32]$p.ParentProcessId])) {
         [void]$test.Add([uint32]$p.ProcessId); $grew = $true
       }
     }
