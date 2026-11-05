@@ -1002,6 +1002,24 @@ mod tests {
     }
 
     #[test]
+    fn fr10_whale_and_samsung_record_their_side_panel_layouts() {
+        let row = |browser: &str| {
+            &crate::builds::compiled()
+                .iter()
+                .find(|build| build.browser == browser)
+                .expect("the build is compiled in")
+                .side_panel
+        };
+        let whale = row("Naver Whale");
+        assert!(whale.supported && whale.registry_end == Some(true));
+        assert_eq!((whale.extension_entry, whale.entry_count), (0x15, 0x16));
+        let samsung = row("Samsung Internet");
+        assert!(!samsung.supported, "the rail cannot read this build's registry yet");
+        assert_eq!(samsung.old_layout, Some(true));
+        assert_eq!((samsung.contents_container, samsung.side_panel), (0x80, 0x98));
+    }
+
+    #[test]
     fn fr10_open_panel_floats_over_the_page_and_leaves_its_width_alone() {
         let mut contents = [8, 47, 692, 591];
         let mut panel = [700, 46, 378, 600];
