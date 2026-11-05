@@ -72,6 +72,69 @@
                 <RemoveFolder Id="RemoveRivetStartMenuFolder" On="uninstall" />
                 <RegistryValue Root="HKLM" Key="SOFTWARE\LogitAI\Rivet" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
             </Component>
+            <!--
+              Rivet as a browser Windows can offer for links and HTML files. This only makes Rivet a
+              choice in Settings, Default apps. It never writes the person's own choice of default; the
+              person picks Rivet there. Uninstall removes every key and value written here.
+              Windows runs the launcher with the address, and the launcher hands it to a Rivet
+              window, whose link rules decide where it opens.
+            -->
+            <Component Id="RivetBrowserRegistration" Guid="6f0f6c7e-3d0e-4c55-9a7e-2b1f4c9d8e31">
+                <RegistryKey Root="HKLM" Key="SOFTWARE\Clients\StartMenuInternet\RivetBrowser" ForceDeleteOnUninstall="yes">
+                    <RegistryValue Type="string" Value="Rivet Browser" KeyPath="yes" />
+                    <RegistryKey Key="DefaultIcon">
+                        <RegistryValue Type="string" Value="[INSTALLFOLDER]rivet.ico" />
+                    </RegistryKey>
+                    <RegistryKey Key="shell\open\command">
+                        <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]rivet-launcher.exe&quot;" />
+                    </RegistryKey>
+                    <RegistryKey Key="Capabilities">
+                        <RegistryValue Name="ApplicationName" Type="string" Value="Rivet Browser" />
+                        <RegistryValue Name="ApplicationDescription" Type="string" Value="Rivet Browser opens links in your Chromium browser with Rivet." />
+                        <RegistryValue Name="ApplicationIcon" Type="string" Value="[INSTALLFOLDER]rivet.ico" />
+                        <RegistryKey Key="StartMenu">
+                            <RegistryValue Name="StartMenuInternet" Type="string" Value="RivetBrowser" />
+                        </RegistryKey>
+                        <RegistryKey Key="URLAssociations">
+                            <RegistryValue Name="http" Type="string" Value="RivetURL" />
+                            <RegistryValue Name="https" Type="string" Value="RivetURL" />
+                        </RegistryKey>
+                        <RegistryKey Key="FileAssociations">
+                            <RegistryValue Name=".htm" Type="string" Value="RivetHTML" />
+                            <RegistryValue Name=".html" Type="string" Value="RivetHTML" />
+                        </RegistryKey>
+                    </RegistryKey>
+                </RegistryKey>
+                <RegistryValue Root="HKLM" Key="SOFTWARE\RegisteredApplications" Name="Rivet Browser" Type="string" Value="SOFTWARE\Clients\StartMenuInternet\RivetBrowser\Capabilities" />
+                <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\RivetURL" ForceDeleteOnUninstall="yes">
+                    <RegistryValue Type="string" Value="Rivet Browser link" />
+                    <RegistryKey Key="Application">
+                        <RegistryValue Name="ApplicationName" Type="string" Value="Rivet Browser" />
+                        <RegistryValue Name="ApplicationIcon" Type="string" Value="[INSTALLFOLDER]rivet.ico" />
+                        <RegistryValue Name="AppUserModelId" Type="string" Value="LogitAI.Rivet.Browser" />
+                    </RegistryKey>
+                    <RegistryKey Key="DefaultIcon">
+                        <RegistryValue Type="string" Value="[INSTALLFOLDER]rivet.ico" />
+                    </RegistryKey>
+                    <RegistryKey Key="shell\open\command">
+                        <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]rivet-launcher.exe&quot; --open-link &quot;%1&quot;" />
+                    </RegistryKey>
+                </RegistryKey>
+                <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\RivetHTML" ForceDeleteOnUninstall="yes">
+                    <RegistryValue Type="string" Value="Rivet Browser HTML document" />
+                    <RegistryKey Key="Application">
+                        <RegistryValue Name="ApplicationName" Type="string" Value="Rivet Browser" />
+                        <RegistryValue Name="ApplicationIcon" Type="string" Value="[INSTALLFOLDER]rivet.ico" />
+                        <RegistryValue Name="AppUserModelId" Type="string" Value="LogitAI.Rivet.Browser" />
+                    </RegistryKey>
+                    <RegistryKey Key="DefaultIcon">
+                        <RegistryValue Type="string" Value="[INSTALLFOLDER]rivet.ico" />
+                    </RegistryKey>
+                    <RegistryKey Key="shell\open\command">
+                        <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]rivet-launcher.exe&quot; --open-link &quot;%1&quot;" />
+                    </RegistryKey>
+                </RegistryKey>
+            </Component>
             <Component Id="InstallFolderRecord" Guid="a9986310-5135-4fc1-a3ac-319829bb0ea6">
                 <RegistryValue Root="HKLM" Key="SOFTWARE\LogitAI\Rivet" Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
             </Component>

@@ -952,6 +952,19 @@ mod tests {
     }
 
     #[test]
+    fn fr3_only_todays_tabs_archive_never_folder_or_pinned_tabs() {
+        let settings = Settings::default();
+        let (mut list, _) = three();
+        list.set_pinned(1, true);
+        assert!(list.new_folder(2, "F").is_some());
+        assert_eq!(
+            list.due_for_archive(&settings, u64::MAX, None),
+            vec![3],
+            "the folder's tab and the pinned tab stay"
+        );
+    }
+
+    #[test]
     fn fr3_the_archive_period_is_a_setting() {
         let mut settings = Settings::default();
         settings.set_archive_after(Some(2 * 3600));

@@ -196,7 +196,7 @@ fn nfr3_whale_maps_only_the_frame_hooks() {
             && !WHALE.tabs.groups
             && !WHALE.split.supported
     );
-    assert!(WHALE.navigation.supported && !WHALE.side_panel.supported);
+    assert!(WHALE.navigation.supported && WHALE.side_panel.supported);
     assert!(
         WHALE.vertical.detour_strip && WHALE.vertical.should_draw_tab_strip_prologue.len() >= 14
     );
@@ -1317,7 +1317,7 @@ fn fr12_edge_58_and_whale_57_record_the_page_view_that_moves_below_the_bar() {
     }
     let whale = &super::whale::WHALE;
     assert_eq!(whale.version, [5, 39, 412, 57]);
-    assert_eq!(whale.side_panel.layout_vtable, ABSENT);
+    assert_eq!(whale.side_panel.layout_vtable, 0x0F9F_BB38);
     let row = whale
         .app_window
         .as_ref()

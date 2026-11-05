@@ -3,6 +3,8 @@
 //! It only opens a caller-selected Chromium executable. Future commands talk to the local Rivet
 //! runtime over the versioned control protocol instead of adding a remote-debugging port.
 
+mod links;
+
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -29,6 +31,9 @@ Usage:
   rivet session close --id <id> [--state <path>] [--json]
   rivet session mini-window --id <id> [--state <path>] \\
       pop-out | close | return left|right|top|bottom | move <x> <y> | resize <width> <height>
+  rivet session open --id <id> [--state <path>] <http or https address>
+  rivet link-rules list | set <pattern> <space>|mini-window|current-space | remove <pattern>
+      | route <address> [--rules <path>] [--json]
   rivet hold refresh --browser <path> [--hold <path>]
 
 The browser executable is always explicit in this first release. Rivet does not guess a browser
@@ -77,15 +82,25 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
     if arguments.first().is_some_and(|command| command == "setup") {
         return run_setup(&arguments[1..]);
     }
+    if arguments
+        .first()
+        .is_some_and(|command| command == "link-rules")
+    {
+        let options = links::parse_rules(&arguments[1..])?;
+        let path = links::rules_path(options.rules)?;
+        println!("{}", links::run_rules_at(&path, options.request)?);
+        return Ok(());
+    }
     match arguments.get(0..2) {
         Some(command) if command == ["session", "start"] => run_start(parse_start(arguments)?),
         Some(command) if command == ["session", "list"] => run_list(parse_query(arguments)?),
         Some(command) if command == ["session", "close"] => run_close(parse_close(arguments)?),
         Some(command) if command == ["session", "mini-window"] => run_mini_window(parse_mini_window(arguments)?),
+        Some(command) if command == ["session", "open"] => run_open(links::parse_open(&arguments)?),
         Some(command) if command == ["builds", "update"] => run_builds_update(&arguments[2..]),
         Some(command) if command == ["builds", "apply"] => run_builds_apply(&arguments[2..]),
         Some(command) if command == ["hold", "refresh"] => run_hold_refresh(arguments),
-        _ => Err("expected `setup`, `session start`, `session list`, `session close`, `session mini-window`, `builds update`, `builds apply` or `hold refresh`".into()),
+        _ => Err("expected `setup`, `session start`, `session list`, `session close`, `session mini-window`, `session open`, `link-rules`, `builds update`, `builds apply` or `hold refresh`".into()),
     }
 }
 
@@ -640,6 +655,28 @@ fn run_mini_window(options: MiniWindowOptions) -> Result<(), String> {
         rivet_protocol::window::MINI_WINDOW_MESSAGE,
         wparam,
         lparam,
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Sends a link into the window of one Rivet session. The window routes it by its link rules,
+/// exactly as it routes a link a page opened in a new window.
+fn run_open(options: links::OpenOptions) -> Result<(), String> {
+    let registry = SessionRegistry::load(&state_path(options.state.as_deref())?)
+        .map_err(|error| error.to_string())?;
+    let session = registry
+        .list()
+        .find(|session| session.id == options.id)
+        .ok_or_else(|| format!("Rivet session {:?} does not exist", options.id))?;
+    let bytes = rivet_protocol::window::encode_open_link(&options.url)?;
+    rivet_platform_windows::send_window_data(
+        &session.browser,
+        BrowserWindow {
+            handle: session.window_handle,
+            process_id: session.process_id,
+        },
+        rivet_protocol::window::OPEN_LINK_DATA,
+        &bytes,
     )
     .map_err(|error| error.to_string())
 }

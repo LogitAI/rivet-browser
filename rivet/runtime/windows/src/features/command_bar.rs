@@ -58,15 +58,18 @@ pub(crate) fn is_ctrl_t(key: u16, ctrl: bool, shift: bool, alt: bool) -> bool {
 pub(crate) enum Command {
     SplitView,
     CloseTab,
+    LinkRules,
 }
 
 impl Command {
-    pub(crate) const ALL: [Command; 2] = [Command::SplitView, Command::CloseTab];
+    pub(crate) const ALL: [Command; 3] =
+        [Command::SplitView, Command::CloseTab, Command::LinkRules];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Command::SplitView => "Open beside this tab in Split View",
             Command::CloseTab => "Close this tab",
+            Command::LinkRules => "Link Rules: where links from other apps open",
         }
     }
 
@@ -74,6 +77,7 @@ impl Command {
         match self {
             Command::SplitView => '\u{ECA5}',
             Command::CloseTab => '\u{E8BB}',
+            Command::LinkRules => '\u{E71B}',
         }
     }
 }
@@ -590,6 +594,7 @@ unsafe fn run(window: HWND, index: usize) -> bool {
         Action::Run(Command::CloseTab) => crate::features::tabs::tabs(window)
             .and_then(|tabs| tabs.into_iter().find(|tab| tab.active))
             .is_some_and(|tab| crate::features::tabs::close_tab(window, tab.index)),
+        Action::Run(Command::LinkRules) => crate::features::link_rules::open(window),
     };
     crate::trace::trace(&format!("command bar: run {action:?}: {done}"));
     crate::frame::update_appbar(window);

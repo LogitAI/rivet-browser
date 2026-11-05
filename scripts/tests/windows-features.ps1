@@ -2,7 +2,7 @@
 # when this passes on a launch like the installed build's. Unit tests and build rows do not count.
 #
 #   pwsh -NoProfile -File scripts/tests/windows-features.ps1 [-Browsers chrome,edge,...]
-#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview] [-OutDir <dir>] [-NoBuild]
+#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview,link-rules] [-OutDir <dir>] [-NoBuild]
 #
 # One row per browser and feature: PASS, FAIL or NOT_DRIVEN. NOT_DRIVEN means the scene could not
 # be set up, so the feature was not exercised. Nothing is decided from build rows or `supported`.
@@ -13,7 +13,7 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules'),
   [string]$OutDir,
   [switch]$NoBuild,
   # The run stops before a row when the output drive has less free space than this.
@@ -212,6 +212,7 @@ function Open-Scene($ctx, $state, $Url, $Seed) {
     Start-Sleep 2
   }
   if (-not $session) { $ctx.Error = "rivet session start did not report the runtime loaded: $raw"; return }
+  $ctx | Add-Member -Force SessionId (($session | ConvertFrom-Json).session_id)
   $deadline = (Get-Date).AddSeconds(45)
   $attached = $false
   while ((Get-Date) -lt $deadline) {
@@ -1239,6 +1240,45 @@ function Invoke-RivetSettings($Name, $shots) {
   } finally { Stop-Scene $ctx }
 }
 
+# Link rules: links sent with `rivet session open` follow the rules in the test profile's own
+# rules file. A link no rule matches opens as a new tab of the current space, a link of a Mini
+# Window rule floats, and the panel opens over the page and changes a rule's target. The addresses
+# are on 127.0.0.1 port 9, which refuses them, so nothing leaves the machine; the tab keeps the
+# address it was asked to open.
+function Invoke-LinkRules($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'link-rules' $urlA
+  try {
+    $rulesFile = Join-Path $flagDir 'link-rules.json'
+    [IO.File]::WriteAllText($rulesFile, '{"rules":[{"pattern":{"kind":"prefix","value":"http://127.0.0.1:9/mini"},"target":{"kind":"mini-window"}}]}')
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if (-not $ctx.SessionId) { return @('NOT_DRIVEN', $null, 'the session reported no id') }
+    $rivet = Join-Path $debug 'rivet.exe'
+    & $rivet session open --id $ctx.SessionId --state $state 'http://127.0.0.1:9/plain' 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { return @('FAIL', $null, "rivet session open exited $LASTEXITCODE") }
+    Start-Sleep 3
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
+    $urls = @(Get-TabUrls)
+    $plain = Get-Capture $ctx (Join-Path $shots 'link-rules-1-plain.png')
+    if (-not ($urls | Where-Object { $_ -match '127\.0\.0\.1:9/plain' })) { return @('FAIL', $plain.Path, "a link no rule matches is not a tab of the window: $($urls -join ' ')") }
+    & $rivet session open --id $ctx.SessionId --state $state 'http://127.0.0.1:9/mini/1' 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { return @('FAIL', $plain.Path, "rivet session open exited $LASTEXITCODE for the Mini Window link") }
+    Start-Sleep 4
+    $mini = Get-Capture $ctx (Join-Path $shots 'link-rules-2-mini.png')
+    if (-not (Read-Log | Where-Object { $_ -match 'link rules: open http://127\.0\.0\.1:9/mini/1 to MiniWindow: true' })) { return @('FAIL', $mini.Path, 'the Mini Window rule did not float the link') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'linkrules')) { return @('NOT_DRIVEN', $mini.Path, 'the runtime did not take the panel command') }
+    Start-Sleep 1
+    $panel = Get-Capture $ctx (Join-Path $shots 'link-rules-3-panel.png')
+    if (-not (Read-Log | Where-Object { $_ -match 'link rules: open$' })) { return @('FAIL', $panel.Path, 'the panel did not open') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'linkrulestarget 0')) { return @('NOT_DRIVEN', $panel.Path, 'the runtime did not take the target click') }
+    $changed = Get-Capture $ctx (Join-Path $shots 'link-rules-4-changed.png')
+    $saved = Get-Content $rulesFile -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+    if ($saved.rules[0].target.kind -ne 'current-space') { return @('FAIL', $changed.Path, "a click on the target did not move it to the current space: $($saved.rules[0].target.kind)") }
+    @('PASS', $panel.Path, 'an unmatched link opened as a tab, the Mini Window rule floated its link, the panel opened and a click changed the saved target; check the panel capture against the study')
+  } finally { Stop-Scene $ctx }
+}
+
 # A tab's link preview floats over the page being read, then opens as a tab or goes away.
 function Invoke-LinkPreview($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'link-preview' $urlA
@@ -1323,6 +1363,7 @@ foreach ($name in $Browsers) {
         'command-bar' { Invoke-CommandBar $name $shots }
         'link-preview' { Invoke-LinkPreview $name $shots }
         'rivet-settings' { Invoke-RivetSettings $name $shots }
+        'link-rules' { Invoke-LinkRules $name $shots }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason

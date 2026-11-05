@@ -342,7 +342,7 @@ mod tests {
     /// The Sidebar is on where a real window showed its rail and an entry's panel, and off where a
     /// build was not checked or has no panel to show.
     #[test]
-    fn fr10_the_sidebar_is_offered_on_chrome_only() {
+    fn fr10_the_sidebar_is_offered_where_its_row_is_recorded() {
         let offered = |build: &Build| {
             crate::features::side_panel::needs(build)
                 .unavailable()
@@ -362,7 +362,7 @@ mod tests {
             "Brave .62 is not installed, so no byte of its row was compared"
         );
         assert!(
-            !offered(&builds::WHALE) && !offered(&builds::SAMSUNG) && !offered(&builds::CHROME_150)
+            offered(&builds::WHALE) && offered(&builds::SAMSUNG) && !offered(&builds::CHROME_150)
         );
     }
 
