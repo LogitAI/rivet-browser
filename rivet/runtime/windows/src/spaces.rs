@@ -305,6 +305,7 @@ impl Spaces {
 
     /// Changes what space `index` is called, how it is coloured or where it opens. False when there
     /// is no such space.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn edit(&mut self, index: usize, edit: impl FnOnce(&mut SpaceInfo)) -> bool {
         match self.list.get_mut(index) {
             Some(space) => {
