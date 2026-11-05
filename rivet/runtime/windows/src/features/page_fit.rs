@@ -95,7 +95,10 @@ mod tests {
         // The page fills the view: nothing to take back.
         assert_eq!(holder_inset([570, 790], &[[0, 0, 570, 790]]), [0; 4]);
         // Two children or a wide gap are the browser's own layout.
-        assert_eq!(holder_inset([570, 790], &[[2, 2, 566, 786], [0, 0, 1, 1]]), [0; 4]);
+        assert_eq!(
+            holder_inset([570, 790], &[[2, 2, 566, 786], [0, 0, 1, 1]]),
+            [0; 4]
+        );
         assert_eq!(holder_inset([570, 790], &[[0, 56, 570, 734]]), [0; 4]);
         assert_eq!(holder_inset([570, 790], &[]), [0; 4]);
     }

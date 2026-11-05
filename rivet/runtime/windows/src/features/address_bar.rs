@@ -399,7 +399,11 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
     }
     let row = &crate::builds::get().side_panel;
     let Some(contents) = area.bounds(row.contents_container) else {
-        crate::trace::trace_changed("bar layout", "address bar: the layout has no page container");        return;
+        crate::trace::trace_changed(
+            "bar layout",
+            "address bar: the layout has no page container",
+        );
+        return;
     };
     // An app window's top container holds the browser's title row, which Rivet's bar replaces. When
     // it sits right on top of the page, the page takes its place and it keeps no height.
