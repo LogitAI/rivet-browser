@@ -1,8 +1,9 @@
 //! Chromium functions for opening DevTools on a panel and for reading the link under the pointer.
 //!
 //! They are kept out of the rows so the signed rows keep their fields. Every address here was read
-//! from the build's own public symbols, and every prologue from its installed module. None of them
-//! has been driven in a browser yet, so they are unverified.
+//! from the build's own public symbols where it has them, or found by its Chromium shape where it
+//! has none, and every prologue from its installed module. None of them has been driven in a
+//! browser yet, so they are unverified.
 
 use super::Build;
 
@@ -86,17 +87,85 @@ pub const EDGE_156_50: PageTools = PageTools {
     ),
 };
 
-/// The functions recorded for `build`, if any. Whale and Samsung publish no symbols and these
-/// functions were not found by their shape, so they have none.
+/// Microsoft Edge 156.0.4314.58, from Microsoft's public symbols. Only Chromium's functions.
+pub const EDGE_156_58: PageTools = PageTools {
+    toggle_devtools: (
+        0x0C73_1B9C,
+        &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
+            0xEC, 0xD8, 0x00, 0x00, 0x00,
+        ],
+    ),
+    show_action: (0x0659_F590, SHOW),
+    browser_context: (0x0119_2390, BROWSER_CONTEXT),
+    profile_from_context: (0x0100_CD60, PROFILE_FROM_CONTEXT),
+    update_target_url: (
+        0x02FB_7390,
+        &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
+            0xEC, 0xF8, 0x00, 0x00, 0x00,
+        ],
+    ),
+};
+
+/// Naver Whale 5.39.412.57, which publishes no symbols. Each function was found by its Chromium
+/// shape. `ToggleDevToolsWindow` is the one function that names both "DevTools_InspectRenderer"
+/// and "DevTools.OpenedByAction", with the same argument use as Chrome 156's. `UpdateTargetURL`
+/// is the one that names its own trace event "UpdateTargetURL". The browser context getter and
+/// `Profile::FromBrowserContext` are the address bar row's.
+pub const WHALE_57: PageTools = PageTools {
+    toggle_devtools: (0x0E9F_0B90, TOGGLE_156),
+    show_action: (0x0515_39E0, SHOW),
+    browser_context: (
+        0x0662_8330,
+        &[0x48, 0x8B, 0x81, 0x68, 0x02, 0x00, 0x00, 0xC3],
+    ),
+    profile_from_context: (0x005D_5480, PROFILE_FROM_CONTEXT),
+    update_target_url: (
+        0x0E46_0DA0,
+        &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
+            0xEC, 0x18, 0x01, 0x00, 0x00,
+        ],
+    ),
+};
+
+/// Samsung Internet 143.0.4.29 (Chromium 143), which publishes no symbols, found the same way as
+/// Whale's. Its `ToggleDevToolsWindow` takes the same registers and the same integer in the sixth
+/// argument. The browser context is kept at +0x258 of the web contents, as the app window row
+/// records. `DevToolsToggleAction::Show` and `Profile::FromBrowserContext` are folded with other
+/// functions of the same bytes, so any copy behaves the same.
+pub const SAMSUNG_29: PageTools = PageTools {
+    toggle_devtools: (
+        0x0D6C_E340,
+        &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81, 0xEC, 0xA0,
+            0x00, 0x00, 0x00,
+        ],
+    ),
+    show_action: (0x02DD_F2E0, SHOW),
+    browser_context: (
+        0x02EB_BE70,
+        &[0x48, 0x8B, 0x81, 0x58, 0x02, 0x00, 0x00, 0xC3],
+    ),
+    profile_from_context: (0x00F9_21F0, PROFILE_FROM_CONTEXT),
+    update_target_url: (0x0386_9E30, TARGET_URL_156),
+};
+
+/// The functions recorded for `build`, by its browser and version. Whale and Samsung Internet were
+/// found by shape, not from symbols.
 pub fn page_tools_for(build: &Build) -> Option<&'static PageTools> {
-    let rows: [(&Build, &'static PageTools); 3] = [
-        (&super::CHROME_156_80, &CHROME_156_80),
-        (&super::BRAVE_63, &BRAVE_63),
-        (&super::EDGE, &EDGE_156_50),
+    const ROWS: [(&str, [u16; 4], &PageTools); 6] = [
+        ("Google Chrome", [156, 0, 8078, 80], &CHROME_156_80),
+        ("Brave", [156, 1, 98, 63], &BRAVE_63),
+        ("Microsoft Edge", [156, 0, 4314, 50], &EDGE_156_50),
+        ("Microsoft Edge", [156, 0, 4314, 58], &EDGE_156_58),
+        ("Naver Whale", [5, 39, 412, 57], &WHALE_57),
+        ("Samsung Internet", [30, 0, 4, 29], &SAMSUNG_29),
     ];
-    rows.into_iter()
-        .find(|(row, _)| row.browser == build.browser && row.version == build.version)
-        .map(|(_, tools)| tools)
+    ROWS.into_iter()
+        .find(|(browser, version, _)| *browser == build.browser && *version == build.version)
+        .map(|(_, _, tools)| tools)
 }
 
 #[cfg(test)]
@@ -148,6 +217,18 @@ mod tests {
                 r"C:\Program Files (x86)\Microsoft\Edge\Application\156.0.4314.50\msedge.dll",
                 &EDGE_156_50,
             ),
+            (
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\156.0.4314.58\msedge.dll",
+                &EDGE_156_58,
+            ),
+            (
+                r"C:\Program Files\Naver\Naver Whale\Application\5.39.412.57\whale.dll",
+                &WHALE_57,
+            ),
+            (
+                r"C:\Program Files\Samsung\Internet\Application\143.0.4.29\samsunginternet.dll",
+                &SAMSUNG_29,
+            ),
         ] {
             let Ok(file) = std::fs::read(path) else {
                 continue;
@@ -167,14 +248,21 @@ mod tests {
         assert!(page_tools_for(&super::super::CHROME_156_80).is_some());
         assert!(page_tools_for(&super::super::BRAVE_63).is_some());
         assert!(page_tools_for(&super::super::EDGE).is_some());
-        assert!(page_tools_for(&super::super::WHALE).is_none());
-        assert!(page_tools_for(&super::super::SAMSUNG).is_none());
+        assert!(page_tools_for(&super::super::WHALE).is_some());
+        assert!(page_tools_for(&super::super::SAMSUNG).is_some());
         assert!(page_tools_for(&super::super::CHROME_156_74).is_none());
     }
 
     #[test]
     fn fr3_link_address_detour_has_room_for_its_jump() {
-        for tools in [&CHROME_156_80, &BRAVE_63, &EDGE_156_50] {
+        for tools in [
+            &CHROME_156_80,
+            &BRAVE_63,
+            &EDGE_156_50,
+            &EDGE_156_58,
+            &WHALE_57,
+            &SAMSUNG_29,
+        ] {
             // `mov rax, hook; jmp rax` takes twelve bytes.
             assert!(tools.update_target_url.1.len() >= 12);
         }
