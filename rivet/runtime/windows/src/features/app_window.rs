@@ -662,7 +662,11 @@ mod tests {
         assert_eq!(spike_text(None), None);
         let own = rivet_core::paths::TestDir::new("spike-own");
         assert_eq!(spike_text(Some(own.path())), None);
-        std::fs::write(own.join("rivet-spike.txt"), "new 06F4DE00\nctx 0x06AC7B40\n").unwrap();
+        std::fs::write(
+            own.join("rivet-spike.txt"),
+            "new 06F4DE00\nctx 0x06AC7B40\n",
+        )
+        .unwrap();
         let text = spike_text(Some(own.path())).expect("the own file is read");
         assert_eq!(spike_value(&text, "ctx"), Some(0x06AC_7B40));
         assert_eq!(spike_value(&text, "new"), Some(0x06F4_DE00));

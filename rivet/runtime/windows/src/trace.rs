@@ -81,7 +81,11 @@ pub unsafe fn trace_crashes() {
             // like return addresses into the browser module show who made the call.
             if base != 0 {
                 let rsp = *((*info).context.cast::<u8>().add(0x98) as *const usize);
-                let rsp = if (low..high).contains(&rsp) { rsp } else { high };
+                let rsp = if (low..high).contains(&rsp) {
+                    rsp
+                } else {
+                    high
+                };
                 let returns: Vec<String> = (0..on_stack(rsp, 96))
                     .filter_map(|index| {
                         let word = *((rsp + index * 8) as *const usize);
