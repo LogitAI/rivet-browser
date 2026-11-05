@@ -298,13 +298,46 @@ pub static SAMSUNG: Build = Build {
         ..UNCHECKED_SPLIT
     },
 
-    side_panel: UNCHECKED_SIDEPANEL,
+    // Only the layout part is recorded, found statically from the disassembly and unverified, so the
+    // page area runs in Chromium's older layout. The Sidebar stays off: this build's side panel
+    // registry and entry keys are laid out differently from what the rail reads.
+    // `BrowserViewLayout::Layout` is slot 3 of the vtable its constructor stores at 0x020AB63C. The
+    // constructor copies its views from `BrowserView::InitViews` one for one from +0x30: the host
+    // view, the contents container at +0x80 (sized from the contents rect less the side panel) and
+    // the unified side panel at +0x98 (built with the "side_panel.is_right_aligned" pref).
+    side_panel: SidePanel {
+        layout_vtable: 0x0E18_0BE0,
+        proposed_slot: 3,
+        proposed: 0x013C_8310,
+        old_layout: Some(true),
+        host_view: 0x30,
+        page_area: ABSENT,
+        contents_container: 0x80,
+        vertical_tabs: ABSENT,
+        toolbar: 0x70,
+        contents_outline: ABSENT,
+        side_panel: 0x98,
+        side_panel_animation: ABSENT,
+        layout_immediately: 0x047C_B9E0,
+        layout_immediately_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
+            0xEC, 0x98, 0x00, 0x00, 0x00, 0x48, 0x89, 0xCE,
+        ],
+        ..UNCHECKED_SIDEPANEL
+    },
     // The frame paint and the top inset are not recorded: nothing shows that this build's functions in
     // those vtable slots are Chromium's, and its frame vtable does not have Chromium's layout.
     layout: Layout {
         // The browser view's `views::View` lies this far inside the object `GetBrowserViewForNativeWindow`
         // answers, read from the parent of its children.
         browser_window_in_view: 0x1F8,
+        // `views::View::SetBoundsRect` and where a view keeps its bounds, which the older layout's
+        // page area sets after the browser's layout ran.
+        set_bounds_rect: 0x047C_EA60,
+        set_bounds_rect_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+        ],
+        view_bounds_offset: 0x1C0,
         ..UNCHECKED_LAYOUT
     },
 };
