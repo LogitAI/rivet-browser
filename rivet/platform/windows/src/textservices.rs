@@ -238,15 +238,15 @@ unsafe extern "system" fn host_create_caret(
     (*this).caret.set((x, y, width, height));
     1
 }
+// The caret is drawn by the host on a visual of its own, so showing or moving it is not a change
+// of the field's pixels. A blink then repaints only the caret, not the whole field.
 unsafe extern "system" fn host_show_caret(this: *mut Host, show: i32) -> i32 {
     (*this).caret_shown.set(show != 0);
-    (*this).changed.set(true);
     1
 }
 unsafe extern "system" fn host_set_caret_pos(this: *mut Host, x: i32, y: i32) -> i32 {
     let (_, _, width, height) = (*this).caret.get();
     (*this).caret.set((x, y, width, height));
-    (*this).changed.set(true);
     1
 }
 unsafe extern "system" fn host_set_timer(this: *mut Host, id: u32, timeout: u32) -> i32 {

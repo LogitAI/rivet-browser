@@ -1,5 +1,6 @@
 //! One module per user-visible feature of a Rivet window.
 
+pub(crate) mod activity;
 pub(crate) mod address_bar;
 pub(crate) mod app_window;
 pub(crate) mod bubble_anchor;
