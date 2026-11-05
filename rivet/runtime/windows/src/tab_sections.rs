@@ -17,6 +17,9 @@ pub const DEFAULT_ARCHIVE_SECS: u64 = 12 * 60 * 60;
 pub const MIN_ARCHIVE_SECS: u64 = 60 * 60;
 pub const MAX_ARCHIVE_SECS: u64 = 30 * 24 * 60 * 60;
 /// How many closed tabs Ctrl+Shift+T can bring back, newest first.
+/// How far the active tab's seen time may lag before it is moved on, in seconds.
+const SEEN_STEP: u64 = 60;
+
 const MAX_CLOSED: usize = 25;
 /// How many archived tabs a space keeps a record of.
 const MAX_ARCHIVED: usize = 200;
@@ -229,7 +232,9 @@ impl TabList {
             let entry = &mut self.entries[at];
             entry.url.clone_from(&tab.url);
             entry.title.clone_from(&tab.title);
-            if tab.active {
+            // The active tab is never archived, so its time only needs to be close. Moving it in
+            // steps keeps the saved list unchanged, and unwritten, while one page stays in front.
+            if tab.active && now.abs_diff(entry.seen) >= SEEN_STEP {
                 entry.seen = now;
             }
         }
@@ -746,6 +751,18 @@ mod tests {
         let mut list = TabList::default();
         list.sync(&tabs, 100);
         (list, tabs)
+    }
+
+    #[test]
+    fn idle_active_tab_keeps_the_saved_list_unchanged_between_steps() {
+        let (mut list, tabs) = three();
+        let saved = list.clone();
+        for now in 101..100 + SEEN_STEP {
+            list.sync(&tabs, now);
+        }
+        assert_eq!(list, saved, "the same tabs within a step change nothing to write");
+        list.sync(&tabs, 100 + SEEN_STEP);
+        assert_ne!(list, saved, "the active tab's time moves on after a step");
     }
 
     #[test]

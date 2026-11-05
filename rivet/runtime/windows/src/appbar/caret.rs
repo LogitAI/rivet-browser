@@ -73,30 +73,29 @@ impl AddressCaret {
     }
 }
 
-impl Appbar {
-    /// Places the top bar's caret, or hides it for `None`. Nothing is sent to the compositor when
-    /// the caret is where it was. `commit` sends the change at once.
-    pub(crate) unsafe fn place_address_caret(
+impl AddressCaret {
+    /// Places the caret, or hides it for `None`. Returns whether anything was sent to the
+    /// compositor, which is nothing when the caret is where it was.
+    unsafe fn place(
         &mut self,
+        device: &IDCompositionDesktopDevice,
         caret: Option<windows_sys::Win32::Foundation::RECT>,
         dpi: u32,
-        commit: bool,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let scale = dpi as f32 / 96.0;
-        let wanted = caret_box(caret, self.address_caret.origin, scale);
-        if wanted == self.address_caret.at {
-            return Ok(());
+        let wanted = caret_box(caret, self.origin, scale);
+        if wanted == self.at {
+            return Ok(false);
         }
-        let caret = &mut self.address_caret;
         match wanted {
-            None => caret.visual.SetContent(None)?,
+            None => self.visual.SetContent(None)?,
             Some(place) => {
-                let fits = caret
+                let fits = self
                     .surface
                     .as_ref()
                     .is_some_and(|(_, w, h)| (*w, *h) == (place.width, place.height));
                 if !fits {
-                    let surface = self.device.CreateSurface(
+                    let surface = device.CreateSurface(
                         place.width,
                         place.height,
                         DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -106,32 +105,90 @@ impl Appbar {
                     let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
                     context.Clear(Some(&rgba(INK, 1.0)));
                     surface.EndDraw()?;
-                    caret.surface = Some((surface, place.width, place.height));
+                    self.surface = Some((surface, place.width, place.height));
                 }
-                if caret.at.is_none() || !fits {
-                    if let Some((surface, _, _)) = caret.surface.as_ref() {
-                        caret.visual.SetContent(surface)?;
+                if self.at.is_none() || !fits {
+                    if let Some((surface, _, _)) = self.surface.as_ref() {
+                        self.visual.SetContent(surface)?;
                     }
                 }
-                caret.visual.SetOffsetX2(place.x as f32)?;
-                caret.visual.SetOffsetY2(place.y as f32)?;
+                self.visual.SetOffsetX2(place.x as f32)?;
+                self.visual.SetOffsetY2(place.y as f32)?;
             }
         }
-        caret.at = wanted;
+        self.at = wanted;
         crate::features::activity::count(crate::features::activity::Counter::CaretMove);
-        if commit {
-            self.device.Commit()?;
+        Ok(true)
+    }
+
+    /// Hides the caret.
+    unsafe fn hide(&mut self) -> Result<()> {
+        if self.at.take().is_some() {
+            self.visual.SetContent(None)?;
+        }
+        Ok(())
+    }
+}
+
+/// Which field's caret.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Which {
+    Address,
+    Command,
+    Settings,
+}
+
+impl Appbar {
+    fn caret_mut(&mut self, which: Which) -> &mut AddressCaret {
+        match which {
+            Which::Address => &mut self.address_caret,
+            Which::Command => &mut self.command_caret,
+            Which::Settings => &mut self.settings_caret,
+        }
+    }
+
+    /// Places a field's caret, or hides it for `None`. Nothing is sent to the compositor when the
+    /// caret is where it was. `commit` sends the change at once.
+    pub(crate) unsafe fn place_caret(
+        &mut self,
+        which: Which,
+        caret: Option<windows_sys::Win32::Foundation::RECT>,
+        dpi: u32,
+        commit: bool,
+    ) -> Result<()> {
+        let device = self.device.clone();
+        let moved = self.caret_mut(which).place(&device, caret, dpi)?;
+        if moved && commit {
+            device.Commit()?;
         }
         Ok(())
     }
 
-    /// Hides the caret, for a top bar that is not edited or not shown.
-    pub(super) unsafe fn hide_address_caret(&mut self) -> Result<()> {
-        if self.address_caret.at.take().is_some() {
-            self.address_caret.visual.SetContent(None)?;
-        }
-        Ok(())
+    /// Places the top bar's caret, or hides it for `None`.
+    pub(crate) unsafe fn place_address_caret(
+        &mut self,
+        caret: Option<windows_sys::Win32::Foundation::RECT>,
+        dpi: u32,
+        commit: bool,
+    ) -> Result<()> {
+        self.place_caret(Which::Address, caret, dpi, commit)
     }
+
+    /// Hides a field's caret, for a field that is not edited or not shown.
+    pub(super) unsafe fn hide_caret(&mut self, which: Which) -> Result<()> {
+        self.caret_mut(which).hide()
+    }
+
+    /// Hides the top bar's caret.
+    pub(super) unsafe fn hide_address_caret(&mut self) -> Result<()> {
+        self.hide_caret(Which::Address)
+    }
+}
+
+/// Whether a card over the page must be painted again: only when what it shows changed. Its
+/// field's text and selection count in the view's generation, and its caret is drawn apart.
+pub(super) fn card_needs_paint<V: PartialEq>(painted: Option<&(V, u32)>, view: &V, dpi: u32) -> bool {
+    painted.is_none_or(|(old, at)| old != view || *at != dpi)
 }
 
 #[cfg(test)]
@@ -172,6 +229,16 @@ mod tests {
         assert!(address_needs_paint(Some(&painted), &editing_view(4), 96));
         assert!(address_needs_paint(Some(&painted), &editing_view(3), 144));
         assert!(address_needs_paint(None, &editing_view(3), 96));
+    }
+
+    #[test]
+    fn idle_command_and_settings_cards_are_painted_only_when_they_changed() {
+        let painted = (("rows", 3u64), 96);
+        assert!(!card_needs_paint(Some(&painted), &("rows", 3u64), 96), "a blink paints nothing");
+        assert!(card_needs_paint(Some(&painted), &("rows", 4u64), 96), "typed text paints");
+        assert!(card_needs_paint(Some(&painted), &("other", 3u64), 96));
+        assert!(card_needs_paint(Some(&painted), &("rows", 3u64), 120));
+        assert!(card_needs_paint::<(&str, u64)>(None, &("rows", 3u64), 96));
     }
 
     #[test]
