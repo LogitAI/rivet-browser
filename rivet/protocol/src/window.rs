@@ -134,8 +134,8 @@ const OPEN_LINK_MAGIC: &[u8; 4] = b"RVL1";
 /// The longest address a request may carry. Chromium shows at most this much of an address.
 pub const MAX_LINK_BYTES: usize = 32 * 1024;
 
-/// The copied data of a request to open `url`. Only `http` and `https` addresses are sent, so a
-/// request can never run a script or open a local file.
+/// The copied data of a request to open `url`. Only `http` and `https` addresses and local
+/// `.htm` or `.html` files are sent, so a request can never run a script or open another file.
 pub fn encode_open_link(url: &str) -> Result<Vec<u8>, String> {
     check_link(url)?;
     let mut bytes = OPEN_LINK_MAGIC.to_vec();
@@ -157,9 +157,16 @@ fn check_link(url: &str) -> Result<(), String> {
     if url.len() > MAX_LINK_BYTES {
         return Err(format!("an address is at most {MAX_LINK_BYTES} bytes"));
     }
-    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
-    if !(lower.starts_with("https://") || lower.starts_with("http://")) {
-        return Err(format!("{url:?} is not an http or https address"));
+    let lower = url.to_ascii_lowercase();
+    let web = lower.starts_with("https://") || lower.starts_with("http://");
+    // A page file a person opens from Explorer, when Rivet is the app for `.htm` and `.html`.
+    let page_file = lower.starts_with("file:///")
+        && (lower.ends_with(".html") || lower.ends_with(".htm"))
+        && !lower.contains(['?', '#']);
+    if !(web || page_file) {
+        return Err(format!(
+            "{url:?} is not an http or https address or an HTML file"
+        ));
     }
     if url.chars().any(char::is_control) {
         return Err("an address has no control characters".into());
@@ -190,6 +197,11 @@ mod tests {
         assert!(encode_open_link("HTTP://example.com/").is_ok());
         assert!(encode_open_link("javascript:alert(1)").is_err());
         assert!(encode_open_link("file:///C:/Windows/").is_err());
+        assert!(encode_open_link("file:///C:/Users/a/page.HTML").is_ok());
+        assert!(encode_open_link("file:///C:/Windows/system.ini").is_err());
+        assert!(encode_open_link("file:///C:/a.html?x=.html").is_err());
+        assert!(encode_open_link("file:///C:/Users/a/page.HTML").is_ok(), "an HTML file from Explorer");
+        assert!(encode_open_link("file:///C:/Windows/system.ini").is_err());
         assert!(encode_open_link("https://a.example/\n").is_err());
         assert!(encode_open_link(&format!("https://a.example/{}", "x".repeat(MAX_LINK_BYTES))).is_err());
         assert_eq!(decode_open_link(OPEN_LINK_DATA, b"RVL1chrome://settings"), None);

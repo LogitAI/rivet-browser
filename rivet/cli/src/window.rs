@@ -1572,6 +1572,16 @@ pub fn run_launcher() -> Result<(), String> {
     }
 }
 
+/// Opens a link from another app in Rivet. Before the first setup there is no saved browser, so
+/// the setup window opens and the link is not kept.
+pub fn run_launcher_with_link(url: &str) -> Result<(), String> {
+    let root = config::data_root()?;
+    match config::start(&root, &Disk) {
+        Start::Open(saved) => crate::open_link::open(url, &saved, &root),
+        Start::Setup { reason } => open(reason),
+    }
+}
+
 fn open_saved(saved: &Saved, root: &std::path::Path) -> Result<(), String> {
     launch::keep_used_builds(root, &system::detect_all());
     launch::start(saved, root)
