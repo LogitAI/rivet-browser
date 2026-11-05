@@ -3707,10 +3707,12 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             timed(Counter::ListMicros, || {
                 crate::features::tab_list::tick(window)
             });
-            crate::features::command_bar::tick(window);
-            // An extension page may load into the browser's side panel some time after the click
-            // that opened it, after the side rail's pointer timer has gone quiet.
-            crate::features::sidebar_page::follow(window);
+            timed(Counter::FollowMicros, || {
+                crate::features::command_bar::tick(window);
+                // An extension page may load into the browser's side panel some time after the
+                // click that opened it, after the side rail's pointer timer has gone quiet.
+                crate::features::sidebar_page::follow(window);
+            });
             // A browser can write its own identity again, for example when a profile finishes
             // loading. The taskbar groups by that identity, so Rivet puts its own back. Reading the
             // identity goes through the shell's property store, so it is not done on every tick.
@@ -3949,7 +3951,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             add_since(Counter::DebugMicros, debug_started);
             timed(Counter::PersistMicros, || persist_tick(window));
             if timed(Counter::GateMicros, || tick_needs_draw(window)) {
-                update_appbar(window);
+                timed(Counter::DrawMicros, || update_appbar(window));
             }
             add_since(Counter::TickMicros, tick_started);
             0
