@@ -805,7 +805,8 @@ function Get-DemoGeometry {
   $ExePath, $ExeName = $table['chrome']
   if (-not (Test-Path $ExePath)) { return $null }
   $hash = (Get-FileHash -Algorithm SHA256 $source).Hash.Substring(0, 16)
-  $dir = Join-Path (Split-Path -Parent $OutDir) "demo-render\$hash"
+  # Each run renders into its own folder, so runs in parallel never write the same file.
+  $dir = Join-Path $OutDir "demo-render\$hash"
   New-Item -ItemType Directory -Force $dir | Out-Null
   $png = Join-Path $dir 'rivet-shell-demo.png'
   $kept = Join-Path $dir 'rivet-shell-demo.geometry.json'
