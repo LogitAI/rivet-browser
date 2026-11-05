@@ -2349,6 +2349,8 @@ fn attach_steps() -> Vec<Step<Attach>> {
         Step::Setup(|_| unsafe {
             let new_tab = crate::features::tabs::install_new_tab(crate::builds::get().toolbar.skip);
             crate::trace::trace(&format!("new tab: {new_tab:?}"));
+            let links = crate::features::page_links::install();
+            crate::trace::trace(&format!("links in pages: {links:?}"));
             true
         }),
         feature(
@@ -2935,6 +2937,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         {
             return result;
         }
+        if let Some(result) = crate::features::page_links::message(window, message, wparam, lparam)
+        {
+            return result;
+        }
         if let Some(result) = crate::features::mini_window::on_mouse(window, message, lparam) {
             return result;
         }
@@ -3437,6 +3443,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             crate::features::command_bar::forget(window);
             crate::features::settings::forget(window);
             crate::features::link_preview::forget(window);
+            crate::features::page_links::forget(window);
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::features::vertical_tabs::forget(window);
             crate::features::tab_strip::forget(window);

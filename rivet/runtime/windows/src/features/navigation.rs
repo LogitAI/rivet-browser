@@ -35,8 +35,9 @@ pub(crate) fn needs(build: &Build) -> Needs {
 
 const REFERRER_POLICY_DEFAULT: i32 = 1;
 const CURRENT_TAB: i32 = 1;
-/// `WindowOpenDisposition::NEW_FOREGROUND_TAB`.
+/// `WindowOpenDisposition::NEW_FOREGROUND_TAB` and `NEW_BACKGROUND_TAB`.
 const NEW_FOREGROUND_TAB: i32 = 3;
+const NEW_BACKGROUND_TAB: i32 = 4;
 /// `ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR`.
 const TYPED_IN_ADDRESS_BAR: u32 = 0x0200_0001;
 
@@ -150,6 +151,15 @@ pub(crate) unsafe fn open_in_new_tab(contents: *mut c_void, url: &str) -> *mut c
         return std::ptr::null_mut();
     };
     open_as(base, contents, url, NEW_FOREGROUND_TAB)
+}
+
+/// Opens `url` in a new background tab of the window that holds the page `contents`, and returns
+/// the new tab's page or null. The active tab stays active.
+pub(crate) unsafe fn open_in_background_tab(contents: *mut c_void, url: &str) -> *mut c_void {
+    let Some(base) = base() else {
+        return std::ptr::null_mut();
+    };
+    open_as(base, contents, url, NEW_BACKGROUND_TAB)
 }
 
 unsafe fn open_as(base: usize, contents: *mut c_void, url: &str, disposition: i32) -> *mut c_void {
