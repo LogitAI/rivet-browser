@@ -400,6 +400,11 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
     let row = &crate::builds::get().side_panel;
     let Some(contents) = area.bounds(row.contents_container) else {
         crate::trace::trace_changed("bar layout", "address bar: the layout has no page container");
+        // The next layout's views are traced once, which shows where this build keeps the page.
+        static DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if crate::trace::tracing() && !DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            crate::hooks::page_area::dump_next();
+        }
         return;
     };
     // An app window's top container holds the browser's title row, which Rivet's bar replaces. When
