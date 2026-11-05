@@ -33,9 +33,11 @@ const PROLOGUE_D0: &[u8] = &[
     0x00, 0x00,
 ];
 
-/// The builds whose `GetAnchorRect` was found, each from that build's public symbols and checked
-/// against the bytes of the installed module. None of them has been driven yet. Edge, Whale and
-/// Samsung Internet have no row: their bubbles keep the browser's placement.
+/// The builds whose `GetAnchorRect` was found and checked against the bytes of the installed
+/// module. Chrome, Brave and Edge were found from their public symbols. Whale and Samsung Internet
+/// have none, so theirs were found by the shape of Chromium's function: the anchor view read from
+/// the delegate, its `GetAnchorBoundsInScreen` slot and the `anchor_rect_` optional written back.
+/// None of them has been driven yet.
 pub(crate) const ROWS: &[AnchorRow] = &[
     AnchorRow {
         browser: "Google Chrome",
@@ -49,6 +51,42 @@ pub(crate) const ROWS: &[AnchorRow] = &[
         version: [156, 1, 98, 63],
         get_anchor_rect: 0x0BED_C9D0,
         prologue: PROLOGUE_D0,
+        verified: false,
+    },
+    AnchorRow {
+        browser: "Google Chrome",
+        version: [156, 0, 8078, 80],
+        get_anchor_rect: 0x0AA7_2C00,
+        prologue: PROLOGUE_D0,
+        verified: false,
+    },
+    AnchorRow {
+        browser: "Microsoft Edge",
+        version: [156, 0, 4314, 58],
+        get_anchor_rect: 0x0330_BF40,
+        // `push r15; push r14; push r12; push rsi; push rdi; push rbx; sub rsp, 0xC8`.
+        prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xC8, 0x00,
+            0x00, 0x00,
+        ],
+        verified: false,
+    },
+    AnchorRow {
+        browser: "Naver Whale",
+        version: [5, 39, 412, 57],
+        get_anchor_rect: 0x0903_7B10,
+        prologue: PROLOGUE_D0,
+        verified: false,
+    },
+    AnchorRow {
+        browser: "Samsung Internet",
+        version: [30, 0, 4, 29],
+        get_anchor_rect: 0x090C_B920,
+        // `push r15; push r14; push rsi; push rdi; push rbx; sub rsp, 0xD0; mov rsi, rdx`.
+        prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x81, 0xEC, 0xD0, 0x00, 0x00, 0x00,
+            0x48, 0x89, 0xD6,
+        ],
         verified: false,
     },
 ];
@@ -240,7 +278,15 @@ mod tests {
         assert!(ROWS
             .iter()
             .all(|row| !row.verified && row.prologue.len() >= 14));
-        assert!(row_for("Google Chrome", [156, 0, 8078, 80]).is_none());
+        for (browser, version, at) in [
+            ("Google Chrome", [156, 0, 8078, 80], 0x0AA7_2C00),
+            ("Microsoft Edge", [156, 0, 4314, 58], 0x0330_BF40),
+            ("Naver Whale", [5, 39, 412, 57], 0x0903_7B10),
+            ("Samsung Internet", [30, 0, 4, 29], 0x090C_B920),
+        ] {
+            let row = row_for(browser, version).expect("every supported build has a row");
+            assert_eq!(row.get_anchor_rect, at, "{browser}");
+        }
         for row in ROWS {
             let build = crate::builds::all()
                 .iter()

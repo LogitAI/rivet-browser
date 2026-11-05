@@ -300,11 +300,8 @@ pub(crate) unsafe fn suggest(window: HWND, text: &str) -> Option<Vec<Suggestion>
     at::<Construct>(base, f.input_drop)(input);
     // `AutocompleteResult` starts with its `std::vector<AutocompleteMatch>`.
     let result = (controller + f.controller_published_result) as *const usize;
-    // Chromium builds libc++ with the vector that keeps its size, not its end: data, size, capacity.
-    let (begin, count) = (*result, *result.add(1));
-    if begin == 0 || count > 64 {
-        return None;
-    }
+    let count = match_count(*result, *result.add(1), f.match_size)?;
+    let begin = *result;
     let mut out = Vec::new();
     for index in 0..count {
         let one = (begin + index * f.match_size) as *const u8;
@@ -315,6 +312,23 @@ pub(crate) unsafe fn suggest(window: HWND, text: &str) -> Option<Vec<Suggestion>
         });
     }
     Some(out)
+}
+
+/// How many matches a `std::vector<AutocompleteMatch>` whose first two words are `begin` and
+/// `second` holds. Recent Chromium builds libc++ with the vector that keeps its size: data, size,
+/// capacity. Older ones keep its end: begin, end, capacity. A size is never an address, so the
+/// second word tells which. More than 64 matches is not a result.
+pub(crate) fn match_count(begin: usize, second: usize, match_size: usize) -> Option<usize> {
+    if begin == 0 || match_size == 0 {
+        return None;
+    }
+    let count = if second >= begin && second > 64 {
+        let bytes = second - begin;
+        (bytes % match_size == 0).then_some(bytes / match_size)?
+    } else {
+        second
+    };
+    (count <= 64).then_some(count)
 }
 
 /// Patches the app window's layout so the page area steps run for it too. An app window is laid out
@@ -331,6 +345,17 @@ pub(crate) unsafe fn install_app_layout() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_suggestions_are_counted_from_a_sized_or_an_ended_vector() {
+        let begin = 0x1000_0000;
+        assert_eq!(match_count(begin, 3, 0x6C0), Some(3));
+        assert_eq!(match_count(begin, begin + 3 * 0x6F0, 0x6F0), Some(3));
+        assert_eq!(match_count(begin, begin, 0x6F0), Some(0));
+        assert_eq!(match_count(begin, begin + 5, 0x6F0), None);
+        assert_eq!(match_count(begin, begin + 65 * 0x6F0, 0x6F0), None);
+        assert_eq!(match_count(0, 3, 0x6C0), None);
+    }
 
     #[test]
     fn fr12_controller_config_keeps_its_switches_after_a_64_bit_provider_field() {

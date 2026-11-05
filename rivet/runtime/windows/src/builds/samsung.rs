@@ -6,7 +6,7 @@ use super::*;
 /// `samsunginternet.dll`, and `samsunginternet.exe` is the browser process itself, so there is no
 /// versioned launcher. The file version resource names the Samsung release, not Chromium's.
 pub static SAMSUNG: Build = Build {
-    omnibox: None,
+    omnibox: Some(super::omnibox_rows::OMNIBOX_SAMSUNG_29),
     app_window: Some(AppWindow {
         feature_impl: Some(0x001FBB10),
         feature_impl_prologue: &[
@@ -14,10 +14,22 @@ pub static SAMSUNG: Build = Build {
             0xCF,
         ],
         browser_type: 0x1B0,
-        detach: None,
-        detach_prologue: &[],
-        insert: None,
-        insert_prologue: &[],
+        // `TabStripModel::DetachTabAtForInsertion`, found statically and unverified: the same body as
+        // Chrome 156's, a call to `DetachTabWithReasonAt` with reason 1 whose tab is moved out.
+        detach: Some(0x08773D90),
+        detach_prologue: &[
+            0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xD6, 0x48, 0x8B, 0x05, 0x9F,
+            0x62, 0x20,
+        ],
+        // `TabStripModel::InsertDetachedTabAt`, found statically and unverified: called right after
+        // the detach above when tabs move between windows, with the reentrancy guard and
+        // `TabModel::OnAddedToModel` of Chrome 156's body. This build takes one more optional by
+        // pointer after the group, which the callers pass as empty.
+        insert: Some(0x0322A3C0),
+        insert_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
+            0xEC, 0x68,
+        ],
         view_parent: 0x190,
         view_children: 0x198,
         operator_new: 0x55841C8,

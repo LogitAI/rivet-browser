@@ -214,11 +214,14 @@ pub(crate) unsafe fn move_tab_in(window: HWND) -> bool {
                 *mut usize,
                 i32,
                 *const [u64; 8],
+                *const [u64; 16],
             ) -> i32;
             let mut tab: usize = 0;
             crate::features::tabs::function::<Detach>(base, detach)(model, &mut tab, count - 1);
             crate::trace::trace(&format!("app window move: detached {tab:#x}"));
             let none = [0u64; 8];
+            // A build whose insert takes one more optional after the group reads this empty one.
+            let no_more = [0u64; 16];
             // At the end of the strip, active: `ADD_ACTIVE | ADD_FORCE_INDEX`.
             let own = crate::features::tabs::function::<
                 unsafe extern "system" fn(*mut c_void) -> i32,
@@ -229,6 +232,7 @@ pub(crate) unsafe fn move_tab_in(window: HWND) -> bool {
                 &mut tab,
                 1 | 4,
                 &none,
+                &no_more,
             );
             crate::trace::trace(&format!("app window move: inserted at {at}"));
         } else {
