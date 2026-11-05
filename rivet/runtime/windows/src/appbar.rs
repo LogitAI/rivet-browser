@@ -60,7 +60,7 @@ mod palette {
 use palette::*;
 
 /// The top bar's caret on a visual of its own.
-mod caret;
+pub(crate) mod caret;
 /// The link rules panel, drawn with the appbar's canvas.
 mod link_rules;
 /// The command bar and the link preview, drawn with the appbar's canvas.
@@ -222,9 +222,13 @@ pub struct Appbar {
     /// The command bar over the page, and what it was last painted for.
     command: IDCompositionVisual2,
     command_painted: Option<(crate::features::command_bar::View, u32)>,
+    /// The command bar's caret, inside the command bar's visual.
+    command_caret: caret::AddressCaret,
     /// The Rivet settings card over the page, and what it was last painted for.
     settings: IDCompositionVisual2,
     settings_painted: Option<(crate::features::settings::View, u32)>,
+    /// The settings card's caret, inside the card's visual.
+    settings_caret: caret::AddressCaret,
     /// The header and shadow of a link preview, and what they were last painted for.
     preview: IDCompositionVisual2,
     preview_painted: Option<(crate::features::link_preview::View, u32)>,
@@ -402,6 +406,8 @@ impl Appbar {
         root.AddVisual(&command, true, None::<&IDCompositionVisual>)?;
         let settings = device.CreateVisual()?;
         root.AddVisual(&settings, true, None::<&IDCompositionVisual>)?;
+        let command_caret = caret::AddressCaret::new(&device, &command)?;
+        let settings_caret = caret::AddressCaret::new(&device, &settings)?;
         let rules = device.CreateVisual()?;
         root.AddVisual(&rules, true, None::<&IDCompositionVisual>)?;
         target.SetRoot(&root)?;
@@ -442,8 +448,10 @@ impl Appbar {
             address_surface: None,
             command,
             command_painted: None,
+            command_caret,
             settings,
             settings_painted: None,
+            settings_caret,
             preview,
             preview_painted: None,
             rules,

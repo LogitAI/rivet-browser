@@ -2114,23 +2114,36 @@ pub(crate) fn rivet_windows() -> Vec<HWND> {
     })
 }
 
-/// Every top-level browser window of this process, whoever made it. For the app window spike.
+/// Every top-level browser window of this process, whoever made it. Only windows of the browser's
+/// class are visited, so the half second tab timer does not read the class of every window.
 pub(crate) fn browser_windows_of_process() -> Vec<HWND> {
-    unsafe extern "system" fn each(window: HWND, found: LPARAM) -> i32 {
-        let mut owner = 0;
-        GetWindowThreadProcessId(window, &mut owner);
-        if owner == GetCurrentProcessId() && class_name(window) == BROWSER_CLASS {
-            (*(found as *mut Vec<HWND>)).push(window);
-        }
-        1
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowExW;
+    thread_local! {
+        static CLASS: Vec<u16> = wide(BROWSER_CLASS);
     }
     let mut found: Vec<HWND> = Vec::new();
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows(
-            Some(each),
-            &mut found as *mut _ as LPARAM,
-        )
-    };
+    CLASS.with(|class| unsafe {
+        let me = GetCurrentProcessId();
+        let mut window = FindWindowExW(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            class.as_ptr(),
+            std::ptr::null(),
+        );
+        while !window.is_null() {
+            let mut owner = 0;
+            GetWindowThreadProcessId(window, &mut owner);
+            if owner == me {
+                found.push(window);
+            }
+            window = FindWindowExW(
+                std::ptr::null_mut(),
+                window,
+                class.as_ptr(),
+                std::ptr::null(),
+            );
+        }
+    });
     found
 }
 
@@ -2593,6 +2606,75 @@ pub(crate) unsafe fn update_address_caret(window: HWND) {
                 log(&format!(
                     "rivet: could not draw the top bar's caret: {error}"
                 ));
+            }
+        }
+    });
+}
+
+thread_local! {
+    static TICK_GATE: RefCell<crate::features::tick_gate::Gate> = RefCell::default();
+}
+
+/// Whether the tab refresh timer saw anything the window's surface shows differently from the
+/// last tick: its tabs, titles and states, its pages and their rows, the top bar and the cards
+/// over the page, its size and its spaces. Pointer and key input draw on their own.
+unsafe fn tick_needs_draw(window: HWND) -> bool {
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    let visible = framed(window);
+    let address = if crate::features::address_bar::busy() {
+        None
+    } else {
+        crate::features::address_bar::view(window)
+    };
+    let command = if crate::features::command_bar::busy() {
+        None
+    } else {
+        crate::features::command_bar::view(window)
+    };
+    let card = if crate::features::settings::busy() {
+        None
+    } else {
+        crate::features::settings::view(window)
+    };
+    let spaces = with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()));
+    let signature = crate::features::tick_gate::signature(&[
+        &(client.right, client.bottom, layout_dpi(window), visible),
+        &layout_of(window),
+        &page_x(window),
+        &appbar_model(window),
+        &pane_rows(window),
+        &address,
+        &command,
+        &card,
+        &crate::features::link_preview::view(window),
+        &crate::features::link_rules::view(window),
+        &crate::dev_bar::view(window),
+        &crate::features::dev_page::window_in_dev_mode(window),
+        &held_warning(),
+        &spaces,
+        &open_menu_kind(window),
+        &dragging(window),
+        &frame_layout::panel_bounds(window),
+        &ground_holes(window),
+    ]);
+    TICK_GATE.with(|gate| gate.borrow_mut().due(window as isize, signature))
+}
+
+/// Places or hides the caret of the command bar or the settings card alone, for a blink that
+/// changed nothing else.
+pub(crate) unsafe fn update_card_caret(window: HWND, which: crate::appbar::caret::Which) {
+    use crate::appbar::caret::Which;
+    let dpi = layout_dpi(window);
+    let caret = match which {
+        Which::Address => crate::features::address_bar::caret(window),
+        Which::Command => crate::features::command_bar::caret(window),
+        Which::Settings => crate::features::settings::caret(window),
+    };
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.place_caret(which, caret, dpi, true) {
+                log(&format!("rivet: could not draw a field's caret: {error}"));
             }
         }
     });
@@ -3554,6 +3636,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             SPACES.with(|all| all.borrow_mut().remove(&(window as isize)));
             PRESSES.with(|all| all.borrow_mut().remove(&(window as isize)));
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
+            TICK_GATE.with(|gate| gate.borrow_mut().forget(window as isize));
             crate::features::address_bar::forget(window);
             crate::features::command_bar::forget(window);
             crate::features::settings::forget(window);
@@ -3856,7 +3939,9 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 }
             }
             persist_tick(window);
-            update_appbar(window);
+            if tick_needs_draw(window) {
+                update_appbar(window);
+            }
             0
         }
         _ if message == group_probe_message() && attached(window) => {
