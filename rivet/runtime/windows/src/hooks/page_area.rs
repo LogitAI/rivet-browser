@@ -162,7 +162,15 @@ pub(crate) unsafe fn run(
     bounds: &mut dyn LayoutBounds,
 ) {
     HOST_VIEWS.with(|views| views.borrow_mut().insert(window as isize, host));
-    if DUMP_LAYOUT.swap(false, std::sync::atomic::Ordering::Relaxed) {
+    // A layout without the recorded page container is traced once, which shows where it keeps it.
+    static DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let unknown = row().contents_container != crate::builds::ABSENT
+        && bounds
+            .of(*(this.cast::<u8>().add(row().contents_container) as *const usize))
+            .is_none()
+        && crate::trace::tracing()
+        && !DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed);
+    if DUMP_LAYOUT.swap(false, std::sync::atomic::Ordering::Relaxed) || unknown {
         trace("layout dump");
         bounds.dump(this, &trace);
     }

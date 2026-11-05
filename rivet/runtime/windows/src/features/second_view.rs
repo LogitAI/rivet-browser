@@ -795,6 +795,17 @@ unsafe fn place(split: &Split) -> bool {
             };
             crate::features::sidebar_page::fit(window, split.mode, moved)
         };
+        // A page view that keeps its page inside a border grows by it, so every pane's page starts
+        // where its row ends.
+        let now = bounds_of(view);
+        let children: Vec<[i32; 4]> = children_of(view)
+            .into_iter()
+            .map(|child| bounds_of(child))
+            .collect();
+        let rect = crate::features::page_fit::grow(
+            rect,
+            crate::features::page_fit::holder_inset([now[2], now[3]], &children),
+        );
         if slot == 0 {
             *LAST.lock().unwrap_or_else(|error| error.into_inner()) = rect;
         }
