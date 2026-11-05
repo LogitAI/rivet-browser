@@ -53,9 +53,55 @@ pub(crate) fn outset(rect: [i32; 4], page: [i32; 4], filled: [i32; 4]) -> [i32; 
     ]
 }
 
+/// The border a page view keeps around the one view that holds its page, as left, top, right and
+/// bottom, from the page view's size `view` and its children's bounds. Some builds give their own
+/// page view a border of a few DIPs, which shows as a band inside Rivet's panel. A view with other
+/// children, or a margin outside `0..=MAX_INSET`, has no such border.
+pub(crate) fn holder_inset(view: [i32; 2], children: &[[i32; 4]]) -> [i32; 4] {
+    let [only] = children else {
+        return [0; 4];
+    };
+    let [x, y, width, height] = *only;
+    let margins = [x, y, view[0] - x - width, view[1] - y - height];
+    if width <= 0 || height <= 0 || margins.iter().any(|m| !(0..=MAX_INSET).contains(m)) {
+        return [0; 4];
+    }
+    margins
+}
+
+/// The bounds `rect` grown by `inset` on each side, so the page inside a bordered view fills the
+/// place Rivet meant for the view.
+pub(crate) fn grow(rect: [i32; 4], inset: [i32; 4]) -> [i32; 4] {
+    let [left, top, right, bottom] = inset;
+    [
+        rect[0] - left,
+        rect[1] - top,
+        rect[2] + left + right,
+        rect[3] + top + bottom,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{fill, outset};
+    use super::{fill, grow, holder_inset, outset};
+
+    #[test]
+    fn fr9_a_page_view_with_a_border_grows_so_its_page_lines_up() {
+        // Samsung Internet 30.0.4.29 keeps the page 2 DIPs inside its own page view, and Rivet's
+        // second view has no border, so the split's panes started 2.4 DIP apart.
+        let inset = holder_inset([570, 790], &[[2, 2, 566, 786]]);
+        assert_eq!(inset, [2, 2, 2, 2]);
+        assert_eq!(grow([578, 14, 570, 790], inset), [576, 12, 574, 794]);
+        // The page fills the view: nothing to take back.
+        assert_eq!(holder_inset([570, 790], &[[0, 0, 570, 790]]), [0; 4]);
+        // Two children or a wide gap are the browser's own layout.
+        assert_eq!(
+            holder_inset([570, 790], &[[2, 2, 566, 786], [0, 0, 1, 1]]),
+            [0; 4]
+        );
+        assert_eq!(holder_inset([570, 790], &[[0, 56, 570, 734]]), [0; 4]);
+        assert_eq!(holder_inset([570, 790], &[]), [0; 4]);
+    }
 
     #[test]
     fn fr9_an_extra_page_takes_back_the_inset_its_view_keeps() {

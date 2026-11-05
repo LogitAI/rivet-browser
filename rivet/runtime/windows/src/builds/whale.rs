@@ -308,9 +308,10 @@ pub static WHALE: Build = Build {
             ),
         ],
     },
-    // Found statically by the shape of Chrome 156's functions and members, and unverified. Whale
-    // publishes no symbols. Its entry ids stop at 0x15, the extension entry, and its registry keeps
-    // begin and end pointers. The layout's members sit 0x20 below Chrome's from the page area on.
+    // Found statically by the shape of Chrome 156's functions and members. Whale publishes no
+    // symbols. Its entry ids stop at 0x15, the extension entry, and its registry keeps begin and
+    // end pointers. The page area and the page container were read from a traced layout of
+    // 5.39.412.57's app window: they sit at 0x28 and 0x90, beside the top row at 0x40.
     side_panel: SidePanel {
         supported: true,
         side_panel_vtable: 0x0FAA_BE20,
@@ -355,8 +356,8 @@ pub static WHALE: Build = Build {
         entry_key_size: None,
         extensions_by_toggle: None,
         host_view: 0x20,
-        page_area: 0x30,
-        contents_container: 0x98,
+        page_area: 0x28,
+        contents_container: 0x90,
         vertical_tabs: 0x60,
         toolbar: 0x40,
         contents_outline: 0x38,

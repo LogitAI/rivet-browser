@@ -738,6 +738,10 @@ unsafe fn area_of(split: &Split) -> Option<[i32; 4]> {
     let now = bounds_of(split.main);
     let last = *LAST.lock().unwrap_or_else(|error| error.into_inner());
     if now != last && now[2] > 0 {
+        crate::trace::trace_changed(
+            "page view area",
+            &format!("second view: the browser gave the page view {now:?}, Rivet set {last:?}"),
+        );
         *FULL.lock().unwrap_or_else(|error| error.into_inner()) = now;
     }
     let full = *FULL.lock().unwrap_or_else(|error| error.into_inner());
@@ -791,9 +795,33 @@ unsafe fn place(split: &Split) -> bool {
             };
             crate::features::sidebar_page::fit(window, split.mode, moved)
         };
+        // A page view that keeps its page inside a border grows by it, so every pane's page starts
+        // where its row ends.
+        let now = bounds_of(view);
+        let children: Vec<[i32; 4]> = children_of(view)
+            .into_iter()
+            .map(|child| bounds_of(child))
+            .collect();
+        let rect = crate::features::page_fit::grow(
+            rect,
+            crate::features::page_fit::holder_inset([now[2], now[3]], &children),
+        );
         if slot == 0 {
             *LAST.lock().unwrap_or_else(|error| error.into_inner()) = rect;
         }
+        crate::trace::trace_changed(
+            if slot == 0 { "place 0" } else { "place n" },
+            &format!(
+                "second view: slot {slot} to {rect:?} from area {full:?}, raw {:?}, now {:?}, children {:?}, parent {:?}",
+                *FULL.lock().unwrap_or_else(|error| error.into_inner()),
+                bounds_of(view),
+                children_of(view)
+                    .into_iter()
+                    .map(|child| bounds_of(child))
+                    .collect::<Vec<_>>(),
+                word(view + offsets().0).filter(|p| *p != 0).map(|p| bounds_of(p))
+            ),
+        );
         // Bounds that are already right are not set again, so a layout does not ask for another one.
         if bounds_of(view) != rect {
             moves.push((view, rect));

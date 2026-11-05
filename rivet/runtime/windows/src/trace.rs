@@ -129,3 +129,22 @@ pub fn trace(message: &str) {
         let _ = writeln!(file, "{message}");
     }
 }
+
+/// Writes `message` only when it differs from the last one written under `key`, so a trace inside
+/// a layout that runs many times a second shows each change once.
+pub fn trace_changed(key: &'static str, message: &str) {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static LAST: Mutex<Option<HashMap<&'static str, String>>> = Mutex::new(None);
+    if !tracing() {
+        return;
+    }
+    let mut last = LAST.lock().unwrap_or_else(|error| error.into_inner());
+    let map = last.get_or_insert_with(HashMap::new);
+    if map.get(key).is_some_and(|previous| previous == message) {
+        return;
+    }
+    map.insert(key, message.to_owned());
+    drop(last);
+    trace(message);
+}
