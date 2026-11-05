@@ -38,6 +38,12 @@ pub fn area_top(window: HWND) -> Option<i32> {
     AREAS.with(|areas| areas.borrow().get(&(window as isize)).map(|area| area.0))
 }
 
+/// The view the browser's layout last laid out for a window: the `views::View` of its
+/// `BrowserView`, which is also its `BrowserWindow` part.
+pub(crate) fn laid_out_host(window: HWND) -> Option<usize> {
+    HOST_VIEWS.with(|views| views.borrow().get(&(window as isize)).copied())
+}
+
 /// The page area of a window, below its top row, from the browser view's bounds and the extent
 /// the layout recorded.
 pub unsafe fn page_geometry(window: HWND) -> Option<PageGeometry> {

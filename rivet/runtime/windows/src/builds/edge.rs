@@ -315,6 +315,11 @@ pub static EDGE: Build = Build {
         proposed: 0x028C7270, // ?Layout@BrowserViewLayoutImplOld@@UEAAXPEAVView@views@@@Z
         old_layout: Some(true),
         registry_end: None,
+        registry_in_coordinator: None,
+        registry_entries: None,
+        coordinator_browser: None,
+        entry_key_size: None,
+        extensions_by_toggle: None,
         host_view: 0x38,
         page_area: 0,
         contents_container: 0xd8,

@@ -1411,7 +1411,7 @@ mod tests {
     #[test]
     fn fr10_rail_labels_chromes_entries_and_draws_their_glyphs() {
         let mut known = HashMap::new();
-        let mut key: panel::EntryKey = [0; 0x28];
+        let mut key: panel::EntryKey = [0; panel::KEY_BYTES];
         key[..4].copy_from_slice(&1u32.to_le_bytes());
         let look = entry_look(&key, &mut known);
         assert_eq!(
