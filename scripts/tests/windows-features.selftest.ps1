@@ -179,5 +179,15 @@ Expect 'fr9_split_rows_blank_capture_is_not_driven' (Test-PaneRows (New-Window 0
 $rows = @([pscustomobject]@{ browser = 'chrome'; version = '1.2'; feature = 'split'; result = 'PASS'; evidence = 'a.png'; reason = 'r' })
 if ((Format-Rows $rows) -notmatch 'chrome\s+1\.2\s+split\s+PASS') { Write-Host 'FAIL table row'; $failures++ } else { Write-Host 'ok   table' }
 
+# A link preview covers most of the page and leaves a margin of it on three sides.
+$preview = Fill (Fill (Fill (New-Window) 160 60 890 540 $B) 200 70 850 90 0xFBFAF7) 200 90 850 515 $A
+Expect 'fr_link_preview_over_the_page_passes' (Test-FloatingPage $preview $B $A) 'PASS'
+# Pages side by side are a split, not a preview.
+Expect 'fr_link_preview_fails_beside_the_page' (Test-FloatingPage $two $B $A) 'FAIL'
+# A preview that fills the whole page area hides the page under it.
+Expect 'fr_link_preview_fails_when_no_page_shows_under_it' (Test-FloatingPage (Fill (New-Window) 160 60 890 540 $A) $B $A) 'FAIL'
+# The page under the preview gone, with the window ground around it.
+Expect 'fr_link_preview_fails_on_the_window_ground' (Test-FloatingPage (Fill (New-Window) 200 90 850 515 $A) $B $A) 'FAIL'
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'
