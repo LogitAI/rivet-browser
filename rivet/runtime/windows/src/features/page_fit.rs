@@ -81,9 +81,37 @@ pub(crate) fn grow(rect: [i32; 4], inset: [i32; 4]) -> [i32; 4] {
     ]
 }
 
+/// The place of the page inside a view at `rect` that keeps it `inset` from each side, the
+/// reverse of [`grow`]. Rows and hit areas follow the page, not its grown view.
+pub(crate) fn shrink(rect: [i32; 4], inset: [i32; 4]) -> [i32; 4] {
+    let [left, top, right, bottom] = inset;
+    [
+        rect[0] + left,
+        rect[1] + top,
+        rect[2] - left - right,
+        rect[3] - top - bottom,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{fill, grow, holder_inset, outset};
+    use super::{fill, grow, holder_inset, outset, shrink};
+
+    #[test]
+    fn fr9_a_grown_page_view_keeps_its_row_over_its_page() {
+        // Samsung Internet 30.0.4.29: the right pane's view grew by its 2 DIP border, so its row
+        // sat 2 DIPs above the left one and the panes were read right to left.
+        let inset = [2, 2, 2, 2];
+        let page = [578, 14, 570, 790];
+        assert_eq!(shrink(grow(page, inset), inset), page);
+        let pages = [
+            (shrink([574, 10, 574, 794], inset), true, Some(0)),
+            ([4, 12, 570, 790], false, Some(1)),
+        ];
+        let panes = crate::features::second_view::grid_panes(&pages, 1160, None);
+        assert_eq!(panes[0].x, 4);
+        assert_eq!(panes[0].row_y, panes[1].row_y);
+    }
 
     #[test]
     fn fr9_a_page_view_with_a_border_grows_so_its_page_lines_up() {
