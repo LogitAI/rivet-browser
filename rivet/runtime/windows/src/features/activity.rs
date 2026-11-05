@@ -35,9 +35,13 @@ pub(crate) enum Counter {
     TaskbarMicros,
     /// Microseconds spent on debug command files.
     DebugMicros,
+    /// Microseconds spent drawing the surface from the tick.
+    DrawMicros,
+    /// Microseconds spent following the active page and the side panel.
+    FollowMicros,
 }
 
-const ALL: [Counter; 14] = [
+const ALL: [Counter; 16] = [
     Counter::RailTick,
     Counter::RailRelayout,
     Counter::TabTick,
@@ -52,6 +56,8 @@ const ALL: [Counter; 14] = [
     Counter::ListMicros,
     Counter::TaskbarMicros,
     Counter::DebugMicros,
+    Counter::DrawMicros,
+    Counter::FollowMicros,
 ];
 
 impl Counter {
@@ -71,6 +77,8 @@ impl Counter {
             Counter::ListMicros => "list_us",
             Counter::TaskbarMicros => "taskbar_us",
             Counter::DebugMicros => "debug_us",
+            Counter::DrawMicros => "draw_us",
+            Counter::FollowMicros => "follow_us",
         }
     }
 }
