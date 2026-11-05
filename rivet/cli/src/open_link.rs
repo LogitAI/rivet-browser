@@ -3,11 +3,15 @@
 //! Rivet window of the saved browser, or to the window the saved session opens, as the same
 //! open-link message `rivet session open` sends, so the window's link rules decide where it opens.
 
+#[cfg(windows)]
 use std::collections::HashSet;
 use std::path::Path;
 
-use rivet_core::session::{SessionRecord, SessionRegistry};
+use rivet_core::session::SessionRecord;
+#[cfg(windows)]
+use rivet_core::session::SessionRegistry;
 
+#[cfg(windows)]
 use crate::config::Saved;
 
 /// The option Windows passes the address with. The installer writes it into the open command.
