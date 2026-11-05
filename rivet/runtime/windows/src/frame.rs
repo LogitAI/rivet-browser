@@ -3691,7 +3691,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
             if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
-            use crate::features::activity::{count, Counter};
+            use crate::features::activity::{add_since, clock, count, timed, Counter};
+            let tick_started = clock();
             count(Counter::TabTick);
             let tick = TAB_TICKS.with(|ticks| {
                 ticks.set(ticks.get() + 1);
@@ -3700,8 +3701,12 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             if debug_switches().is_some() {
                 count(Counter::DebugScan);
             }
-            crate::features::side_panel::tick(window, debug_switches());
-            crate::features::tab_list::tick(window);
+            timed(Counter::DebugMicros, || {
+                crate::features::side_panel::tick(window, debug_switches())
+            });
+            timed(Counter::ListMicros, || {
+                crate::features::tab_list::tick(window)
+            });
             crate::features::command_bar::tick(window);
             // An extension page may load into the browser's side panel some time after the click
             // that opened it, after the side rail's pointer timer has gone quiet.
@@ -3709,6 +3714,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             // A browser can write its own identity again, for example when a profile finishes
             // loading. The taskbar groups by that identity, so Rivet puts its own back. Reading the
             // identity goes through the shell's property store, so it is not done on every tick.
+            let taskbar_started = clock();
             if taskbar_check_due(tick) {
                 count(Counter::TaskbarCheck);
                 if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
@@ -3717,7 +3723,9 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     set_rivet_icons(window);
                 }
             }
+            add_since(Counter::TaskbarMicros, taskbar_started);
             crate::features::activity::report_on_tick();
+            let debug_started = clock();
             if let Some(flag) = debug_switches().map(|dir| dir.join("rivet-split-now.flag")) {
                 if std::fs::remove_file(&flag).is_ok() {
                     crate::features::split::probe(window);
@@ -3938,10 +3946,12 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     ));
                 }
             }
-            persist_tick(window);
-            if tick_needs_draw(window) {
+            add_since(Counter::DebugMicros, debug_started);
+            timed(Counter::PersistMicros, || persist_tick(window));
+            if timed(Counter::GateMicros, || tick_needs_draw(window)) {
                 update_appbar(window);
             }
+            add_since(Counter::TickMicros, tick_started);
             0
         }
         _ if message == group_probe_message() && attached(window) => {
