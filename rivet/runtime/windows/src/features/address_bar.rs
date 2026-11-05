@@ -581,32 +581,39 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
     let dev = crate::features::dev_page::window_in_dev_mode(window);
     let reserve = dev_reserve(window);
     let security = Security::from_level(crate::features::omnibox::security_level(window), &url);
-    Some(with_bar(window, |bar| View {
-        dev,
-        url: url.clone(),
-        reserve: if pane { 0.0 } else { reserve },
-        pane,
-        x: x * f,
-        y: y * f,
-        width: width * f,
-        height: ROW_HEIGHT as f32 * f,
-        toggle,
-        title,
-        rest,
-        security,
-        hover: bar.hover,
-        can_back: true,
-        can_forward: true,
-        caption_hover: crate::frame::caption_hover(window),
-        zoomed: windows_sys::Win32::UI::WindowsAndMessaging::IsZoomed(window) != 0,
-        editing: bar.editing,
-        generation: bar.generation,
-        suggestions: bar
-            .suggestions
-            .iter()
-            .map(|s| (s.contents.clone(), s.description.clone()))
-            .collect(),
-        selected: bar.selected,
+    Some(with_bar(window, |bar| {
+        // The field tells when its text or selection changed. A change made without a key, such as
+        // a select all, counts too. The top bar is painted again only when the field draws anew.
+        if bar.field.as_ref().is_some_and(|field| field.take_changed()) {
+            bar.generation += 1;
+        }
+        View {
+            dev,
+            url: url.clone(),
+            reserve: if pane { 0.0 } else { reserve },
+            pane,
+            x: x * f,
+            y: y * f,
+            width: width * f,
+            height: ROW_HEIGHT as f32 * f,
+            toggle,
+            title,
+            rest,
+            security,
+            hover: bar.hover,
+            can_back: true,
+            can_forward: true,
+            caption_hover: crate::frame::caption_hover(window),
+            zoomed: windows_sys::Win32::UI::WindowsAndMessaging::IsZoomed(window) != 0,
+            editing: bar.editing,
+            generation: bar.generation,
+            suggestions: bar
+                .suggestions
+                .iter()
+                .map(|s| (s.contents.clone(), s.description.clone()))
+                .collect(),
+            selected: bar.selected,
+        }
     }))
 }
 
@@ -879,19 +886,25 @@ pub(crate) unsafe fn message(
         WM_MOUSEMOVE => {
             let point = point_of(lparam);
             let now = part_at(window, point);
-            let changed = with_bar(window, |bar| {
+            let (hover_changed, content_changed) = with_bar(window, |bar| {
                 let changed = bar.hover != now;
                 bar.hover = now;
+                let mut drawn = false;
                 if bar.editing && ((wparam & 1) != 0 || now == Some(Part::Address)) {
                     if let Some(field) = bar.field.as_ref() {
                         field.send(message, wparam, lparam);
+                        drawn = field.take_changed();
                     }
                 }
-                changed
+                if drawn {
+                    bar.generation += 1;
+                }
+                (changed, drawn)
             });
-            if changed || editing {
-                crate::frame::update_appbar(window);
-            }
+            redraw(
+                window,
+                redraw_after(editing, hover_changed, content_changed),
+            );
             if now.is_some() || (editing && (wparam & 1) != 0) {
                 Some(0)
             } else {
@@ -1055,8 +1068,11 @@ pub(crate) unsafe fn message(
             None
         }
         WM_TIMER if (TIMER_BASE..=TIMER_LAST).contains(&wparam) => {
+            // Most of the field's timers blink the caret, which moves only the caret's own visual.
+            let before = with_bar(window, |bar| bar.generation);
             forward(window, message, wparam - TIMER_BASE, 0);
-            crate::frame::update_appbar(window);
+            let after = with_bar(window, |bar| bar.generation);
+            redraw(window, redraw_after(editing, false, before != after));
             Some(0)
         }
         WM_KILLFOCUS => {
@@ -1207,9 +1223,62 @@ pub(crate) unsafe fn finish_composition_for_test(window: HWND) -> bool {
     done != 0
 }
 
+/// What a message to the bar needs drawn again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Redraw {
+    Nothing,
+    /// Only the caret moved or blinked: its own small visual is placed or hidden.
+    Caret,
+    /// The bar looks different: hover, text or selection.
+    Bar,
+}
+
+fn redraw_after(editing: bool, hover_changed: bool, content_changed: bool) -> Redraw {
+    if hover_changed || content_changed {
+        Redraw::Bar
+    } else if editing {
+        Redraw::Caret
+    } else {
+        Redraw::Nothing
+    }
+}
+
+unsafe fn redraw(window: HWND, redraw: Redraw) {
+    match redraw {
+        Redraw::Nothing => {}
+        Redraw::Caret => crate::frame::update_address_caret(window),
+        Redraw::Bar => crate::frame::update_appbar(window),
+    }
+}
+
+/// The field's caret in client pixels while the address is edited and the caret is shown.
+pub(crate) fn caret(window: HWND) -> Option<RECT> {
+    if busy() {
+        return None;
+    }
+    with_bar(window, |bar| {
+        bar.editing
+            .then(|| bar.field.as_ref().and_then(|field| field.caret()))
+            .flatten()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_caret_blink_redraws_only_the_caret() {
+        assert_eq!(redraw_after(true, false, false), Redraw::Caret);
+        assert_eq!(redraw_after(true, false, true), Redraw::Bar);
+        assert_eq!(redraw_after(true, true, false), Redraw::Bar);
+    }
+
+    #[test]
+    fn idle_pointer_moving_over_a_resting_bar_redraws_nothing() {
+        assert_eq!(redraw_after(false, false, false), Redraw::Nothing);
+        assert_eq!(redraw_after(false, true, false), Redraw::Bar);
+    }
 
     #[test]
     fn fr12_a_bar_right_above_the_page_moves_below_the_address_bar_with_it() {
