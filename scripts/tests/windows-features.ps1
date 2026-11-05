@@ -13,7 +13,7 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings'),
   [string]$OutDir,
   [switch]$NoBuild
 )
@@ -1207,6 +1207,35 @@ function Invoke-CommandBar($Name, $shots) {
   } finally { Stop-Scene $ctx }
 }
 
+# Rivet settings open as a card over the page without a window of their own, are walked with the
+# keyboard, and write the store that owns each setting: here Ctrl+T, which the tab list file keeps.
+function Invoke-RivetSettings($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'rivet-settings' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    $tops = @(Get-MyTops $ctx)
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'settings')) { return @('NOT_DRIVEN', $null, 'the runtime did not take the settings command') }
+    Start-Sleep 1
+    $open = Get-Capture $ctx (Join-Path $shots 'rivet-settings-1-open.png')
+    if (-not (Read-Log | Where-Object { $_ -match 'settings: open: true' })) { return @('FAIL', $open.Path, 'the settings card did not open') }
+    if (@(Get-MyTops $ctx | Where-Object { $tops -notcontains $_ }).Count -gt 0) { return @('FAIL', $open.Path, 'the settings card made a window of its own') }
+    foreach ($command in 'settingskey down', 'settingskey right') {
+      if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $open.Path, "'$command' was not taken") }
+    }
+    Start-Sleep 1
+    $changed = Get-Capture $ctx (Join-Path $shots 'rivet-settings-2-changed.png')
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'sections')) { return @('NOT_DRIVEN', $changed.Path, 'sections was not taken') }
+    if ((Get-Sections).CtrlT -ne 'new_tab_page') { return @('FAIL', $changed.Path, 'the keyboard did not change what Ctrl+T opens') }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'settingskey esc')) { return @('NOT_DRIVEN', $changed.Path, 'esc was not taken') }
+    Start-Sleep 1
+    $closed = Get-Capture $ctx (Join-Path $shots 'rivet-settings-3-closed.png')
+    if (-not (Read-Log | Where-Object { $_ -match 'settings: closed' })) { return @('FAIL', $closed.Path, 'Esc did not close the card') }
+    @('PASS', $changed.Path, 'card opened without a window of its own, Down and Right set Ctrl+T to the new tab page, Esc closed it')
+  } finally { Stop-Scene $ctx }
+}
+
 # A tab's link preview floats over the page being read, then opens as a tab or goes away.
 function Invoke-LinkPreview($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'link-preview' $urlA
@@ -1283,6 +1312,7 @@ foreach ($name in $Browsers) {
         'link-new-tab' { Invoke-LinkNewTab $name $shots }
         'command-bar' { Invoke-CommandBar $name $shots }
         'link-preview' { Invoke-LinkPreview $name $shots }
+        'rivet-settings' { Invoke-RivetSettings $name $shots }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason

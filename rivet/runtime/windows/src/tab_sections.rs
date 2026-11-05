@@ -591,6 +591,21 @@ impl Store {
         &mut self.spaces[at].1
     }
 
+    /// A space was renamed: its list moves to the new name. A list already under the new name is
+    /// left alone, because two spaces cannot share a name.
+    pub fn rename_space(&mut self, old: &str, new: &str) -> bool {
+        if old == new || self.spaces.iter().any(|(name, _)| name == new) {
+            return false;
+        }
+        match self.spaces.iter_mut().find(|(name, _)| name == old) {
+            Some(entry) => {
+                entry.0 = new.to_owned();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// The file text. Closed tabs are kept too, so Ctrl+Shift+T still works after a restart.
     pub fn to_json(&self, user_data_dir: &str) -> String {
         use serde_json::{json, Value};

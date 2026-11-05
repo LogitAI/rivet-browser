@@ -16,6 +16,7 @@ pub(crate) mod page_bar;
 pub(crate) mod page_fit;
 pub(crate) mod pane_infobar;
 pub(crate) mod second_view;
+pub(crate) mod settings;
 pub(crate) mod side_panel;
 pub(crate) mod sidebar_page;
 pub(crate) mod split;

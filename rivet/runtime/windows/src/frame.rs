@@ -76,6 +76,8 @@ pub(crate) enum AppbarHit {
     ManageProfiles,
     /// The settings entry that switches who keeps passwords and passkeys.
     Credentials,
+    /// The settings entry that opens the Rivet settings card over the page.
+    RivetSettings,
     /// The entry of a tab's menu that shows the tab beside the one after it.
     SplitTab(usize),
     /// The entry of a tab's menu that pins the tab, or unpins a pinned one.
@@ -122,7 +124,7 @@ pub(crate) const SETTINGS_ITEMS: [(&str, Option<AppbarHit>); 4] = [
     ("Profile settings", Some(AppbarHit::ProfileSettings)),
     ("Manage profiles", Some(AppbarHit::ManageProfiles)),
     ("Passwords and passkeys", Some(AppbarHit::Credentials)),
-    ("Rivet settings", None),
+    ("Rivet settings", Some(AppbarHit::RivetSettings)),
 ];
 
 /// The title of a settings entry as drawn. The provider entry names the current choice.
@@ -863,6 +865,54 @@ fn with_spaces<R>(window: HWND, edit: impl FnOnce(&mut Spaces) -> R) -> R {
     })
 }
 
+/// The appbar width in DIPs and whether it is hidden. The spaces file keeps both.
+pub(crate) fn appbar_settings(window: HWND) -> (i32, bool) {
+    let layout = layout_of(window);
+    (layout.side, layout.collapsed)
+}
+
+/// Sets the appbar width as a drag of its edge would.
+pub(crate) unsafe fn set_appbar_width(window: HWND, width: i32) {
+    if edit_layout(window, |layout| layout.set_width(width)) {
+        sync_strip(window);
+        update_appbar(window);
+        relayout(window);
+    }
+}
+
+/// Hides or shows the appbar as its toggle would.
+pub(crate) unsafe fn set_appbar_hidden(window: HWND, hidden: bool) {
+    if layout_of(window).collapsed != hidden {
+        toggle_appbar(window);
+    }
+}
+
+/// The spaces of a window and the index of the one it shows.
+pub(crate) fn spaces_snapshot(window: HWND) -> (Vec<crate::spaces::SpaceInfo>, usize) {
+    with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()))
+}
+
+/// Changes one space. The window's frame follows a new colour of the space it shows, and the
+/// spaces file is written on the window's timer.
+pub(crate) unsafe fn edit_space(
+    window: HWND,
+    index: usize,
+    edit: impl FnOnce(&mut crate::spaces::SpaceInfo),
+) -> bool {
+    let (done, tint) = with_spaces(window, |spaces| {
+        let done = spaces.edit(index, edit);
+        (done, spaces.list()[spaces.current()].tint)
+    });
+    APPBAR_STATE.with(|states| {
+        if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
+            entry.2 = tint;
+        }
+    });
+    windows_sys::Win32::Graphics::Gdi::InvalidateRect(window, std::ptr::null(), 0);
+    update_appbar(window);
+    done
+}
+
 /// The name of the space a window shows now.
 pub(crate) fn space_name(window: HWND) -> String {
     with_spaces(window, |spaces| {
@@ -1575,6 +1625,10 @@ unsafe fn appbar_action(window: HWND, hit: AppbarHit) {
                 ));
             }
             crate::frame::update_appbar(window);
+        }
+        AppbarHit::RivetSettings => {
+            close_menu(window);
+            crate::features::settings::open(window);
         }
         AppbarHit::ProfileSettings | AppbarHit::ManageProfiles => {
             close_menu(window);
@@ -2512,6 +2566,18 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     log(&format!("rivet: could not draw the command bar: {error}"));
                 }
             }
+            if !crate::features::settings::busy() {
+                let card = if visible {
+                    crate::features::settings::view(window)
+                } else {
+                    None
+                };
+                if let Err(error) = appbar.update_settings(window as isize, card.as_ref(), dpi) {
+                    log(&format!(
+                        "rivet: could not draw the Rivet settings: {error}"
+                    ));
+                }
+            }
             let bar = if visible {
                 crate::dev_bar::view(window)
             } else {
@@ -2857,6 +2923,9 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
     // The command bar's scrim and the link preview's header lie over the pages, and the Mini
     // Window floats over them, so they take the pointer and the keyboard before the pages do.
     if attached(window) {
+        if let Some(result) = crate::features::settings::message(window, message, wparam, lparam) {
+            return result;
+        }
         if let Some(result) = crate::features::command_bar::message(window, message, wparam, lparam)
         {
             return result;
@@ -3366,6 +3435,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
             crate::features::address_bar::forget(window);
             crate::features::command_bar::forget(window);
+            crate::features::settings::forget(window);
             crate::features::link_preview::forget(window);
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             crate::features::vertical_tabs::forget(window);
@@ -3508,6 +3578,15 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         // The command bar: `command` opens it, `commandtype TEXT` puts text in its
                         // field, `commandrun N` runs row N. The link preview: `preview N` shows tab N
                         // floating, `previewopen` opens it as a tab and `previewesc` dismisses it.
+                        // Rivet settings: `settings` opens the card, `settingskey KEY [TEXT]` presses
+                        // up, down, left, right, enter, esc or tab on it, or `type` puts TEXT in the
+                        // row being edited.
+                        Some("settings") => crate::features::settings::open(window),
+                        Some("settingskey") => {
+                            let rest = text.trim().trim_start_matches("settingskey").trim();
+                            let (key, typed) = rest.split_once(' ').unwrap_or((rest, ""));
+                            crate::features::settings::key_for_test(window, key, typed)
+                        }
                         Some("command") => crate::features::command_bar::open(window),
                         Some("commandtype") => {
                             let text = text.trim().trim_start_matches("commandtype").trim();
@@ -3722,7 +3801,7 @@ mod tests {
     }
 
     #[test]
-    fn fr3_settings_menu_rises_from_the_footer_with_a_disabled_last_entry() {
+    fn fr3_settings_menu_rises_from_the_footer_and_opens_rivet_settings() {
         let (_, top, _, height) = super::menu_area(Menu::Settings, 268.0, 700.0, 3);
         assert!(
             top + height <= 700.0 - 38.0,
@@ -3741,7 +3820,7 @@ mod tests {
         assert_eq!(hit(0.0), (true, Some(AppbarHit::ProfileSettings)));
         assert_eq!(hit(1.0), (true, Some(AppbarHit::ManageProfiles)));
         assert_eq!(hit(2.0), (true, Some(AppbarHit::Credentials)));
-        assert_eq!(hit(3.0), (true, None), "Rivet settings has no action yet");
+        assert_eq!(hit(3.0), (true, Some(AppbarHit::RivetSettings)));
         assert_eq!(
             menu_hit(Menu::Settings, 20.0, top - 1.0, 268.0, 700.0, 3),
             (false, None)
