@@ -105,7 +105,24 @@ impl Layout {
     /// Where a trace switched on by `name` writes. A switch is the file `debug\<name>` or the
     /// name listed in `RIVET_TRACE`, separated by commas.
     pub fn trace_file(&self, name: &str) -> Option<PathBuf> {
-        let listed = std::env::var("RIVET_TRACE").is_ok_and(|value| {
+        self.trace_file_with(name, std::env::var("RIVET_TRACE").ok().as_deref(), None)
+    }
+
+    /// As `trace_file`, with `RIVET_TRACE`'s value given and the session's own `rivet-debug`
+    /// folder. A switch in that folder writes its trace beside it, so a test run on its own profile
+    /// keeps its trace apart from every other run. Nothing else turns a trace on.
+    pub fn trace_file_with(
+        &self,
+        name: &str,
+        rivet_trace: Option<&str>,
+        own_debug: Option<&Path>,
+    ) -> Option<PathBuf> {
+        if let Some(own) = own_debug.map(|dir| dir.join(name)) {
+            if own.is_file() {
+                return Some(own);
+            }
+        }
+        let listed = rivet_trace.is_some_and(|value| {
             value
                 .split(',')
                 .any(|item| item.trim().eq_ignore_ascii_case(name))
@@ -113,6 +130,36 @@ impl Layout {
         (listed || self.debug().join(name).is_file()).then(|| self.logs().join(name))
     }
 }
+
+/// The name of the debug folder inside a session's profile that tests use.
+pub const PROFILE_DEBUG_NAME: &str = "rivet-debug";
+
+/// The profile a browser process was started with, from its `--user-data-dir` switch only. The
+/// runtime never guesses the maker's default profile folder, because that is the person's own.
+pub fn session_user_data_dir(arguments: impl IntoIterator<Item = String>) -> Option<PathBuf> {
+    arguments
+        .into_iter()
+        .filter_map(|argument| {
+            argument
+                .strip_prefix("--user-data-dir=")
+                .map(|dir| dir.trim_matches('"').to_owned())
+        })
+        .find(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The `rivet-debug` folder of the session's profile, when the session has a profile and the
+/// folder exists.
+pub fn session_debug_dir(arguments: impl IntoIterator<Item = String>) -> Option<PathBuf> {
+    session_user_data_dir(arguments)
+        .map(|profile| profile.join(PROFILE_DEBUG_NAME))
+        .filter(|dir| dir.is_dir())
+}
+
+/// Held browser copies kept for each browser. Older ones are removed.
+pub const HELD_PER_BROWSER: usize = 2;
+/// An unfinished copy of a held browser, or a scratch file, is removed after this long.
+pub const UNFINISHED_KEEP: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// What one migration step did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,8 +230,8 @@ pub fn migrate(local_app_data: &Path) -> Vec<Moved> {
 }
 
 /// Removes what is no longer needed: spaces of profiles that no longer exist, unreadable spaces
-/// files after `CORRUPT_KEEP`, and logs past their limits. Held browsers are pruned where they
-/// are made, because only that code knows which builds are still needed.
+/// files after `CORRUPT_KEEP`, logs past their limits, scratch files and unfinished held copies
+/// after `UNFINISHED_KEEP`, and held browsers beyond `HELD_PER_BROWSER` for each browser.
 pub fn prune(layout: &Layout, now: SystemTime) -> Vec<PathBuf> {
     let mut removed = Vec::new();
     for entry in read_dir(&layout.spaces()) {
@@ -214,13 +261,68 @@ pub fn prune(layout: &Layout, now: SystemTime) -> Vec<PathBuf> {
     }
     for entry in read_dir(&layout.scratch()) {
         let path = entry.path();
-        if older_than(&path, now, Duration::from_secs(24 * 60 * 60))
-            && std::fs::remove_file(&path).is_ok()
-        {
+        if older_than(&path, now, UNFINISHED_KEEP) && remove_any(&path) {
+            removed.push(path);
+        }
+    }
+    for browser in read_dir(&layout.held_browsers()) {
+        if browser.file_type().is_ok_and(|kind| kind.is_dir()) {
+            removed.extend(prune_held(&browser.path(), now));
+        }
+    }
+    removed
+}
+
+/// Removes the unfinished copies past `UNFINISHED_KEEP` and the oldest finished holds beyond
+/// `HELD_PER_BROWSER` in one browser's folder of held copies. A hold is renamed aside before it is
+/// deleted: a browser running from it blocks the rename, so a hold in use is never half deleted.
+fn prune_held(folder: &Path, now: SystemTime) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
+    let mut holds = Vec::new();
+    for entry in read_dir(folder) {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.contains(".partial-") || name.contains(".removing-") {
+            if older_than(&path, now, UNFINISHED_KEEP) && remove_any(&path) {
+                removed.push(path);
+            }
+        } else if let Some(version) = held_version(&name) {
+            holds.push((version, path));
+        }
+    }
+    holds.sort();
+    let extra = holds.len().saturating_sub(HELD_PER_BROWSER);
+    for (_, path) in holds.into_iter().take(extra) {
+        let mut aside = path.as_os_str().to_owned();
+        aside.push(format!(".removing-{}", std::process::id()));
+        let aside = PathBuf::from(aside);
+        if std::fs::rename(&path, &aside).is_ok() {
+            let _ = std::fs::remove_dir_all(&aside);
             removed.push(path);
         }
     }
     removed
+}
+
+/// The four numbers of a held build's folder name, such as `156.0.8078.48`.
+fn held_version(name: &str) -> Option<[u32; 4]> {
+    let mut parts = name.split('.');
+    let mut version = [0; 4];
+    for slot in &mut version {
+        *slot = parts.next()?.parse().ok()?;
+    }
+    parts.next().is_none().then_some(version)
+}
+
+fn remove_any(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path).is_ok(),
+        Ok(_) => std::fs::remove_file(path).is_ok(),
+        Err(_) => false,
+    }
 }
 
 /// Rotates a trace file that reached `LOG_LIMIT_BYTES`, so one trace never holds more than twice
@@ -519,6 +621,112 @@ mod tests {
         assert_eq!(
             layout.trace_file("rivet-test-switch.log"),
             Some(layout.logs().join("rivet-test-switch.log"))
+        );
+    }
+
+    #[test]
+    fn nfr7_held_browsers_keep_two_per_browser_and_unfinished_copies_go_after_a_day() {
+        let local = TestDir::new("nfr7-held");
+        let layout = Layout::under(&local);
+        let chrome = layout.held_browsers().join("chrome");
+        for version in ["150.0.1.1", "156.0.8078.48", "152.0.2.3", "156.0.8078.9"] {
+            std::fs::create_dir_all(chrome.join(version)).unwrap();
+        }
+        std::fs::create_dir_all(chrome.join("157.0.1.1.partial-7")).unwrap();
+        std::fs::write(chrome.join("hold-state.json"), "{}").unwrap();
+        let edge = layout.held_browsers().join("edge");
+        std::fs::create_dir_all(edge.join("140.0.1.1")).unwrap();
+        std::fs::create_dir_all(layout.scratch()).unwrap();
+        std::fs::write(layout.scratch().join("launch-error.txt"), "x").unwrap();
+
+        prune(&layout, SystemTime::now());
+        assert!(chrome.join("156.0.8078.48").is_dir() && chrome.join("156.0.8078.9").is_dir());
+        assert!(!chrome.join("150.0.1.1").exists() && !chrome.join("152.0.2.3").exists());
+        assert!(
+            edge.join("140.0.1.1").is_dir(),
+            "each browser keeps its own"
+        );
+        assert!(chrome.join("hold-state.json").is_file());
+        assert!(
+            chrome.join("157.0.1.1.partial-7").is_dir()
+                && layout.scratch().join("launch-error.txt").is_file(),
+            "a copy still being made is kept"
+        );
+
+        prune(
+            &layout,
+            SystemTime::now() + UNFINISHED_KEEP + Duration::from_secs(60),
+        );
+        assert!(!chrome.join("157.0.1.1.partial-7").exists());
+        assert!(!layout.scratch().join("launch-error.txt").exists());
+        assert!(chrome.join("156.0.8078.48").is_dir());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn nfr7_a_held_browser_in_use_is_not_half_deleted() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let local = TestDir::new("nfr7-held-busy");
+        let layout = Layout::under(&local);
+        let chrome = layout.held_browsers().join("chrome");
+        for version in ["150.0.1.1", "151.0.1.1", "152.0.1.1"] {
+            std::fs::create_dir_all(chrome.join(version)).unwrap();
+            std::fs::write(chrome.join(version).join("chrome.exe"), "x").unwrap();
+        }
+        let open = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(chrome.join("150.0.1.1").join("chrome.exe"))
+            .unwrap();
+        prune(&layout, SystemTime::now());
+        assert!(chrome.join("150.0.1.1").join("chrome.exe").is_file());
+        drop(open);
+        prune(&layout, SystemTime::now());
+        assert!(!chrome.join("150.0.1.1").exists());
+    }
+
+    #[test]
+    fn nfr7_a_trace_turns_on_only_by_a_switch_file_or_rivet_trace() {
+        let local = TestDir::new("nfr7-trace-with");
+        let layout = Layout::under(&local);
+        let name = "rivet-nav.log";
+        assert_eq!(layout.trace_file_with(name, None, None), None);
+        assert_eq!(layout.trace_file_with(name, Some("other.log"), None), None);
+        assert_eq!(
+            layout.trace_file_with(name, Some("x.log, RIVET-NAV.log"), None),
+            Some(layout.logs().join(name))
+        );
+        let own = local.join("profile").join(PROFILE_DEBUG_NAME);
+        std::fs::create_dir_all(&own).unwrap();
+        assert_eq!(layout.trace_file_with(name, None, Some(&own)), None);
+        std::fs::write(own.join(name), "").unwrap();
+        assert_eq!(
+            layout.trace_file_with(name, None, Some(&own)),
+            Some(own.join(name))
+        );
+    }
+
+    #[test]
+    fn nfr7_the_runtime_reads_only_the_sessions_user_data_dir() {
+        let args = |list: &[&str]| list.iter().map(|item| item.to_string()).collect::<Vec<_>>();
+        assert_eq!(session_user_data_dir(args(&["chrome.exe"])), None);
+        assert_eq!(
+            session_user_data_dir(args(&["chrome.exe", "--profile-directory=Default"])),
+            None,
+            "no maker default folder is guessed"
+        );
+        assert_eq!(session_user_data_dir(args(&["--user-data-dir="])), None);
+        assert_eq!(
+            session_user_data_dir(args(&["--user-data-dir=\"D:\\P\\chrome\"", "--app=x"])),
+            Some(PathBuf::from("D:\\P\\chrome"))
+        );
+        let profile = TestDir::new("nfr7-session-debug");
+        let arg = format!("--user-data-dir={}", profile.display());
+        assert_eq!(session_debug_dir([arg.clone()]), None);
+        std::fs::create_dir_all(profile.join(PROFILE_DEBUG_NAME)).unwrap();
+        assert_eq!(
+            session_debug_dir([arg]),
+            Some(profile.join(PROFILE_DEBUG_NAME))
         );
     }
 
