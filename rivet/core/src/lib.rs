@@ -254,8 +254,9 @@ fn plan_launch(request: &LaunchRequest, controlled: bool) -> Result<LaunchPlan, 
     }
     arguments.extend(request.credentials.launch_arguments());
     match display {
+        // A controlled hidden launch is an off-screen app window, so Rivet can still drive it.
         DisplayMode::Visible | DisplayMode::Hidden
-            if controlled || display == DisplayMode::Visible =>
+            if controlled || matches!(display, DisplayMode::Visible) =>
         {
             if display == DisplayMode::Hidden {
                 arguments.push(HIDDEN_WINDOW_POSITION.to_owned());
@@ -263,7 +264,7 @@ fn plan_launch(request: &LaunchRequest, controlled: bool) -> Result<LaunchPlan, 
             // An app window has no maker tab strip or toolbar.
             arguments.push(format!("--app={}", request.url));
         }
-        DisplayMode::Hidden => {
+        DisplayMode::Visible | DisplayMode::Hidden => {
             arguments.push("--headless=new".to_owned());
             arguments.push(request.url.clone());
         }
