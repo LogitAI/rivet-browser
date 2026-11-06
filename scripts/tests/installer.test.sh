@@ -33,3 +33,13 @@ if [ "$(grep -c 'ForceDeleteOnUninstall="yes"' "$wxs")" -lt 3 ]; then
     exit 1
 fi
 echo "ok    fr8 Rivet is offered as a browser and never made the default by setup"
+
+# FR-8: a release is the files whose SHA-256 a signed manifest lists, checked before it is made.
+build="$repo_root/rivet/installer/windows/build.ps1"
+for needle in 'release-sign $Version $manifest $setup $msi' 'release-check $manifest $file'     'Sign-Files @($msi)' 'wix burn reattach'; do
+    if ! grep -qF "$needle" "$build"; then
+        echo "fr8: build.ps1 does not $needle" >&2
+        exit 1
+    fi
+done
+echo "ok    fr8 a release is signed and hash-checked when it is built"

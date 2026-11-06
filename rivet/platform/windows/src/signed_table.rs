@@ -89,6 +89,50 @@ pub fn parse(payload: &[u8]) -> Result<Value, String> {
     Ok(value)
 }
 
+/// The payload kind of a release manifest, which lists the SHA-256 of each file a release ships.
+/// It is signed like a table, so a table can never be read as a manifest or the other way round.
+pub const ARTIFACTS: &str = "rivet-artifacts-1";
+
+/// The manifest payload of a release's files, by file name.
+pub fn artifact_manifest(version: &str, files: &[(&str, &[u8])]) -> Result<Vec<u8>, String> {
+    let mut listed = serde_json::Map::new();
+    for (name, bytes) in files {
+        if name.contains(['/', '\\']) || name.is_empty() {
+            return Err(format!("{name:?} is not a file name"));
+        }
+        listed.insert(
+            (*name).to_owned(),
+            Value::String(hex_text(&cng::sha256(bytes)?)),
+        );
+    }
+    serde_json::to_vec(&serde_json::json!({"kind": ARTIFACTS, "version": version, "files": listed}))
+        .map_err(|error| error.to_string())
+}
+
+/// Checks a downloaded or bundled file against a signed manifest before anything installs it.
+/// The manifest must verify under the key, name the file, and hold the file's exact hash.
+/// Returns the release version the manifest names.
+pub fn check_artifact(
+    public_key: &str,
+    signed_manifest: &[u8],
+    name: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
+    let payload = open(public_key, signed_manifest)?;
+    let manifest: Value = serde_json::from_slice(payload)
+        .map_err(|error| format!("the manifest is not JSON: {error}"))?;
+    if manifest["kind"] != ARTIFACTS {
+        return Err("the signed file is not a release manifest".into());
+    }
+    let wanted = manifest["files"][name]
+        .as_str()
+        .ok_or_else(|| format!("the manifest does not list {name}"))?;
+    if !wanted.eq_ignore_ascii_case(&hex_text(&cng::sha256(bytes)?)) {
+        return Err(format!("{name} does not match its signed hash"));
+    }
+    Ok(manifest["version"].as_str().unwrap_or_default().to_owned())
+}
+
 /// Where the applied table lives, below `%LOCALAPPDATA%`. It is not in the install folder, which
 /// the person's account cannot write. Anyone who can write here still cannot forge a signature.
 pub fn store_path(local_app_data: &Path) -> PathBuf {
@@ -659,5 +703,48 @@ mod tests {
             refresh(&store, &public, "http://example.invalid/t", hour, 100),
             Ok(None)
         );
+    }
+
+    #[test]
+    fn fr8_a_release_file_with_its_signed_hash_is_accepted() {
+        let (private, public) = generate_key().unwrap();
+        let manifest = artifact_manifest(
+            "0.2.0",
+            &[
+                ("setup-0.2.0.exe", b"setup"),
+                ("rivet-0.2.0.msi", b"package"),
+            ],
+        )
+        .unwrap();
+        let signed = sign(&private, &manifest).unwrap();
+        assert_eq!(
+            check_artifact(&public, &signed, "setup-0.2.0.exe", b"setup").unwrap(),
+            "0.2.0"
+        );
+        assert!(check_artifact(&public, &signed, "rivet-0.2.0.msi", b"package").is_ok());
+    }
+
+    #[test]
+    fn fr8_a_changed_unlisted_or_unsigned_release_file_is_refused() {
+        let (private, public) = generate_key().unwrap();
+        let (other, _) = generate_key().unwrap();
+        let manifest = artifact_manifest("0.2.0", &[("setup-0.2.0.exe", b"setup")]).unwrap();
+        let signed = sign(&private, &manifest).unwrap();
+        let error = check_artifact(&public, &signed, "setup-0.2.0.exe", b"setuq").unwrap_err();
+        assert!(error.contains("signed hash"), "{error}");
+        assert!(check_artifact(&public, &signed, "setup-0.3.0.exe", b"setup").is_err());
+        let forged = sign(&other, &manifest).unwrap();
+        assert!(check_artifact(&public, &forged, "setup-0.2.0.exe", b"setup").is_err());
+        assert!(check_artifact(&public, &manifest, "setup-0.2.0.exe", b"setup").is_err());
+        assert!(artifact_manifest("0.2.0", &[("..\\setup.exe", b"setup")]).is_err());
+    }
+
+    #[test]
+    fn fr8_a_table_is_never_read_as_a_release_manifest() {
+        let (private, public) = generate_key().unwrap();
+        let table = sign(&private, &payload(7)).unwrap();
+        assert!(check_artifact(&public, &table, "setup-0.2.0.exe", b"setup").is_err());
+        let manifest = artifact_manifest("0.2.0", &[("setup-0.2.0.exe", b"setup")]).unwrap();
+        assert!(parse(&manifest).is_err());
     }
 }

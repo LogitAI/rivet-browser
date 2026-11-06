@@ -193,6 +193,92 @@ pub fn pending(candidates: Vec<Candidate>, known: &BTreeSet<(String, String)>) -
     left
 }
 
+/// The feature checks of `scripts/tests/windows-features.ps1`, which every supported browser must
+/// pass. A browser that misses one is not listed as supported, so features stay the same on all.
+pub const FEATURES: &[&str] = &[
+    "split",
+    "sidebar",
+    "newtab",
+    "space",
+    "split-start",
+    "split-menu",
+    "split-menu-start",
+    "split-drag",
+    "split-drag-start",
+    "split-shortcut",
+    "split-one-tab",
+    "split-maximised",
+    "split-space",
+    "split-click",
+    "split-rows",
+    "split-drop-top",
+    "split-drop-bottom",
+    "split-grid-3",
+    "split-grid-4",
+    "bar-layout",
+    "mini-pop-out",
+    "mini-move",
+    "mini-return",
+    "mini-close",
+    "tab-sections",
+    "tab-close-select",
+    "tab-reopen",
+    "tab-archive",
+    "ctrl-t-setting",
+    "link-new-tab",
+    "command-bar",
+    "link-preview",
+    "rivet-settings",
+    "link-rules",
+    "address-suggest",
+];
+
+/// Whether a browser may be published as supported, from the rows of a feature run
+/// (`results.json`: browser, feature, result). Every feature must read `PASS` for that browser. A
+/// feature that failed, was not driven or is missing keeps the browser off the list, because a
+/// check that could not run proves nothing. The error lists each reason.
+pub fn publish_gate(results: &Value, browser: &str) -> Result<(), Vec<String>> {
+    let rows: Vec<&Value> = match results {
+        Value::Array(rows) => rows.iter().collect(),
+        // ConvertTo-Json writes a single row as an object.
+        Value::Object(_) => vec![results],
+        _ => return Err(vec!["the feature results are not a list".to_owned()]),
+    };
+    let browser = browser.to_ascii_lowercase();
+    let mut seen: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for row in rows {
+        if row["browser"]
+            .as_str()
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+            != Some(&browser)
+        {
+            continue;
+        }
+        if let Some(feature) = row["feature"].as_str() {
+            seen.entry(feature)
+                .or_default()
+                .push(row["result"].as_str().unwrap_or("NOT_DRIVEN"));
+        }
+    }
+    let mut reasons = Vec::new();
+    for feature in FEATURES {
+        match seen.get(feature) {
+            None => reasons.push(format!("{feature}: not run")),
+            Some(results) => {
+                if let Some(other) = results.iter().find(|result| **result != "PASS") {
+                    reasons.push(format!("{feature}: {other}"));
+                }
+            }
+        }
+    }
+    if reasons.is_empty() {
+        Ok(())
+    } else {
+        Err(reasons)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +430,69 @@ mod tests {
             &known(&[("Brave", "156.1.98.63")])
         )
         .is_empty());
+    }
+
+    fn results(rows: &[(&str, &str, &str)]) -> Value {
+        Value::Array(
+            rows.iter()
+                .map(|(browser, feature, result)| {
+                    json!({"browser": browser, "feature": feature, "result": result})
+                })
+                .collect(),
+        )
+    }
+
+    fn all_pass(browser: &str) -> Vec<(&str, &'static str, &'static str)> {
+        FEATURES
+            .iter()
+            .map(|feature| (browser, *feature, "PASS"))
+            .collect()
+    }
+
+    #[test]
+    fn nfr3_a_browser_that_passed_every_feature_is_published() {
+        assert_eq!(
+            publish_gate(&results(&all_pass("chrome")), "Chrome"),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn nfr3_one_failed_or_undriven_feature_keeps_a_browser_off_the_list() {
+        let mut rows = all_pass("edge");
+        rows[3].2 = "FAIL";
+        rows[7].2 = "NOT_DRIVEN";
+        let reasons = publish_gate(&results(&rows), "edge").unwrap_err();
+        assert_eq!(reasons.len(), 2);
+        assert!(reasons[0].contains("FAIL") || reasons[1].contains("FAIL"));
+        // A pass on another run of the same feature does not hide the failure.
+        let mut twice = all_pass("edge");
+        twice.push(("edge", "split", "FAIL"));
+        assert!(publish_gate(&results(&twice), "edge").is_err());
+    }
+
+    #[test]
+    fn nfr3_a_feature_that_was_not_run_does_not_count_as_passed() {
+        let mut rows = all_pass("brave");
+        rows.retain(|row| row.1 != "sidebar");
+        rows.extend(all_pass("chrome"));
+        assert_eq!(
+            publish_gate(&results(&rows), "brave"),
+            Err(vec!["sidebar: not run".to_owned()])
+        );
+        assert!(publish_gate(&results(&all_pass("chrome")), "brave").is_err());
+        assert!(publish_gate(&json!("nonsense"), "brave").is_err());
+    }
+
+    #[test]
+    fn nfr3_the_gate_asks_for_every_feature_the_feature_script_drives() {
+        let script = include_str!("../../../../scripts/tests/windows-features.ps1");
+        let line = script
+            .lines()
+            .find(|line| line.trim_start().starts_with("[string[]]$Features"))
+            .expect("the script lists its features");
+        let listed: BTreeSet<&str> = line.split('\'').skip(1).step_by(2).collect();
+        let gated: BTreeSet<&str> = FEATURES.iter().copied().collect();
+        assert_eq!(listed, gated);
     }
 }
