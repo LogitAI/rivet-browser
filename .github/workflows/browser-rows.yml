@@ -177,6 +177,10 @@ jobs:
           ./tools/chrome-builds.exe port "$temp/prior.json" "$temp/prior.pdb" "$temp/new.pdb" "${{ steps.build.outputs.module }}" "${{ matrix.build.version }}" "$temp/row.json" "$temp/report.json"
           $code = $LASTEXITCODE
           if ($code -ne 0 -and $code -ne 3) { exit $code }
+          # Fingerprints let a Rivet find these functions in a later build that has no row yet. A row
+          # whose addresses cannot all be fingerprinted is still a good row, just without them.
+          ./tools/chrome-builds.exe fingerprint "$temp/row.json" "${{ steps.build.outputs.module }}" "$temp/row.json"
+          if ($LASTEXITCODE -ne 0) { "The row has no fingerprints." }
           "for_review=$($code -eq 3)".ToLower() >> $env:GITHUB_OUTPUT
           Get-Content "$temp/report.json"
           exit 0
@@ -204,6 +208,22 @@ jobs:
             -Rivet rivet/target/debug/rivet.exe -Runtime rivet/target/debug/rivet_runtime_windows.dll `
             -Browser "${{ steps.build.outputs.executable }}" -Work (Join-Path $temp "session")
 
+      - name: Drive every feature on the real browser
+        if: steps.made.outputs.for_review == 'false'
+        run: |
+          # A browser is listed as supported only when every feature check passed on it. A check
+          # that could not run counts as failed, so its row is not published.
+          $temp = $env:RUNNER_TEMP
+          $name = "${{ matrix.build.browser }}".ToLower()
+          $features = Join-Path $temp "session/features"
+          # The table the proof step applied lives here, and this Rivet trusts its key.
+          $env:LOCALAPPDATA = Join-Path $temp "local"
+          ./scripts/tests/windows-features.ps1 -NoBuild -Browsers $name `
+            -Executable "${{ steps.build.outputs.executable }}" -OutDir $features
+          ./tools/chrome-builds.exe gate (Join-Path $features "results.json") $name
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Content (Join-Path $temp "session/features-passed") "${{ matrix.build.version }}"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -214,6 +234,8 @@ jobs:
             ${{ runner.temp }}/part.json
             ${{ runner.temp }}/session/row.png
             ${{ runner.temp }}/session/row-failed.png
+            ${{ runner.temp }}/session/features-passed
+            ${{ runner.temp }}/session/features/results.json
           retention-days: 30
 
       - name: Ask a person about a row the generator cannot vouch for
@@ -266,10 +288,11 @@ jobs:
             throw "Set the RIVET_TABLE_SIGNING_KEY secret and the RIVET_TABLE_PUBLIC_KEY variable."
           }
           $tool = (Get-ChildItem artifacts/row-tools/chrome-builds.exe).FullName
-          # A part exists only for a row whose report had nothing for review, and only a row
-          # whose proof passed has its image.
+          # A part exists only for a row whose report had nothing for review, only a row whose
+          # proof passed has its image, and only a browser that passed every feature has its mark.
           $parts = @(Get-ChildItem artifacts/row-* -Directory | Where-Object {
-            (Test-Path "$_/part.json") -and (Test-Path "$_/session/row.png")
+            (Test-Path "$_/part.json") -and (Test-Path "$_/session/row.png") -and
+              (Test-Path "$_/session/features-passed")
           } | ForEach-Object { "$_/part.json" })
           if ($parts.Count -eq 0) { "No row passed."; "published=false" >> $env:GITHUB_OUTPUT; exit 0 }
           & $tool table-merge rivet/runtime/windows/rows/table.json @parts

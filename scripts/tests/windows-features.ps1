@@ -16,6 +16,8 @@ param(
   [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest', 'appbar-width', 'appbar-peek', 'open-link-running', 'open-link-start', 'credentials-browser', 'credentials-system', 'view-click', 'view-click-other', 'view-keys', 'view-ime', 'tab-moves', 'first-frame', 'fullscreen-sidebar', 'taskbar-identity', 'taskbar-relaunch', 'sidebar-scale-monitor', 'split-panel-look', 'sidebar-floats', 'sidebar-open-button', 'dev-row', 'address-editing', 'security-chip', 'permission-bubble', 'password-bubble', 'typing-keeps-active', 'cli-control', 'cli-input', 'cli-hidden'),
   [string]$OutDir,
   [switch]$NoBuild,
+  # A browser build outside its usual folder, such as one a row job downloaded. Needs one -Browsers.
+  [string]$Executable,
   # The run stops before a row when the output drive has less free space than this.
   [double]$MinFreeGigabytes = 20
 )
@@ -45,6 +47,10 @@ $table = [ordered]@{
   whale   = @('C:\Program Files\Naver\Naver Whale\Application\whale.exe', 'whale.exe')
   brave   = @('C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe', 'brave.exe')
   samsung = @('C:\Program Files\Samsung\Internet\Application\samsunginternet.exe', 'samsunginternet.exe')
+}
+if ($Executable) {
+  if ($Browsers.Count -ne 1) { throw '-Executable needs exactly one browser in -Browsers' }
+  $table[$Browsers[0]] = @($Executable, (Split-Path -Leaf $Executable))
 }
 
 Add-Type -AssemblyName System.Drawing
