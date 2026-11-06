@@ -2,7 +2,7 @@
 # when this passes on a launch like the installed build's. Unit tests and build rows do not count.
 #
 #   pwsh -NoProfile -File scripts/tests/windows-features.ps1 [-Browsers chrome,edge,...]
-#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview,link-rules,address-suggest] [-OutDir <dir>] [-NoBuild]
+#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview,link-rules,address-suggest,appbar-width,appbar-peek,open-link-running,open-link-start] [-OutDir <dir>] [-NoBuild]
 #
 # One row per browser and feature: PASS, FAIL or NOT_DRIVEN. NOT_DRIVEN means the scene could not
 # be set up, so the feature was not exercised. Nothing is decided from build rows or `supported`.
@@ -13,7 +13,7 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest', 'appbar-width', 'appbar-peek', 'open-link-running', 'open-link-start'),
   [string]$OutDir,
   [switch]$NoBuild,
   # The run stops before a row when the output drive has less free space than this.
@@ -1399,6 +1399,168 @@ function Invoke-AddressSuggest($Name, $shots) {
   } finally { Stop-Scene $ctx }
 }
 
+# --- FR-3 appbar width, hide and peek, and links from other apps ----------------------------
+# The docked appbar starts 276 DIP wide. Its inner 6 DIP are the resizer, and a drag sets the
+# width to the pointer's x, kept between 200 and 420 DIP.
+$appbarWidth = 276
+
+function Invoke-AppbarWidth($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'appbar-width' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    $f = $ctx.Dpi / 96.0
+    $y = [int](300 * $f)
+    $start = @(Read-Log).Count
+    # The press lands on the resizer as non-client input, then the window holds the pointer and
+    # takes client moves, as with a person's drag.
+    Send-AppbarNc $ctx 0xA1 ([int](($appbarWidth - 3) * $f)) $y
+    Start-Sleep -Milliseconds 300
+    $seen = @()
+    $shot = $null
+    foreach ($step in @(@(150, 200, 'narrow'), @(600, 420, 'wide'), @(320, 320, 'middle'))) {
+      $x, $want, $label = $step
+      $skip = @(Read-Log).Count
+      Send-ClientMouse $ctx 0x200 ([int]($x * $f)) $y 1
+      $hit = Wait-Log $skip "appbar: width $want$" 10
+      $shot = Get-Capture $ctx (Join-Path $shots "appbar-width-$label.png")
+      if (-not $hit) {
+        Send-ClientMouse $ctx 0x202 ([int]($x * $f)) $y
+        $last = @(Read-Log | Select-Object -Skip $start | Where-Object { $_ -match 'appbar: width ' }) | Select-Object -Last 1
+        if ($seen.Count -eq 0 -and -not $last) { return @('NOT_DRIVEN', $shot.Path, 'the drag on the resizer changed no width') }
+        return @('FAIL', $shot.Path, "a drag to $x DIP did not give $want DIP; last: $last")
+      }
+      $seen += $want
+    }
+    Send-ClientMouse $ctx 0x202 ([int](320 * $f)) $y
+    @('PASS', $shot.Path, "the drag gave $($seen -join ', ') DIP for 150, 600 and 320; check the captures for the page edge")
+  } finally { Stop-Scene $ctx }
+}
+
+function Invoke-AppbarPeek($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'appbar-peek' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    $f = $ctx.Dpi / 96.0
+    # The real pointer is never over the off-screen window, which would end a peek at once. This
+    # flag keeps the peek until the posted pointer leaves.
+    $hold = Join-Path $flagDir 'rivet-hold-peek.flag'
+    [IO.File]::WriteAllText($hold, '')
+    # The toggle is the 28 DIP button 8 DIP right of the page panel's leading edge, 16 DIP down.
+    $skip = @(Read-Log).Count
+    Send-AppbarClick $ctx ([int](($appbarWidth + 8 + 14) * $f)) ([int]((16 + 14) * $f))
+    $hidden = Wait-Log $skip 'appbar: hidden true' 10
+    $one = Get-Capture $ctx (Join-Path $shots 'appbar-peek-1-hidden.png')
+    if (-not $hidden) { return @('NOT_DRIVEN', $one.Path, 'the toggle click did not hide the appbar') }
+    $skip = @(Read-Log).Count
+    Send-ClientMouse $ctx 0x200 ([int](4 * $f)) ([int](300 * $f))
+    $peek = Wait-Log $skip 'appbar: peek true' 10
+    Start-Sleep 1
+    $two = Get-Capture $ctx (Join-Path $shots 'appbar-peek-2-peek.png')
+    if (-not $peek) { return @('FAIL', $two.Path, 'the pointer at the left edge did not show the hidden appbar') }
+    # A point inside the floating appbar keeps it.
+    $skip = @(Read-Log).Count
+    Send-ClientMouse $ctx 0x200 ([int](120 * $f)) ([int](300 * $f))
+    if (Wait-Log $skip 'appbar: peek false' 2) { return @('FAIL', $two.Path, 'the peek left while the pointer was over the floating appbar') }
+    Remove-Item $hold -ErrorAction SilentlyContinue
+    $skip = @(Read-Log).Count
+    Send-ClientMouse $ctx 0x200 ([int](($appbarWidth + 300) * $f)) ([int](300 * $f))
+    $gone = Wait-Log $skip 'appbar: peek false' 10
+    $three = Get-Capture $ctx (Join-Path $shots 'appbar-peek-3-left.png')
+    if (-not $gone) { return @('FAIL', $three.Path, 'the peek stayed after the pointer left it') }
+    @('PASS', $two.Path, 'the toggle hid the appbar, the left edge showed it, and it went when the pointer left; check the captures against the mockup')
+  } finally { Stop-Scene $ctx }
+}
+
+# Windows runs `rivet-launcher.exe --open-link <address>` when Rivet is the default browser. The
+# launcher reads the saved setup and the session list below the local application data folder, so
+# this row gives it a folder of its own in the output and never the owner's.
+function New-LinkRoot($Name, [string]$Mode, [string]$ExePath) {
+  $root = Join-Path $OutDir "local-$Name-open-link-$Mode"
+  Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+  $config = Join-Path $root 'Rivet\config'
+  New-Item -ItemType Directory -Force $config | Out-Null
+  $setup = @{ version = 1; browser = $ExePath; profile = 'Link' } | ConvertTo-Json -Compress
+  [IO.File]::WriteAllText((Join-Path $config 'setup.json'), $setup)
+  $root
+}
+
+# Runs the launcher for one link with `$Root` as its local application data folder, and returns
+# its exit code, or $null when it did not finish.
+function Invoke-Launcher([string]$Root, [string]$Url) {
+  $old = $env:LOCALAPPDATA
+  $env:LOCALAPPDATA = $Root
+  try {
+    $p = Start-Process -FilePath (Join-Path $debug 'rivet-launcher.exe') -ArgumentList '--open-link', $Url -PassThru
+    # The launcher waits at most 30 seconds for a new window to take the link.
+    if (-not $p.WaitForExit(45000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; return $null }
+    $p.ExitCode
+  } finally { $env:LOCALAPPDATA = $old }
+}
+
+function Invoke-OpenLink($Name, $shots, [string]$Mode) {
+  $feature = "open-link-$Mode"
+  $exePath, $exeName = $table[$Name]
+  if (-not (Test-Path (Join-Path $debug 'rivet-launcher.exe'))) { return @('NOT_DRIVEN', $null, 'rivet-launcher.exe was not built') }
+  $root = New-LinkRoot $Name $Mode $exePath
+  $link = "http://127.0.0.1:9/handoff-$Mode"
+  $ctx = $null
+  $started = $null
+  try {
+    if ($Mode -eq 'running') {
+      $ctx, $state = Start-Scene $Name $feature $urlA
+      # The window registers in the session list the launcher reads.
+      $state = Join-Path $root 'Rivet\state\sessions.json'
+      New-Item -ItemType Directory -Force (Split-Path $state) | Out-Null
+      $old = $env:LOCALAPPDATA; $env:LOCALAPPDATA = $root
+      try { Open-Scene $ctx $state $urlA $null } finally { $env:LOCALAPPDATA = $old }
+      if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+      if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+      $code = Invoke-Launcher $root $link
+      if ($null -eq $code) { return @('FAIL', $null, 'the launcher did not finish') }
+      Start-Sleep 3
+      if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
+      $urls = @(Get-TabUrls)
+      $shot = Get-Capture $ctx (Join-Path $shots "$feature.png")
+      $fresh = @(Get-ProcessList $exeName | Where-Object { $_.CommandLine -like "*$root\Rivet\profiles*" })
+      if ($fresh.Count) { return @('FAIL', $shot.Path, 'the launcher started another window instead of using the running one') }
+      if ($code -ne 0) { return @('FAIL', $shot.Path, "the launcher exited $code") }
+      if (-not ($urls | Where-Object { $_ -match [regex]::Escape($link) })) { return @('FAIL', $shot.Path, "the link is not a tab of the running window: $($urls -join ' ')") }
+      return @('PASS', $shot.Path, "the running window took the link as a tab: $($urls.Count) tabs")
+    }
+    # No Rivet window: the launcher starts the saved session. Its profile folder is where the
+    # setup names it, so the trace and debug switches can be put there before the launch.
+    $key = switch ($exeName) { 'msedge.exe' { 'edge' } 'samsunginternet.exe' { 'samsung' } default { [IO.Path]::GetFileNameWithoutExtension($exeName).ToLowerInvariant() } }
+    $started = Join-Path $root "Rivet\profiles\$key\Link"
+    $script:flagDir = Join-Path $started 'rivet-debug'
+    New-Item -ItemType Directory -Force $script:flagDir | Out-Null
+    $script:logFile = Join-Path $script:flagDir 'rivet-vertical-tabs.log'
+    [IO.File]::WriteAllText($logFile, '')
+    if ($appWindowRvas.Contains($Name)) { Set-Content (Join-Path $flagDir 'rivet-spike.txt') $appWindowRvas[$Name] }
+    $code = Invoke-Launcher $root $link
+    $ctx = [pscustomobject]@{ Name = $Name; ExeName = $exeName; ExePath = $exePath; Profile = $started; Hwnd = [IntPtr]::Zero; Error = $null; Dpi = 96; Feature = $feature }
+    $mine = Get-MyProcesses $exeName $started | Where-Object { $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
+    if (-not $mine) { return @('FAIL', $null, "the launcher started no browser on the saved profile (exit $code)") }
+    $ctx.Hwnd = (Get-Process -Id $mine.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle
+    if ($ctx.Hwnd -and $ctx.Hwnd -ne [IntPtr]::Zero) { $ctx.Dpi = [FeatureWin]::GetDpiForWindow($ctx.Hwnd) }
+    if ($null -eq $code) { return @('FAIL', $null, 'the launcher did not finish') }
+    if ($code -ne 0) { return @('FAIL', $null, "the launcher exited $code") }
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
+    $urls = @(Get-TabUrls)
+    $shot = if ($ctx.Hwnd -and $ctx.Hwnd -ne [IntPtr]::Zero) { Get-Capture $ctx (Join-Path $shots "$feature.png") } else { $null }
+    $path = if ($shot) { $shot.Path } else { $null }
+    if (-not ($urls | Where-Object { $_ -match [regex]::Escape($link) })) { return @('FAIL', $path, "the link is not a tab of the started window: $($urls -join ' ')") }
+    @('PASS', $path, "the saved session started and its window took the link: $($urls -join ' ')")
+  } finally {
+    if ($ctx) { Stop-Scene $ctx }
+    if ($started) { Stop-Mine $exeName $started }
+    Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+  }
+}
+
 # --- Run ---------------------------------------------------------------------------------
 foreach ($name in $Browsers) {
   $exePath, $exeName = $table[$name]
@@ -1452,6 +1614,10 @@ foreach ($name in $Browsers) {
         'rivet-settings' { Invoke-RivetSettings $name $shots }
         'link-rules' { Invoke-LinkRules $name $shots }
         'address-suggest' { Invoke-AddressSuggest $name $shots }
+        'appbar-width' { Invoke-AppbarWidth $name $shots }
+        'appbar-peek' { Invoke-AppbarPeek $name $shots }
+        'open-link-running' { Invoke-OpenLink $name $shots 'running' }
+        'open-link-start' { Invoke-OpenLink $name $shots 'start' }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason
