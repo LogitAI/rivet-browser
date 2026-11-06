@@ -2302,8 +2302,16 @@ pub unsafe fn attach(window: HWND) -> bool {
         return false;
     }
     SetPropW(window, key.as_ptr(), replaced as _);
+    // The window stays cloaked until it has Rivet's look, so no frame shows the browser's own strip.
+    crate::features::look::first_look(window, crate::features::look::FirstLook::Attached);
     // DirectComposition targets and frame changes belong on the UI thread that owns the window.
-    PostMessageW(window, attach_message(), 0, 0) != 0
+    let posted = PostMessageW(window, attach_message(), 0, 0) != 0;
+    if posted {
+        crate::features::control::serve(window);
+    } else {
+        crate::features::look::first_look(window, crate::features::look::FirstLook::AttachFailed);
+    }
+    posted
 }
 
 unsafe fn call_browser(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -3093,6 +3101,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         update_appbar(window);
         return 0;
     }
+    if message == crate::features::control::message() && attached(window) {
+        crate::features::control::take(window, lparam);
+        return 0;
+    }
     if message == windows_sys::Win32::UI::WindowsAndMessaging::WM_COPYDATA && attached(window) {
         if let Some(result) = crate::features::link_rules::copy_data(window, lparam) {
             return result;
@@ -3642,6 +3654,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             let original: WNDPROC = std::mem::transmute(original);
             CallWindowProcW(original, window, message, wparam, lparam)
         }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
+            if crate::features::look::on_timer(window, wparam) =>
+        {
+            0
+        }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam == OPEN_LATER_TIMER => {
             windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, OPEN_LATER_TIMER);
             let due: Vec<_> = OPEN_LATER.with(|later| {
@@ -3855,6 +3872,33 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                             crate::trace::trace(&format!("address bar suggestions {found:?}"));
                             found.is_some()
                         }
+                        // `baranchors` traces where the address and its security chip sit, so a
+                        // test can click the chip; `baredit copy|cut|paste|undo|selectall` edits the
+                        // field through the text engine as the keyboard shortcuts do; `devactions`
+                        // traces the developer row's buttons.
+                        Some("baranchors") => {
+                            let anchors = crate::features::address_bar::anchors(window);
+                            crate::trace::trace(&format!(
+                                "address bar anchors {anchors:?} dpi {}",
+                                layout_dpi(window)
+                            ));
+                            anchors.is_some()
+                        }
+                        Some("baredit") => {
+                            let word = text.trim().trim_start_matches("baredit").trim();
+                            crate::features::address_bar::edit_for_test(window, word)
+                        }
+                        Some("devactions") => {
+                            let actions: Vec<_> = crate::features::dev_page::dev_actions()
+                                .into_iter()
+                                .map(|(action, _)| action)
+                                .collect();
+                            crate::trace::trace(&format!(
+                                "dev mode {} actions {actions:?}",
+                                crate::features::dev_page::window_in_dev_mode(window)
+                            ));
+                            true
+                        }
                         Some("barimedone") => {
                             crate::features::address_bar::finish_composition_for_test(window)
                         }
@@ -3954,9 +3998,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ if message == attach_message() => {
+            crate::features::look::first_look(window, crate::features::look::FirstLook::UiThread);
             crate::features::tab_list::connect_command_bar();
             create_appbar(window);
             crate::features::window_corners::keep_round(window);
+            crate::features::look::first_look(window, crate::features::look::FirstLook::RivetDrawn);
             0
         }
         _ => call_browser(window, message, wparam, lparam),

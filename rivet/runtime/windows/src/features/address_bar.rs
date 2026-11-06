@@ -1349,6 +1349,37 @@ pub(crate) unsafe fn finish_composition_for_test(window: HWND) -> bool {
     done != 0
 }
 
+/// The text engine message an edit command of a test stands for: the one the engine runs for the
+/// keyboard shortcut. A test cannot hold Ctrl down without taking the focus.
+pub(crate) fn edit_message(word: &str) -> Option<(u32, usize, isize)> {
+    match word {
+        "cut" => Some((0x0300, 0, 0)),
+        "copy" => Some((0x0301, 0, 0)),
+        "paste" => Some((0x0302, 0, 0)),
+        "undo" => Some((0x00C7, 0, 0)),
+        "selectall" => Some((0x00B1, 0, -1)),
+        _ => None,
+    }
+}
+
+/// Runs an edit command on the field being edited, for tests, and traces its text afterwards.
+pub(crate) unsafe fn edit_for_test(window: HWND, word: &str) -> bool {
+    let Some((message, wparam, lparam)) = edit_message(word) else {
+        return false;
+    };
+    let editing = with_bar(window, |bar| bar.editing && bar.field.is_some());
+    if !editing {
+        return false;
+    }
+    let used = forward(window, message, wparam, lparam).is_some();
+    crate::trace::trace(&format!(
+        "address bar edit {word}: {used} text {:?}",
+        text(window)
+    ));
+    crate::frame::update_appbar(window);
+    used
+}
+
 /// What a message to the bar needs drawn again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Redraw {
@@ -1392,6 +1423,16 @@ pub(crate) fn caret(window: HWND) -> Option<RECT> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_edit_commands_are_the_text_engines_own_clipboard_and_undo_messages() {
+        assert_eq!(edit_message("copy"), Some((0x0301, 0, 0)));
+        assert_eq!(edit_message("cut"), Some((0x0300, 0, 0)));
+        assert_eq!(edit_message("paste"), Some((0x0302, 0, 0)));
+        assert_eq!(edit_message("undo"), Some((0x00C7, 0, 0)));
+        assert_eq!(edit_message("selectall"), Some((0x00B1, 0, -1)));
+        assert_eq!(edit_message("bold"), None);
+    }
 
     #[test]
     fn fr12_inline_completion_is_asked_only_while_typing_at_the_end() {

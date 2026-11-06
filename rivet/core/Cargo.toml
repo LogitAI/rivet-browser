@@ -10,5 +10,6 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+rivet-protocol = { path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true

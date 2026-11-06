@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 rivet-core.workspace = true
+rivet-protocol = { path = "../../protocol" }
 serde.workspace = true
 serde_json.workspace = true
 windows-sys.workspace = true

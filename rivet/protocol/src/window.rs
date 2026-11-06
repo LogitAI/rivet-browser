@@ -3,6 +3,10 @@
 //! A window message carries two numbers, so each command is encoded into `wparam` and `lparam`
 //! here, once, and both the sender and the runtime use these functions.
 
+/// The environment variable Rivet sets for a browser it starts hidden. The runtime cloaks the first
+/// window it attaches to in such a process, before the window is ever shown.
+pub const HIDDEN_START_VARIABLE: &str = "RIVET_START_HIDDEN";
+
 /// The registered window message that carries a Mini Window command.
 pub const MINI_WINDOW_MESSAGE: &str = "Rivet.MiniWindow";
 
