@@ -602,13 +602,15 @@ unsafe extern "system" fn mini_proc(
 ) -> LRESULT {
     use windows_sys::Win32::Foundation::POINT as WinPoint;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, WM_MOUSELEAVE,
+        ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, KillTimer, SetWindowLongPtrW, GWLP_WNDPROC, HTCAPTION, WM_CLOSE,
         WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
         WM_MOUSEMOVE, WM_MOVING, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_SIZE, WM_TIMER,
     };
+    // `WM_MOUSELEAVE`, which `windows-sys` does not export.
+    const WM_MOUSELEAVE: u32 = 0x02A3;
     if !is_mini(mini) {
         return call_original(mini, message, wparam, lparam);
     }
