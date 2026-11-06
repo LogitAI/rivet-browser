@@ -14,6 +14,13 @@ pub struct SessionRecord {
     pub window_handle: isize,
     pub process_id: u32,
     pub url: String,
+    /// `visible` or `hidden`, as the session started. Records from before this field are visible.
+    #[serde(default = "visible")]
+    pub display: String,
+}
+
+fn visible() -> String {
+    "visible".into()
 }
 
 /// A file-backed collection of Rivet-owned browser windows.
@@ -97,6 +104,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fr5_a_record_without_a_display_reads_as_visible() {
+        let record: SessionRecord = serde_json::from_str(
+            r#"{"id":"a","browser":"C:/b.exe","window_handle":1,"process_id":2,"url":"about:blank"}"#,
+        )
+        .unwrap();
+        assert_eq!(record.display, "visible");
+    }
+
+    #[test]
     fn fr1_registry_lists_and_removes_only_the_requested_session() {
         let mut registry = SessionRegistry::default();
         registry
@@ -106,6 +122,7 @@ mod tests {
                 window_handle: 1,
                 process_id: 10,
                 url: "https://one.test/".into(),
+                display: "visible".into(),
             })
             .unwrap();
         registry
@@ -115,6 +132,7 @@ mod tests {
                 window_handle: 2,
                 process_id: 10,
                 url: "https://two.test/".into(),
+                display: "hidden".into(),
             })
             .unwrap();
         assert_eq!(registry.remove("one").unwrap().window_handle, 1);

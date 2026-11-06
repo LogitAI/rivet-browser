@@ -5,6 +5,7 @@ pub(crate) mod address_bar;
 pub(crate) mod app_window;
 pub(crate) mod bubble_anchor;
 pub(crate) mod command_bar;
+pub(crate) mod control;
 pub(crate) mod dev_page;
 pub(crate) mod dev_tools;
 pub(crate) mod field_caret;

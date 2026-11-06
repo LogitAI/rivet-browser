@@ -2,7 +2,7 @@
 # when this passes on a launch like the installed build's. Unit tests and build rows do not count.
 #
 #   pwsh -NoProfile -File scripts/tests/windows-features.ps1 [-Browsers chrome,edge,...]
-#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview,link-rules,address-suggest,appbar-width,appbar-peek,open-link-running,open-link-start,credentials-browser,credentials-system,view-ime,tab-moves,first-frame] [-OutDir <dir>] [-NoBuild]
+#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview,link-rules,address-suggest,appbar-width,appbar-peek,open-link-running,open-link-start,credentials-browser,credentials-system,view-ime,tab-moves,first-frame,cli-control,cli-input,cli-hidden] [-OutDir <dir>] [-NoBuild]
 #
 # One row per browser and feature: PASS, FAIL or NOT_DRIVEN. NOT_DRIVEN means the scene could not
 # be set up, so the feature was not exercised. Nothing is decided from build rows or `supported`.
@@ -13,7 +13,7 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest', 'appbar-width', 'appbar-peek', 'open-link-running', 'open-link-start', 'credentials-browser', 'credentials-system', 'view-click', 'view-click-other', 'view-keys', 'view-ime', 'tab-moves', 'first-frame', 'fullscreen-sidebar', 'taskbar-identity', 'taskbar-relaunch', 'sidebar-scale-monitor', 'split-panel-look', 'sidebar-floats', 'sidebar-open-button', 'dev-row', 'address-editing', 'security-chip', 'permission-bubble', 'password-bubble', 'typing-keeps-active'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest', 'appbar-width', 'appbar-peek', 'open-link-running', 'open-link-start', 'credentials-browser', 'credentials-system', 'view-click', 'view-click-other', 'view-keys', 'view-ime', 'tab-moves', 'first-frame', 'fullscreen-sidebar', 'taskbar-identity', 'taskbar-relaunch', 'sidebar-scale-monitor', 'split-panel-look', 'sidebar-floats', 'sidebar-open-button', 'dev-row', 'address-editing', 'security-chip', 'permission-bubble', 'password-bubble', 'typing-keeps-active', 'cli-control', 'cli-input', 'cli-hidden'),
   [string]$OutDir,
   [switch]$NoBuild,
   # The run stops before a row when the output drive has less free space than this.
@@ -2384,6 +2384,118 @@ function Invoke-TypingKeepsActive($Name, $shots) {
 }
 # --- End of the window surface rows -----------------------------------------------------------
 
+# Runs one `rivet` control command of the scene's session with --json and returns the exit code and
+# the parsed answer.
+function Invoke-Rivet($ctx, $state, [string[]]$Words) {
+  $out = & (Join-Path $debug 'rivet.exe') @Words --id $ctx.SessionId --state $state --json 2>&1 | ForEach-Object { [string]$_ }
+  $code = $LASTEXITCODE
+  $line = $out | Where-Object { $_.StartsWith('{') } | Select-Object -Last 1
+  $value = if ($line) { try { $line | ConvertFrom-Json } catch { $null } } else { $null }
+  [pscustomobject]@{ Code = $code; Value = $value; Text = ($out -join ' ') }
+}
+
+# Pages, navigation, reads and workspaces through `rivet`, checked against what the browser reports.
+function Invoke-CliControl($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'cli-control' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if (-not $ctx.SessionId) { return @('NOT_DRIVEN', $null, 'the session reported no id') }
+    $notes = @()
+    $r = Invoke-Rivet $ctx $state @('page', 'open', $urlB)
+    if ($r.Code -ne 0) { return @('FAIL', $null, "page open exited $($r.Code): $($r.Text)") }
+    Start-Sleep 3
+    $r = Invoke-Rivet $ctx $state @('page', 'list')
+    $urls = @($r.Value.pages | ForEach-Object { $_.url })
+    if (-not ($urls | Where-Object { $_ -like '*page-a.html' }) -or -not ($urls | Where-Object { $_ -like '*page-b.html' })) { return @('FAIL', $null, "page list does not show the frame page and the CLI page: $($urls -join ' ')") }
+    $notes += "page list shows $($urls.Count) pages"
+    $r = Invoke-Rivet $ctx $state @('nav', 'go', $urlC)
+    if ($r.Code -ne 0) { return @('FAIL', $null, "nav go exited $($r.Code): $($r.Text)") }
+    Start-Sleep 3
+    $r = Invoke-Rivet $ctx $state @('read', 'url')
+    if ($r.Value.value -notlike '*page-c.html') { return @('FAIL', $null, "read url after nav go: $($r.Text)") }
+    $r = Invoke-Rivet $ctx $state @('read', 'title')
+    if ($r.Value.value -ne 'page-c') { return @('FAIL', $null, "read title after nav go: $($r.Text)") }
+    $r = Invoke-Rivet $ctx $state @('nav', 'back')
+    Start-Sleep 3
+    $r = Invoke-Rivet $ctx $state @('read', 'url')
+    if ($r.Value.value -notlike '*page-b.html') { return @('FAIL', $null, "read url after nav back: $($r.Text)") }
+    $notes += 'nav go, read url and title, nav back worked'
+    $r = Invoke-Rivet $ctx $state @('workspace', 'list')
+    if ($r.Code -ne 0 -or @($r.Value.workspaces).Count -lt 1) { return @('FAIL', $null, "workspace list: $($r.Text)") }
+    $notes += "workspace list shows $(@($r.Value.workspaces).Count)"
+    $r = Invoke-Rivet $ctx $state @('page', 'close', '1')
+    Start-Sleep 2
+    $r = Invoke-Rivet $ctx $state @('page', 'list')
+    if (@($r.Value.pages).Count -ne ($urls.Count - 1)) { return @('FAIL', $null, "page close left $(@($r.Value.pages).Count) pages") }
+    $cap = Get-Capture $ctx (Join-Path $shots 'cli-control.png')
+    @('PASS', $cap.Path, (($notes + 'page close removed the page') -join '; '))
+  } finally { Stop-Scene $ctx }
+}
+
+# Typing and a key through `rivet input`: the page copies its field into its title.
+function Invoke-CliInput($Name, $shots) {
+  $path = Join-Path $pageDir 'input.html'
+  [IO.File]::WriteAllText($path, "<!doctype html><meta charset=utf-8><title>empty</title><input id=f autofocus style='font-size:40px' oninput='document.title=this.value' onkeydown=`"if(event.key==='Enter')document.title='enter:'+this.value`">")
+  $url = 'file:///' + ($path -replace '\\', '/')
+  $ctx, $state = Start-Scene $Name 'cli-input' $url
+  try {
+    Open-Scene $ctx $state $url $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    $r = Invoke-Rivet $ctx $state @('input', 'click', '200', '200')
+    $r = Invoke-Rivet $ctx $state @('input', 'type', 'rivet')
+    if ($r.Code -ne 0) { return @('FAIL', $null, "input type exited $($r.Code): $($r.Text)") }
+    Start-Sleep 2
+    $typed = (Invoke-Rivet $ctx $state @('read', 'title')).Value.value
+    $r = Invoke-Rivet $ctx $state @('input', 'key', 'enter')
+    Start-Sleep 2
+    $entered = (Invoke-Rivet $ctx $state @('read', 'title')).Value.value
+    $cap = Get-Capture $ctx (Join-Path $shots 'cli-input.png')
+    if ($typed -ne 'rivet') { return @('FAIL', $cap.Path, "typed text did not reach the page field: title $typed") }
+    if ($entered -ne 'enter:rivet') { return @('FAIL', $cap.Path, "Enter did not reach the page: title $entered") }
+    @('PASS', $cap.Path, 'typed text and Enter reached the page field')
+  } finally { Stop-Scene $ctx }
+}
+
+# A hidden session: cloaked, still navigating; a frame read is refused under hidden and shows the
+# window under auto. The window stays off-screen because the test sets RIVET_KEEP_OFFSCREEN.
+function Invoke-CliHidden($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'cli-hidden' $urlA
+  $env:RIVET_KEEP_OFFSCREEN = '1'
+  try {
+    Open-Scene $ctx $state $urlA $null @('--display', 'hidden')
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if (-not $ctx.SessionId) { return @('NOT_DRIVEN', $null, 'the hidden session reported no id') }
+    if (-not [CloakWin]::Cloaked($ctx.Hwnd)) { return @('FAIL', $null, 'the hidden session window is not cloaked') }
+    $r = Invoke-Rivet $ctx $state @('nav', 'go', $urlB, '--display', 'hidden')
+    Start-Sleep 3
+    $r = Invoke-Rivet $ctx $state @('read', 'url', '--display', 'hidden')
+    if ($r.Value.value -notlike '*page-b.html') { return @('FAIL', $null, "a hidden session did not navigate: $($r.Text)") }
+    if (-not [CloakWin]::Cloaked($ctx.Hwnd)) { return @('FAIL', $null, 'navigation showed the hidden window') }
+    $bmp = Join-Path $shots 'cli-hidden-frame.bmp'
+    $r = Invoke-Rivet $ctx $state @('read', 'frame', '--out', $bmp, '--display', 'hidden')
+    if ($r.Code -eq 0 -or $r.Value.error -ne 'needs_visible') { return @('FAIL', $null, "a hidden frame read was not refused with a reason: $($r.Text)") }
+    if (-not [CloakWin]::Cloaked($ctx.Hwnd)) { return @('FAIL', $null, 'the refused frame read showed the window') }
+    $r = Invoke-Rivet $ctx $state @('read', 'frame', '--out', $bmp, '--display', 'auto')
+    if ($r.Code -ne 0 -or -not $r.Value.promoted -or -not (Test-Path $bmp)) { return @('FAIL', $null, "auto did not show the window for a frame read: $($r.Text)") }
+    if ([CloakWin]::Cloaked($ctx.Hwnd)) { return @('FAIL', $bmp, 'auto reported a promotion but the window is still cloaked') }
+    @('PASS', $bmp, 'hidden window cloaked and navigating; hidden frame read refused with needs_visible; auto showed it and wrote the capture; open the bitmap to check it')
+  } finally { Remove-Item Env:\RIVET_KEEP_OFFSCREEN -ErrorAction SilentlyContinue; Stop-Scene $ctx }
+}
+
+# --- CLI control channel -------------------------------------------------------------------
+Add-Type -TypeDefinition @'
+using System;using System.Runtime.InteropServices;
+public static class CloakWin{
+ [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h,int a,out int v,int n);
+ // DWMWA_CLOAKED: non-zero while the window manager keeps the window off every screen.
+ public static bool Cloaked(IntPtr h){int v;return DwmGetWindowAttribute(h,14,out v,4)==0&&v!=0;}
+}
+'@
+
 # --- Run ---------------------------------------------------------------------------------
 foreach ($name in $Browsers) {
   $exePath, $exeName = $table[$name]
@@ -2462,6 +2574,9 @@ foreach ($name in $Browsers) {
         'permission-bubble' { Invoke-PermissionBubble $name $shots }
         'password-bubble' { Invoke-PasswordBubble $name $shots }
         'typing-keeps-active' { Invoke-TypingKeepsActive $name $shots }
+        'cli-control' { Invoke-CliControl $name $shots }
+        'cli-input' { Invoke-CliInput $name $shots }
+        'cli-hidden' { Invoke-CliHidden $name $shots }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason

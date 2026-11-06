@@ -18,10 +18,191 @@ message HelloRejected {
   string reason = 1;
 }
 
+// How a browser task may show itself. `auto` shows the window only when the command needs
+// visual evidence. Unspecified is read as `auto`.
+enum DisplayPolicy {
+  DISPLAY_POLICY_UNSPECIFIED = 0;
+  DISPLAY_POLICY_VISIBLE = 1;
+  DISPLAY_POLICY_HIDDEN = 2;
+  DISPLAY_POLICY_AUTO = 3;
+}
+
+// Whether a session's window is shown now.
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0;
+  VISIBILITY_VISIBLE = 1;
+  VISIBILITY_HIDDEN = 2;
+}
+
+// A page of the session's window. Without an index the command acts on the active page.
+message PageTarget {
+  optional uint32 index = 1;
+}
+
+message PageList {}
+
+message PageOpen {
+  string url = 1;
+}
+
+message PageClose {
+  uint32 index = 1;
+}
+
+message PageSelect {
+  uint32 index = 1;
+}
+
+message Navigate {
+  PageTarget page = 1;
+  string url = 2;
+}
+
+enum NavStep {
+  NAV_STEP_UNSPECIFIED = 0;
+  NAV_STEP_BACK = 1;
+  NAV_STEP_FORWARD = 2;
+  NAV_STEP_RELOAD = 3;
+}
+
+message NavigationStep {
+  PageTarget page = 1;
+  NavStep step = 2;
+}
+
+message InputText {
+  PageTarget page = 1;
+  string text = 2;
+}
+
+// A left click at a point of the window's client area, in physical pixels.
+message InputClick {
+  PageTarget page = 1;
+  int32 x = 2;
+  int32 y = 3;
+}
+
+message InputKey {
+  PageTarget page = 1;
+  string key = 2;
+}
+
+enum ReadField {
+  READ_FIELD_UNSPECIFIED = 0;
+  READ_FIELD_URL = 1;
+  READ_FIELD_TITLE = 2;
+  READ_FIELD_TEXT = 3;
+}
+
+message ReadPage {
+  PageTarget page = 1;
+  ReadField field = 2;
+}
+
+// A capture of the window as the person would see it. This is visual evidence.
+message ReadFrame {}
+
+message WorkspaceList {}
+
+message WorkspaceSwitch {
+  string name = 1;
+}
+
+// Shows or hides the session's window.
+message SetVisibility {
+  Visibility visibility = 1;
+}
+
+message ControlRequest {
+  DisplayPolicy display = 1;
+  oneof command {
+    PageList page_list = 10;
+    PageOpen page_open = 11;
+    PageClose page_close = 12;
+    PageSelect page_select = 13;
+    Navigate navigate = 20;
+    NavigationStep nav_step = 21;
+    InputText input_text = 30;
+    InputClick input_click = 31;
+    InputKey input_key = 32;
+    ReadPage read_page = 40;
+    ReadFrame read_frame = 41;
+    WorkspaceList workspace_list = 50;
+    WorkspaceSwitch workspace_switch = 51;
+    SetVisibility set_visibility = 60;
+  }
+}
+
+message Page {
+  uint32 index = 1;
+  bool active = 2;
+  string title = 3;
+  string url = 4;
+}
+
+message Pages {
+  repeated Page pages = 1;
+}
+
+message Workspace {
+  string name = 1;
+  bool current = 2;
+}
+
+message Workspaces {
+  repeated Workspace workspaces = 1;
+}
+
+message Text {
+  string value = 1;
+}
+
+// Top-down rows of blue, green, red and alpha bytes.
+message Frame {
+  uint32 width = 1;
+  uint32 height = 2;
+  bytes bgra = 3;
+}
+
+message Done {}
+
+enum FailureKind {
+  FAILURE_KIND_UNSPECIFIED = 0;
+  FAILURE_KIND_BAD_REQUEST = 1;
+  FAILURE_KIND_NOT_FOUND = 2;
+  // The browser build does not offer the function the command needs.
+  FAILURE_KIND_UNAVAILABLE = 3;
+  // The command needs visual evidence and the policy forbids showing the window.
+  FAILURE_KIND_NEEDS_VISIBLE = 4;
+  FAILURE_KIND_BROWSER_REFUSED = 5;
+}
+
+message ControlFailure {
+  FailureKind kind = 1;
+  string reason = 2;
+}
+
+message ControlResponse {
+  // The session's visibility after the command.
+  Visibility visibility = 1;
+  // Whether this command showed a hidden window.
+  bool promoted = 2;
+  oneof result {
+    Done done = 10;
+    Pages pages = 11;
+    Text text = 12;
+    Workspaces workspaces = 13;
+    Frame frame = 14;
+    ControlFailure failure = 15;
+  }
+}
+
 message Envelope {
   oneof message {
     Hello hello = 1;
     HelloAccepted hello_accepted = 2;
     HelloRejected hello_rejected = 3;
+    ControlRequest request = 4;
+    ControlResponse response = 5;
   }
 }
