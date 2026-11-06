@@ -191,7 +191,7 @@ mod tests {
                 assert!(due <= LONGEST_HIDE_MS, "{moment:?} hides for {due} ms");
             }
         }
-        assert!(REVEAL_AFTER_MS < LONGEST_HIDE_MS);
+        const { assert!(REVEAL_AFTER_MS < LONGEST_HIDE_MS) };
         // The timer itself shows the window and stops.
         assert_eq!(reveal_in(FirstLook::Timer), None);
     }
