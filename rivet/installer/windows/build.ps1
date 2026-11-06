@@ -72,13 +72,19 @@ Copy-Item (Join-Path $rivet "runtime\windows\fonts\OFL-*.txt") $stage
 
 # Authenticode: with RIVET_CODE_SIGN_CERT (a certificate thumbprint in the build account's store),
 # every program file, the package and setup.exe are signed, so Windows can tell a changed file.
+# RIVET_TIMESTAMP_URL is the RFC 3161 timestamp service of the certificate's issuer. The timestamp
+# keeps old releases trusted after the certificate expires, so signing refuses to run without it.
+# No service is built in: it follows whichever issuer signs Rivet.
 $signtool = $null
 if ($env:RIVET_CODE_SIGN_CERT) {
+    if (-not $env:RIVET_TIMESTAMP_URL) {
+        throw "RIVET_CODE_SIGN_CERT is set but RIVET_TIMESTAMP_URL is not: set the certificate issuer's timestamp service"
+    }
     $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
 }
 function Sign-Files([string[]]$Files) {
     if (-not $signtool) { return }
-    & $signtool sign /sha1 $env:RIVET_CODE_SIGN_CERT /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 @Files
+    & $signtool sign /sha1 $env:RIVET_CODE_SIGN_CERT /fd SHA256 /tr $env:RIVET_TIMESTAMP_URL /td SHA256 @Files
     if ($LASTEXITCODE -ne 0) { throw "signing $($Files -join ', ') failed" }
 }
 Sign-Files @(Get-ChildItem $stage -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' } | ForEach-Object FullName)
