@@ -2313,8 +2313,14 @@ pub unsafe fn attach(window: HWND) -> bool {
         return false;
     }
     SetPropW(window, key.as_ptr(), replaced as _);
+    // The window stays cloaked until it has Rivet's look, so no frame shows the browser's own strip.
+    crate::features::look::first_look(window, crate::features::look::FirstLook::Attached);
     // DirectComposition targets and frame changes belong on the UI thread that owns the window.
-    PostMessageW(window, attach_message(), 0, 0) != 0
+    let posted = PostMessageW(window, attach_message(), 0, 0) != 0;
+    if !posted {
+        crate::features::look::first_look(window, crate::features::look::FirstLook::AttachFailed);
+    }
+    posted
 }
 
 unsafe fn call_browser(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -3658,6 +3664,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             let original: WNDPROC = std::mem::transmute(original);
             CallWindowProcW(original, window, message, wparam, lparam)
         }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
+            if crate::features::look::on_timer(window, wparam) =>
+        {
+            0
+        }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam == OPEN_LATER_TIMER => {
             windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, OPEN_LATER_TIMER);
             let due: Vec<_> = OPEN_LATER.with(|later| {
@@ -3970,9 +3981,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ if message == attach_message() => {
+            crate::features::look::first_look(window, crate::features::look::FirstLook::UiThread);
             crate::features::tab_list::connect_command_bar();
             create_appbar(window);
             crate::features::window_corners::keep_round(window);
+            crate::features::look::first_look(window, crate::features::look::FirstLook::RivetDrawn);
             0
         }
         _ => call_browser(window, message, wparam, lparam),

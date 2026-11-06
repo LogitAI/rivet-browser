@@ -189,5 +189,12 @@ Expect 'fr_link_preview_fails_when_no_page_shows_under_it' (Test-FloatingPage (F
 # The page under the preview gone, with the window ground around it.
 Expect 'fr_link_preview_fails_on_the_window_ground' (Test-FloatingPage (Fill (New-Window) 200 90 850 515 $A) $B $A) 'FAIL'
 
+# The first frames of a window: a band of the browser's own colour above the page fails.
+$settled = Fill (Fill (New-Window 0xECE8E2) 160 0 890 52 0xFBFAF7) 160 60 890 540 $A
+$band = Fill (Fill (New-Window 0xECE8E2) 160 0 890 52 0xCCCCCC) 160 60 890 540 $A
+Expect 'fr12_first_frames_like_the_settled_window_pass' (Test-FirstFrames @($settled, (New-Window 0xFFFFFF)) $settled 160 890 56) 'PASS'
+Expect 'fr12_a_grey_band_in_a_first_frame_fails' (Test-FirstFrames @($band, $settled) $settled 160 890 56) 'FAIL'
+Expect 'fr12_only_blank_first_frames_are_not_driven' (Test-FirstFrames @((New-Window 0x000000)) $settled 160 890 56) 'NOT_DRIVEN'
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'
