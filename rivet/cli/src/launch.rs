@@ -3,6 +3,7 @@
 
 use crate::config::{profile_dir, profiles_folder, Saved};
 use crate::detect::Browser;
+use rivet_platform_windows::background::hidden;
 use rivet_platform_windows::hold;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,7 +56,7 @@ pub fn keep_used_builds(root: &Path, detected: &[Browser]) {
         return;
     };
     for browser in browsers_in_use(root, detected) {
-        let _ = Command::new(&rivet)
+        let _ = hidden(&mut Command::new(&rivet))
             .args(["hold", "refresh", "--browser"])
             .arg(&browser.path)
             .arg("--hold")
@@ -75,7 +76,7 @@ pub fn start(saved: &Saved, root: &Path) -> Result<(), String> {
         .map_or(0, |elapsed| elapsed.as_secs());
     let held = root.join("Rivet").join("browsers");
     hold::plan(&saved.browser, &held, now).map_err(|refusal| refusal.to_string())?;
-    Command::new(rivet_executable()?)
+    hidden(&mut Command::new(rivet_executable()?))
         .args(session_arguments(
             &saved.browser,
             &profile_dir(root, &saved.browser, &saved.profile),

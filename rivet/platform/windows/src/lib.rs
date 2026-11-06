@@ -4,6 +4,7 @@
 //! browser process identifier and the absolute runtime DLL path after applying Rivet's session
 //! ownership checks.
 
+pub mod background;
 pub mod chrome_build;
 pub mod hold;
 pub mod row_port;
