@@ -492,7 +492,7 @@ pub fn refresh_with(
 /// The accounts of an app container, as the browser's installer grants them on its own folder. The
 /// browser's more restricted sandboxes read program files through them. Files copied later inherit it.
 fn allow_sandboxed_reads(folder: &Path) {
-    let _ = std::process::Command::new("icacls")
+    let _ = crate::background::hidden(&mut std::process::Command::new("icacls"))
         .arg(folder)
         .args(HOLD_GRANTS.iter().flat_map(|sid| ["/grant", *sid]))
         .stdout(std::process::Stdio::null())
@@ -878,7 +878,7 @@ mod tests {
         let root = scratch("acl");
         allow_sandboxed_reads(&root);
         std::fs::write(root.join("file"), "x").unwrap();
-        let listed = std::process::Command::new("icacls")
+        let listed = crate::background::hidden(&mut std::process::Command::new("icacls"))
             .arg(root.join("file"))
             .output()
             .unwrap();
