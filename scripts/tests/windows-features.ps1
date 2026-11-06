@@ -1349,20 +1349,36 @@ function Wait-Log([int]$Skip, [string]$Pattern, [int]$Seconds = 30) {
   $null
 }
 
-# The address bar lists the browser's own suggestions: page-a, visited first, is suggested for a
-# prefix of its address and completed inline after the typed text, and Enter opens it.
+# The address bar lists the browser's own suggestions: page-a, typed and visited first, is suggested
+# for a prefix of its address and completed inline after the typed text, and Enter opens it. The
+# pages are served over loopback, since the browser's history suggestions leave file pages out.
 function Invoke-AddressSuggest($Name, $shots) {
-  $ctx, $state = Start-Scene $Name 'address-suggest' $urlA
+  $dir = Join-Path $pageDir 'suggest'
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  foreach ($p in @(@('suggest-a', $script:ColourA), @('suggest-b', $script:ColourB))) {
+    [IO.File]::WriteAllText((Join-Path $dir "$($p[0]).html"), ("<!doctype html><meta charset=utf-8><title>$($p[0])</title><style>html,body{margin:0;height:100%;background:#{0:X6}}</style>" -f $p[1]))
+  }
+  $site = Start-LocalSite $dir
+  $sa = "$($site.Base)/suggest-a.html"; $sb = "$($site.Base)/suggest-b.html"
+  $ctx, $state = Start-Scene $Name 'address-suggest' $sb
   try {
-    Open-Scene $ctx $state $urlA $null
+    Open-Scene $ctx $state $sb $null
     if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots 'address-suggest-1-page-a.png')
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
     if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    # page-a is typed into the bar first, as a person would have visited it.
+    $before = @(Read-Log).Count
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the bar command') }
+    Send-Chars $ctx $sa
+    Start-Sleep -Milliseconds 800
+    Send-Key $ctx 0x0D
+    if (-not (Wait-Log $before '^address bar: open')) { return @('FAIL', $one.Path, 'the typed address of page-a did not open') }
+    Start-Sleep 4
     # page-b is typed into the bar and opened in the same tab, so page-a is history, not the page.
     $before = @(Read-Log).Count
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the bar command') }
-    Send-Chars $ctx $urlB
+    Send-Chars $ctx $sb
     Start-Sleep -Milliseconds 800
     Send-Key $ctx 0x0D
     if (-not (Wait-Log $before '^address bar: open')) { return @('FAIL', $one.Path, 'the typed address of page-b did not open') }
@@ -1371,8 +1387,8 @@ function Invoke-AddressSuggest($Name, $shots) {
     $onB = Test-OnePage $b $script:ColourB $script:ColourA
     if ($onB.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $b.Path, "page-b did not open from the bar: $($onB.Reason)") }
     # Type page-a's address without its last four letters.
-    $prefix = $urlA.Substring(0, $urlA.Length - 4)
-    $rest = $urlA.Substring($urlA.Length - 4)
+    $prefix = $sa.Substring(0, $sa.Length - 4)
+    $rest = $sa.Substring($sa.Length - 4)
     $before = @(Read-Log).Count
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $b.Path, 'the runtime did not take the bar command') }
     Send-Chars $ctx $prefix
@@ -1381,7 +1397,7 @@ function Invoke-AddressSuggest($Name, $shots) {
     Start-Sleep 2
     $list = Get-Capture $ctx (Join-Path $shots 'address-suggest-3-list.png')
     if (-not $line) { return @('FAIL', $list.Path, 'the bar asked the browser for no suggestions for the typed prefix') }
-    $page = $urlA -replace '^file:///', ''
+    $page = $sa
     if ($line -notmatch [regex]::Escape($page)) { return @('FAIL', $list.Path, "page-a is not suggested: $line") }
     $notes = @('page-a suggested')
     $inline = $line -match ('inline ' + [regex]::Escape('"' + $rest + '"') + '$')
@@ -1396,7 +1412,7 @@ function Invoke-AddressSuggest($Name, $shots) {
     if ($v.Verdict -ne 'PASS') { return @('FAIL', $after.Path, "Enter did not show page-a: $($v.Reason)") }
     $notes += 'Enter opened page-a'
     @('PASS', $list.Path, ($notes -join '; '))
-  } finally { Stop-Scene $ctx }
+  } finally { Stop-Scene $ctx; Stop-LocalSite $site }
 }
 
 # --- FR-3 appbar width, hide and peek, and links from other apps ----------------------------
