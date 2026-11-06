@@ -310,8 +310,18 @@ pub(crate) unsafe fn move_tab(from: HWND, index: usize, to: HWND, active: bool) 
     true
 }
 
-/// `chrome::MoveTabsToNewWindow(source, tab indices, group)`.
-type MoveToNew = unsafe extern "system" fn(*mut c_void, *const [usize; 3], *const [u64; 4]);
+/// `BrowserTabStripModelDelegate::MoveTabsToNewWindow(this, tab indices)`.
+type MoveToNew = unsafe extern "system" fn(*const [usize; 2], *const [usize; 3]);
+
+/// The words of a `std::vector<int>` that holds the ints at `data`: begin, end and the end of its
+/// storage on builds that keep the end by pointer, begin, size and capacity on the others.
+pub(crate) fn index_vector(data: usize, count: usize, by_pointer: bool) -> [usize; 3] {
+    if by_pointer {
+        [data, data + count * 4, data + count * 4]
+    } else {
+        [data, count, count]
+    }
+}
 
 /// Moves tab `index` of `window` into a new window of the same profile and the same browser type
 /// with Chromium's own move-to-new-window function. The browser makes and shows the window.
@@ -322,19 +332,15 @@ pub(crate) unsafe fn move_tab_to_new_window(window: HWND, index: usize) -> bool 
     let Some(rva) = recorded("move_new") else {
         return false;
     };
+    let by_pointer = checked_row().is_some_and(|row| row.move_to_new_window_vector_by_pointer);
     let Some(browser) = crate::features::tabs::browser(base, window) else {
         return false;
     };
-    let indices: [i32; 2] = [index as i32, 0];
-    // A `std::vector<int>` of one: begin, end and the end of its storage.
-    let vector: [usize; 3] = [
-        indices.as_ptr() as usize,
-        indices.as_ptr() as usize + 4,
-        indices.as_ptr() as usize + 4,
-    ];
-    // An empty `std::optional<TabGroupId>`, passed by address as the calling convention does.
-    let no_group = [0u64; 4];
-    crate::features::tabs::function::<MoveToNew>(base, rva)(browser, &vector, &no_group);
+    let indices: [i32; 1] = [index as i32];
+    let vector = index_vector(indices.as_ptr() as usize, indices.len(), by_pointer);
+    // The delegate keeps its browser right after its vtable and reads nothing else of itself.
+    let delegate: [usize; 2] = [0, browser as usize];
+    crate::features::tabs::function::<MoveToNew>(base, rva)(&delegate, &vector);
     crate::trace::trace(&format!("app window: moved tab {index} to a new window"));
     true
 }
@@ -715,6 +721,14 @@ pub(crate) fn install_features() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr9_the_tab_index_vector_follows_the_builds_libcxx_layout() {
+        // Chromium 156 builds libc++ with the vector that keeps its size.
+        assert_eq!(index_vector(0x1000, 1, false), [0x1000, 1, 1]);
+        // Older builds keep its end and the end of its storage as pointers.
+        assert_eq!(index_vector(0x1000, 1, true), [0x1000, 0x1004, 0x1004]);
+    }
 
     const CHROMIUM: Features = Features {
         title_bar: FEATURE_TITLEBAR,

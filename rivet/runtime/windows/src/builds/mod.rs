@@ -129,10 +129,17 @@ pub struct AppWindow {
     pub detach_prologue: &'static [u8],
     pub insert: Option<usize>,
     pub insert_prologue: &'static [u8],
-    /// `chrome::MoveTabsToNewWindow(source, tab indices, group)`, which makes a new window of the
-    /// source window's profile and type for the tabs. The Mini Window is made with it.
+    /// `BrowserTabStripModelDelegate::MoveTabsToNewWindow(this, tab indices)`, which reads only the
+    /// browser at `this + 8` and calls `chrome::MoveTabsToNewWindow` with it. That makes a new
+    /// window of the source window's profile and type for the tabs. The Mini Window is made with
+    /// it. The delegate is called rather than the function behind it, because builds differ in
+    /// where the `BrowserWindowInterface` sits in the browser and in what that function takes
+    /// after the indices; the delegate takes care of both.
     pub move_to_new_window: Option<usize>,
     pub move_to_new_window_prologue: &'static [u8],
+    /// How the index vector it takes is laid out: begin, end and capacity as pointers, or begin,
+    /// size and capacity. libc++ changed it between Chromium 150 and 156.
+    pub move_to_new_window_vector_by_pointer: bool,
     /// A `views::View` keeps its parent at this offset and its children vector right after it.
     pub view_parent: usize,
     pub view_children: usize,
