@@ -141,13 +141,15 @@ impl Security {
     }
 
     /// The chip for Chromium's `security_state::SecurityLevel`: 3 and 4 are secure, 1 and 5 warn.
-    /// Level 0 says nothing about the connection, so the address tells a local or internal page.
+    /// Level 0 says nothing about the connection yet: Chromium reports it for an https page while the
+    /// page is still loading, before the certificate is known. The chip stays neutral then rather
+    /// than warning, and the address tells a local, internal or plain http page.
     pub(crate) fn from_level(level: Option<i32>, url: &str) -> Self {
         match level {
             Some(3 | 4) => Security::Secure,
             Some(1 | 5) => Security::NotSecure,
             Some(_) => match Self::of(url) {
-                Security::Secure => Security::NotSecure,
+                Security::Secure => Security::Internal,
                 other => other,
             },
             None => Self::of(url),
@@ -1478,8 +1480,13 @@ mod tests {
             Security::from_level(Some(5), "https://a.test/"),
             Security::NotSecure
         );
+        // While an https page loads Chromium has no level yet; the chip must not say Not secure.
         assert_eq!(
             Security::from_level(Some(0), "https://a.test/"),
+            Security::Internal
+        );
+        assert_eq!(
+            Security::from_level(Some(0), "http://a.test/"),
             Security::NotSecure
         );
         assert_eq!(
