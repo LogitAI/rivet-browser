@@ -2333,7 +2333,10 @@ fn caption_row_height(window: HWND) -> Option<i32> {
 fn top_inset_extra(window: HWND) -> Option<i32> {
     // A Rivet window has no title bar above its panel: the browser's top elements begin at the
     // panel's top gap on every browser, whatever height its own title bar has.
-    attached(window).then_some(frame_layout::PANEL_GAP)
+    // A Mini Window keeps the room of Rivet's row on its own surface.
+    attached(window)
+        .then_some(frame_layout::PANEL_GAP)
+        .or_else(|| crate::features::mini_window::top_inset(window))
 }
 
 /// The features of a Rivet window in the order they are installed. A feature the browser does not
@@ -2816,7 +2819,6 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             }
             sync_ground(window, appbar, visible, dpi);
             crate::side_rail::update(window, appbar, visible, dpi);
-            crate::features::mini_window::update(window, appbar, visible, dpi);
         }
     });
 }
@@ -3110,8 +3112,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             return result;
         }
     }
-    // The command bar's scrim and the link preview's header lie over the pages, and the Mini
-    // Window floats over them, so they take the pointer and the keyboard before the pages do.
+    // The command bar's scrim and the link preview's header lie over the pages, so they take the
+    // pointer and the keyboard before the pages do.
     if attached(window) {
         if let Some(result) = crate::features::settings::message(window, message, wparam, lparam) {
             return result;
@@ -3131,9 +3133,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         }
         if let Some(result) = crate::features::page_links::message(window, message, wparam, lparam)
         {
-            return result;
-        }
-        if let Some(result) = crate::features::mini_window::on_mouse(window, message, lparam) {
             return result;
         }
     }

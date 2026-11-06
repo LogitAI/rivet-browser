@@ -65,6 +65,11 @@ pub(crate) fn prologues(row: &AppWindow) -> Vec<(&'static str, usize, &'static [
         ("detach", row.detach, row.detach_prologue),
         ("insert", row.insert, row.insert_prologue),
         (
+            "move_new",
+            row.move_to_new_window,
+            row.move_to_new_window_prologue,
+        ),
+        (
             "browser_context",
             row.browser_context,
             row.browser_context_prologue,
@@ -121,6 +126,7 @@ pub(crate) fn row_value(row: &AppWindow, name: &str) -> Option<usize> {
         "kind" => Some(row.browser_type),
         "detach" => row.detach,
         "insert" => row.insert,
+        "move_new" => row.move_to_new_window,
         "vparent" => Some(row.view_parent),
         "vchildren" => Some(row.view_children),
         "new" => Some(row.operator_new),
@@ -217,40 +223,8 @@ pub(crate) unsafe fn move_tab_in(window: HWND) -> bool {
         if count < 1 {
             continue;
         }
-        if let (Some(detach), Some(insert), Some(target)) = (
-            recorded("detach"),
-            recorded("insert"),
-            crate::features::tabs::tab_model(base, window),
-        ) {
-            // The tab model of the other window gives the tab up, and the app window's model takes it.
-            type Detach = unsafe extern "system" fn(*mut c_void, *mut usize, i32) -> *mut usize;
-            type Insert = unsafe extern "system" fn(
-                *mut c_void,
-                i32,
-                *mut usize,
-                i32,
-                *const [u64; 8],
-                *const [u64; 16],
-            ) -> i32;
-            let mut tab: usize = 0;
-            crate::features::tabs::function::<Detach>(base, detach)(model, &mut tab, count - 1);
-            crate::trace::trace(&format!("app window move: detached {tab:#x}"));
-            let none = [0u64; 8];
-            // A build whose insert takes one more optional after the group reads this empty one.
-            let no_more = [0u64; 16];
-            // At the end of the strip, active: `ADD_ACTIVE | ADD_FORCE_INDEX`.
-            let own = crate::features::tabs::function::<
-                unsafe extern "system" fn(*mut c_void) -> i32,
-            >(base, crate::builds::get().tabs.tab_count)(target);
-            let at = crate::features::tabs::function::<Insert>(base, insert)(
-                target,
-                own,
-                &mut tab,
-                1 | 4,
-                &none,
-                &no_more,
-            );
-            crate::trace::trace(&format!("app window move: inserted at {at}"));
+        if can_move_tabs() {
+            move_tab(other, (count - 1) as usize, window, true);
         } else {
             let indices: [i32; 2] = [count - 1, 0];
             let vector: [usize; 3] = [
@@ -269,6 +243,100 @@ pub(crate) unsafe fn move_tab_in(window: HWND) -> bool {
         break;
     }
     moved
+}
+
+/// `TabStripModel::DetachTabAtForInsertion` and `TabStripModel::InsertDetachedTabAt`.
+type Detach = unsafe extern "system" fn(*mut c_void, *mut usize, i32) -> *mut usize;
+type Insert = unsafe extern "system" fn(
+    *mut c_void,
+    i32,
+    *mut usize,
+    i32,
+    *const [u64; 8],
+    *const [u64; 16],
+) -> i32;
+
+/// Whether this build can move a tab from one window's tab strip model to another's.
+pub(crate) fn can_move_tabs() -> bool {
+    recorded("detach").is_some() && recorded("insert").is_some()
+}
+
+/// Moves tab `index` of window `from` to the end of window `to`'s own tab strip with Chromium's
+/// own detach and insert, so the page keeps its history, its state and its profile. `active` makes
+/// it the tab `to` shows. A window whose last tab leaves is closed by the browser itself.
+pub(crate) unsafe fn move_tab(from: HWND, index: usize, to: HWND, active: bool) -> bool {
+    let Some(base) = crate::features::tabs::base() else {
+        return false;
+    };
+    let (Some(detach), Some(insert)) = (recorded("detach"), recorded("insert")) else {
+        return false;
+    };
+    let (Some(source), Some(target)) = (
+        crate::features::tabs::tab_model(base, from),
+        crate::features::tabs::tab_model(base, to),
+    ) else {
+        return false;
+    };
+    let count = |model| {
+        crate::features::tabs::function::<unsafe extern "system" fn(*mut c_void) -> i32>(
+            base,
+            crate::builds::get().tabs.tab_count,
+        )(model)
+    };
+    if index as i32 >= count(source) {
+        return false;
+    }
+    // The tab model of `from` gives the tab up, and the model of `to` takes it.
+    let mut tab: usize = 0;
+    crate::features::tabs::function::<Detach>(base, detach)(source, &mut tab, index as i32);
+    crate::trace::trace(&format!("app window move: detached {tab:#x}"));
+    if tab == 0 {
+        return false;
+    }
+    let none = [0u64; 8];
+    // A build whose insert takes one more optional after the group reads this empty one.
+    let no_more = [0u64; 16];
+    // At the end of the strip: `ADD_FORCE_INDEX`, with `ADD_ACTIVE` when it is to be shown.
+    let flags = if active { 1 | 4 } else { 4 };
+    let at = crate::features::tabs::function::<Insert>(base, insert)(
+        target,
+        count(target),
+        &mut tab,
+        flags,
+        &none,
+        &no_more,
+    );
+    crate::trace::trace(&format!("app window move: inserted at {at}"));
+    true
+}
+
+/// `chrome::MoveTabsToNewWindow(source, tab indices, group)`.
+type MoveToNew = unsafe extern "system" fn(*mut c_void, *const [usize; 3], *const [u64; 4]);
+
+/// Moves tab `index` of `window` into a new window of the same profile and the same browser type
+/// with Chromium's own move-to-new-window function. The browser makes and shows the window.
+pub(crate) unsafe fn move_tab_to_new_window(window: HWND, index: usize) -> bool {
+    let Some(base) = crate::features::tabs::base() else {
+        return false;
+    };
+    let Some(rva) = recorded("move_new") else {
+        return false;
+    };
+    let Some(browser) = crate::features::tabs::browser(base, window) else {
+        return false;
+    };
+    let indices: [i32; 2] = [index as i32, 0];
+    // A `std::vector<int>` of one: begin, end and the end of its storage.
+    let vector: [usize; 3] = [
+        indices.as_ptr() as usize,
+        indices.as_ptr() as usize + 4,
+        indices.as_ptr() as usize + 4,
+    ];
+    // An empty `std::optional<TabGroupId>`, passed by address as the calling convention does.
+    let no_group = [0u64; 4];
+    crate::features::tabs::function::<MoveToNew>(base, rva)(browser, &vector, &no_group);
+    crate::trace::trace(&format!("app window: moved tab {index} to a new window"));
+    true
 }
 
 /// Offsets of the browser object that hold the browser type of an app window (`TYPE_APP`, 2).

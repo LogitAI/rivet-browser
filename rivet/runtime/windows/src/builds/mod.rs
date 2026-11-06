@@ -129,6 +129,10 @@ pub struct AppWindow {
     pub detach_prologue: &'static [u8],
     pub insert: Option<usize>,
     pub insert_prologue: &'static [u8],
+    /// `chrome::MoveTabsToNewWindow(source, tab indices, group)`, which makes a new window of the
+    /// source window's profile and type for the tabs. The Mini Window is made with it.
+    pub move_to_new_window: Option<usize>,
+    pub move_to_new_window_prologue: &'static [u8],
     /// A `views::View` keeps its parent at this offset and its children vector right after it.
     pub view_parent: usize,
     pub view_children: usize,

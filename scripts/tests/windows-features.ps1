@@ -925,34 +925,56 @@ function Invoke-BarLayout($Name, $shots) {
 }
 
 # A Mini Window command, posted the way `rivet session mini-window` posts it. The codes are the
-# protocol's: 1 pop out, 2 move (x | y << 16 in DIPs), 4 return (0 left, 1 right, 2 top, 3 bottom), 5 close.
+# protocol's: 1 pop out, 2 move (x | y << 16 in DIPs of the Rivet window's client area), 4 return (0 left, 1 right, 2 top, 3 bottom), 5 close.
 function Send-MiniCommand($ctx, [int]$Code, [int]$Low = 0, [int]$High = 0) {
   $l = [IntPtr](($High -shl 16) -bor ($Low -band 0xffff))
   [FeatureWin]::PostMessage($ctx.Hwnd, [FeatureWin]::RegisterWindowMessage('Rivet.MiniWindow'), [IntPtr]$Code, $l) | Out-Null
 }
 
-# Whether page B floats as a Mini Window over page A: B is a smaller rectangle that page A's region
-# surrounds, so A still fills the page area around it.
-function Test-MiniShown($capture) {
-  # The focused pane pops out. A posted click may not move the focus, so either page may float.
-  $one = Test-MiniOver $capture $script:ColourA $script:ColourB
-  if ($one.Verdict -eq 'PASS') { return $one }
-  $two = Test-MiniOver $capture $script:ColourB $script:ColourA
-  if ($two.Verdict -eq 'PASS') { $two.Reason = "page A floats, not the focused page B; $($two.Reason)"; return $two }
-  $one
+# The Mini Window is a browser window of its own: a new visible top-level window of the same
+# browser process, off every monitor like the test window, small, and placed near the Rivet window.
+function Find-MiniWindow($ctx, $before) {
+  $own = [uint32]0
+  [FeatureWin]::GetWindowThreadProcessId($ctx.Hwnd, [ref]$own) | Out-Null
+  foreach ($i in 1..80) {
+    foreach ($t in @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ })) {
+      $q = [uint32]0
+      [FeatureWin]::GetWindowThreadProcessId($t, [ref]$q) | Out-Null
+      if ($q -eq $own) { return $t }
+      # A window of another process is no Mini Window. It is moved away and closed at once.
+      [FeatureWin]::SetWindowPos($t, [IntPtr]::Zero, -3000, -3000, 1600, 1000, 0x14) | Out-Null
+      [FeatureWin]::PostMessage($t, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+    }
+    Start-Sleep -Milliseconds 50
+  }
+  [IntPtr]::Zero
 }
 
-# Whether the page of colour $Float floats over the page of colour $Behind. A and B in the result
-# are the behind and floating regions.
-function Test-MiniOver($capture, [int]$Behind, [int]$Float) {
-  $a = Get-PageRegion $capture $Behind
-  $b = Get-PageRegion $capture $Float
-  if ($b.Area -le 0) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'page B is not shown'; A = $a; B = $b } }
-  if ($a.Area -le 0) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'page A is not shown behind the Mini Window'; A = $a; B = $b } }
-  $inside = $b.X0 -gt $a.X0 -and $b.X1 -lt $a.X1 -and $b.Y0 -gt $a.Y0 -and $b.Y1 -lt $a.Y1
-  if (-not $inside) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = "page B ($($b.X0),$($b.Y0))-($($b.X1),$($b.Y1)) does not float inside page A ($($a.X0),$($a.Y0))-($($a.X1),$($a.Y1))"; A = $a; B = $b } }
-  if ($b.Area * 4 -gt $a.Area) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'page B is too large for a Mini Window'; A = $a; B = $b } }
-  [pscustomobject]@{ Verdict = 'PASS'; Reason = "page B floats at ($($b.X0),$($b.Y0)) $($b.Width)x$($b.Height) over page A"; A = $a; B = $b }
+function Get-Rect([IntPtr]$h) {
+  $r = New-Object FeatureWin+R
+  [FeatureWin]::GetWindowRect($h, [ref]$r) | Out-Null
+  $r
+}
+
+# Whether the Mini Window is a small window beside the Rivet window that shows page $Float.
+function Test-MiniWindow($ctx, [IntPtr]$mini, [string]$Path, [int]$Float) {
+  if ($mini -eq [IntPtr]::Zero) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'no new top-level window of the browser process appeared'; Capture = $null } }
+  # A Mini Window on a monitor is moved off at once, so the test never shows a window.
+  if ([FeatureMonitor]::OnMonitor($mini)) {
+    [FeatureWin]::SetWindowPos($mini, [IntPtr]::Zero, -3000, -3000, 0, 0, 0x15) | Out-Null
+    return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'the Mini Window opened on a monitor, not beside the off-screen Rivet window'; Capture = $null }
+  }
+  $m = Get-Rect $mini; $w = Get-Rect $ctx.Hwnd
+  $s = $ctx.Dpi / 96.0
+  $mw = ($m.Ri - $m.L) / $s; $mh = ($m.B - $m.T) / $s
+  if ($mw -gt 640 -or $mh -gt 480 -or $mw -lt 200 -or $mh -lt 120) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = "the Mini Window is $([int]$mw)x$([int]$mh) DIP, not a small window"; Capture = $null } }
+  $near = $m.L -lt $w.Ri + 200 * $s -and $m.Ri -gt $w.L - 200 * $s -and $m.T -lt $w.B + 200 * $s -and $m.B -gt $w.T - 200 * $s
+  if (-not $near) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = "the Mini Window at ($($m.L),$($m.T)) is not near the Rivet window at ($($w.L),$($w.T))"; Capture = $null } }
+  $shot = Get-Capture ([pscustomobject]@{ Hwnd = $mini }) $Path
+  if (-not $shot) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'the Mini Window could not be captured'; Capture = $null } }
+  $page = Get-PageRegion $shot $Float
+  if ($page.Area -le 0) { return [pscustomobject]@{ Verdict = 'FAIL'; Reason = 'the Mini Window does not show the popped page'; Capture = $shot } }
+  [pscustomobject]@{ Verdict = 'PASS'; Reason = "a $([int]$mw)x$([int]$mh) DIP window of the same process at ($($m.L),$($m.T)) beside the Rivet window shows the page"; Capture = $shot; Rect = $m }
 }
 
 # The Mini Window from a split: pop out, then one of move, return or close.
@@ -968,8 +990,6 @@ function Invoke-Mini($Name, $shots, [string]$Step) {
     $split = Get-Capture $ctx (Join-Path $shots "mini-$Step-1-split.png")
     $on = Test-TwoPages $split $script:ColourA $script:ColourB
     if ($on.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $split.Path, "no split to pop out of: $($on.Reason)") }
-    # The checker must reject a split: both pages side by side are no Mini Window.
-    if ((Test-MiniShown $split).Verdict -ne 'FAIL') { return @('NOT_DRIVEN', $split.Path, 'the Mini Window check did not fail on a split') }
     # Page B is the second pane, so it is focused first and then popped out.
     $before = @(Read-Log).Count
     $b = Get-PageRegion $split $script:ColourB
@@ -977,50 +997,66 @@ function Invoke-Mini($Name, $shots, [string]$Step) {
     Send-ClientMouse $ctx 0x201 $p.X $p.Y 1
     Send-ClientMouse $ctx 0x202 $p.X $p.Y 0
     Start-Sleep 2
+    $tops = Get-MyTops $ctx
     Send-MiniCommand $ctx 1
-    Start-Sleep 4
-    $mini = Get-Capture $ctx (Join-Path $shots "mini-$Step-2-popped.png")
+    $mini = Find-MiniWindow $ctx $tops
+    Start-Sleep 3
     $log = @(Read-Log | Select-Object -Skip $before)
-    if (-not ($log | Where-Object { $_ -match '^mini window: open tab' })) { return @('FAIL', $mini.Path, 'the runtime did not open a Mini Window for the pop-out command') }
-    $shown = Test-MiniShown $mini
-    if ($shown.Verdict -ne 'PASS') { return @('FAIL', $mini.Path, "pop out: $($shown.Reason)") }
-    if ($Step -eq 'pop-out') { return @('PASS', $mini.Path, $shown.Reason) }
+    if (-not ($log | Where-Object { $_ -match '^mini window: open tab' })) {
+      if ($log | Where-Object { $_ -match '^mini window: (no move to a new window|this build cannot move a tab)' }) { return @('NOT_DRIVEN', $null, 'this build has no recorded move-to-new-window or tab insert function') }
+      return @('FAIL', $null, 'the runtime did not open a Mini Window for the pop-out command')
+    }
+    # The focused pane pops out. A posted click may not move the focus, so either page may float.
+    $float, $stay = $script:ColourB, $script:ColourA
+    $shown = Test-MiniWindow $ctx $mini (Join-Path $shots "mini-$Step-2-mini.png") $float
+    if ($shown.Verdict -ne 'PASS') {
+      $other = Test-MiniWindow $ctx $mini (Join-Path $shots "mini-$Step-2-mini.png") $script:ColourA
+      if ($other.Verdict -eq 'PASS') { $shown = $other; $shown.Reason = "page A popped out, not the focused page B; $($other.Reason)"; $float, $stay = $script:ColourA, $script:ColourB }
+    }
+    if ($shown.Verdict -ne 'PASS') { return @('FAIL', $(if ($shown.Capture) { $shown.Capture.Path }), "pop out: $($shown.Reason)") }
+    $main = Get-Capture $ctx (Join-Path $shots "mini-$Step-3-window.png")
+    $left = Test-OnePage $main $stay $float
+    if ($left.Verdict -ne 'PASS') { return @('FAIL', $main.Path, "the Rivet window after the pop-out: $($left.Reason)") }
+    if ($Step -eq 'pop-out') { return @('PASS', $shown.Capture.Path, "$($shown.Reason); the Rivet window shows the other page alone") }
     $s = $ctx.Dpi / 96.0
     switch ($Step) {
       'move' {
-        $x = [int]($shown.A.X0 / $s) + 40; $y = [int]($shown.A.Y0 / $s) + 40
-        Send-MiniCommand $ctx 2 $x $y
-        Start-Sleep 3
-        $moved = Get-Capture $ctx (Join-Path $shots 'mini-move-3-moved.png')
-        $after = Test-MiniShown $moved
-        if ($after.Verdict -ne 'PASS') { return @('FAIL', $moved.Path, "after the move: $($after.Reason)") }
-        if ([Math]::Abs($after.B.X0 - $shown.B.X0) -lt 20 * $s -or $after.B.X0 -gt $shown.B.X0) { return @('FAIL', $moved.Path, "the Mini Window did not move to the upper left (from $($shown.B.X0),$($shown.B.Y0) to $($after.B.X0),$($after.B.Y0))") }
-        return @('PASS', $moved.Path, "moved from ($($shown.B.X0),$($shown.B.Y0)) to ($($after.B.X0),$($after.B.Y0))")
+        # 40 DIP right and down of the Rivet window's client origin, which is off every monitor.
+        Send-MiniCommand $ctx 2 40 40
+        Start-Sleep 2
+        $o = New-Object FeatureWin+P; [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$o) | Out-Null
+        $r = Get-Rect $mini
+        $moved = Get-Capture ([pscustomobject]@{ Hwnd = $mini }) (Join-Path $shots 'mini-move-4-moved.png')
+        if ([FeatureMonitor]::OnMonitor($mini)) { return @('FAIL', $moved.Path, 'the move put the Mini Window on a monitor') }
+        $want = @([int]($o.X + 40 * $s), [int]($o.Y + 40 * $s))
+        if ([Math]::Abs($r.L - $want[0]) -gt 2 -or [Math]::Abs($r.T - $want[1]) -gt 2) { return @('FAIL', $moved.Path, "the Mini Window is at ($($r.L),$($r.T)), not at ($($want[0]),$($want[1]))") }
+        return @('PASS', $moved.Path, "moved from ($($shown.Rect.L),$($shown.Rect.T)) to ($($r.L),$($r.T))")
       }
       'return' {
         Send-MiniCommand $ctx 4 0
         Start-Sleep 6
-        $back = Get-Capture $ctx (Join-Path $shots 'mini-return-3-split.png')
+        $back = Get-Capture $ctx (Join-Path $shots 'mini-return-4-split.png')
+        if (@(Get-MyTops $ctx) -contains $mini) { return @('FAIL', $back.Path, 'the Mini Window is still open after the return') }
         $two = Test-TwoPages $back $script:ColourA $script:ColourB
         if ($two.Verdict -ne 'PASS') { return @('FAIL', $back.Path, "after the return: $($two.Reason)") }
-        $floated, $stayed = if ($shown.Reason -match '^page A floats') { $script:ColourA, $script:ColourB } else { $script:ColourB, $script:ColourA }
-        $a = Get-PageRegion $back $stayed; $bb = Get-PageRegion $back $floated
-        if ($bb.X0 -ge $a.X0) { return @('FAIL', $back.Path, 'the floating page came back as a split, but not on the left edge') }
+        $a = Get-PageRegion $back $stay; $bb = Get-PageRegion $back $float
+        if ($bb.X0 -ge $a.X0) { return @('FAIL', $back.Path, 'the popped page came back as a split, but not on the left edge') }
         if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $back.Path, 'the runtime did not take the tab list command') }
         $count = (Get-TabUrls).Count
         if ($count -ne 2) { return @('FAIL', $back.Path, "the window has $count tabs after the return, not the same two") }
-        return @('PASS', $back.Path, "page B is back on the left as a split of the same tab; $($two.Reason)")
+        return @('PASS', $back.Path, "the Mini Window closed and its page is back on the left as a split of the same tab; $($two.Reason)")
       }
       'close' {
         Send-MiniCommand $ctx 5
         Start-Sleep 3
-        $closed = Get-Capture $ctx (Join-Path $shots 'mini-close-3-closed.png')
-        $one = if ($shown.Reason -match '^page A floats') { Test-OnePage $closed $script:ColourB $script:ColourA } else { Test-OnePage $closed $script:ColourA $script:ColourB }
+        $closed = Get-Capture $ctx (Join-Path $shots 'mini-close-4-closed.png')
+        if (@(Get-MyTops $ctx) -contains $mini) { return @('FAIL', $closed.Path, 'the Mini Window is still open after the close') }
+        $one = Test-OnePage $closed $stay $float
         if ($one.Verdict -ne 'PASS') { return @('FAIL', $closed.Path, "after the close: $($one.Reason)") }
         if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $closed.Path, 'the runtime did not take the tab list command') }
         $count = (Get-TabUrls).Count
-        if ($count -ne 2) { return @('FAIL', $closed.Path, "the window has $count tabs after the close; the page should stay in its tab") }
-        return @('PASS', $closed.Path, 'the Mini Window closed and page B stays in its tab')
+        if ($count -ne 2) { return @('FAIL', $closed.Path, "the window has $count tabs after the close; the page should be back in its tab") }
+        return @('PASS', $closed.Path, 'the Mini Window closed and its page is back as a background tab of the Rivet window')
       }
     }
   } finally { Stop-Scene $ctx }
