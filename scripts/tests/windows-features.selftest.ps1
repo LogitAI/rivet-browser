@@ -189,5 +189,61 @@ Expect 'fr_link_preview_fails_when_no_page_shows_under_it' (Test-FloatingPage (F
 # The page under the preview gone, with the window ground around it.
 Expect 'fr_link_preview_fails_on_the_window_ground' (Test-FloatingPage (Fill (New-Window) 200 90 850 515 $A) $B $A) 'FAIL'
 
+# --- Window surface rows: split panel looks, Sidebar panel and open button, developer row ---------
+. (Join-Path $PSScriptRoot 'windows-features-surface-lib.ps1')
+function Round-Lower($Cap, [int]$X0, [int]$X1, [int]$Y1, [int]$Ground = 0xF0F0F0) {
+  foreach ($d in @(@(0, 1), @(1, 1), @(0, 2), @(1, 2), @(2, 1), @(0, 3), @(3, 1))) {
+    Fill (Fill $Cap ($X0 + $d[0]) ($Y1 - $d[1]) ($X0 + $d[0] + 1) ($Y1 - $d[1] + 1) $Ground) ($X1 - 1 - $d[0]) ($Y1 - $d[1]) ($X1 - $d[0]) ($Y1 - $d[1] + 1) $Ground | Out-Null
+  }
+  $Cap
+}
+function New-Panels([int]$ShadowA = 0xC8C8C8, [int]$ShadowB = 0xE6E6E6, [switch]$Square) {
+  $c = Fill (Fill (New-Window) 160 60 520 400 $A) 530 60 890 400 $B
+  $c = Fill (Fill $c 180 400 500 410 $ShadowA) 550 400 870 410 $ShadowB
+  if (-not $Square) { $c = Round-Lower (Round-Lower $c 160 520 400) 530 890 400 }
+  $c
+}
+Expect 'fr9_panels_with_round_corners_and_one_raised_by_shadow_pass' (Test-PanelLook (New-Panels) $A $B 1) 'PASS'
+Expect 'fr9_square_panels_fail' (Test-PanelLook (New-Panels -Square) $A $B 1) 'FAIL'
+Expect 'fr9_panels_with_equal_shadows_fail' (Test-PanelLook (New-Panels 0xD8D8D8 0xD8D8D8) $A $B 1) 'FAIL'
+Expect 'fr9_an_accent_border_on_the_active_panel_fails' (Test-PanelLook (Fill (New-Panels) 524 80 528 380 0x1E78FF) $A $B 1) 'FAIL'
+
+function New-Marked([int]$Right, [int]$Marker) { Fill (Fill (New-Window) 160 60 $Right 540 $A) $Marker 60 ($Marker + 4) 252 0x101010 }
+$floatBefore = New-Marked 890 525
+Expect 'fr10_panel_over_the_page_keeps_its_width_passes' (Test-PanelFloats $floatBefore (Fill (New-Marked 890 525) 700 60 890 540 $B) $A $B 1) 'PASS'
+Expect 'fr10_panel_that_narrows_the_page_fails' (Test-PanelFloats $floatBefore (Fill (New-Marked 700 430) 710 60 890 540 $B) $A $B 1) 'FAIL'
+Expect 'fr10_no_panel_fails' (Test-PanelFloats $floatBefore (New-Marked 890 525) $A $B 1) 'FAIL'
+Expect 'fr10_rail_takes_its_own_width_passes' (Test-RailWidth (New-Marked 890 525) (New-Marked 850 505) $A 1) 'PASS'
+Expect 'fr10_rail_of_the_wrong_width_fails' (Test-RailWidth (New-Marked 890 525) (New-Marked 870 515) $A 1) 'FAIL'
+
+function Mix([int]$Over, [int]$Under, [double]$Alpha) {
+  $o = ConvertTo-Colour $Over; $u = ConvertTo-Colour $Under
+  ([int]($o.R * $Alpha + $u.R * (1 - $Alpha)) -shl 16) -bor ([int]($o.G * $Alpha + $u.G * (1 - $Alpha)) -shl 8) -bor [int]($o.B * $Alpha + $u.B * (1 - $Alpha))
+}
+$corner = @(818, 468, 890, 540)
+$away = Fill (New-Window) 160 60 890 540 $A
+$near = Fill (Fill (New-Window) 160 60 890 540 $A) 856 504 886 534 (Mix 0x404040 $A 0.6)
+$over = Fill (Fill (New-Window) 160 60 890 540 $A) 856 504 886 534 0x404040
+Expect 'fr10_open_button_hidden_faint_then_solid_passes' (Test-OpenButtonFade $away $near $over $A $corner) 'PASS'
+Expect 'fr10_open_button_that_never_appears_fails' (Test-OpenButtonFade $away $away $over $A $corner) 'FAIL'
+Expect 'fr10_open_button_solid_near_the_corner_fails' (Test-OpenButtonFade $away $over $over $A $corner) 'FAIL'
+Expect 'fr10_open_button_shown_with_the_pointer_away_fails' (Test-OpenButtonFade $over $near $over $A $corner) 'FAIL'
+
+function New-Row([int]$Ground, [int]$Buttons) {
+  $c = Fill (Fill (New-Window) 160 64 890 540 $A) 160 20 890 64 $Ground
+  for ($k = 0; $k -lt $Buttons; $k++) { $x = 646 + 30 * $k + 8; $c = Fill $c $x 35 ($x + 14) 49 0xFFFFFF }
+  $c
+}
+$plainRow = New-Row 0xF7F5F0 0
+Expect 'fr11_dev_row_with_its_background_and_seven_buttons_passes' (Test-DevRow $plainRow (New-Row 0x2A2B2E 7) @(20, 64) @(640, 856) 7) 'PASS'
+Expect 'fr11_dev_row_with_the_plain_background_fails' (Test-DevRow $plainRow (Fill (New-Row 0xF7F5F0 0) 646 35 860 49 0x202020) @(20, 64) @(640, 856) 7) 'FAIL'
+Expect 'fr11_dev_row_missing_buttons_fails' (Test-DevRow $plainRow (New-Row 0x2A2B2E 4) @(20, 64) @(640, 856) 7) 'FAIL'
+$text = Fill (Fill (New-Window) 200 30 210 50 0x202020) 300 30 305 50 0x202020
+$width = Get-InkWidth $text @(160, 25, 600, 55)
+if ($width -ne 105) { Write-Host "FAIL fr11_ink_width_spans_the_text : wanted 105, got $width"; $failures++ } else { Write-Host 'ok   fr11_ink_width_spans_the_text : 105' }
+Expect 'fr11_equal_widths_are_monospace' (Test-Monospace 200 201 1 400) 'PASS'
+Expect 'fr11_unequal_widths_are_not_monospace' (Test-Monospace 200 260 1 400) 'FAIL'
+Expect 'fr11_a_full_field_says_nothing' (Test-Monospace 398 398 1 400) 'NOT_DRIVEN'
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'
