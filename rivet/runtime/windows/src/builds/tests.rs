@@ -969,6 +969,62 @@ fn fr13_app_window_functions_match_the_installed_builds() {
     if let Some(file) = held.and_then(|path| std::fs::read(path).ok()) {
         check_app_window_bytes("Google Chrome", &[156, 0, 8078, 74], &file);
     }
+    // Chrome 156.0.8078.80 and Brave 156.1.98.63 are held the same way.
+    for (browser, folder, version, path) in [
+        (
+            "Google Chrome",
+            "chrome",
+            [156, 0, 8078, 80],
+            "156.0.8078.80",
+        ),
+        ("Brave", "brave", [156, 1, 98, 63], "156.1.98.63"),
+    ] {
+        let held = rivet_core::paths::Layout::current().map(|layout| {
+            layout
+                .held_browsers()
+                .join(folder)
+                .join(path)
+                .join(path)
+                .join("chrome.dll")
+        });
+        if let Some(file) = held.and_then(|path| std::fs::read(path).ok()) {
+            check_app_window_bytes(browser, &version, &file);
+        }
+    }
+}
+
+#[test]
+fn fr9_every_app_window_row_records_the_move_to_new_window_delegate() {
+    // Builds of Chromium 150 and older keep a vector's end as a pointer; 156 keeps its size.
+    let expected: [(&str, [u16; 4], usize, bool); 6] = [
+        ("Google Chrome", [156, 0, 8078, 74], 0x09E57B00, false),
+        ("Google Chrome", [156, 0, 8078, 80], 0x09E4CC60, false),
+        ("Microsoft Edge", [156, 0, 4314, 58], 0x0A299420, false),
+        ("Brave", [156, 1, 98, 63], 0x0B37C970, false),
+        ("Naver Whale", [5, 39, 412, 57], 0x0E4666C0, true),
+        ("Samsung Internet", [30, 0, 4, 29], 0x0DBB8A50, true),
+    ];
+    for (browser, version, rva, by_pointer) in expected {
+        let build = all()
+            .iter()
+            .find(|build| build.browser == browser && build.version == version)
+            .unwrap_or_else(|| panic!("{browser} {version:?} has a row"));
+        let row = build.app_window.as_ref().unwrap();
+        assert_eq!(row.move_to_new_window, Some(rva), "{browser} {version:?}");
+        assert_eq!(
+            row.move_to_new_window_prologue.len(),
+            16,
+            "{browser} {version:?}"
+        );
+        assert_eq!(
+            row.move_to_new_window_vector_by_pointer, by_pointer,
+            "{browser} {version:?}"
+        );
+        assert_eq!(
+            crate::features::app_window::row_value(row, "move_new"),
+            Some(rva)
+        );
+    }
 }
 
 fn check_app_window_bytes(browser: &str, version: &[u16; 4], file: &[u8]) {
