@@ -2,7 +2,7 @@
 # when this passes on a launch like the installed build's. Unit tests and build rows do not count.
 #
 #   pwsh -NoProfile -File scripts/tests/windows-features.ps1 [-Browsers chrome,edge,...]
-#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview,link-rules,address-suggest] [-OutDir <dir>] [-NoBuild]
+#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview,link-rules,address-suggest,credentials-browser,credentials-system] [-OutDir <dir>] [-NoBuild]
 #
 # One row per browser and feature: PASS, FAIL or NOT_DRIVEN. NOT_DRIVEN means the scene could not
 # be set up, so the feature was not exercised. Nothing is decided from build rows or `supported`.
@@ -13,7 +13,7 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest', 'credentials-browser', 'credentials-system'),
   [string]$OutDir,
   [switch]$NoBuild,
   # The run stops before a row when the output drive has less free space than this.
@@ -201,11 +201,11 @@ function Start-Scene($Name, $Feature, $Url) {
   return $ctx, $state
 }
 
-function Open-Scene($ctx, $state, $Url, $Seed) {
+function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   if ($Seed) { & $Seed }
   $session = $null; $raw = ''
   foreach ($try in 1..3) {
-    $lines = & (Join-Path $debug 'rivet.exe') session start --browser $ctx.ExePath --url $Url --user-data-dir $ctx.Profile --runtime (Join-Path $debug 'rivet_runtime_windows.dll') --state $state --json 2>&1 | ForEach-Object { [string]$_ }
+    $lines = & (Join-Path $debug 'rivet.exe') session start --browser $ctx.ExePath --url $Url --user-data-dir $ctx.Profile --runtime (Join-Path $debug 'rivet_runtime_windows.dll') --state $state @Extra --json 2>&1 | ForEach-Object { [string]$_ }
     $session = $lines | Where-Object { $_.Contains('runtime_loaded') } | Select-Object -First 1
     if ($session) { break }
     $raw = (($lines | Select-Object -First 2) -join ' ')
@@ -1399,6 +1399,118 @@ function Invoke-AddressSuggest($Name, $shots) {
   } finally { Stop-Scene $ctx }
 }
 
+# A fake account form, served over loopback from files in the run's page folder, because a
+# browser's password manager does not save or fill on file:// pages. The form's script fills a fake
+# account and submits it, since posted keys do not reach the page on every browser. The page turns
+# green when the browser itself fills its fields (`:autofill`), and stays red otherwise. Nothing
+# real is typed and nothing is read from the profile's password store.
+function New-LoginPages {
+  $hexA = '#{0:X6}' -f $script:ColourA; $hexC = '#{0:X6}' -f $script:ColourC
+  $style = "<style>html,body{margin:0;height:100%;background:$hexA}body:has(input:autofill),body:has(input:-webkit-autofill){background:$hexC}input{font-size:20px;margin:20px}</style>"
+  $form = "<form method=get action=done.html autocomplete=on><input id=u name=username autocomplete=username><input id=p name=password type=password autocomplete=current-password><button>Sign in</button></form>"
+  $js = "<script>if(location.hash==='#submit'){setTimeout(function(){u.value='rivet-test-user';p.value='not-a-real-password-1';document.forms[0].requestSubmit()},1500)}</script>"
+  [IO.File]::WriteAllText((Join-Path $pageDir 'login.html'), "<!doctype html><meta charset=utf-8><title>login</title>$style$form$js")
+  $hexB = '#{0:X6}' -f $script:ColourB
+  [IO.File]::WriteAllText((Join-Path $pageDir 'done.html'), "<!doctype html><meta charset=utf-8><title>signed in</title><style>html,body{margin:0;height:100%;background:$hexB}</style>")
+}
+
+# Serves the page folder on 127.0.0.1 from a runspace of this process, on a port of its own.
+function Start-LoginServer {
+  New-LoginPages
+  $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $probe.Start()
+  $port = $probe.LocalEndpoint.Port; $probe.Stop()
+  $listener = [Net.HttpListener]::new()
+  $listener.Prefixes.Add("http://127.0.0.1:$port/")
+  $listener.Start()
+  $ps = [PowerShell]::Create()
+  [void]$ps.AddScript({
+      param($listener, $dir)
+      while ($listener.IsListening) {
+        try { $c = $listener.GetContext() } catch { break }
+        $name = [IO.Path]::GetFileName($c.Request.Url.AbsolutePath)
+        $path = Join-Path $dir $name
+        if ($name -and (Test-Path $path)) {
+          $bytes = [IO.File]::ReadAllBytes($path); $c.Response.ContentType = 'text/html; charset=utf-8'
+          $c.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+        } else { $c.Response.StatusCode = 404 }
+        $c.Response.Close()
+      }
+    }).AddArgument($listener).AddArgument($pageDir)
+  [void]$ps.BeginInvoke()
+  [pscustomobject]@{ Listener = $listener; Shell = $ps; Url = "http://127.0.0.1:$port/login.html" }
+}
+
+function Stop-LoginServer($server) {
+  if (-not $server) { return }
+  try { $server.Listener.Stop(); $server.Listener.Close() } catch {}
+  try { $server.Shell.Stop(); $server.Shell.Dispose() } catch {}
+}
+
+# Reads only the two password manager switches from the test profile's Preferences.
+function Get-ProviderPrefs([string]$Profile) {
+  $path = Join-Path $Profile 'Default\Preferences'
+  try { $p = Get-Content -Raw $path | ConvertFrom-Json } catch { return $null }
+  [pscustomobject]@{ Save = $p.credentials_enable_service; AutoSignIn = $p.credentials_enable_autosignin }
+}
+
+# NFR-8: the chosen provider takes effect. `browser`: the browser's password manager offers to save
+# the fake account after the form is sent, its Save is accepted, and a fresh load of the form is
+# filled by the browser. `system`: the browser's password manager stays off, so it neither offers
+# to save nor fills; the save through Windows passkeys needs Windows Hello, which only a person at
+# the machine can answer, so that half is reported as not driven.
+function Invoke-Credentials($Name, $shots, [string]$Provider) {
+  $feature = "credentials-$Provider"
+  $server = $null
+  $ctx, $state = Start-Scene $Name $feature $urlA
+  try {
+    $server = Start-LoginServer
+    Open-Scene $ctx $state ($server.Url + '#submit') $null @('--credentials', $Provider)
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    $prefs = Get-ProviderPrefs $ctx.Profile
+    $want = ($Provider -eq 'browser')
+    if (-not $prefs -or $prefs.Save -ne $want -or $prefs.AutoSignIn -ne $want) {
+      return @('FAIL', $null, "the profile does not start with the $Provider provider: save=$($prefs.Save) autosignin=$($prefs.AutoSignIn)")
+    }
+    $tops = @(Get-MyTops $ctx)
+    # The form sends itself 1.5 s after load. The browser's save offer is a window of its own; it is
+    # moved off-screen without activation as soon as it appears, then its default button is pressed.
+    $bubble = $null
+    foreach ($i in 1..200) {
+      Start-Sleep -Milliseconds 50
+      $bubble = @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $tops -notcontains $_ }) | Select-Object -First 1
+      if ($bubble) { [FeatureWin]::SetWindowPos($bubble, [IntPtr]::Zero, 9000, 2200, 0, 0, 0x15) | Out-Null; break }
+    }
+    $sent = Get-Capture $ctx (Join-Path $shots "$feature-1-sent.png")
+    if ($Provider -eq 'system') {
+      if ($bubble) {
+        [FeatureWin]::PostMessage($bubble, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+        return @('FAIL', $sent.Path, 'the browser offered to save although the Windows provider is chosen')
+      }
+      if (-not (Open-SecondPage $ctx $server.Url)) { return @('NOT_DRIVEN', $sent.Path, 'the form could not be opened again in a tab of the window') }
+      Start-Sleep 3
+      $again = Get-Capture $ctx (Join-Path $shots "$feature-2-again.png")
+      $v = Test-OnePage $again $script:ColourA $script:ColourC
+      if ($v.Verdict -ne 'PASS') { return @('FAIL', $again.Path, "the browser filled the form although its manager is off: $($v.Reason)") }
+      return @('NOT_DRIVEN', $again.Path, 'browser manager off as chosen (no save offer, no fill); the Windows passkey save needs Windows Hello and was not driven')
+    }
+    if (-not $bubble) { return @('FAIL', $sent.Path, 'the browser did not offer to save the fake account') }
+    $capBubble = [pscustomobject]@{ Hwnd = $bubble }
+    $offer = Get-Capture $capBubble (Join-Path $shots "$feature-2-offer.png")
+    Send-Key $capBubble 0x0D
+    Start-Sleep 2
+    if (-not (Open-SecondPage $ctx $server.Url)) { return @('NOT_DRIVEN', $offer.Path, 'the form could not be opened again in a tab of the window') }
+    Start-Sleep 3
+    $filled = Get-Capture $ctx (Join-Path $shots "$feature-3-filled.png")
+    $v = Test-OnePage $filled $script:ColourC $script:ColourA
+    if ($v.Verdict -ne 'PASS') { return @('FAIL', $filled.Path, "the saved fake account was not filled: $($v.Reason)") }
+    @('PASS', $filled.Path, 'the browser offered to save the fake account, Save was accepted, and a fresh load of the form was filled by the browser')
+  } finally {
+    Stop-Scene $ctx
+    Stop-LoginServer $server
+  }
+}
+
 # --- Run ---------------------------------------------------------------------------------
 foreach ($name in $Browsers) {
   $exePath, $exeName = $table[$name]
@@ -1452,6 +1564,8 @@ foreach ($name in $Browsers) {
         'rivet-settings' { Invoke-RivetSettings $name $shots }
         'link-rules' { Invoke-LinkRules $name $shots }
         'address-suggest' { Invoke-AddressSuggest $name $shots }
+        'credentials-browser' { Invoke-Credentials $name $shots 'browser' }
+        'credentials-system' { Invoke-Credentials $name $shots 'system' }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason

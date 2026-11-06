@@ -11,6 +11,32 @@ pub fn set_trace(path: std::path::PathBuf) {
     let _ = TRACE.set(path);
 }
 
+/// Where the trace `name` writes in this process, `None` when it is not switched on. A switch is a
+/// file in the session profile's own `rivet-debug` folder, a file in Rivet's `config\debug` folder
+/// or the name in `RIVET_TRACE`. The profile is the one given by `--user-data-dir`, never a guess.
+pub fn switched(name: &str) -> Option<std::path::PathBuf> {
+    let layout = rivet_core::paths::Layout::current()?;
+    let path = switched_in(
+        &layout,
+        name,
+        std::env::var("RIVET_TRACE").ok().as_deref(),
+        std::env::args(),
+    )?;
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    rivet_core::paths::cap_log(&path);
+    Some(path)
+}
+
+fn switched_in(
+    layout: &rivet_core::paths::Layout,
+    name: &str,
+    rivet_trace: Option<&str>,
+    arguments: impl IntoIterator<Item = String>,
+) -> Option<std::path::PathBuf> {
+    let own = rivet_core::paths::session_debug_dir(arguments);
+    layout.trace_file_with(name, rivet_trace, own.as_deref())
+}
+
 /// Diagnostic: logs access violations with their offset in the browser module, so a crash on a
 /// new build shows which recorded address was wrong. Only while the trace is on.
 pub unsafe fn trace_crashes() {
@@ -185,7 +211,36 @@ pub fn trace_changed(key: &'static str, message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::traced;
+    use super::{switched_in, traced};
+    use rivet_core::paths::{Layout, TestDir, PROFILE_DEBUG_NAME};
+
+    #[test]
+    fn nfr7_a_trace_is_switched_on_only_by_a_debug_file_or_rivet_trace() {
+        let local = TestDir::new("nfr7-runtime-trace");
+        let layout = Layout::under(&local);
+        let profile = local.join("profile");
+        let args = || vec![format!("--user-data-dir={}", profile.display())];
+        let name = "rivet-nav.log";
+        assert_eq!(switched_in(&layout, name, None, args()), None);
+        assert_eq!(
+            switched_in(&layout, name, Some(name), args()),
+            Some(layout.logs().join(name))
+        );
+        std::fs::create_dir_all(layout.debug()).unwrap();
+        std::fs::write(layout.debug().join(name), "").unwrap();
+        assert_eq!(
+            switched_in(&layout, name, None, Vec::new()),
+            Some(layout.logs().join(name))
+        );
+        let own = profile.join(PROFILE_DEBUG_NAME);
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join(name), "").unwrap();
+        assert_eq!(
+            switched_in(&layout, name, None, args()),
+            Some(own.join(name)),
+            "a test profile's own switch keeps its trace in that profile"
+        );
+    }
 
     #[test]
     fn nfr7_the_crash_trace_never_traces_its_own_faults_or_a_stack_overflow() {
