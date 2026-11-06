@@ -1204,7 +1204,8 @@ pub(crate) fn spaces_file() -> Option<(std::path::PathBuf, String)> {
 }
 
 /// Restores the saved spaces, the appbar width and its hidden state when a window attaches.
-/// Missing or corrupt files leave the defaults. A corrupt file is kept under another name.
+/// A corrupt file is kept under another name and its copy is read instead. Without a good one the
+/// defaults stay.
 unsafe fn load_persisted(window: HWND) {
     let owns = PERSIST.with(|persist| {
         let mut persist = persist.borrow_mut();
@@ -1217,11 +1218,7 @@ unsafe fn load_persisted(window: HWND) {
     let Some((path, _)) = spaces_file().filter(|_| owns) else {
         return;
     };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let Some(mut stored) = Spaces::from_json(&text) else {
-        let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
+    let Some(mut stored) = crate::spaces::read_recovering(&path, Spaces::from_json) else {
         return;
     };
     let pending = stored.spaces.take_current_tabs();
@@ -1838,6 +1835,7 @@ unsafe fn relayout(window: HWND) {
 unsafe fn toggle_appbar(window: HWND) {
     close_menu(window);
     edit_layout(window, |layout| layout.toggle());
+    crate::trace::trace(&format!("appbar: hidden {}", layout_of(window).collapsed));
     sync_strip(window);
     SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
     KillTimer(window, PEEK_TIMER);
@@ -1854,6 +1852,7 @@ unsafe fn set_peek(window: HWND, on: bool) {
         changed
     });
     if changed {
+        crate::trace::trace(&format!("appbar: peek {on}"));
         SetTimer(window, PEEK_TIMER, 16, None);
     }
 }
@@ -2029,6 +2028,7 @@ unsafe fn apply_drag(window: HWND) {
     let factor = layout_dpi(window) as f32 / 96.0;
     let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
     if edit_layout(window, |layout| layout.set_width(wanted)) {
+        crate::trace::trace(&format!("appbar: width {}", layout_of(window).side));
         sync_strip(window);
         // The appbar takes its new width before the browser lays the page out, so what the
         // browser exposes is only ever ground or appbar, never the appbar's old surface over a

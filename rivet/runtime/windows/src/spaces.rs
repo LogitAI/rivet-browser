@@ -667,19 +667,61 @@ pub fn user_data_dir_of(args: impl IntoIterator<Item = String>) -> Option<String
     None
 }
 
-/// Writes the file whole or not at all: the text goes to a neighbour file first, which then
+/// `path` with `suffix` added to its file name, such as `p.json` to `p.json.bak`.
+fn beside(path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
+/// Writes one file whole or not at all: the text goes to a neighbour file first, which then
 /// replaces the old one in one step, so a crash leaves the old file or the new one.
-pub fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+fn write_whole(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension("json.tmp");
+    let temporary = beside(path, ".tmp");
     let mut file = std::fs::File::create(&temporary)?;
     file.write_all(text.as_bytes())?;
     file.sync_all()?;
     drop(file);
     std::fs::rename(&temporary, path)
+}
+
+/// Writes the file whole or not at all, then a copy of it beside it. The browser can be stopped
+/// or updated at any moment, and a file damaged by something else can be read back from the copy.
+/// The copy is written after the file, so a crash between the two leaves a good file.
+pub fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    write_whole(path, text)?;
+    write_whole(&beside(path, ".bak"), text)
+}
+
+/// Reads a file `write_atomic` wrote, with `parse`. A neighbour left by a write that was cut short
+/// is removed. A file that does not parse is kept aside under another name, and the copy beside it
+/// takes its place when that one parses. `None` when neither gives a value.
+pub fn read_recovering<T>(path: &std::path::Path, parse: impl Fn(&str) -> Option<T>) -> Option<T> {
+    let copy = beside(path, ".bak");
+    for leftover in [beside(path, ".tmp"), beside(&copy, ".tmp")] {
+        let _ = std::fs::remove_file(leftover);
+    }
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            if let Some(value) = parse(&text) {
+                return Some(value);
+            }
+            let _ = std::fs::rename(path, beside(path, ".corrupt"));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            // Unreadable, not missing: keep it aside so the copy can take its place.
+            let _ = std::fs::rename(path, beside(path, ".corrupt"));
+        }
+    }
+    let text = std::fs::read_to_string(&copy).ok()?;
+    let value = parse(&text)?;
+    let _ = write_whole(path, &text);
+    Some(value)
 }
 
 /// A small JSON reader, enough for the file above.
@@ -1524,6 +1566,20 @@ mod tests {
         assert_eq!(args(&["c.exe"]), None);
     }
 
+    fn names_in(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A parser for the tests below: a file is good when it starts with `ok`.
+    fn good(text: &str) -> Option<String> {
+        text.starts_with("ok").then(|| text.to_owned())
+    }
+
     #[test]
     fn fr3_atomic_write_replaces_the_file_and_leaves_no_temporary() {
         let dir = rivet_core::paths::TestDir::new("rivet-spaces-test");
@@ -1531,11 +1587,66 @@ mod tests {
         write_atomic(&path, "first").unwrap();
         write_atomic(&path, "second").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
-        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names, ["p.json"]);
+        assert_eq!(names_in(path.parent().unwrap()), ["p.json", "p.json.bak"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fr3_a_damaged_file_is_recovered_from_its_copy_with_the_latest_tabs() {
+        let dir = rivet_core::paths::TestDir::new("rivet-spaces-recover");
+        let path = dir.join("p.json");
+        write_atomic(&path, "ok one").unwrap();
+        write_atomic(&path, "ok two").unwrap();
+        // The browser stopped, or something else wrote over the file.
+        std::fs::write(&path, "{\"version\":2,\"spa").unwrap();
+        assert_eq!(read_recovering(&path, good), Some("ok two".into()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "ok two");
+        assert_eq!(
+            names_in(&dir),
+            ["p.json", "p.json.bak", "p.json.corrupt"],
+            "the damaged file is kept aside, never deleted"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fr3_a_write_cut_short_leaves_the_last_file_and_its_leftover_goes() {
+        let dir = rivet_core::paths::TestDir::new("rivet-spaces-cut");
+        let path = dir.join("p.json");
+        write_atomic(&path, "ok saved").unwrap();
+        // A write stopped before its rename leaves only the neighbour, half written.
+        std::fs::write(dir.join("p.json.tmp"), "ok half").unwrap();
+        std::fs::write(dir.join("p.json.bak.tmp"), "o").unwrap();
+        assert_eq!(read_recovering(&path, good), Some("ok saved".into()));
+        assert_eq!(names_in(&dir), ["p.json", "p.json.bak"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fr3_a_damaged_file_without_a_good_copy_gives_the_defaults_and_is_kept_aside() {
+        let dir = rivet_core::paths::TestDir::new("rivet-spaces-lost");
+        let path = dir.join("p.json");
+        assert_eq!(read_recovering(&path, good), None, "no file at all");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, "broken").unwrap();
+        std::fs::write(dir.join("p.json.bak"), "also broken").unwrap();
+        assert_eq!(read_recovering(&path, good), None);
+        assert_eq!(names_in(&dir), ["p.json.bak", "p.json.corrupt"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fr3_a_written_spaces_file_reads_back_through_recovery() {
+        let dir = rivet_core::paths::TestDir::new("rivet-spaces-roundtrip");
+        let path = dir.join("p.json");
+        let spaces = Spaces::new();
+        let open = vec![tab("https://a.test/", true), tab("https://b.test/", false)];
+        write_atomic(&path, &spaces.to_json(&open, 300, true, "d")).unwrap();
+        std::fs::write(&path, "").unwrap();
+        let stored = read_recovering(&path, Spaces::from_json).expect("the copy must load");
+        assert_eq!((stored.width, stored.hidden), (300, true));
+        let mut loaded = stored.spaces;
+        assert_eq!(loaded.take_current_tabs(), open);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
