@@ -855,8 +855,7 @@ fn begin_row(prior: &Value, version: &str) -> (Value, PortReport) {
         prior_version: prior_version.clone(),
         ..PortReport::default()
     };
-    let parts: Vec<u16> = new
-        .version
+    let parts: Vec<u16> = version
         .split('.')
         .filter_map(|part| part.parse().ok())
         .collect();
