@@ -2629,7 +2629,7 @@ foreach ($name in $Browsers) {
         'dev-row' { Invoke-DevRow $name $shots }
         'address-editing' { Invoke-AddressEditing $name $shots }
         'security-chip' { Invoke-SecurityChip $name $shots }
-        'permission-bubble' { Invoke-PermissionBubble $name $shots }
+        'permission-bubble' { @('NOT_DRIVEN', $null, 'the permission bubble opened a browser window on a monitor in an off-screen run, which the visible guard stopped; it stays off until the bubble is kept off-screen') }
         'password-bubble' { Invoke-PasswordBubble $name $shots }
         'typing-keeps-active' { Invoke-TypingKeepsActive $name $shots }
         'cli-control' { Invoke-CliControl $name $shots }
