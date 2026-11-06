@@ -3866,6 +3866,33 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                             crate::trace::trace(&format!("address bar suggestions {found:?}"));
                             found.is_some()
                         }
+                        // `baranchors` traces where the address and its security chip sit, so a
+                        // test can click the chip; `baredit copy|cut|paste|undo|selectall` edits the
+                        // field through the text engine as the keyboard shortcuts do; `devactions`
+                        // traces the developer row's buttons.
+                        Some("baranchors") => {
+                            let anchors = crate::features::address_bar::anchors(window);
+                            crate::trace::trace(&format!(
+                                "address bar anchors {anchors:?} dpi {}",
+                                layout_dpi(window)
+                            ));
+                            anchors.is_some()
+                        }
+                        Some("baredit") => {
+                            let word = text.trim().trim_start_matches("baredit").trim();
+                            crate::features::address_bar::edit_for_test(window, word)
+                        }
+                        Some("devactions") => {
+                            let actions: Vec<_> = crate::features::dev_page::dev_actions()
+                                .into_iter()
+                                .map(|(action, _)| action)
+                                .collect();
+                            crate::trace::trace(&format!(
+                                "dev mode {} actions {actions:?}",
+                                crate::features::dev_page::window_in_dev_mode(window)
+                            ));
+                            true
+                        }
                         Some("barimedone") => {
                             crate::features::address_bar::finish_composition_for_test(window)
                         }
