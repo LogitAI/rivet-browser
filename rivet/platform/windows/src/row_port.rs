@@ -1024,9 +1024,9 @@ fn code_print(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
         return None;
     }
     let window = pe.read(address, FINGERPRINT_BYTES + 16)?;
-    // `add [rax], al` is what zeros decode as: the start of a class table or padding, which a
-    // compiler never begins a function with.
-    if window.starts_with(&[0x00, 0x00]) {
+    // Zeros decode as `add [rax], al` and padding as `int3`: the start of a class table or of the
+    // gap between functions, never of a function.
+    if window.starts_with(&[0x00, 0x00]) || window.first() == Some(&0xCC) {
         return None;
     }
     let (ends, _) = x64::boundaries(window, FINGERPRINT_BYTES);
