@@ -2,7 +2,7 @@
 # when this passes on a launch like the installed build's. Unit tests and build rows do not count.
 #
 #   pwsh -NoProfile -File scripts/tests/windows-features.ps1 [-Browsers chrome,edge,...]
-#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview,link-rules] [-OutDir <dir>] [-NoBuild]
+#       [-Features split,sidebar,newtab,space,split-grid-4,bar-layout,command-bar,link-preview,link-rules,address-suggest] [-OutDir <dir>] [-NoBuild]
 #
 # One row per browser and feature: PASS, FAIL or NOT_DRIVEN. NOT_DRIVEN means the scene could not
 # be set up, so the feature was not exercised. Nothing is decided from build rows or `supported`.
@@ -13,7 +13,7 @@
 # of a profile. A browser is started only when the build exited 0.
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest'),
   [string]$OutDir,
   [switch]$NoBuild,
   # The run stops before a row when the output drive has less free space than this.
@@ -1329,6 +1329,76 @@ function Invoke-LinkPreview($Name, $shots) {
   } finally { Stop-Scene $ctx }
 }
 
+# Posts each character of `$Text` to the window as typed keys, which the focused address field takes.
+function Send-Chars($ctx, [string]$Text) {
+  foreach ($ch in $Text.ToCharArray()) { [FeatureWin]::PostMessage($ctx.Hwnd, 0x102, [IntPtr][int]$ch, [IntPtr]1) | Out-Null }
+}
+
+function Send-Key($ctx, [int]$Key) {
+  [FeatureWin]::PostMessage($ctx.Hwnd, 0x100, [IntPtr]$Key, [IntPtr]1) | Out-Null
+  [FeatureWin]::PostMessage($ctx.Hwnd, 0x101, [IntPtr]$Key, [IntPtr]0xC0000001) | Out-Null
+}
+
+# Waits until the runtime log, after line `$Skip`, has a line matching `$Pattern`, and returns it.
+function Wait-Log([int]$Skip, [string]$Pattern, [int]$Seconds = 30) {
+  foreach ($i in 1..($Seconds * 2)) {
+    $hit = @(Read-Log | Select-Object -Skip $Skip | Where-Object { $_ -match $Pattern }) | Select-Object -Last 1
+    if ($hit) { return $hit }
+    Start-Sleep -Milliseconds 500
+  }
+  $null
+}
+
+# The address bar lists the browser's own suggestions: page-a, visited first, is suggested for a
+# prefix of its address and completed inline after the typed text, and Enter opens it.
+function Invoke-AddressSuggest($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'address-suggest' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    $one = Get-Capture $ctx (Join-Path $shots 'address-suggest-1-page-a.png')
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    # page-b is typed into the bar and opened in the same tab, so page-a is history, not the page.
+    $before = @(Read-Log).Count
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the bar command') }
+    Send-Chars $ctx $urlB
+    Start-Sleep -Milliseconds 800
+    Send-Key $ctx 0x0D
+    if (-not (Wait-Log $before '^address bar: open')) { return @('FAIL', $one.Path, 'the typed address of page-b did not open') }
+    Start-Sleep 4
+    $b = Get-Capture $ctx (Join-Path $shots 'address-suggest-2-page-b.png')
+    $onB = Test-OnePage $b $script:ColourB $script:ColourA
+    if ($onB.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $b.Path, "page-b did not open from the bar: $($onB.Reason)") }
+    # Type page-a's address without its last four letters.
+    $prefix = $urlA.Substring(0, $urlA.Length - 4)
+    $rest = $urlA.Substring($urlA.Length - 4)
+    $before = @(Read-Log).Count
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $b.Path, 'the runtime did not take the bar command') }
+    Send-Chars $ctx $prefix
+    $quoted = [regex]::Escape('"' + $prefix + '"')
+    $line = Wait-Log $before "^address bar: suggestions for $quoted"
+    Start-Sleep 2
+    $list = Get-Capture $ctx (Join-Path $shots 'address-suggest-3-list.png')
+    if (-not $line) { return @('FAIL', $list.Path, 'the bar asked the browser for no suggestions for the typed prefix') }
+    $page = $urlA -replace '^file:///', ''
+    if ($line -notmatch [regex]::Escape($page)) { return @('FAIL', $list.Path, "page-a is not suggested: $line") }
+    $notes = @('page-a suggested')
+    $inline = $line -match ('inline ' + [regex]::Escape('"' + $rest + '"') + '$')
+    if (-not $inline) { return @('FAIL', $list.Path, "page-a is listed but not completed inline with '$rest': $line") }
+    $notes += "completed inline with '$rest'"
+    $before = @(Read-Log).Count
+    Send-Key $ctx 0x0D
+    if (-not (Wait-Log $before '^address bar: open suggestion 0')) { return @('FAIL', $list.Path, 'Enter did not open the completed suggestion') }
+    Start-Sleep 4
+    $after = Get-Capture $ctx (Join-Path $shots 'address-suggest-4-opened.png')
+    $v = Test-OnePage $after $script:ColourA $script:ColourB
+    if ($v.Verdict -ne 'PASS') { return @('FAIL', $after.Path, "Enter did not show page-a: $($v.Reason)") }
+    $notes += 'Enter opened page-a'
+    @('PASS', $list.Path, ($notes -join '; '))
+  } finally { Stop-Scene $ctx }
+}
+
 # --- Run ---------------------------------------------------------------------------------
 foreach ($name in $Browsers) {
   $exePath, $exeName = $table[$name]
@@ -1381,6 +1451,7 @@ foreach ($name in $Browsers) {
         'link-preview' { Invoke-LinkPreview $name $shots }
         'rivet-settings' { Invoke-RivetSettings $name $shots }
         'link-rules' { Invoke-LinkRules $name $shots }
+        'address-suggest' { Invoke-AddressSuggest $name $shots }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason
