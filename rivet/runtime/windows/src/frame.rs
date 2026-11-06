@@ -2306,7 +2306,9 @@ pub unsafe fn attach(window: HWND) -> bool {
     crate::features::look::first_look(window, crate::features::look::FirstLook::Attached);
     // DirectComposition targets and frame changes belong on the UI thread that owns the window.
     let posted = PostMessageW(window, attach_message(), 0, 0) != 0;
-    if !posted {
+    if posted {
+        crate::features::control::serve(window);
+    } else {
         crate::features::look::first_look(window, crate::features::look::FirstLook::AttachFailed);
     }
     posted
@@ -3097,6 +3099,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
     {
         crate::features::mini_window::command(window, wparam, lparam);
         update_appbar(window);
+        return 0;
+    }
+    if message == crate::features::control::message() && attached(window) {
+        crate::features::control::take(window, lparam);
         return 0;
     }
     if message == windows_sys::Win32::UI::WindowsAndMessaging::WM_COPYDATA && attached(window) {
