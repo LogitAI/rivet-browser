@@ -270,6 +270,8 @@ fn plan_launch(request: &LaunchRequest, controlled: bool) -> Result<LaunchPlan, 
         }
         DisplayMode::Auto => unreachable!("auto is resolved above"),
     }
+    // Chromium keeps only the last `--disable-features` list, which would drop the provider's.
+    let arguments = credentials::merge_disabled_features(arguments);
     Ok(LaunchPlan {
         program: request.browser.clone(),
         arguments,
@@ -304,6 +306,22 @@ mod tests {
             display,
             credentials: CredentialProvider::Browser,
         }
+    }
+
+    #[test]
+    fn nfr8_launch_has_one_disable_features_list_with_the_provider_feature() {
+        let plan = build_launch_plan(&LaunchRequest {
+            credentials: CredentialProvider::System,
+            ..request(DisplayMode::Visible)
+        })
+        .unwrap();
+        let lists: Vec<&String> = plan
+            .arguments
+            .iter()
+            .filter(|argument| argument.starts_with("--disable-features="))
+            .collect();
+        assert_eq!(lists.len(), 1);
+        assert!(lists[0].contains("WebAuthenticationEnclaveAuthenticator"));
     }
 
     #[test]

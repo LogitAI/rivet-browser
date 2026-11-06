@@ -450,3 +450,35 @@ function Test-PaneRows($Capture, [int]$ColourOne, [int]$ColourTwo, [double]$Scal
     if ($shared -ge 0.5) { return New-Verdict 'FAIL' ('one bar runs across both pages ({0:P0} of the gap above them is paper)' -f $shared) }
     New-Verdict 'PASS' ('each pane has its own row; tops at {0} and {1} px' -f $left.Y0, $right.Y0)
 }
+
+# The first frames of a window against its settled look. Every frame the window showed before it
+# settled must look like it in the top band (`X0` to `X1`, rows 0 to `Y1`, in pixels), where a
+# browser's own title strip would show. A blank frame, painted nothing yet, is no band and is
+# skipped. A frame that differs in more than a sixth of the band fails.
+function Test-FirstFrames($Frames, $Steady, [int]$X0, [int]$X1, [int]$Y1) {
+  if (-not $Steady -or (Test-Blank $Steady)) { return New-Verdict 'NOT_DRIVEN' 'the settled capture is blank' }
+  $painted = 0; $blank = 0; $index = 0
+  foreach ($frame in $Frames) {
+    $index++
+    if (Test-Blank $frame) { $blank++; continue }
+    $x1 = [Math]::Min($X1, [Math]::Min($frame.Width, $Steady.Width))
+    $y1 = [Math]::Min($Y1, [Math]::Min($frame.Height, $Steady.Height))
+    if ($x1 -le $X0 -or $y1 -le 0) { continue }
+    $painted++
+    $differ = 0; $total = 0
+    for ($y = 0; $y -lt $y1; $y += 2) {
+      for ($x = $X0; $x -lt $x1; $x += 2) {
+        $total++
+        $p = $frame.Pixels[$y * $frame.Width + $x]; $q = $Steady.Pixels[$y * $Steady.Width + $x]
+        if ([Math]::Abs((($p -shr 16) -band 255) - (($q -shr 16) -band 255)) -gt $script:Tolerance -or
+            [Math]::Abs((($p -shr 8) -band 255) - (($q -shr 8) -band 255)) -gt $script:Tolerance -or
+            [Math]::Abs(($p -band 255) - ($q -band 255)) -gt $script:Tolerance) { $differ++ }
+      }
+    }
+    if ($total -gt 0 -and $differ / $total -gt (1.0 / 6)) {
+      return New-Verdict 'FAIL' ('frame {0} of {1} differs from the settled window in {2:P0} of the top band' -f $index, @($Frames).Count, ($differ / $total))
+    }
+  }
+  if ($painted -eq 0) { return New-Verdict 'NOT_DRIVEN' "no painted frame was caught before the window settled ($blank blank)" }
+  New-Verdict 'PASS' "$painted painted frames before the window settled all look like it; $blank blank"
+}
