@@ -244,6 +244,12 @@ if ($width -ne 105) { Write-Host "FAIL fr11_ink_width_spans_the_text : wanted 10
 Expect 'fr11_equal_widths_are_monospace' (Test-Monospace 200 201 1 400) 'PASS'
 Expect 'fr11_unequal_widths_are_not_monospace' (Test-Monospace 200 260 1 400) 'FAIL'
 Expect 'fr11_a_full_field_says_nothing' (Test-Monospace 398 398 1 400) 'NOT_DRIVEN'
+# The first frames of a window: a band of the browser's own colour above the page fails.
+$settled = Fill (Fill (New-Window 0xECE8E2) 160 0 890 52 0xFBFAF7) 160 60 890 540 $A
+$band = Fill (Fill (New-Window 0xECE8E2) 160 0 890 52 0xCCCCCC) 160 60 890 540 $A
+Expect 'fr12_first_frames_like_the_settled_window_pass' (Test-FirstFrames @($settled, (New-Window 0xFFFFFF)) $settled 160 890 56) 'PASS'
+Expect 'fr12_a_grey_band_in_a_first_frame_fails' (Test-FirstFrames @($band, $settled) $settled 160 890 56) 'FAIL'
+Expect 'fr12_only_blank_first_frames_are_not_driven' (Test-FirstFrames @((New-Window 0x000000)) $settled 160 890 56) 'NOT_DRIVEN'
 
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'

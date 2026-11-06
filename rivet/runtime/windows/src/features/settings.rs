@@ -88,7 +88,8 @@ impl Row {
 
     /// The line under the label, for a setting that does not apply at once.
     pub(crate) fn note(self) -> Option<&'static str> {
-        (self == Row::Credentials).then_some("Applies from the next start of Rivet")
+        (self == Row::Credentials)
+            .then_some("Applies from the next start. Other managers: move passwords yourself")
     }
 }
 
@@ -1409,9 +1410,9 @@ mod tests {
             Some(Change::Provider(CredentialProvider::System))
         );
         assert_eq!(choices(Row::Credentials), ["Browser", "Windows"]);
-        assert!(Row::Credentials
-            .note()
-            .is_some_and(|note| note.contains("next start")));
+        assert!(Row::Credentials.note().is_some_and(
+            |note| note.contains("next start") && note.contains("move passwords yourself")
+        ));
     }
 
     #[test]

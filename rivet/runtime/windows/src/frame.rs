@@ -1204,7 +1204,8 @@ pub(crate) fn spaces_file() -> Option<(std::path::PathBuf, String)> {
 }
 
 /// Restores the saved spaces, the appbar width and its hidden state when a window attaches.
-/// Missing or corrupt files leave the defaults. A corrupt file is kept under another name.
+/// A corrupt file is kept under another name and its copy is read instead. Without a good one the
+/// defaults stay.
 unsafe fn load_persisted(window: HWND) {
     let owns = PERSIST.with(|persist| {
         let mut persist = persist.borrow_mut();
@@ -1217,11 +1218,7 @@ unsafe fn load_persisted(window: HWND) {
     let Some((path, _)) = spaces_file().filter(|_| owns) else {
         return;
     };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let Some(mut stored) = Spaces::from_json(&text) else {
-        let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
+    let Some(mut stored) = crate::spaces::read_recovering(&path, Spaces::from_json) else {
         return;
     };
     let pending = stored.spaces.take_current_tabs();
@@ -1838,6 +1835,7 @@ unsafe fn relayout(window: HWND) {
 unsafe fn toggle_appbar(window: HWND) {
     close_menu(window);
     edit_layout(window, |layout| layout.toggle());
+    crate::trace::trace(&format!("appbar: hidden {}", layout_of(window).collapsed));
     sync_strip(window);
     SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
     KillTimer(window, PEEK_TIMER);
@@ -1854,6 +1852,7 @@ unsafe fn set_peek(window: HWND, on: bool) {
         changed
     });
     if changed {
+        crate::trace::trace(&format!("appbar: peek {on}"));
         SetTimer(window, PEEK_TIMER, 16, None);
     }
 }
@@ -2029,6 +2028,7 @@ unsafe fn apply_drag(window: HWND) {
     let factor = layout_dpi(window) as f32 / 96.0;
     let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
     if edit_layout(window, |layout| layout.set_width(wanted)) {
+        crate::trace::trace(&format!("appbar: width {}", layout_of(window).side));
         sync_strip(window);
         // The appbar takes its new width before the browser lays the page out, so what the
         // browser exposes is only ever ground or appbar, never the appbar's old surface over a
@@ -2180,15 +2180,7 @@ pub(crate) fn own_debug_directory() -> Option<std::path::PathBuf> {
 }
 
 fn own_debug_directory_in(arguments: impl Iterator<Item = String>) -> Option<std::path::PathBuf> {
-    arguments
-        .filter_map(|argument| {
-            argument
-                .strip_prefix("--user-data-dir=")
-                .map(|dir| std::path::PathBuf::from(dir.trim_matches('"')))
-        })
-        .next()
-        .map(|profile| profile.join("rivet-debug"))
-        .filter(|dir| dir.is_dir())
+    rivet_core::paths::session_debug_dir(arguments)
 }
 
 /// The folder of debug command files that the window's timer looks in, decided once per process:
@@ -2230,10 +2222,7 @@ thread_local! {
 
 /// The log a switched-on trace writes, rotated when it is full. `None` while the switch is off.
 fn trace_file(name: &str) -> Option<std::path::PathBuf> {
-    let path = rivet_core::paths::Layout::current()?.trace_file(name)?;
-    std::fs::create_dir_all(path.parent()?).ok()?;
-    rivet_core::paths::cap_log(&path);
-    Some(path)
+    crate::trace::switched(name)
 }
 
 pub(crate) unsafe fn runtime_directory() -> Option<std::path::PathBuf> {
@@ -2313,8 +2302,14 @@ pub unsafe fn attach(window: HWND) -> bool {
         return false;
     }
     SetPropW(window, key.as_ptr(), replaced as _);
+    // The window stays cloaked until it has Rivet's look, so no frame shows the browser's own strip.
+    crate::features::look::first_look(window, crate::features::look::FirstLook::Attached);
     // DirectComposition targets and frame changes belong on the UI thread that owns the window.
-    PostMessageW(window, attach_message(), 0, 0) != 0
+    let posted = PostMessageW(window, attach_message(), 0, 0) != 0;
+    if !posted {
+        crate::features::look::first_look(window, crate::features::look::FirstLook::AttachFailed);
+    }
+    posted
 }
 
 unsafe fn call_browser(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -2555,12 +2550,7 @@ unsafe fn create_appbar(window: HWND) {
     if attached(window) {
         return;
     }
-    if let Some(path) = own_debug_directory()
-        .map(|dir| dir.join("rivet-vertical-tabs.log"))
-        .filter(|path| path.is_file())
-    {
-        crate::trace::set_trace(path);
-    } else if let Some(path) = trace_file("rivet-vertical-tabs.log") {
+    if let Some(path) = trace_file("rivet-vertical-tabs.log") {
         crate::trace::set_trace(path);
     }
     // Without the layout hook the browser would draw underneath the appbar, so an unknown
@@ -3658,6 +3648,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             let original: WNDPROC = std::mem::transmute(original);
             CallWindowProcW(original, window, message, wparam, lparam)
         }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
+            if crate::features::look::on_timer(window, wparam) =>
+        {
+            0
+        }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam == OPEN_LATER_TIMER => {
             windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, OPEN_LATER_TIMER);
             let due: Vec<_> = OPEN_LATER.with(|later| {
@@ -3997,9 +3992,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ if message == attach_message() => {
+            crate::features::look::first_look(window, crate::features::look::FirstLook::UiThread);
             crate::features::tab_list::connect_command_bar();
             create_appbar(window);
             crate::features::window_corners::keep_round(window);
+            crate::features::look::first_look(window, crate::features::look::FirstLook::RivetDrawn);
             0
         }
         _ => call_browser(window, message, wparam, lparam),
