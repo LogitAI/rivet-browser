@@ -154,6 +154,24 @@ impl<'a> PeFile<'a> {
             .any(|(address, size)| (*address..address.saturating_add(*size)).contains(&rva))
     }
 
+    /// The image base the module was linked at.
+    pub fn image_base(&self) -> u64 {
+        self.image_base
+    }
+
+    /// Every section as `(rva, bytes)`, cut to what the file holds, with whether it is code.
+    pub fn sections(&self) -> Vec<(u32, &'a [u8], bool)> {
+        self.sections
+            .iter()
+            .filter_map(|(address, size, raw)| {
+                let start = *raw as usize;
+                let end = start.saturating_add(*size as usize).min(self.bytes.len());
+                let bytes = self.bytes.get(start..end)?;
+                Some((*address, bytes, self.is_code(*address)))
+            })
+            .collect()
+    }
+
     /// Reads bytes at an RVA.
     pub fn read(&self, rva: u32, length: usize) -> Option<&'a [u8]> {
         let start = self.offset(rva)?;

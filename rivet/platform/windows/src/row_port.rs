@@ -831,6 +831,16 @@ pub fn port_row(
     named: &BTreeMap<u32, (u32, Vec<String>)>,
     new: &NewBuild,
 ) -> (Value, PortReport) {
+    let (row, mut report) = begin_row(prior, new.version);
+    let mut moved: BTreeMap<u32, u32> = BTreeMap::new();
+    let targets = addresses_of(&row);
+    report.addresses = targets.len();
+    port_by_name(prior, &row, named, new, &targets, &mut moved, &mut report);
+    finish_row(row, &moved, new.pe, report)
+}
+
+/// A copy of the prior row with the new version, and frame addresses in the `0x` form.
+fn begin_row(prior: &Value, version: &str) -> (Value, PortReport) {
     let mut row = prior.clone();
     let prior_version = prior["frame"]["version"]
         .as_str()
@@ -841,37 +851,44 @@ pub fn port_row(
             .as_str()
             .unwrap_or_default()
             .to_owned(),
-        version: new.version.to_owned(),
+        version: version.to_owned(),
         prior_version: prior_version.clone(),
         ..PortReport::default()
     };
-    let parts: Vec<u16> = new
-        .version
+    let parts: Vec<u16> = version
         .split('.')
         .filter_map(|part| part.parse().ok())
         .collect();
     if parts.len() != 4 {
         report
             .review
-            .push(format!("{} is not a four part version", new.version));
+            .push(format!("{} is not a four part version", version));
     }
-    if prior_version.split('.').next() != new.version.split('.').next() {
+    if prior_version.split('.').next() != version.split('.').next() {
         report.review.push(format!(
             "the milestone changed from {prior_version} to {}: member offsets, colour ids and layout constants have no public symbols, so they were carried over unchecked",
-            new.version
+            version
         ));
     }
     row["build"]["version"] = json!(parts);
-    row["frame"]["version"] = json!(new.version);
+    row["frame"]["version"] = json!(version);
 
     let frame_as_addresses = frame_addresses(&row["frame"]);
     row["frame_addresses"] = frame_as_addresses;
+    (row, report)
+}
 
-    // Addresses.
-    let mut moved: BTreeMap<u32, u32> = BTreeMap::new();
-    let targets = addresses_of(&row);
-    report.addresses = targets.len();
-    for target in &targets {
+/// Finds each address of a row through the public names of both builds.
+fn port_by_name(
+    prior: &Value,
+    row: &Value,
+    named: &BTreeMap<u32, (u32, Vec<String>)>,
+    new: &NewBuild,
+    targets: &BTreeSet<u32>,
+    moved: &mut BTreeMap<u32, u32>,
+    report: &mut PortReport,
+) {
+    for target in targets {
         let Some((distance, names)) = named.get(target) else {
             continue;
         };
@@ -926,6 +943,15 @@ pub fn port_row(
             moved.insert(*target, place);
         }
     }
+}
+
+/// Writes the new places into a row and reads every guard and table slot back from the new module.
+fn finish_row(
+    mut row: Value,
+    moved: &BTreeMap<u32, u32>,
+    pe: &PeFile,
+    mut report: PortReport,
+) -> (Value, PortReport) {
     report.mapped = moved.len();
 
     let frame_values = row
@@ -957,12 +983,243 @@ pub fn port_row(
     apply_frame_addresses(&mut row["frame"], &frame_values);
 
     // Everything read back from the new module.
-    read_rounded_corners(&mut row["build"], new.pe, &mut report);
-    refresh_guards("build", &mut row["build"], new.pe, &mut report);
-    refresh_frame_guard(&mut row["frame"], new.pe, &mut report);
-    check_vtable_slots(&mut row["build"], new.pe, &mut report);
-    check_frame_slot(&mut row["frame"], new.pe, &mut report);
+    read_rounded_corners(&mut row["build"], pe, &mut report);
+    refresh_guards("build", &mut row["build"], pe, &mut report);
+    refresh_frame_guard(&mut row["frame"], pe, &mut report);
+    check_vtable_slots(&mut row["build"], pe, &mut report);
+    check_frame_slot(&mut row["frame"], pe, &mut report);
     (row, report)
+}
+
+/// How many bytes of a function a fingerprint holds at most.
+const FINGERPRINT_BYTES: usize = 32;
+/// A shorter fingerprint matches too many places to mean anything.
+const FINGERPRINT_LEAST: usize = 16;
+/// The first bytes of a fingerprint, which are searched for, must be plain instruction bytes.
+const ANCHOR: usize = 4;
+/// How far into a class table a fingerprint looks for a slot it can name.
+const SLOTS_SEEN: u32 = 0x80;
+
+/// The addresses of a row that are found again in a new build. Those read from code are skipped.
+fn fingerprint_targets(row: &Value) -> BTreeSet<u32> {
+    let mut row = row.clone();
+    row["frame_addresses"] = frame_addresses(&row["frame"]);
+    let mut found = BTreeSet::new();
+    let mut collect = |path: &str, value: &mut Value| {
+        if READ_FROM_CODE.iter().any(|field| path.ends_with(field)) {
+            return;
+        }
+        if let Some(address) = read_address(value).filter(|value| is_address(*value)) {
+            found.insert(address as u32);
+        }
+    };
+    walk_addresses("", &mut row["build"], &mut collect);
+    walk_addresses(".frame", &mut row["frame_addresses"], &mut collect);
+    found
+}
+
+/// The start of a function with its displacements cleared, cut at an instruction end.
+fn code_print(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
+    if !pe.is_code(address) {
+        return None;
+    }
+    let window = pe.read(address, FINGERPRINT_BYTES + 16)?;
+    // Zeros decode as `add [rax], al` and padding as `int3`: the start of a class table or of the
+    // gap between functions, never of a function.
+    if window.starts_with(&[0x00, 0x00]) || window.first() == Some(&0xCC) {
+        return None;
+    }
+    let (ends, _) = x64::boundaries(window, FINGERPRINT_BYTES);
+    let length = ends
+        .iter()
+        .rev()
+        .find(|end| **end <= FINGERPRINT_BYTES)
+        .copied()?;
+    if length < FINGERPRINT_LEAST {
+        return None;
+    }
+    let bytes = &window[..length];
+    let shape = x64::shape(bytes)?;
+    // The anchor is searched for byte by byte, so it may not hold a displacement.
+    (shape[..ANCHOR] == bytes[..ANCHOR]).then_some(shape)
+}
+
+/// Records, in the row, how the runtime can find each of its addresses in a build with no row.
+/// A function is known by its first instructions without their displacements. A class table is
+/// known by a slot that holds one of those functions. An address that is neither cannot be found,
+/// so then the row gets no fingerprints at all.
+pub fn add_fingerprints(row: &mut Value, pe: &PeFile) -> Result<(), String> {
+    let targets = fingerprint_targets(row);
+    let mut prints = serde_json::Map::new();
+    let mut missing = Vec::new();
+    let mut functions = BTreeMap::new();
+    for target in &targets {
+        if let Some(shape) = code_print(pe, *target) {
+            functions.insert(*target, hex_text(&shape));
+        }
+    }
+    for target in &targets {
+        let key = format!("{target:#x}");
+        if let Some(shape) = functions.get(target) {
+            prints.insert(key, Value::String(shape.clone()));
+            continue;
+        }
+        let slot = (0..SLOTS_SEEN).find_map(|slot| {
+            let holds = pe.pointer_rva(target.checked_add(slot * 8)?)?;
+            functions.contains_key(&holds).then_some((slot, holds))
+        });
+        match slot {
+            Some((slot, holds)) => {
+                prints.insert(key, json!({"slot": slot, "holds": format!("{holds:#x}")}));
+            }
+            None => missing.push(key),
+        }
+    }
+    if !missing.is_empty() {
+        return Err(format!("no fingerprint for {}", missing.join(", ")));
+    }
+    row["fingerprints"] = Value::Object(prints);
+    Ok(())
+}
+
+/// Every place each function fingerprint matches, in one pass over the code.
+fn find_prints(pe: &PeFile, prints: &BTreeMap<u32, Vec<u8>>) -> BTreeMap<u32, Vec<u32>> {
+    let mut by_anchor: HashMap<[u8; ANCHOR], Vec<u32>> = HashMap::new();
+    let mut first = [false; 256];
+    for (target, shape) in prints {
+        let anchor: [u8; ANCHOR] = shape[..ANCHOR].try_into().expect("checked length");
+        first[anchor[0] as usize] = true;
+        by_anchor.entry(anchor).or_default().push(*target);
+    }
+    let mut found: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for (base, bytes, is_code) in pe.sections() {
+        if !is_code {
+            continue;
+        }
+        for at in 0..bytes.len().saturating_sub(ANCHOR) {
+            if !first[bytes[at] as usize] {
+                continue;
+            }
+            let anchor: [u8; ANCHOR] = bytes[at..at + ANCHOR].try_into().expect("in range");
+            let Some(targets) = by_anchor.get(&anchor) else {
+                continue;
+            };
+            for target in targets {
+                let shape = &prints[target];
+                let Some(candidate) = bytes.get(at..at + shape.len()) else {
+                    continue;
+                };
+                if x64::shape(candidate).as_deref() == Some(shape.as_slice()) {
+                    found.entry(*target).or_default().push(base + at as u32);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Every class table whose given slot holds a function, by a pointer search over the module.
+fn find_table(pe: &PeFile, slot: u32, function: u32) -> Vec<u32> {
+    let value = (pe.image_base() + u64::from(function)).to_le_bytes();
+    let mut found = Vec::new();
+    for (base, bytes, _) in pe.sections() {
+        for at in (0..bytes.len().saturating_sub(7)).step_by(8) {
+            if bytes[at..at + 8] == value {
+                if let Some(table) = (base + at as u32).checked_sub(slot * 8) {
+                    found.push(table);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Makes the row of a build that has no row from the fingerprints of a verified row of the same
+/// milestone, without symbols. Each address must match exactly one place, no two addresses may
+/// share one, and every function start and table slot is then checked again in the new module the
+/// way a ported row is. Any doubt is an error with its reasons, and then the runtime changes
+/// nothing in the browser.
+pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<String>> {
+    let Some(stored) = prior["fingerprints"].as_object() else {
+        return Err(vec!["the row has no fingerprints".to_owned()]);
+    };
+    let (row, mut report) = begin_row(prior, version);
+    let targets = fingerprint_targets(prior);
+    report.addresses = targets.len();
+    let mut functions = BTreeMap::new();
+    let mut tables = BTreeMap::new();
+    for target in &targets {
+        match stored.get(&format!("{target:#x}")) {
+            Some(Value::String(text)) => match hex(text).filter(|shape| shape.len() >= ANCHOR) {
+                Some(shape) => {
+                    functions.insert(*target, shape);
+                }
+                None => report
+                    .review
+                    .push(format!("{target:#x}: unreadable fingerprint")),
+            },
+            Some(Value::Object(table)) => {
+                let slot = table["slot"]
+                    .as_u64()
+                    .and_then(|slot| u32::try_from(slot).ok());
+                let holds = read_address(&table["holds"]).map(|holds| holds as u32);
+                match (slot, holds) {
+                    (Some(slot), Some(holds)) => {
+                        tables.insert(*target, (slot, holds));
+                    }
+                    _ => report
+                        .review
+                        .push(format!("{target:#x}: unreadable table fingerprint")),
+                }
+            }
+            _ => report.review.push(format!("{target:#x}: no fingerprint")),
+        }
+    }
+    let found = find_prints(pe, &functions);
+    let mut moved = BTreeMap::new();
+    for target in functions.keys() {
+        match found.get(target).map(Vec::as_slice) {
+            Some([only]) => {
+                moved.insert(*target, *only);
+            }
+            Some(many) => report
+                .review
+                .push(format!("{target:#x} matches {} places", many.len())),
+            None => report.review.push(format!("{target:#x} matches no place")),
+        }
+    }
+    for (target, (slot, holds)) in &tables {
+        let Some(function) = moved.get(holds).copied() else {
+            report.review.push(format!(
+                "{target:#x}: the function in slot {slot} was not found"
+            ));
+            continue;
+        };
+        match find_table(pe, *slot, function).as_slice() {
+            [only] => {
+                moved.insert(*target, *only);
+            }
+            many => report.review.push(format!(
+                "{target:#x}: {} tables hold {function:#x} in slot {slot}",
+                many.len()
+            )),
+        }
+    }
+    let places: BTreeSet<u32> = moved.values().copied().collect();
+    if places.len() != moved.len() {
+        report
+            .review
+            .push("two addresses found the same place".to_owned());
+    }
+    let (mut row, report) = finish_row(row, &moved, pe, report);
+    if !report.review.is_empty() {
+        return Err(report.review);
+    }
+    if let Some(object) = row.as_object_mut() {
+        // They describe the prior build, so they would mislead in this row.
+        object.remove("fingerprints");
+    }
+    Ok(row)
 }
 
 /// A folded function that fills a known table slot is the one in that slot of the new table.
@@ -1395,5 +1652,151 @@ mod tests {
         assert_eq!(x64::decode(&[0x0F, 0x05]), None);
         assert_eq!(x64::boundaries(&[0x56, 0xCF, 0x90], 3), (vec![1], false));
         assert_eq!(x64::shape(&[0x56, 0xCF]), None);
+    }
+
+    /// A verified row whose functions sit at 0x101000 in its module.
+    fn verified_row() -> Value {
+        json!({
+            "frame": {
+                "browser": "B", "version": "1.0.0.2", "module": "b.dll",
+                "frame_view_vtable": 0x101000, "client_view_slot": 1, "client_view_bounds": 0x101100,
+                "hwnd_for_view": 0x101200, "hwnd_for_view_prologue": "4883ec28",
+            },
+            "build": {
+                "browser": "B", "module": "b.dll", "version": [1, 0, 0, 2],
+                "toolbar": {
+                    "paint": "0x101300", "paint_prologue": "415741564155415456575553",
+                    "view_layer": "0x20", "missing": "0x7fff0000",
+                },
+                "tabs": {"signatures": [["0x101300", "41574156"]]},
+            },
+        })
+    }
+
+    /// The same functions `shift` bytes further on, with `displacement` in every RIP-relative
+    /// field, as the next build of a milestone lays them out.
+    fn shifted_code(shift: u32, displacement: u8) -> Vec<(u32, Vec<u8>)> {
+        let d = format!("{displacement:02x}");
+        vec![
+            (0x101008 + shift, pointer(0x101100 + shift).to_vec()),
+            // mov [rsp+8],rbx; push rdi; sub rsp,20h; mov rax,[rip+d]; xor rax,rsp
+            (
+                0x101100 + shift,
+                hex(&format!("48895c2408574883ec20488b05{d}0000004833c4")).unwrap(),
+            ),
+            // sub rsp,28h; mov rcx,[rip+d]; call rel32
+            (
+                0x101200 + shift,
+                hex(&format!("4883ec28488b0d{d}000000e8{d}000000")).unwrap(),
+            ),
+            // push r15..rbx; sub rsp,0a0h
+            (
+                0x101300 + shift,
+                hex("4157415641554154565755534881eca0000000").unwrap(),
+            ),
+        ]
+    }
+
+    fn fingerprinted() -> Value {
+        let bytes = module(&code_refs(&shifted_code(0, 0x10)));
+        let pe = PeFile::parse(&bytes).unwrap();
+        let mut row = verified_row();
+        add_fingerprints(&mut row, &pe).unwrap();
+        row
+    }
+
+    fn find(row: &Value, code: &[(u32, Vec<u8>)], version: &str) -> Result<Value, Vec<String>> {
+        let bytes = module(&code_refs(code));
+        let pe = PeFile::parse(&bytes).unwrap();
+        find_row(row, version, &pe)
+    }
+
+    #[test]
+    fn nfr6_an_unknown_build_takes_the_addresses_its_fingerprints_find() {
+        let row = fingerprinted();
+        assert_eq!(row["fingerprints"]["0x101000"]["slot"], 1);
+        assert_eq!(row["fingerprints"]["0x101000"]["holds"], "0x101100");
+        let found = find(&row, &shifted_code(0x2000, 0x44), "1.0.0.3").unwrap();
+        assert_eq!(found["build"]["toolbar"]["paint"], "0x103300");
+        assert_eq!(found["build"]["tabs"]["signatures"][0][0], "0x103300");
+        assert_eq!(found["frame"]["frame_view_vtable"], 0x103000);
+        assert_eq!(found["frame"]["client_view_bounds"], 0x103100);
+        assert_eq!(found["frame"]["hwnd_for_view"], 0x103200);
+        assert_eq!(found["frame"]["version"], "1.0.0.3");
+        assert_eq!(found["build"]["version"], json!([1, 0, 0, 3]));
+        // Values that are not addresses stay, and the prior build's fingerprints do not.
+        assert_eq!(found["build"]["toolbar"]["view_layer"], "0x20");
+        assert!(found.get("fingerprints").is_none());
+        assert!(found.get("frame_addresses").is_none());
+    }
+
+    #[test]
+    fn nfr6_a_fingerprint_that_matches_two_places_changes_nothing() {
+        let mut code = shifted_code(0x2000, 0x44);
+        code.push((
+            0x105300,
+            hex("4157415641554154565755534881eca0000000").unwrap(),
+        ));
+        let reasons = find(&fingerprinted(), &code, "1.0.0.3").unwrap_err();
+        assert!(
+            reasons
+                .iter()
+                .any(|line| line.contains("0x101300 matches 2 places")),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn nfr6_a_changed_function_start_changes_nothing() {
+        let mut code = shifted_code(0x2000, 0x44);
+        // push r15; push r14; push r13; push rbp (was push r12) ...
+        code[3].1 = hex("4157415641555556575553904881eca0000000").unwrap();
+        let reasons = find(&fingerprinted(), &code, "1.0.0.3").unwrap_err();
+        assert!(
+            reasons
+                .iter()
+                .any(|line| line.contains("0x101300 matches no place")),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn nfr6_a_table_that_no_longer_holds_its_function_changes_nothing() {
+        let code: Vec<_> = shifted_code(0x2000, 0x44)
+            .into_iter()
+            .filter(|(rva, _)| *rva != 0x103008)
+            .collect();
+        let reasons = find(&fingerprinted(), &code, "1.0.0.3").unwrap_err();
+        assert!(
+            reasons.iter().any(|line| line.contains("0 tables hold")),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn nfr6_fingerprints_do_not_cross_a_milestone() {
+        let reasons = find(&fingerprinted(), &shifted_code(0x2000, 0x44), "2.0.0.1").unwrap_err();
+        assert!(
+            reasons.iter().any(|line| line.contains("milestone")),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn nfr6_a_row_without_fingerprints_finds_nothing() {
+        let reasons = find(&verified_row(), &shifted_code(0x2000, 0x44), "1.0.0.3").unwrap_err();
+        assert_eq!(reasons, ["the row has no fingerprints"]);
+    }
+
+    #[test]
+    fn nfr3_an_address_that_is_neither_code_nor_a_table_gets_no_fingerprints() {
+        let bytes = module(&code_refs(&shifted_code(0, 0x10)));
+        let pe = PeFile::parse(&bytes).unwrap();
+        let mut row = verified_row();
+        // Inside the code section's range but past what the file holds.
+        row["build"]["toolbar"]["state"] = json!("0x1f0000");
+        let error = add_fingerprints(&mut row, &pe).unwrap_err();
+        assert!(error.contains("0x1f0000"), "{error}");
+        assert!(row.get("fingerprints").is_none());
     }
 }
