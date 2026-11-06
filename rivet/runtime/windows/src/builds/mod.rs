@@ -20,8 +20,8 @@ pub mod page_tool_rows;
 mod samsung;
 mod whale;
 
-pub use brave::{BRAVE, BRAVE_63};
-pub use chrome::{CHROME, CHROME_150, CHROME_156_74, CHROME_156_80};
+pub use brave::{BRAVE, BRAVE_157_55, BRAVE_63};
+pub use chrome::{CHROME, CHROME_150, CHROME_156_74, CHROME_156_80, CHROME_157_38};
 pub use edge::EDGE;
 pub use samsung::SAMSUNG;
 pub use whale::{WHALE, WHALE_ADD_TAB_AT};
@@ -903,15 +903,17 @@ pub fn unchecked_reason(build: &Build, feature: &str) -> &'static str {
 }
 
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 9] = [
+static TABLE: [&Build; 11] = [
     &CHROME_156_74,
     &CHROME_156_80,
+    &CHROME_157_38,
     &CHROME,
     &EDGE,
     &CHROME_150,
     &WHALE,
     &BRAVE,
     &BRAVE_63,
+    &BRAVE_157_55,
     &SAMSUNG,
 ];
 
