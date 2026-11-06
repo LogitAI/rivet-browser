@@ -769,7 +769,7 @@ fn keep_build_in_background(browser: &std::path::Path, root: &std::path::Path) {
     let Ok(rivet) = env::current_exe() else {
         return;
     };
-    let _ = Command::new(rivet)
+    let _ = rivet_platform_windows::background::hidden(&mut Command::new(rivet))
         .args(["hold", "refresh", "--browser"])
         .arg(browser)
         .arg("--hold")
