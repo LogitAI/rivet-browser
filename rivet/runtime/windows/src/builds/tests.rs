@@ -832,6 +832,8 @@ const APP_WINDOW_MODULES: &[(&str, [u16; 4], &str)] = &[
         [156, 0, 8078, 80],
         r"C:\Program Files\Google\Chrome\Application\156.0.8078.80\chrome.dll",
     ),
+    ("Google Chrome", [157, 0, 8103, 38], CHROME_157_DLL),
+    ("Brave", [157, 1, 99, 55], BRAVE_157_DLL),
 ];
 
 #[test]
@@ -868,6 +870,8 @@ fn fr12_every_address_bar_row_matches_its_installed_build() {
             r"C:\Program Files\BraveSoftware\Brave-Browser\Application\156.1.98.63\chrome.dll",
         ),
         (&WHALE, WHALE_DLL),
+        (&CHROME_157_38, CHROME_157_DLL),
+        (&BRAVE_157_55, BRAVE_157_DLL),
     ];
     for (build, path) in modules {
         let row = build
@@ -996,7 +1000,9 @@ fn fr13_app_window_functions_match_the_installed_builds() {
 #[test]
 fn fr9_every_app_window_row_records_the_move_to_new_window_delegate() {
     // Builds of Chromium 150 and older keep a vector's end as a pointer; 156 keeps its size.
-    let expected: [(&str, [u16; 4], usize, bool); 6] = [
+    let expected: [(&str, [u16; 4], usize, bool); 8] = [
+        ("Google Chrome", [157, 0, 8103, 38], 0x0A9F_FF30, false),
+        ("Brave", [157, 1, 99, 55], 0x0BF1_6A60, false),
         ("Google Chrome", [156, 0, 8078, 74], 0x09E57B00, false),
         ("Google Chrome", [156, 0, 8078, 80], 0x09E4CC60, false),
         ("Microsoft Edge", [156, 0, 4314, 58], 0x0A299420, false),
@@ -1025,6 +1031,118 @@ fn fr9_every_app_window_row_records_the_move_to_new_window_delegate() {
             Some(rva)
         );
     }
+}
+
+/// The installed modules of the Chromium 157 builds.
+const CHROME_157_DLL: &str = r"C:\Program Files\Google\Chrome\Application\157.0.8103.38\chrome.dll";
+const BRAVE_157_DLL: &str =
+    r"C:\Program Files\BraveSoftware\Brave-Browser\Application\157.1.99.55\chrome.dll";
+
+#[test]
+fn nfr3_chromium_157_rows_match_the_installed_builds() {
+    // Both rows were ported by name from the 156 rows with each build's own public symbols. Every
+    // recorded first byte must be the installed module's.
+    for (build, path) in [
+        (&CHROME_157_38, CHROME_157_DLL),
+        (&BRAVE_157_55, BRAVE_157_DLL),
+    ] {
+        let Ok(file) = std::fs::read(path) else {
+            continue;
+        };
+        let mut checked = 0;
+        check_row_bytes(
+            &file,
+            &crate::row_data::RowValue::to_row(build),
+            "build",
+            &mut checked,
+        );
+        assert!(
+            checked > 60,
+            "{}: only {checked} recorded byte runs were compared",
+            build.browser
+        );
+    }
+}
+
+#[test]
+fn nfr3_chromium_157_rows_record_the_members_that_moved() {
+    // Chromium 157 made `views::View` eight bytes shorter after its bounds, so every view member
+    // past them moved, and it took one virtual out of the frame view. The values were read again
+    // from each build's instructions, not carried over.
+    for build in [&CHROME_157_38, &BRAVE_157_55] {
+        let name = build.browser;
+        assert_eq!(build.tabs.browser_in_view, 0x558, "{name}");
+        assert_eq!(build.side_panel.browser_offset, 0x558, "{name}");
+        assert_eq!(build.layout.view_bounds_offset, 0x1C8, "{name}");
+        assert_eq!(build.layout.frame_browser_window_offset, 0x338, "{name}");
+        assert_eq!(build.layout.caption_container_offset, 0x3C0, "{name}");
+        assert_eq!(
+            (build.layout.top_inset_slot, build.layout.caption_paint_slot),
+            (126, 113),
+            "{name}"
+        );
+        assert_eq!(build.omnibox.as_ref().unwrap().match_size, 0x690, "{name}");
+        let split = &build.split;
+        assert_eq!(
+            (
+                split.layout_delegate_offset,
+                split.containers_member,
+                split.container_count_member,
+                split.active_member,
+                split.split_insets_member,
+            ),
+            (0x320, 0x348, 0x350, 0x3C0, 0x3FC),
+            "{name}"
+        );
+        assert_eq!(
+            (
+                split.container_delegate_offset,
+                split.mini_toolbar_member,
+                split.outline_member
+            ),
+            (0x318, 0x438, 0x440),
+            "{name}"
+        );
+        let row = build.app_window.as_ref().unwrap();
+        assert_eq!(row.web_view_size, 0x520, "{name}");
+        assert_eq!(
+            (row.view_parent, row.view_children),
+            (0x198, 0x1A0),
+            "{name}"
+        );
+    }
+    // Chromium 157 dropped one side panel entry. Brave keeps its own four.
+    assert_eq!(
+        (
+            CHROME_157_38.side_panel.extension_entry,
+            CHROME_157_38.side_panel.entry_count
+        ),
+        (22, 23)
+    );
+    assert_eq!(
+        (
+            BRAVE_157_55.side_panel.extension_entry,
+            BRAVE_157_55.side_panel.entry_count
+        ),
+        (26, 27)
+    );
+    // Colour ids moved by five, and Brave's stay 17 above Chrome's past the frame ones.
+    assert_eq!(
+        CHROME_157_38.layout.frame_ids,
+        &[0x141, 0x142, 0x145, 0x146, 0x149]
+    );
+    assert_eq!(
+        BRAVE_157_55.layout.frame_ids,
+        CHROME_157_38.layout.frame_ids
+    );
+    assert_eq!(CHROME_157_38.layout.caption_ink_ids, &[0x673, 0x674, 0x675]);
+    assert_eq!(BRAVE_157_55.layout.caption_ink_ids, &[0x684, 0x685, 0x686]);
+    // Brave's window feature object keeps its browser type eight bytes further on.
+    assert_eq!(
+        CHROME_157_38.app_window.as_ref().unwrap().browser_type,
+        0x10
+    );
+    assert_eq!(BRAVE_157_55.app_window.as_ref().unwrap().browser_type, 0x18);
 }
 
 fn check_app_window_bytes(browser: &str, version: &[u16; 4], file: &[u8]) {

@@ -20,6 +20,16 @@
     "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
   },
   {
+    "browser": "Brave",
+    "version": "157.1.99.55",
+    "module": "chrome.dll",
+    "frame_view_vtable": 291093392,
+    "client_view_slot": 102,
+    "client_view_bounds": 65005024,
+    "hwnd_for_view": 65715936,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
     "browser": "Google Chrome",
     "version": "150.0.7871.187",
     "module": "chrome.dll",
@@ -57,6 +67,16 @@
     "client_view_slot": 103,
     "client_view_bounds": 55062656,
     "hwnd_for_view": 55105520,
+    "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
+  },
+  {
+    "browser": "Google Chrome",
+    "version": "157.0.8103.38",
+    "module": "chrome.dll",
+    "frame_view_vtable": 269960784,
+    "client_view_slot": 102,
+    "client_view_bounds": 57880000,
+    "hwnd_for_view": 57906832,
     "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058"
   },
   {

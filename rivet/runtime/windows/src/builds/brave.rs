@@ -673,3 +673,410 @@ pub static BRAVE_63: Build = Build {
         provider_verified: true,
     },
 };
+
+/// Brave 157.1.99.55's colour ids, read from its colour id tables by the names Brave 156.1.98.63
+/// used. They still sit 17 above Chrome 157's.
+const DEV_BRAVE_157: DevMode = DevMode {
+    colours: &[
+        (0x141, DEV_GROUND),
+        (1614, DEV_GROUND),
+        (818, 0),
+        (819, DEV_HOVER),
+        (1619, DEV_ICON),
+        (1620, DEV_ICON),
+        (1621, DEV_ICON_OFF),
+        (1624, DEV_ICON_HOT),
+        (1622, DEV_ICON_HOT),
+        (1623, DEV_ICON_OFF),
+        (1627, DEV_RULE),
+        (1635, DEV_HOVER),
+        (1636, DEV_RIPPLE),
+        (1668, DEV_ICON_HOT),
+        (1669, DEV_ICON_HOT),
+        (1670, DEV_ICON_HOT),
+        (1029, DEV_ICON),
+        (1030, DEV_ICON),
+        (1031, DEV_ICON_HOT),
+        (1072, DEV_ICON),
+        (1073, DEV_ICON),
+        (1076, DEV_ICON),
+        (1079, DEV_ICON_HOT),
+        (1080, DEV_ICON),
+    ],
+    ..DEV_CHROME_156
+};
+
+/// Brave 157.1.99.55 (Chromium 157.0.8103.39), ported by name from the 156.1.98.63 row with this
+/// build's own public symbols, and every recorded first byte read from the installed module.
+/// Chromium 157 moved member offsets, vtable slots and colour ids. Each value that is not an address
+/// was read again from this build's instructions or its colour id tables, and where a value is
+/// Chromium's, checked against Chrome 157.0.8103.38 too. Found statically and not driven yet.
+pub static BRAVE_157_55: Build = Build {
+    omnibox: Some(super::omnibox_rows::OMNIBOX_BRAVE_157_55),
+    app_window: Some(AppWindow {
+        feature_impl: Some(0x0017C0B0),
+        feature_impl_prologue: &[
+            0x56, 0x48, 0x83, 0xEC, 0x20, 0x8B, 0x41, 0x18, 0x48, 0x83, 0xF8, 0x05,
+        ],
+        browser_type: 0x18,
+        detach: Some(0x0BDC88C0), // Chromium, found statically by name in the public symbols and unverified
+        detach_prologue: &[
+            0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xD6, 0x48, 0x8B, 0x05, 0x6F,
+            0xF7, 0x81,
+        ],
+        insert: Some(0x0BDC83A0), // Chromium, found statically by name in the public symbols and unverified
+        insert_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
+            0xEC, 0x68,
+        ],
+        // `BrowserTabStripModelDelegate::MoveTabsToNewWindow`, found by name in this build's
+        // public symbols.
+        move_to_new_window: Some(0x0BF16A60),
+        move_to_new_window_prologue: &[
+            0x48, 0x8B, 0x49, 0x08, 0xE9, 0xC7, 0x86, 0x01, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+            0xCC, 0xCC,
+        ],
+        move_to_new_window_vector_by_pointer: false,
+        view_parent: 0x198,
+        view_children: 0x1A0,
+        operator_new: 0x73F5220,
+        operator_new_prologue: &[
+            0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x02, 0x5B, 0x09, 0xFE,
+            0x48, 0x85,
+        ],
+        web_view_ctor: 0x2222E60,
+        web_view_ctor_prologue: &[
+            0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0xCF,
+            0x51, 0x3C,
+        ],
+        web_view_size: 0x520,
+        browser_context: Some(0x06DBDCA0),
+        browser_context_prologue: &[
+            0x48, 0x8B, 0x81, 0x90, 0x02, 0x00, 0x00, 0xC3, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+            0xCC, 0xCC,
+        ],
+        browser_context_offset: None,
+        add_child: 0x68E2D70,
+        add_child_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
+            0xEC, 0x88,
+        ],
+        set_contents: 0x2B5A240,
+        set_contents_prologue: &[
+            0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0xE8,
+            0xBE, 0x35,
+        ],
+        set_bounds: Some(0x05E84A70),
+        set_bounds_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
+            0xEC, 0xE8,
+        ],
+        focus_behavior: Some(0x0081FF90),
+        focus_behavior_prologue: &[
+            0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05,
+            0x9E, 0x80,
+        ],
+        request_focus: Some(0x02788250),
+        request_focus_prologue: &[
+            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x01, 0x48, 0x8B,
+            0x40, 0x50,
+        ],
+        request_focus_slot: None,
+        destructor_slot: 0x9,
+        bounds_changed_slot: Some(0x0000004B),
+        window_features: None,
+    }),
+    browser: "Brave",
+    module: "chrome.dll",
+    version: [157, 1, 99, 55],
+    toolbar: Toolbar {
+        get_widget_slot: 11,
+        dev: DEV_BRAVE_157,
+        get_color: 0x05B6CB30, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
+        get_color_bytes: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
+            0x89, 0xD7,
+        ],
+        content_window_for_hwnd: 0x00D6A480, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        widget_for_window: 0x03153E70, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
+        skip: "",
+        toolbar_layout: 0x011E0460, // ?Layout@ToolbarView, found statically and unverified
+    },
+    vertical: VerticalTabs {
+        supported: true,
+        slot: 0x11501450, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
+        should_display: 0x03CC0CB0, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
+        browser_view_for_browser: 0x00363EB0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
+        hwnd_for_view: 0x03EABEE0,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
+        notify_mode_changed: 0x0B7ABF10, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
+        update_collapse_action: 0x02A4CCE0, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
+        destructor: 0x02C793A0, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
+        destructor_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x89,
+        ],
+        browser_offset: 0x1B8,
+        mode_offset: 0x1E8,
+        width_offset: 0x1CC,
+        browser_view_view_vtable: 0x11598D50, // the browser view vtable
+        region_preferred_size: 0x0B5116A0, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        region_preferred_size_slot: 0x1159D840, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
+        invalidate_layout: 0x05B46EF0,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
+        invalidate_layout_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+        ],
+        region_minimum_size: 0x0B511610, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
+        region_minimum_prologue: &[
+            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
+            0x02, 0x00, 0x00, 0x00, 0x00,
+        ],
+        should_draw_tab_strip: 0x06A93F30, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
+        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
+        detour_strip: false,
+        ..UNCHECKED_VERTICALTABS
+    },
+    navigation: Navigation {
+        supported: true,
+        content_window_for_hwnd: 0x00D6A480, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        browser_view_for_window: 0x0C07A830, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
+        active_web_contents: 0x0C07ACE0, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        gurl_from_text: 0x05B3DB20, // ??0GURL@@QEAA@V?$basic_string_view@DU?$char_traits@D@__Cr@std@@@__Cr@std@@@Z
+        gurl_wide: false,
+        gurl_empty: 0x06F48890,           // ??0GURL@@QEAA@XZ
+        gurl_drop: 0x054592C0,            // ??1GURL@@QEAA@XZ
+        open_url_params: 0x089AB120, // ??0OpenURLParams@content@@QEAA@AEBVGURL@@AEBUReferrer@1@W4WindowOpenDisposition@@W4PageTransition@ui@@_N@Z
+        open_url_params_drop: 0x02145260, // ??1OpenURLParams@content@@QEAA@XZ
+        open_url: 0x09B2FB30, // ?OpenURL@WebContentsImpl@content@@UEAAPEAVWebContents@2@AEBUOpenURLParams@2@V?$OnceCallback@...@Z
+        signatures: &[
+            (0x00D6A480, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x0C07A830, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (
+                0x05B3DB20,
+                &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+            ),
+            (0x06F48890, &[0x48, 0x89, 0xC8, 0x0F, 0x57, 0xC0]),
+            (0x054592C0, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28]),
+            (0x089AB120, &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53]),
+            (0x02145260, &[0x41, 0x56, 0x56, 0x57, 0x53]),
+            (
+                0x09B2FB30,
+                &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57],
+            ),
+            (0x0C07ACE0, &[0x48, 0x8B, 0x81, 0x58, 0x05, 0x00, 0x00]),
+        ],
+    },
+    tabs: Tabs {
+        supported: true, // list, switch, close and new tab; groups are not read
+        content_window_for_hwnd: 0x00D6A480,
+        browser_view_for_window: 0x0C07A830,
+        active_web_contents: 0x0C07ACE0,
+        browser_in_view: 0x558, // the field `GetActiveWebContents` reads first
+        groups: false,
+        get_tab_model: 0x06694180, // ?GetTabStripModel@Browser@@UEAAPEAVTabStripModel@@XZ, `mov rax, [rcx + 0x30]; ret`
+        tab_count: 0x0196A020,     // ?count@TabStripModel@@QEBAHXZ
+        tab_at: 0x03124500, // ?GetWebContentsAt@TabStripModel@@QEBAPEAVWebContents@content@@H@Z
+        activate_tab: 0x03124360, // ?ActivateTabAt@TabStripModel@@QEAAXHUTabStripUserGestureDetails@@@Z
+        close_tab: 0x0BDCF440,    // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
+        title: 0x00B0A190, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator@_S@23@@__Cr@std@@XZ
+        new_tab: 0x0BF2E0F0, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
+        last_committed_url: 0x06EB2B20, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
+        visible_url: 0x073ACD20,        // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
+        get_group: 0x03124580, // ?GetTabGroupForTab@TabStripModel@@QEBA?AV?$optional@VTabGroupId@tab_groups@@@__Cr@std@@H@Z
+        signatures: &[
+            (0x00D6A480, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x0C07A830, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0C07ACE0, &[0x48, 0x8B, 0x81, 0x58, 0x05, 0x00, 0x00]),
+            (0x06694180, &[0x48, 0x8B, 0x41, 0x30, 0xC3]),
+            (0x0196A020, &[0x48, 0x8B, 0x41, 0x08, 0x8B, 0x40, 0x20]),
+            (0x03124500, &[0x48, 0x83, 0xEC, 0x28, 0x85, 0xD2]),
+            (0x03124360, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38]),
+            (0x0BDCF440, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28]),
+            (0x00B0A190, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x48]),
+            (
+                0x0BF2E0F0,
+                &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57],
+            ),
+            (0x06EB2B20, &[0x48, 0x63, 0x81, 0xD4, 0x02, 0x00, 0x00]),
+            (0x073ACD20, &[0x48, 0x8B, 0x81, 0xB0, 0x02, 0x00, 0x00]),
+        ],
+        ..UNCHECKED_TABS
+    },
+    split: Split {
+        supported: false,
+        add_to_new_split: 0x0BDD3650, // ?AddToNewSplit@TabStripModel
+        split_adds_active: false,
+        split_vector_ends_by_pointer: false,
+        remove_split: 0x0BDD5230,        // ?RemoveSplit@TabStripModel
+        get_split_for_tab: 0x031245D0,   // ?GetSplitForTab@TabStripModel
+        allocate: 0x073F5220,            // ??2@YAPEAX_K@Z
+        set_rounded_corners: 0x03E16A90, // ?SetRoundedCorners@ContentsContainerView
+        set_rounded_corners_prologue: &[
+            0xF3, 0x0F, 0x10, 0x02, 0x0F, 0x2E, 0x81, 0x7C, 0x04, 0x00, 0x00, 0x75, 0x33,
+        ],
+        set_rounded_corners_changed: 0x03E16AD0,
+        set_rounded_corners_parity: 0x03E16A9D,
+        update_border: ABSENT,
+        update_border_prologue: &[
+            0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x60, 0x0F, 0x29, 0x74, 0x24,
+            0x50,
+        ],
+        set_border_slot: 0xf0 / 8,
+        set_visible_slot: 0x90 / 8,
+        outline_member: 0x440,
+        calculate_layout: 0x022EA510, // ?CalculateProposedLayout@MultiContentsView
+        calculate_layout_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+        ],
+        layout_delegate_offset: 0x320,
+        split_insets_member: 0x3fc,
+        containers_member: 0x348,
+        container_count_member: 0x350,
+        active_member: 0x3c0,
+        schedule_paint: 0x0614DC70, // ?SchedulePaint@View@views
+        schedule_paint_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x40, 0x48],
+        web_contents_focused: 0x03E18E60, // MultiContentsView::OnWebContentsFocused, found by its bytes beside the class's other functions
+        web_contents_focused_prologue: &[
+            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x81, 0x90, 0x03, 0x00, 0x00,
+        ],
+        container_layout: 0x0208D680, // ?CalculateProposedLayout@ContentsContainerView
+        container_delegate_offset: 0x318,
+        mini_toolbar_member: 0x438,
+        flex_layout: 0x069ED3B0, // ?CalculateProposedLayout@FlexLayout@views
+        flex_layout_host: 0x38,
+        location_bar_vtable: 0x115CC710, // ??_7LocationBarView@@6BLayerDelegate@ui@@@, found statically and unverified
+        view_size: 0x1D0,
+        signatures: &[
+            (
+                0x0BDD3650,
+                &[
+                    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+                ],
+            ),
+            (
+                0x0BDD5230,
+                &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x58],
+            ),
+            (
+                0x031245D0,
+                &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x45, 0x85, 0xC0, 0x78],
+            ),
+            (
+                0x073F5220,
+                &[0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9],
+            ),
+        ],
+    },
+    side_panel: SidePanel {
+        supported: false,
+        side_panel_vtable: 0x11583410, // ??_7SidePanel@@6BLayerDelegate@ui@@@
+        browser_offset: 0x558,
+        features_offset: 0xd0,
+        features_coordinator: 0x338,
+        browser_view_view_vtable: 0x11598D50, // the browser view vtable
+        coordinator_vtable: 0x11574EC0, // ??_7SidePanelCoordinator@@6BSidePanelUIBase@@@, found statically and unverified
+        show: 0x0B06A550, // ?Show@SidePanelUIBase@@UEAAXW4SidePanelEntryId@@V?$optional@W4SidePanelOpenTrigger@@@__Cr@std@@_N@Z
+        show_prologue: &[
+            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x44, 0x89, 0xCB,
+        ],
+        entry_id_to_string: 0x01F83090, // ?SidePanelEntryIdToString@@YA?AV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@W4SidePanelEntryId@@@Z
+        entry_id_to_string_prologue: &[
+            0x83, 0xFA, 0x1A, 0x0F, 0x87, 0x03, 0x06, 0x00, 0x00, 0x48, 0x89, 0xC8, 0x89, 0xD1,
+        ],
+        extension_entry: 26,
+        entry_count: 27,
+        hidden_entries: &[],
+        // Slot 5 of the coordinator vtable.
+        toggle: 0x0389B9B0, // ?Toggle@SidePanelCoordinator, found statically and unverified
+        toggle_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x68, 0x48,
+            0x89, 0xCF,
+        ],
+        entry_showing: 0x03899780, // ?IsSidePanelEntryShowing@SidePanelUIBase@@UEBA_NAEBVSidePanelEntryKey@@@Z
+        entry_showing_prologue: &[0x48, 0x8B, 0x49, 0x10, 0x80, 0x79, 0x30, 0x01],
+        registry_from: 0x03087320, // ?From@SidePanelRegistry@@SAPEAV1@PEAVBrowserWindowInterface@@@Z
+        registry_from_prologue: &[0x48, 0x81, 0xC1, 0xA8, 0x00, 0x00, 0x00],
+        get_color_provider: 0x036CDFB0, // ?GetColorProvider@WebContentsImpl@content@@EEBAAEBVColorProvider@ui@@XZ
+        get_color_provider_prologue: &[
+            0x48, 0x8B, 0x89, 0x98, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x01, 0x48, 0x8B, 0x40, 0x08,
+        ],
+        source_in_widget: 0x48,
+        color_source: 0x98,
+        generate_colors_css: 0x06F9B0A0, // ?GenerateColorsCss@ThemeSource@@SA?AV?$optional@V?$basic_string@DU?$char_traits@D@__Cr@std@@@__Cr@std@@AEBVColorProvider@ui@@AEBVGURL@@_N2@Z
+        generate_colors_css_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+        ],
+        layout_vtable: 0x114E49D8, // ??_7BrowserViewTabbedLayoutImpl@@6B@, found statically and unverified
+        proposed_slot: 16,
+        proposed: 0x03B5F310, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl, slot 16, found statically and unverified
+        old_layout: None,
+        registry_end: None,
+        registry_in_coordinator: None,
+        registry_entries: None,
+        coordinator_browser: None,
+        entry_key_size: None,
+        extensions_by_toggle: None,
+        host_view: 0x38,
+        page_area: 0x50,
+        contents_container: 0xb8,
+        vertical_tabs: 0x80,
+        toolbar: 0x60,
+        contents_outline: 0x58,
+        side_panel: 0xc0,
+        side_panel_animation: 0xc8,
+        layout_immediately: 0x05E85780, // ?LayoutImmediately@View@views
+        layout_immediately_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
+        ],
+        event_handler_for_point: 0x0152B340, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
+    },
+    layout: Layout {
+        on_paint_slot: 89,
+        on_paint: 0x01A83CF0, // ?OnPaint@BrowserFrameViewWin, slot 89, found statically and unverified
+        on_paint_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
+        ],
+        get_color_provider: 0x06713B80, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
+        get_color_provider_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x78, 0x48],
+        draw_color: 0x03EDB680, // ?DrawColor@Canvas@gfx@@QEAAXI@Z
+        draw_color_prologue: &[0x48, 0x83, 0xEC, 0x38],
+        frame_ids: &[0x141, 0x142, 0x145, 0x146, 0x149],
+        corner_vtable: 0x1160FD30, // ??_7CustomFloatingCorner@@6BLayerDelegate@ui@@@
+        corner_paint: 0x0C083EC0,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
+        corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        caption_vtable: 0x11644170, // ??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@
+        caption_size_slot: 74,
+        caption_size: 0x03E5AC90, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        caption_paint_slot: 113,
+        caption_paint: 0x01D8BBD0, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
+        caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
+        top_inset_slot: 126,
+        top_inset: 0x02360D60, // ?GetTopInset@BrowserFrameViewWin, slot 127, found statically and unverified
+        layout_slot: 23,
+        layout: 0x03DFF0D0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
+        layout_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40],
+        set_bounds_rect: 0x05E84A70, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
+        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        caption_container_offset: 0x3C0,
+        view_bounds_offset: 0x1C8,
+        browser_view_view_vtable: 0x11598D50, // the browser view vtable
+        frame_vtable: 0x1159C030, // ??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@, found statically and unverified
+        layout_immediately: 0x05E85780, // ?LayoutImmediately@View@views@@AEAAXXZ
+        layout_immediately_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
+        ],
+        set_layer: 0x00817D20, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
+        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
+        set_radius: 0x0315EF10, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
+        set_masks: 0x0315EF00, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
+        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
+        stack_at_top: 0x0C3D6D80, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
+        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
+        set_opaque: 0x0080EA30, // ?SetFillsBoundsOpaquely@Layer@ui@@UEAAX_N@Z
+        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
+        frame_browser_window_offset: 0x338,
+        browser_window_in_view: 0x1F0,
+        caption_ink_ids: &[0x684, 0x685, 0x686],
+        top_inset_adjust: 0, // Chromium's own GetTopInset, as on Chrome
+        provider_verified: true,
+    },
+};
