@@ -277,6 +277,7 @@ mod tests {
         let table: Vec<ChromeBuild> = serde_json::from_str(TABLE).unwrap();
         assert!(table.iter().any(|build| build.version == "156.0.8078.48"));
         assert!(table.iter().any(|build| build.version == "156.0.8078.80"));
+        assert!(table.iter().any(|build| build.version == "157.0.8103.38"));
         assert!(table.iter().any(|build| build.version == "150.0.7871.187"));
         assert!(table
             .iter()
@@ -287,6 +288,9 @@ mod tests {
         assert!(table
             .iter()
             .any(|build| build.browser == "Brave" && build.version == "156.1.98.63"));
+        assert!(table
+            .iter()
+            .any(|build| build.browser == "Brave" && build.version == "157.1.99.55"));
         assert!(table
             .iter()
             .any(|build| build.module == "samsunginternet.dll" && build.version == "30.0.4.29"));
