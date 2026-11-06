@@ -268,8 +268,12 @@ struct Bar {
     generation: u64,
     suggestions: Vec<crate::features::omnibox::Suggestion>,
     selected: Option<usize>,
-    /// The text the suggestions are for.
+    /// The text the suggestions are for, as typed: without the inline completion.
     queried: String,
+    /// The browser's inline completion shown selected after the typed text, or empty.
+    inline: String,
+    /// Whether the last key deleted text. The browser completes nothing inline then.
+    deleting: bool,
 }
 
 thread_local! {
@@ -294,6 +298,8 @@ fn with_bar<R>(window: HWND, work: impl FnOnce(&mut Bar) -> R) -> R {
             suggestions: Vec::new(),
             selected: None,
             queried: String::new(),
+            inline: String::new(),
+            deleting: false,
         });
         work(bar)
     })
@@ -727,6 +733,8 @@ unsafe fn end(bar: &mut Bar) {
     bar.suggestions.clear();
     bar.selected = None;
     bar.queried.clear();
+    bar.inline.clear();
+    bar.deleting = false;
     bar.generation += 1;
 }
 
@@ -787,26 +795,109 @@ unsafe fn row_at(window: HWND, point: POINT) -> Option<usize> {
     (index < count).then_some(index)
 }
 
-/// Asks the browser for suggestions when the text changed since it last asked.
+const EM_GETSEL: u32 = 0x00B0;
+const EM_SETSEL: u32 = 0x00B1;
+
+/// The field's selection as start and end in UTF-16 units.
+fn selection(field: &Field) -> (usize, usize) {
+    let (mut start, mut end) = (0u32, 0u32);
+    field.send(
+        EM_GETSEL,
+        &mut start as *mut u32 as usize,
+        &mut end as *mut u32 as isize,
+    );
+    (start as usize, end as usize)
+}
+
+/// Whether the input method holds an open composition in the window.
+unsafe fn composing(window: HWND) -> bool {
+    use windows_sys::Win32::UI::Input::Ime::{
+        ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext, GCS_COMPSTR,
+    };
+    let context = ImmGetContext(window);
+    if context as isize == 0 {
+        return false;
+    }
+    let length = ImmGetCompositionStringW(context, GCS_COMPSTR, std::ptr::null_mut(), 0);
+    ImmReleaseContext(window, context);
+    length > 0
+}
+
+/// Whether the browser may complete `text` inline: the caret sits at its end with nothing
+/// selected and the last key added text, as in the browser's own address bar.
+pub(crate) fn may_complete_inline(text: &str, selection: (usize, usize), deleting: bool) -> bool {
+    let length = text.encode_utf16().count();
+    !deleting && selection == (length, length)
+}
+
+/// The field's text with the browser's completion after the typed text, and the completion's
+/// start and end in UTF-16 units, selected so the next key replaces it.
+pub(crate) fn completed(typed: &str, inline: &str) -> (String, usize, usize) {
+    let start = typed.encode_utf16().count();
+    (
+        format!("{typed}{inline}"),
+        start,
+        start + inline.encode_utf16().count(),
+    )
+}
+
+/// Asks the browser for suggestions when the text changed since it last asked. The browser answers
+/// at once, so nothing waits or polls: the list is drawn again only when the text changed.
 unsafe fn refresh_suggestions(window: HWND) {
-    let Some(text) = with_bar(window, |bar| {
-        let text = bar.field.as_ref()?.text();
-        (bar.editing && text != bar.queried).then_some(text)
+    let Some((text, inline)) = with_bar(window, |bar| {
+        let field = bar.field.as_ref()?;
+        let text = field.text();
+        // Deleting the selected completion leaves the typed text, which needs no new query.
+        if text == bar.queried && !bar.inline.is_empty() {
+            bar.inline.clear();
+            bar.generation += 1;
+        }
+        if !bar.editing
+            || text == bar.queried
+            || (!bar.inline.is_empty() && text == format!("{}{}", bar.queried, bar.inline))
+        {
+            return None;
+        }
+        Some((
+            text.clone(),
+            may_complete_inline(&text, selection(field), bar.deleting),
+        ))
     }) else {
         return;
     };
+    let inline = inline && !composing(window);
     let found = if text.trim().is_empty() {
         Some(Vec::new())
     } else {
-        crate::features::omnibox::suggest(window, &text)
+        crate::features::omnibox::suggest_with(window, &text, inline)
     };
-    with_bar(window, |bar| {
-        bar.queried = text;
+    let shown = with_bar(window, |bar| {
         bar.suggestions = found.unwrap_or_default();
         bar.suggestions.truncate(SUGGESTIONS_SHOWN);
         bar.selected = None;
+        bar.inline = bar
+            .suggestions
+            .first()
+            .map(|first| first.inline.clone())
+            .unwrap_or_default();
+        if !bar.inline.is_empty() {
+            if let Some(field) = bar.field.as_ref() {
+                let (full, start, end) = completed(&text, &bar.inline);
+                field.set_text(&full);
+                field.send(EM_SETSEL, start, end as isize);
+                field.take_changed();
+            }
+        }
+        bar.queried = text.clone();
         bar.generation += 1;
+        let rows: Vec<&str> = bar
+            .suggestions
+            .iter()
+            .map(|s| s.destination.as_str())
+            .collect();
+        format!("{rows:?} inline {:?}", bar.inline)
     });
+    crate::trace::trace(&format!("address bar: suggestions for {text:?}: {shown}"));
 }
 
 /// Opens a suggestion as the browser's dropdown does.
@@ -967,7 +1058,11 @@ pub(crate) unsafe fn message(
         }
         _ if !editing => None,
         WM_KEYDOWN => match wparam as u16 {
-            0x0D if with_bar(window, |bar| bar.selected.is_some()) => {
+            // Enter opens the picked suggestion, or the default one while its completion shows.
+            0x0D if with_bar(window, |bar| {
+                bar.selected.is_some() || (!bar.inline.is_empty() && !bar.suggestions.is_empty())
+            }) =>
+            {
                 let index = with_bar(window, |bar| bar.selected.unwrap_or(0));
                 open_suggestion(window, index);
                 Some(0)
@@ -978,12 +1073,24 @@ pub(crate) unsafe fn message(
                 with_bar(window, |bar| {
                     let count = bar.suggestions.len();
                     if count > 0 {
-                        bar.selected = Some(match (bar.selected, down) {
+                        let at = match (bar.selected, down) {
                             (None, true) => 0,
                             (None, false) => count - 1,
                             (Some(at), true) => (at + 1) % count,
                             (Some(at), false) => (at + count - 1) % count,
-                        });
+                        };
+                        bar.selected = Some(at);
+                        // The field shows the picked match as the browser's dropdown does, and
+                        // typing goes on from it.
+                        let fill = bar.suggestions[at].fill.clone();
+                        if let (false, Some(field)) = (fill.is_empty(), bar.field.as_ref()) {
+                            field.set_text(&fill);
+                            let end = fill.encode_utf16().count();
+                            field.send(EM_SETSEL, end, end as isize);
+                            field.take_changed();
+                            bar.queried = fill;
+                            bar.inline.clear();
+                        }
                         bar.generation += 1;
                     }
                 });
@@ -1005,8 +1112,21 @@ pub(crate) unsafe fn message(
                 Some(0)
             }
             0x1B => {
-                // Escape puts the page's address back, and a second one leaves the field.
+                // Escape first closes the suggestions and drops the inline completion, then puts
+                // the page's address back, and a last one leaves the field.
                 with_bar(window, |bar| {
+                    if !bar.suggestions.is_empty() {
+                        if let (false, Some(field)) = (bar.inline.is_empty(), bar.field.as_ref()) {
+                            field.set_text(&bar.queried);
+                            let end = bar.queried.encode_utf16().count();
+                            field.send(EM_SETSEL, end, end as isize);
+                        }
+                        bar.inline.clear();
+                        bar.suggestions.clear();
+                        bar.selected = None;
+                        bar.generation += 1;
+                        return;
+                    }
                     let field = bar.field.as_ref();
                     let now = field.map(|field| field.text()).unwrap_or_default();
                     if now != bar.original {
@@ -1031,6 +1151,9 @@ pub(crate) unsafe fn message(
                     crate::frame::update_appbar(window);
                     return Some(0);
                 }
+                with_bar(window, |bar| {
+                    bar.deleting = matches!(wparam as u16, 0x08 | 0x2E)
+                });
                 let used = forward(window, message, wparam, lparam);
                 refresh_suggestions(window);
                 crate::frame::update_appbar(window);
@@ -1041,6 +1164,7 @@ pub(crate) unsafe fn message(
             if matches!(wparam, 0x0d | 0x1b | 0x09 | 0x0a) {
                 return Some(0);
             }
+            with_bar(window, |bar| bar.deleting = wparam == 0x08);
             let used = forward(window, message, wparam, lparam);
             refresh_suggestions(window);
             crate::frame::update_appbar(window);
@@ -1268,6 +1392,25 @@ pub(crate) fn caret(window: HWND) -> Option<RECT> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_inline_completion_is_asked_only_while_typing_at_the_end() {
+        assert!(may_complete_inline("exa", (3, 3), false));
+        assert!(!may_complete_inline("exa", (3, 3), true));
+        assert!(!may_complete_inline("exa", (1, 1), false));
+        assert!(!may_complete_inline("exa", (0, 3), false));
+        // Positions are UTF-16 units, as the text engine counts them.
+        assert!(may_complete_inline("검색", (2, 2), false));
+    }
+
+    #[test]
+    fn fr12_inline_completion_is_selected_after_the_typed_text() {
+        assert_eq!(
+            completed("exa", "mple.com"),
+            ("example.com".to_string(), 3, 11)
+        );
+        assert_eq!(completed("검", "색어"), ("검색어".to_string(), 1, 3));
+    }
 
     #[test]
     fn idle_caret_blink_redraws_only_the_caret() {
