@@ -2314,7 +2314,11 @@ pub unsafe fn attach(window: HWND) -> bool {
     }
     SetPropW(window, key.as_ptr(), replaced as _);
     // DirectComposition targets and frame changes belong on the UI thread that owns the window.
-    PostMessageW(window, attach_message(), 0, 0) != 0
+    let posted = PostMessageW(window, attach_message(), 0, 0) != 0;
+    if posted {
+        crate::features::control::serve(window);
+    }
+    posted
 }
 
 unsafe fn call_browser(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -3107,6 +3111,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
     {
         crate::features::mini_window::command(window, wparam, lparam);
         update_appbar(window);
+        return 0;
+    }
+    if message == crate::features::control::message() && attached(window) {
+        crate::features::control::take(window, lparam);
         return 0;
     }
     if message == windows_sys::Win32::UI::WindowsAndMessaging::WM_COPYDATA && attached(window) {

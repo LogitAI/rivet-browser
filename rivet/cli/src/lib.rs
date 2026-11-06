@@ -3,6 +3,7 @@
 //! the window and the command line cannot disagree.
 
 pub mod config;
+pub mod control;
 pub mod detect;
 pub mod launch;
 pub mod model;
