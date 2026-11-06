@@ -42,17 +42,11 @@ fn with<R>(window: HWND, edit: impl FnOnce(&mut State) -> R) -> R {
     STATE.with(|state| {
         let mut state = state.borrow_mut();
         let state = state.get_or_insert_with(|| {
-            // A missing or damaged file leaves the defaults. A damaged one is kept under another name.
-            let store = match file() {
-                Some((path, _)) => match std::fs::read_to_string(&path) {
-                    Ok(text) => Store::from_json(&text).unwrap_or_else(|| {
-                        let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
-                        Store::default()
-                    }),
-                    Err(_) => Store::default(),
-                },
-                None => Store::default(),
-            };
+            // A damaged file is kept under another name and its copy is read instead. Without a
+            // good one the defaults stay.
+            let store = file()
+                .and_then(|(path, _)| crate::spaces::read_recovering(&path, Store::from_json))
+                .unwrap_or_default();
             State {
                 store,
                 owner: window as isize,
