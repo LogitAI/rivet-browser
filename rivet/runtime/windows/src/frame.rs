@@ -2180,15 +2180,7 @@ pub(crate) fn own_debug_directory() -> Option<std::path::PathBuf> {
 }
 
 fn own_debug_directory_in(arguments: impl Iterator<Item = String>) -> Option<std::path::PathBuf> {
-    arguments
-        .filter_map(|argument| {
-            argument
-                .strip_prefix("--user-data-dir=")
-                .map(|dir| std::path::PathBuf::from(dir.trim_matches('"')))
-        })
-        .next()
-        .map(|profile| profile.join("rivet-debug"))
-        .filter(|dir| dir.is_dir())
+    rivet_core::paths::session_debug_dir(arguments)
 }
 
 /// The folder of debug command files that the window's timer looks in, decided once per process:
@@ -2230,10 +2222,7 @@ thread_local! {
 
 /// The log a switched-on trace writes, rotated when it is full. `None` while the switch is off.
 fn trace_file(name: &str) -> Option<std::path::PathBuf> {
-    let path = rivet_core::paths::Layout::current()?.trace_file(name)?;
-    std::fs::create_dir_all(path.parent()?).ok()?;
-    rivet_core::paths::cap_log(&path);
-    Some(path)
+    crate::trace::switched(name)
 }
 
 pub(crate) unsafe fn runtime_directory() -> Option<std::path::PathBuf> {
@@ -2555,12 +2544,7 @@ unsafe fn create_appbar(window: HWND) {
     if attached(window) {
         return;
     }
-    if let Some(path) = own_debug_directory()
-        .map(|dir| dir.join("rivet-vertical-tabs.log"))
-        .filter(|path| path.is_file())
-    {
-        crate::trace::set_trace(path);
-    } else if let Some(path) = trace_file("rivet-vertical-tabs.log") {
+    if let Some(path) = trace_file("rivet-vertical-tabs.log") {
         crate::trace::set_trace(path);
     }
     // Without the layout hook the browser would draw underneath the appbar, so an unknown

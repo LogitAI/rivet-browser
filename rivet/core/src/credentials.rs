@@ -89,6 +89,68 @@ impl CredentialProvider {
     }
 }
 
+/// What Rivet says about a password manager a person names, such as one they used before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Advice {
+    /// The manager is the chosen provider, so the browser saves and fills through it.
+    Handled,
+    /// The manager is not a provider Rivet hands credentials to. Rivet opens no other store, so the
+    /// person moves their passwords with that manager's own export and the provider's own import.
+    ManualMove(&'static str),
+}
+
+/// The words shown for a manager that is not a provider. They name only what the person does.
+pub const MANUAL_MOVE_GUIDANCE: &str = "Rivet does not open other password managers. To use their \
+     passwords here, export them from that manager and import them into the provider you chose.";
+
+/// The advice for a manager named `manager` while `provider` is chosen.
+pub fn advice(provider: CredentialProvider, manager: &str) -> Advice {
+    match CredentialProvider::parse(manager) {
+        Some(named) if named == provider => Advice::Handled,
+        _ => Advice::ManualMove(MANUAL_MOVE_GUIDANCE),
+    }
+}
+
+/// The provider a Rivet profile will start with, read back from the keys `prepare_profile` writes,
+/// so a launch can check that the choice took effect. `None` when the keys disagree or are missing.
+pub fn provider_in_profile(user_data_dir: &Path) -> Option<CredentialProvider> {
+    let text = std::fs::read_to_string(user_data_dir.join("Default").join("Preferences")).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    match (
+        value[SAVE_PASSWORDS_PREF].as_bool()?,
+        value[AUTO_SIGN_IN_PREF].as_bool()?,
+    ) {
+        (true, true) => Some(CredentialProvider::Browser),
+        (false, false) => Some(CredentialProvider::System),
+        _ => None,
+    }
+}
+
+/// Joins every `--disable-features=` switch into one. Chromium keeps only the last copy of a
+/// switch, so a second list would silently drop the provider's feature.
+pub fn merge_disabled_features(arguments: Vec<String>) -> Vec<String> {
+    const SWITCH: &str = "--disable-features=";
+    let mut features: Vec<String> = Vec::new();
+    let mut first = None;
+    let mut out = Vec::with_capacity(arguments.len());
+    for argument in arguments {
+        if let Some(list) = argument.strip_prefix(SWITCH) {
+            for feature in list.split(',').map(str::trim).filter(|f| !f.is_empty()) {
+                if !features.iter().any(|known| known == feature) {
+                    features.push(feature.to_owned());
+                }
+            }
+            first.get_or_insert(out.len());
+        } else {
+            out.push(argument);
+        }
+    }
+    if let Some(index) = first {
+        out.insert(index, format!("{SWITCH}{}", features.join(",")));
+    }
+    out
+}
+
 /// The provider saved in a setup file's JSON, the browser's when none was saved.
 pub fn from_setup(value: &Value) -> CredentialProvider {
     value["credentials"]
@@ -255,5 +317,62 @@ mod tests {
         assert!(prepare_profile(&root, CredentialProvider::System).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn nfr8_the_chosen_provider_is_the_one_the_profile_starts_with() {
+        let root = crate::paths::TestDir::new("nfr8-in-effect");
+        assert_eq!(provider_in_profile(&root), None);
+        for provider in CredentialProvider::ALL {
+            prepare_profile(&root, provider).unwrap();
+            assert_eq!(provider_in_profile(&root), Some(provider));
+        }
+        let path = root.join("Default").join("Preferences");
+        std::fs::write(
+            &path,
+            r#"{"credentials_enable_service":true,"credentials_enable_autosignin":false}"#,
+        )
+        .unwrap();
+        assert_eq!(provider_in_profile(&root), None, "half set is not a choice");
+    }
+
+    #[test]
+    fn nfr8_the_passkey_switch_survives_another_disable_features_list() {
+        let mut arguments = vec!["--user-data-dir=C:\\P".to_owned()];
+        arguments.extend(CredentialProvider::System.launch_arguments());
+        arguments.push("--disable-features=Translate,WebAuthenticationEnclaveAuthenticator".into());
+        arguments.push("--app=https://example.test/".into());
+        let merged = merge_disabled_features(arguments);
+        assert_eq!(
+            merged,
+            vec![
+                "--user-data-dir=C:\\P".to_owned(),
+                "--disable-features=WebAuthenticationEnclaveAuthenticator,Translate".to_owned(),
+                "--app=https://example.test/".to_owned(),
+            ]
+        );
+        assert_eq!(
+            merge_disabled_features(vec!["--app=x".into()]),
+            vec!["--app=x".to_owned()]
+        );
+    }
+
+    #[test]
+    fn nfr8_other_managers_get_only_manual_move_guidance() {
+        assert_eq!(
+            advice(CredentialProvider::Browser, "browser"),
+            Advice::Handled
+        );
+        assert_eq!(
+            advice(CredentialProvider::System, "Windows"),
+            Advice::Handled
+        );
+        for manager in ["1Password", "Bitwarden", "Samsung Pass", "windows"] {
+            let Advice::ManualMove(text) = advice(CredentialProvider::Browser, manager) else {
+                panic!("{manager} is not the chosen provider");
+            };
+            assert!(text.contains("export") && text.contains("import"));
+            assert!(text.contains("does not open"));
+        }
     }
 }
