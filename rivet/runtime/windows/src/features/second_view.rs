@@ -1885,34 +1885,6 @@ pub(crate) mod bare {
         }
     }
 
-    /// Gives the view the keyboard.
-    pub(crate) unsafe fn focus(view: usize) -> bool {
-        let Some(function) = virtual_of(view, "request_focus", "focus_slot") else {
-            return false;
-        };
-        std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(function)(view);
-        true
-    }
-
-    /// The browser moved `page` into the window's page view because its tab became active. The page
-    /// view takes `behind` back and `view` shows `page` again. Returns whether the pages moved.
-    pub(crate) unsafe fn take_back(window: HWND, view: usize, page: usize, behind: usize) -> bool {
-        let Some(parent) = browser_view(window) else {
-            return false;
-        };
-        let size = recorded("size").unwrap_or(0x528);
-        let Some(main) = views_with_vtable(parent, *(view as *const usize))
-            .into_iter()
-            .find(|candidate| *candidate != view && holds(*candidate, page, size))
-        else {
-            return false;
-        };
-        set_page(view, 0);
-        set_page(main, behind);
-        set_page(view, page);
-        true
-    }
-
     /// The window's active page, or zero.
     pub(crate) unsafe fn active(window: HWND) -> usize {
         active_page(window)
