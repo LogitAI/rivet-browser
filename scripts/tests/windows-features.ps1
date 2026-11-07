@@ -880,16 +880,17 @@ function Get-DemoGeometry {
   Stop-Mine $ExeName $profile_
   $common = @('--headless=new', '--do-not-de-elevate', "--user-data-dir=`"$profile_`"", '--disable-sync', '--no-first-run', '--no-default-browser-check', '--disable-features=msImplicitSignin,msEdgeSignIn,Translate', '--lang=en-US', '--window-size=1600,1000', '--force-device-scale-factor=1', '--hide-scrollbars', '--virtual-time-budget=3000')
   $dom = Join-Path $dir 'rivet-shell-demo.dom.html'
-  $dump = $null
+  $dump = $null; $shot = $null
   try {
-    $shot = Start-Process -FilePath $ExePath -ArgumentList ($common + @("--screenshot=`"$png`"", $url)) -PassThru -WindowStyle Hidden
+    $shot = Start-TestBrowser -FilePath $ExePath -ArgumentList ($common + @("--screenshot=`"$png`"", $url))
     if (-not $shot.WaitForExit(60000)) { return $null }
-    $dump = Start-Process -FilePath $ExePath -ArgumentList ($common + @('--dump-dom', $url)) -PassThru -WindowStyle Hidden -RedirectStandardOutput $dom
+    $dump = Start-TestBrowser -FilePath $ExePath -ArgumentList ($common + @('--dump-dom', $url)) -RedirectStandardOutput $dom
     if (-not $dump.WaitForExit(60000)) { return $null }
   } finally {
     Stop-Mine $ExeName $profile_
     # The redirected output stays open while the process object or a child of the dump holds it.
     if ($dump) { $dump.Dispose() }
+    if ($shot) { $shot.Dispose() }
   }
   $text = Read-SharedText $dom
   if ($null -eq $text) { return $null }
@@ -1562,10 +1563,13 @@ function Invoke-Launcher([string]$Root, [string]$Url) {
   $old = $env:RIVET_DATA_ROOT
   $env:RIVET_DATA_ROOT = $Root
   try {
-    $p = Start-Process -FilePath (Join-Path $debug 'rivet-launcher.exe') -ArgumentList '--open-link', $Url -PassThru
+    # Started like a test browser, so a window the launcher itself shows first is not activated.
+    $p = Start-TestBrowser -FilePath (Join-Path $debug 'rivet-launcher.exe') -ArgumentList '--open-link', $Url
     # The launcher waits at most 30 seconds for a new window to take the link.
-    if (-not $p.WaitForExit(45000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; return $null }
-    $p.ExitCode
+    if (-not $p.WaitForExit(45000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; $p.Dispose(); return $null }
+    $code = $p.ExitCode
+    $p.Dispose()
+    $code
   } finally { $env:RIVET_DATA_ROOT = $old }
 }
 

@@ -13,6 +13,7 @@ pub mod row_port;
 pub mod row_recipe;
 pub mod row_watch;
 pub mod signed_table;
+pub mod start;
 #[cfg(windows)]
 pub mod textservices;
 

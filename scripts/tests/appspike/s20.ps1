@@ -3,7 +3,7 @@
 function Titles { Send-Flag $ctx 'rivet-tab.txt' 'list' | Out-Null; (Read-Log | Where-Object { $_ -match 'tab command' } | Select-Object -Last 1) -replace '^.*tabs ', '' }
 $f = $ctx.Dpi / 96.0
 $urlProbe = New-Probe
-$p = Start-Process -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlProbe) -PassThru -WindowStyle Hidden
+$p = Start-TestBrowser -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlProbe)
 $null = $p.WaitForExit(20000); Start-Sleep 6
 "tabs of the app window before: $(Titles)"
 Send-Flag $ctx 'rivet-tab.txt' 'view 0 40 bv other' | Out-Null; Start-Sleep 5

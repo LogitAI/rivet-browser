@@ -2318,6 +2318,8 @@ pub unsafe fn attach(window: HWND) -> bool {
         return false;
     }
     SetPropW(window, key.as_ptr(), replaced as _);
+    // A test run's window goes off every monitor and stops activating before anything else runs.
+    crate::offscreen::keep_from_attach(window);
     // The window stays cloaked until it has Rivet's look, so no frame shows the browser's own strip.
     crate::features::look::first_look(window, crate::features::look::FirstLook::Attached);
     // DirectComposition targets and frame changes belong on the UI thread that owns the window.

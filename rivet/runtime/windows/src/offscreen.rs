@@ -10,18 +10,65 @@
 //! move or size loop, which holds the mouse until the button comes up.
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use rivet_platform_windows::focus;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetAncestor, GetDesktopWindow, GetWindowRect, IsWindowVisible, SetWindowPos,
-    SetWindowsHookExW, CBT_CREATEWNDW, CWPRETSTRUCT, CWPSTRUCT, CW_USEDEFAULT, GA_PARENT,
-    HCBT_ACTIVATE, HCBT_CREATEWND, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, MA_NOACTIVATE, SC_MOVE,
-    SC_SIZE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WH_CALLWNDPROC, WH_CALLWNDPROCRET, WH_CBT,
-    WINDOWPOS, WM_MOUSEACTIVATE, WM_NCLBUTTONDOWN, WM_SHOWWINDOW, WM_SYSCOMMAND,
-    WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CHILD,
+    CallNextHookEx, GetAncestor, GetDesktopWindow, GetWindowRect, GetWindowThreadProcessId,
+    IsWindowVisible, RegisterWindowMessageW, SendMessageTimeoutW, SetWindowPos, SetWindowsHookExW,
+    CBT_CREATEWNDW, CWPRETSTRUCT, CWPSTRUCT, CW_USEDEFAULT, GA_PARENT, HCBT_ACTIVATE,
+    HCBT_CREATEWND, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, MA_NOACTIVATE, SC_MOVE, SC_SIZE,
+    SMTO_ABORTIFHUNG, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WH_CALLWNDPROC,
+    WH_CALLWNDPROCRET, WH_CBT, WINDOWPOS, WM_MOUSEACTIVATE, WM_NCLBUTTONDOWN, WM_SHOWWINDOW,
+    WM_SYSCOMMAND, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CHILD,
 };
+
+/// The message that asks the browser's UI thread to start keeping its windows off-screen.
+const KEEP_MESSAGE: &str = "Rivet.KeepOffscreen";
+
+/// How long the attach waits for the UI thread to take the hooks, in milliseconds.
+const KEEP_WAIT_MS: u32 = 2000;
+
+/// The registered number of [`KEEP_MESSAGE`], looked up once.
+static KEEP_NUMBER: AtomicU32 = AtomicU32::new(0);
+
+unsafe fn keep_message() -> u32 {
+    let known = KEEP_NUMBER.load(Ordering::Relaxed);
+    if known != 0 {
+        return known;
+    }
+    let name: Vec<u16> = KEEP_MESSAGE.encode_utf16().chain(Some(0)).collect();
+    let number = RegisterWindowMessageW(name.as_ptr());
+    KEEP_NUMBER.store(number, Ordering::Relaxed);
+    number
+}
+
+/// Under a test, the first thing an attach does once the window is subclassed: the window goes
+/// off every monitor at once, and the UI thread takes the no-activate hooks before it handles any
+/// message already posted to it. The hooks belong on that thread, since a thread hook ends with
+/// the thread that set it and this one ends when the attach returns. A sent message is handled
+/// before posted ones, so this is the earliest the UI thread can run them.
+pub(crate) unsafe fn keep_from_attach(window: HWND) {
+    if !focus::keep_offscreen() {
+        return;
+    }
+    put_away(window);
+    let mut result = 0usize;
+    if SendMessageTimeoutW(
+        window,
+        keep_message(),
+        0,
+        0,
+        SMTO_ABORTIFHUNG,
+        KEEP_WAIT_MS,
+        &mut result,
+    ) == 0
+    {
+        crate::frame::log("rivet: the UI thread did not take the off-screen hooks in time");
+    }
+}
 
 thread_local! {
     /// Whether this thread's windows are kept off-screen already.
@@ -73,6 +120,11 @@ pub(crate) unsafe fn put_away(window: HWND) {
     }
     let current = [rect.left, rect.top, rect.right, rect.bottom];
     if let Some((x, y)) = focus::offscreen_spot(current, focus::screen_bounds()) {
+        // From another thread the move is queued to the window's own thread, so this thread never
+        // waits on the browser's UI thread.
+        let foreign =
+            GetWindowThreadProcessId(window, std::ptr::null_mut()) != GetCurrentThreadId();
+        let queued = if foreign { SWP_ASYNCWINDOWPOS } else { 0 };
         SetWindowPos(
             window,
             std::ptr::null_mut(),
@@ -80,7 +132,7 @@ pub(crate) unsafe fn put_away(window: HWND) {
             y,
             0,
             0,
-            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | queued,
         );
     }
 }
@@ -181,6 +233,12 @@ pub(crate) unsafe fn message(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> Option<LRESULT> {
+    // Registered messages start at 0xC000, so other messages skip the lookup.
+    if message >= 0xC000 && message == keep_message() && focus::keep_offscreen() {
+        keep_thread();
+        put_away(window);
+        return Some(0);
+    }
     match message {
         WM_NCLBUTTONDOWN
             if (wparam == HTCAPTION as usize

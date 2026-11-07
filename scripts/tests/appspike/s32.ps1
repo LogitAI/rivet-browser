@@ -6,7 +6,7 @@ $f = $ctx.Dpi / 96.0
 $path = Join-Path $pageDir 'tick.html'
 [IO.File]::WriteAllText($path, '<!doctype html><title>tick0</title><body style="margin:0;background:#80f"><div id=bar style="height:200px;background:#f80"></div><script>var n=0;setInterval(function(){n++;document.title="tick"+n;var b=document.getElementById("bar");b.style.background=n%2?"#80f":"#f80"},300)</script>')
 $url = 'file:///' + ($path -replace '\\', '/')
-$p = Start-Process -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $url) -PassThru -WindowStyle Hidden
+$p = Start-TestBrowser -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $url)
 $null = $p.WaitForExit(20000); Start-Sleep 6
 function OtherTitle { $own = [Convert]::ToString([int64]$ctx.Hwnd, 16); $l = Show-Windows $ctx | Where-Object { $_ -notmatch "^$own " -and $_ -match '\[tick' } | Select-Object -First 1; if ($l) { [int]([regex]::Match($l, 'tick(\d+)')).Groups[1].Value } else { -1 } }
 # The x where page-a's red ends and where the second page (purple or orange) starts, on one row.

@@ -1,6 +1,6 @@
 . scripts/tests/appspike/spike-common.ps1
 function Tabs($label) { Send-Flag $ctx 'rivet-tab.txt' 'list' | Out-Null; "$label tabs: " + ((Get-TabUrls) -join ' | ') ; "$label windows: " + ((Show-Windows $ctx | Measure-Object).Count) }
-$p = Start-Process -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlB) -PassThru -WindowStyle Hidden
+$p = Start-TestBrowser -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlB)
 $null = $p.WaitForExit(20000); Start-Sleep 5
 Send-Flag $ctx 'rivet-tab.txt' 'move' | Out-Null; Start-Sleep 3
 Tabs 'two tabs'

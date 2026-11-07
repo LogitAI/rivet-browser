@@ -371,16 +371,19 @@ fn run_start(options: StartOptions) -> Result<(), String> {
     } else {
         Vec::new()
     };
-    let mut command = Command::new(&plan.program);
-    command.args(&plan.arguments);
+    let mut environment = Vec::new();
     if app_window && plan.display == DisplayMode::Hidden {
         // The runtime reads this as it attaches and cloaks the window before it is ever shown.
-        command.env(rivet_protocol::window::HIDDEN_START_VARIABLE, "1");
+        environment.push((rivet_protocol::window::HIDDEN_START_VARIABLE, "1"));
     }
-    let child = command
-        .spawn()
-        .map_err(|error| format!("could not start {}: {error}", plan.program.display()))?;
-    let task_id = child.id();
+    // Under a test run the browser's first window shows without taking the foreground.
+    let task_id = rivet_platform_windows::start::spawn_browser(
+        &plan.program,
+        &plan.arguments,
+        &environment,
+        0,
+    )
+    .map_err(|error| format!("could not start {}: {error}", plan.program.display()))?;
     // Spike: load the runtime before the browser builds its first window, so window feature
     // answers are in place when the window is made.
     if std::env::var_os("RIVET_SPIKE_EARLY").is_some() {

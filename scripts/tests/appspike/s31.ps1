@@ -8,7 +8,7 @@ function Send-Text($ctx, [string]$Text) {
 # The second view: typing after a click and a RequestFocus, then closing the view.
 $f = $ctx.Dpi / 96.0
 $urlProbe = New-Probe
-$p = Start-Process -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlProbe) -PassThru -WindowStyle Hidden
+$p = Start-TestBrowser -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlProbe)
 $null = $p.WaitForExit(20000); Start-Sleep 6
 Send-Flag $ctx 'rivet-tab.txt' 'view 0 40 bv other' | Out-Null; Start-Sleep 5
 $c1 = Get-Capture $ctx (Join-Path $shots 's31-1-shown.png')

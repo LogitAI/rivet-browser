@@ -1,6 +1,6 @@
 . scripts/tests/appspike/spike-common.ps1
 # The page of a separate window of the same browser shown in Rivet's view of this window (no tab moves).
-$p = Start-Process -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlB) -PassThru -WindowStyle Hidden
+$p = Start-TestBrowser -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlB)
 $null = $p.WaitForExit(20000); Start-Sleep 6
 "windows before: " + ((Show-Windows $ctx | ForEach-Object { ($_ -split ' ', 3)[2] -replace ' \d+,\d+,\d+,\d+$', '' }) -join ' || ')
 $null = Get-Capture $ctx (Join-Path $shots 's16-0-before.png')
