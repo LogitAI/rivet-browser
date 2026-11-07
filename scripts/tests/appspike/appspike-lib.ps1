@@ -131,7 +131,7 @@ function Open-Scene($ctx, $state, $Url, $Seed) {
   while ((Get-Date) -lt $deadline) {
     $mine = Get-MyProcesses $ctx.ExeName $ctx.Profile | Where-Object { $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
     if (-not $mine) { $ctx.Error = 'the browser exited after launch'; return }
-    $h = (Get-Process -Id $mine.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle
+    $h = (Get-BrowserWindow $mine.ProcessId)
     if ($h -and $h -ne [IntPtr]::Zero) {
       $ctx.Hwnd = $h
       if ([FeatureWin]::GetProp($h, 'Rivet.OriginalWindowProc') -ne [IntPtr]::Zero) { $attached = $true; break }

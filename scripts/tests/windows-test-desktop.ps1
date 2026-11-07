@@ -44,6 +44,24 @@ public static class RivetTestDesktop{
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformationW(IntPtr o,int index,System.Text.StringBuilder name,int length,out int needed);
  // The name of this process's window station: WinSta0 on a person's session, another on a service.
  public static string Station(){var b=new System.Text.StringBuilder(256);int n;return GetUserObjectInformationW(GetProcessWindowStation(),2,b,512,out n)?b.ToString():"WinSta0";}
+ public delegate bool EW(IntPtr h,IntPtr l);
+ [DllImport("user32.dll")] static extern bool EnumWindows(EW f,IntPtr l);
+ [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
+ [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h,uint cmd);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassNameW(IntPtr h,System.Text.StringBuilder s,int n);
+ [StructLayout(LayoutKind.Sequential)] struct RC{public int L,T,R,B;}
+ [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out RC r);
+ // The largest visible, unowned Chromium frame window of process `pid` on this thread's desktop.
+ // A fresh desktop gives every process an input indicator window of its own, which .NET can pick as
+ // the main window, so the browser frame is found by its class.
+ public static IntPtr BrowserWindow(int pid){
+  IntPtr best=IntPtr.Zero;long area=-1;
+  EnumWindows((h,l)=>{uint p;GetWindowThreadProcessId(h,out p);if(p!=(uint)pid||!IsWindowVisible(h)||GetWindow(h,4)!=IntPtr.Zero)return true;
+   var b=new System.Text.StringBuilder(64);GetClassNameW(h,b,64);if(b.ToString()!="Chrome_WidgetWin_1")return true;
+   RC r;GetWindowRect(h,out r);long a=(long)(r.R-r.L)*(r.B-r.T);if(a>area){area=a;best=h;}return true;},IntPtr.Zero);
+  return best;
+ }
  // GENERIC_ALL on a new desktop of the calling process's window station.
  public static IntPtr Create(string name){var d=CreateDesktopW(name,IntPtr.Zero,IntPtr.Zero,0,0x10000000,IntPtr.Zero);if(d==IntPtr.Zero)throw new System.ComponentModel.Win32Exception();return d;}
  public static bool Close(IntPtr desktop){return CloseDesktop(desktop);}
@@ -105,6 +123,9 @@ function Invoke-OnOwnDesktop([string]$Script, $Bound) {
     [void][RivetTestDesktop]::Close($desktop)
   }
 }
+
+# The browser frame window of process `$ProcessId`, or [IntPtr]::Zero while it has none.
+function Get-BrowserWindow([int]$ProcessId) { [RivetTestDesktop]::BrowserWindow($ProcessId) }
 
 # Starts `$File` with `$Arguments` on the person's own desktop, for the guard of a run that is on a
 # test desktop. The result has Id, HasExited, ExitCode and WaitForExit(milliseconds).

@@ -34,6 +34,14 @@ while IFS= read -r file; do
     fi
 done < <(git grep -l -I -E 'Start-TestBrowser|session start|rivet-launcher' -- 'scripts/tests/*.ps1' | sort -u)
 
+# On a desktop of its own every process gets an input indicator window, which .NET may report as the
+# browser's main window. Runners find the browser frame with Get-BrowserWindow instead.
+if hits="$(git grep -n -I 'MainWindowHandle' -- 'scripts/tests/*.ps1')"; then
+    echo "error: a runner reads MainWindowHandle, which can be the input indicator window" >&2
+    echo "$hits" >&2
+    failed=1
+fi
+
 if (( failed )); then
     exit 1
 fi
