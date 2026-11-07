@@ -1402,21 +1402,16 @@ function Invoke-AddressSuggest($Name, $shots) {
   }
   $site = Start-LocalSite $dir
   $sa = "$($site.Base)/suggest-a.html"; $sb = "$($site.Base)/suggest-b.html"
-  $ctx, $state = Start-Scene $Name 'address-suggest' $sb
+  # page-a is the first page, as a person would have visited it a while ago. The browser takes some
+  # seconds to index a visit, so a page visited just before is not suggested yet.
+  $ctx, $state = Start-Scene $Name 'address-suggest' $sa
   try {
-    Open-Scene $ctx $state $sb $null
+    Open-Scene $ctx $state $sa $null
     if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots 'address-suggest-1-page-a.png')
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
     if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
-    # page-a is typed into the bar first, as a person would have visited it.
-    $before = @(Read-Log).Count
-    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the bar command') }
-    Send-Chars $ctx $sa
-    Start-Sleep -Milliseconds 800
-    Send-Key $ctx 0x0D
-    if (-not (Wait-Log $before '^address bar: open')) { return @('FAIL', $one.Path, 'the typed address of page-a did not open') }
-    Start-Sleep 4
+    Start-Sleep 10
     # page-b is typed into the bar and opened in the same tab, so page-a is history, not the page.
     $before = @(Read-Log).Count
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the bar command') }
