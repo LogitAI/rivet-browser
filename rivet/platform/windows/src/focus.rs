@@ -121,6 +121,10 @@ mod win {
     };
 
     /// Whether any part of the visible window lies on a monitor.
+    ///
+    /// # Safety
+    ///
+    /// `window` must be a window handle, or null; it is only passed to Windows.
     pub unsafe fn on_monitor(window: HWND) -> bool {
         let mut rect: RECT = std::mem::zeroed();
         IsWindowVisible(window) != 0
@@ -130,6 +134,10 @@ mod win {
 
     /// Whether the primary button is physically held down. `GetAsyncKeyState` reads the physical
     /// buttons, so with swapped buttons the primary one is the right one.
+    ///
+    /// # Safety
+    ///
+    /// Calls Windows only; it has no other requirement.
     pub unsafe fn primary_button_down() -> bool {
         let key = if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
             VK_RBUTTON
@@ -140,6 +148,10 @@ mod win {
     }
 
     /// The rectangle that bounds every monitor, in the calling thread's pixels.
+    ///
+    /// # Safety
+    ///
+    /// Calls Windows only; it has no other requirement.
     pub unsafe fn screen_bounds() -> Rect {
         let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
         let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -153,6 +165,10 @@ mod win {
 
     /// Takes the mouse for a drag on `window` when [`may_capture`] allows it. Returns whether it
     /// did. A drag without the capture still gets every message sent to its own window.
+    ///
+    /// # Safety
+    ///
+    /// `window` must be a window handle, or null; it is only passed to Windows.
     pub unsafe fn capture(window: HWND) -> bool {
         let allowed = may_capture(CaptureCheck {
             on_monitor: on_monitor(window),
@@ -168,6 +184,10 @@ mod win {
     /// Takes the mouse for an open menu on `window`, so a click outside the menu closes it. A menu
     /// opens when a click ends, so no button is held: only the window's place and the test switch
     /// decide. Returns whether it did.
+    ///
+    /// # Safety
+    ///
+    /// `window` must be a window handle, or null; it is only passed to Windows.
     pub unsafe fn capture_for_menu(window: HWND) -> bool {
         let allowed = may_capture(CaptureCheck {
             on_monitor: on_monitor(window),
@@ -182,6 +202,10 @@ mod win {
 
     /// Whether a press on `window` may start a drag that the system runs, such as a move or a
     /// size of the window. That drag takes the mouse as a capture does.
+    ///
+    /// # Safety
+    ///
+    /// `window` must be a window handle, or null; it is only passed to Windows.
     pub unsafe fn may_start_system_drag(window: HWND) -> bool {
         may_capture(CaptureCheck {
             on_monitor: on_monitor(window),
@@ -192,6 +216,10 @@ mod win {
 
     /// Gives the mouse back when `window` holds it. A capture the browser took for something else
     /// is left alone.
+    ///
+    /// # Safety
+    ///
+    /// `window` must be a window handle, or null; it is only passed to Windows.
     pub unsafe fn release(window: HWND) {
         if GetCapture() == window {
             ReleaseCapture();

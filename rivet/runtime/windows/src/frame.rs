@@ -42,6 +42,11 @@ use crate::press::Presses;
 use crate::spaces::{SavedTab, Spaces, MAX_SPACES};
 use crate::tab_rows::{self, Row};
 
+/// The composition root of the runtime's layers. A feature that has moved behind the operating
+/// system and browser access traits is given these adapters, and nothing else picks one.
+pub(crate) const OS: crate::os::win32::Win32 = crate::os::win32::Win32;
+pub(crate) const BROWSER: crate::browser::chromium::Chromium = crate::browser::chromium::Chromium;
+
 const BROWSER_CLASS: &str = "Chrome_WidgetWin_1";
 const ORIGINAL_PROC: &str = "Rivet.OriginalWindowProc";
 const ATTACH_MESSAGE: &str = "Rivet.AttachAppbar";
@@ -3760,13 +3765,21 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         Some("closesel") => crate::features::tab_list::close(window, index),
                         // App window spike: a tab added through Chromium's own tab strip functions.
                         Some(word @ ("back" | "forward" | "reload" | "stop")) => {
-                            crate::features::page_bar::Command::parse(word).is_some_and(|command| {
-                                crate::features::page_bar::run(window, command)
+                            crate::features::page_bar::parse_command(word).is_some_and(|command| {
+                                crate::features::page_bar::run(
+                                    &OS,
+                                    &BROWSER,
+                                    crate::os::WindowId::from_hwnd(window),
+                                    command,
+                                )
                             })
                         }
                         Some("pages") => {
-                            let pages =
-                                crate::features::page_bar::pages(window).unwrap_or_default();
+                            let pages = crate::features::page_bar::pages(
+                                &BROWSER,
+                                crate::os::WindowId::from_hwnd(window),
+                            )
+                            .unwrap_or_default();
                             for page in &pages {
                                 crate::trace::trace(&format!(
                                     "page {} active {} title {:?} url {:?}",
