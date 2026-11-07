@@ -30,15 +30,6 @@ pub static SAMSUNG: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        // `BrowserTabStripModelDelegate::MoveTabsToNewWindow`, found statically by Chromium shape
-        // and unverified: the only delegate thunk whose target checks an index vector by its ends
-        // and tests the browser type at 0x1B0, as this row records.
-        move_to_new_window: Some(0x0DBB8A50),
-        move_to_new_window_prologue: &[
-            0x48, 0x8B, 0x49, 0x08, 0xE9, 0x77, 0xC1, 0xC5, 0xFF, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
-            0xCC, 0xCC,
-        ],
-        move_to_new_window_vector_by_pointer: true,
         view_parent: 0x190,
         view_children: 0x198,
         operator_new: 0x55841C8,
