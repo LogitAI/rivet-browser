@@ -6,6 +6,10 @@
 //! never activated. A window the browser makes at its default place would otherwise open on a
 //! monitor, shown and active, and take the keyboard from whatever the person was doing.
 //!
+//! A test browser is started minimized and inactive, with no place or size on its command line,
+//! so Chromium never activates its windows as it shows them. Each new window therefore first shows
+//! minimized, on no monitor, and is restored here once, off every monitor and without activation.
+//!
 //! Outside a test, the only rule here is that a press nobody really made never starts the system's
 //! move or size loop, which holds the mouse until the button comes up.
 
@@ -16,17 +20,23 @@ use rivet_platform_windows::focus;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetAncestor, GetDesktopWindow, GetWindowRect, GetWindowThreadProcessId,
-    IsWindowVisible, RegisterWindowMessageW, SendMessageTimeoutW, SetWindowPos, SetWindowsHookExW,
-    CBT_CREATEWNDW, CWPRETSTRUCT, CWPSTRUCT, CW_USEDEFAULT, GA_PARENT, HCBT_ACTIVATE,
-    HCBT_CREATEWND, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, MA_NOACTIVATE, SC_MOVE, SC_SIZE,
-    SMTO_ABORTIFHUNG, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WH_CALLWNDPROC,
-    WH_CALLWNDPROCRET, WH_CBT, WINDOWPOS, WM_MOUSEACTIVATE, WM_NCLBUTTONDOWN, WM_SHOWWINDOW,
-    WM_SYSCOMMAND, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CHILD,
+    CallNextHookEx, GetAncestor, GetDesktopWindow, GetPropW, GetWindowPlacement, GetWindowRect,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, RegisterWindowMessageW, RemovePropW,
+    SendMessageTimeoutW, SetPropW, SetWindowPlacement, SetWindowPos, SetWindowsHookExW,
+    ShowWindowAsync, CBT_CREATEWNDW, CWPRETSTRUCT, CWPSTRUCT, CW_USEDEFAULT, GA_PARENT,
+    HCBT_ACTIVATE, HCBT_CREATEWND, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, MA_NOACTIVATE, SC_MOVE,
+    SC_SIZE, SMTO_ABORTIFHUNG, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_SHOWNOACTIVATE, WH_CALLWNDPROC, WH_CALLWNDPROCRET, WH_CBT, WINDOWPLACEMENT, WINDOWPOS,
+    WM_MOUSEACTIVATE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_SHOWWINDOW, WM_SYSCOMMAND,
+    WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CHILD,
 };
 
 /// The message that asks the browser's UI thread to start keeping its windows off-screen.
 const KEEP_MESSAGE: &str = "Rivet.KeepOffscreen";
+
+/// The window property that marks a test window as seen shown, so its first minimized show is
+/// restored once and a later minimize is left alone.
+const SEEN_PROPERTY: &str = "Rivet.TestWindowSeen";
 
 /// How long the attach waits for the UI thread to take the hooks, in milliseconds.
 const KEEP_WAIT_MS: u32 = 2000;
@@ -137,6 +147,67 @@ pub(crate) unsafe fn put_away(window: HWND) {
     }
 }
 
+fn seen_key() -> Vec<u16> {
+    SEEN_PROPERTY.encode_utf16().chain(Some(0)).collect()
+}
+
+/// Whether `window` was seen shown already, and marks it seen.
+unsafe fn take_first_sight(window: HWND) -> bool {
+    let key = seen_key();
+    let seen = !GetPropW(window, key.as_ptr()).is_null();
+    if !seen {
+        SetPropW(window, key.as_ptr(), 1usize as _);
+    }
+    seen
+}
+
+/// A test browser starts with `SW_SHOWMINNOACTIVE`, so every new window first shows minimized and
+/// lies on no monitor. This restores such a window once, without activation. The restore goes
+/// through `WM_WINDOWPOSCHANGING`, which puts it off every monitor. A window first seen restored is
+/// only marked, so a minimize a test asks for later stays.
+unsafe fn restore_first_show(window: HWND) {
+    if !focus::keep_offscreen() || !top_level(window) || IsWindowVisible(window) == 0 {
+        return;
+    }
+    let minimized = IsIconic(window) != 0;
+    if focus::restores_first_show(minimized, take_first_sight(window)) {
+        // Queued, since this runs inside the browser's own show or move of the window.
+        ShowWindowAsync(window, SW_SHOWNOACTIVATE);
+    }
+}
+
+/// On the UI thread as the runtime attaches: the window Rivet started shows minimized, and is
+/// restored right of every monitor at the test size, without activation. Its restored place is
+/// set in workspace coordinates, which differ from screen ones only by the taskbar, far less than
+/// the margin that keeps it off every monitor.
+unsafe fn restore_attached(window: HWND) {
+    if !focus::keep_offscreen() || !top_level(window) || IsWindowVisible(window) == 0 {
+        return;
+    }
+    let minimized = IsIconic(window) != 0;
+    if !focus::restores_first_show(minimized, take_first_sight(window)) {
+        return;
+    }
+    let mut placement: WINDOWPLACEMENT = std::mem::zeroed();
+    placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+    if GetWindowPlacement(window, &mut placement) == 0 {
+        ShowWindowAsync(window, SW_SHOWNOACTIVATE);
+        return;
+    }
+    let [left, top, right, bottom] = focus::test_window_place(focus::screen_bounds());
+    placement.rcNormalPosition = RECT {
+        left,
+        top,
+        right,
+        bottom,
+    };
+    placement.flags = 0;
+    placement.showCmd = SW_SHOWNOACTIVATE as u32;
+    if SetWindowPlacement(window, &placement) == 0 {
+        crate::frame::log("rivet: could not restore the minimized test window");
+    }
+}
+
 /// Rewrites a `WM_WINDOWPOSCHANGING` request of a top-level window so it never activates the
 /// window and never shows it on a monitor.
 unsafe fn keep_place(window: HWND, place: *mut WINDOWPOS) {
@@ -207,17 +278,25 @@ unsafe extern "system" fn call_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -
         let sent = &*(lparam as *const CWPSTRUCT);
         if sent.message == WM_WINDOWPOSCHANGING {
             keep_place(sent.hwnd, sent.lParam as *mut WINDOWPOS);
+        } else if sent.message == WM_NCDESTROY {
+            let key = seen_key();
+            RemovePropW(sent.hwnd, key.as_ptr());
         }
     }
     CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
 }
 
-/// After a window moved or showed: one that still reached a monitor is put away at once.
+/// After a window moved or showed: one that still reached a monitor is put away at once, and a new
+/// window that showed minimized is restored off every monitor.
 unsafe extern "system" fn after_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 && lparam != 0 {
         let done = &*(lparam as *const CWPRETSTRUCT);
         if done.message == WM_WINDOWPOSCHANGED || done.message == WM_SHOWWINDOW {
             put_away(done.hwnd);
+        }
+        // Only once the move is done is a minimized show minimized already.
+        if done.message == WM_WINDOWPOSCHANGED {
+            restore_first_show(done.hwnd);
         }
     }
     CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
@@ -237,6 +316,7 @@ pub(crate) unsafe fn message(
     if message >= 0xC000 && message == keep_message() && focus::keep_offscreen() {
         keep_thread();
         put_away(window);
+        restore_attached(window);
         return Some(0);
     }
     match message {

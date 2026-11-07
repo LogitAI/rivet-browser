@@ -1,7 +1,7 @@
 $root = Join-Path (Get-Location) 'rivet'
 $f = Join-Path $root 'core\src\lib.rs'
 $orig = [IO.File]::ReadAllText($f)
-$flags = @('--disable-sync', '--no-first-run', '--no-default-browser-check', '--disable-features=msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion,Translate', '--lang=en-US', '--window-position=9000,1000', '--window-size=1600,1000')
+$flags = @('--disable-sync', '--no-first-run', '--no-default-browser-check', '--disable-features=msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion,Translate', '--lang=en-US')
 $push = ($flags | ForEach-Object { "arguments.push(`"$_`".to_owned());" }) -join ' '
 $marker = 'arguments.push(format!("--app={}", request.url));'
 [IO.File]::WriteAllText($f, $orig.Replace($marker, "$push $marker"))

@@ -66,16 +66,18 @@ function Stop-Mine([string]$Profile) {
 $built = $false
 if ($NoBuild) {
   $built = (Test-Path (Join-Path $debug 'rivet.exe')) -and (Test-Path (Join-Path $debug 'rivet_runtime_windows.dll'))
-  if ($built -and -not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Join-Path $debug 'rivet.exe'))).Contains('--window-position=9000,1000'))) {
-    $built = $false; Write-Host 'rivet.exe was not built with the off-screen test flags'
+  if ($built -and -not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Join-Path $debug 'rivet.exe'))).Contains('msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion'))) {
+    $built = $false; Write-Host 'rivet.exe was not built with the test flags'
   }
 } else {
-  # The window flags exist for tests only: off-screen, no sync, no sign-in, and no occlusion tracking
-  # so that an off-screen page still paints. They are the same flags windows-features.ps1 uses. The
-  # launcher file is restored right after the build and must never be committed.
+  # The flags exist for tests only: no sync, no sign-in, and no occlusion tracking so that an
+  # off-screen page still paints. They are the same flags windows-features.ps1 uses, and like those
+  # they never place or size the window, which would make Chromium activate it as it shows. The
+  # run's RIVET_KEEP_OFFSCREEN keeps it off every monitor. The launcher file is restored right after
+  # the build and must never be committed.
   $f = Join-Path $root 'core\src\lib.rs'
   $orig = [IO.File]::ReadAllText($f)
-  $flags = @('--disable-sync', '--no-first-run', '--no-default-browser-check', '--disable-features=msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion', '--window-position=9000,1000', '--window-size=1600,1000')
+  $flags = @('--disable-sync', '--no-first-run', '--no-default-browser-check', '--disable-features=msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion')
   $push = ($flags | ForEach-Object { "arguments.push(`"$_`".to_owned());" }) -join ' '
   [IO.File]::WriteAllText($f, $orig.Replace('arguments.push(request.url.clone());', "$push arguments.push(request.url.clone());"))
   Push-Location $root

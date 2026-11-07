@@ -24,8 +24,8 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 $rivet = Join-Path $debug 'rivet.exe'
 $dll = Join-Path $debug 'rivet_runtime_windows.dll'
-if (-not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($rivet)).Contains('--window-position=9000,1000'))) {
-  Write-Host 'refusing to launch: this rivet.exe was not built with the off-screen test flags'; exit 2
+if (-not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($rivet)).Contains('msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion'))) {
+  Write-Host 'refusing to launch: this rivet.exe was not built with the test flags'; exit 2
 }
 $table = @{
   chrome = @('C:\Program Files\Google\Chrome\Application\chrome.exe', 'chrome.exe')
