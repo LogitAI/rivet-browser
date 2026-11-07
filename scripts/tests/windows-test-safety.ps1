@@ -89,6 +89,15 @@ function Start-RunSafety {
       New-Item -ItemType Directory -Force $copy | Out-Null
       Copy-Item $table (Join-Path $copy 'table.bin') -Force
     }
+    # The held copies of earlier browser builds are Rivet's own too. An installed Rivet opens a
+    # browser whose new build has no row yet from its held copy, so the run sees the same copies,
+    # through a junction rather than a copy of whole browsers.
+    $held = Join-Path $env:LOCALAPPDATA 'Rivet\browsers'
+    $link = Join-Path $dataRoot 'Rivet\browsers'
+    if ((Test-Path $held) -and -not (Test-Path $link)) {
+      New-Item -ItemType Directory -Force (Split-Path $link) | Out-Null
+      New-Item -ItemType Junction -Path $link -Target $held | Out-Null
+    }
   }
 
   # The registry is read and written under one lock, so two runs starting together see each other.
