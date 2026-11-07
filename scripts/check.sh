@@ -15,6 +15,7 @@ tests=(
     scripts/tests/installer.test.sh
     scripts/tests/windows-features.test.sh
     scripts/tests/paths.test.sh
+    scripts/tests/layers.test.sh
 )
 for test in "${tests[@]}"; do
     echo "== $test"
