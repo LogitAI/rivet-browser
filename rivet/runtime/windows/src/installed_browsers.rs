@@ -154,7 +154,9 @@ fn windows_of(process: u32) -> Vec<crate::spaces::Candidate> {
 }
 
 /// Brings the window that already runs the profile `directory` to the front. Returns whether there
-/// was one. Only that window is touched, and nothing is moved into another window.
+/// was one. Only that window is touched, and nothing is moved into another window. Under a test
+/// run the window is found but never restored or brought forward, so it stays off-screen and the
+/// person's own window keeps the keyboard.
 pub(crate) fn raise_existing(directory: &std::path::Path) -> bool {
     let Some(process) = profile_process(directory) else {
         return false;
@@ -162,6 +164,9 @@ pub(crate) fn raise_existing(directory: &std::path::Path) -> bool {
     let Some(window) = crate::spaces::pick_window(&windows_of(process)) else {
         return false;
     };
+    if rivet_platform_windows::focus::keep_offscreen() {
+        return true;
+    }
     let window = window as HWND;
     unsafe {
         if IsIconic(window) != 0 {

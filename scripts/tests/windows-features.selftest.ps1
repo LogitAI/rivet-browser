@@ -251,5 +251,20 @@ Expect 'fr12_first_frames_like_the_settled_window_pass' (Test-FirstFrames @($set
 Expect 'fr12_a_grey_band_in_a_first_frame_fails' (Test-FirstFrames @($band, $settled) $settled 160 890 56) 'FAIL'
 Expect 'fr12_only_blank_first_frames_are_not_driven' (Test-FirstFrames @((New-Window 0x000000)) $settled 160 890 56) 'NOT_DRIVEN'
 
+# The run registry: a run that must be alone never starts beside another, and no run starts beside it.
+. (Join-Path $PSScriptRoot 'windows-test-safety.ps1')
+$plain = [pscustomobject]@{ pid = 11; out = 'a'; alone = $false }
+$lonely = [pscustomobject]@{ pid = 12; out = 'b'; alone = $true }
+foreach ($case in @(
+    @($false, $null, $true, 'nfr5_a_run_starts_when_none_is_active'),
+    @($true, $null, $true, 'nfr5_open_link_rows_start_when_no_other_run_is_active'),
+    @($false, @($plain), $true, 'nfr5_runs_without_open_link_rows_start_side_by_side'),
+    @($true, @($plain), $false, 'nfr5_open_link_rows_never_start_beside_another_run'),
+    @($false, @($lonely), $false, 'nfr5_no_run_starts_beside_open_link_rows'))) {
+  $ok, $why = Test-RunMayStart $case[0] $case[1]
+  if ([bool]$ok -ne $case[2]) { Write-Host "FAIL $($case[3]) : wanted $($case[2]), got $ok ($why)"; $failures++ }
+  else { Write-Host "ok   $($case[3]) : $ok" }
+}
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'

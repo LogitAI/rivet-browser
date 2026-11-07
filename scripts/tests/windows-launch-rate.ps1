@@ -38,11 +38,15 @@ Add-Type -TypeDefinition @'
 using System;using System.Runtime.InteropServices;
 public static class LaunchWin{ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr GetProp(IntPtr h,string n); }
 '@
+# Off-screen and inactive windows, Rivet files in this run's folder, and the visible guard.
+. (Join-Path $PSScriptRoot 'windows-test-safety.ps1')
+$safety = Start-RunSafety -OutDir $OutDir -Name 'launch-rate'
 $report = @()
 foreach ($name in $Browsers) {
   $exe, $exeName = $table[$name]
   $ok = 0
   foreach ($run in 1..$Runs) {
+    Assert-RunSafe $safety
     $profile_ = Join-Path $OutDir "p-$name-$run"
     Get-ProcessList $exeName | Where-Object { $_.CommandLine -like "*$OutDir*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep $Gap
@@ -73,3 +77,4 @@ foreach ($name in $Browsers) {
   "{0}: {1} of {2} launches reported the runtime loaded and attached" -f $name, $ok, $Runs | Write-Host
 }
 $report | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $OutDir 'launch-rate.json') -Encoding utf8
+Stop-RunSafety $safety

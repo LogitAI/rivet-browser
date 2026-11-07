@@ -10,7 +10,10 @@
 # Safety: test windows sit off-screen and are captured with PrintWindow. No window is activated and
 # the cursor never moves. Each run uses a fresh profile inside this checkout with sync and sign-in
 # off, and only processes whose command line holds that profile are stopped. Nothing is copied out
-# of a profile. A browser is started only when the build exited 0.
+# of a profile. A browser is started only when the build exited 0. Every row runs under
+# RIVET_KEEP_OFFSCREEN with Rivet's own files in this run's folder, and the visible guard stops the
+# run when a test window shows on a monitor, takes the foreground or holds the mouse. The open-link
+# rows run only when no other run is active (windows-test-safety.ps1).
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
   [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest', 'appbar-width', 'appbar-peek', 'open-link-running', 'open-link-start', 'credentials-browser', 'credentials-system', 'view-click', 'view-click-other', 'view-keys', 'view-ime', 'tab-moves', 'first-frame', 'fullscreen-sidebar', 'taskbar-identity', 'taskbar-relaunch', 'sidebar-scale-monitor', 'split-panel-look', 'sidebar-floats', 'sidebar-open-button', 'dev-row', 'address-editing', 'security-chip', 'permission-bubble', 'password-bubble', 'typing-keeps-active', 'cli-control', 'cli-input', 'cli-hidden'),
@@ -184,6 +187,8 @@ function Get-MyProcesses($ExeName, $Profile) {
 function Read-Log { Get-Content $logFile -ErrorAction SilentlyContinue }
 
 function Start-Scene($Name, $Feature, $Url) {
+  # No browser starts after the visible guard stopped the run.
+  Assert-RunSafe $script:safety
   $exePath, $exeName = $table[$Name]
   $profile_ = Join-Path $OutDir "profiles\$Name-$Feature"
   Stop-Mine $exeName $profile_
@@ -1531,7 +1536,7 @@ function Invoke-AppbarPeek($Name, $shots) {
 }
 
 # Windows runs `rivet-launcher.exe --open-link <address>` when Rivet is the default browser. The
-# launcher reads the saved setup and the session list below the local application data folder, so
+# launcher reads the saved setup and the session list below its data folder, so
 # this row gives it a folder of its own in the output and never the owner's.
 function New-LinkRoot($Name, [string]$Mode, [string]$ExePath) {
   $root = Join-Path $OutDir "local-$Name-open-link-$Mode"
@@ -1543,17 +1548,17 @@ function New-LinkRoot($Name, [string]$Mode, [string]$ExePath) {
   $root
 }
 
-# Runs the launcher for one link with `$Root` as its local application data folder, and returns
-# its exit code, or $null when it did not finish.
+# Runs the launcher for one link with `$Root` in place of the local application data folder for
+# Rivet's files, and returns its exit code, or $null when it did not finish.
 function Invoke-Launcher([string]$Root, [string]$Url) {
-  $old = $env:LOCALAPPDATA
-  $env:LOCALAPPDATA = $Root
+  $old = $env:RIVET_DATA_ROOT
+  $env:RIVET_DATA_ROOT = $Root
   try {
     $p = Start-Process -FilePath (Join-Path $debug 'rivet-launcher.exe') -ArgumentList '--open-link', $Url -PassThru
     # The launcher waits at most 30 seconds for a new window to take the link.
     if (-not $p.WaitForExit(45000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; return $null }
     $p.ExitCode
-  } finally { $env:LOCALAPPDATA = $old }
+  } finally { $env:RIVET_DATA_ROOT = $old }
 }
 
 function Invoke-OpenLink($Name, $shots, [string]$Mode) {
@@ -1570,8 +1575,8 @@ function Invoke-OpenLink($Name, $shots, [string]$Mode) {
       # The window registers in the session list the launcher reads.
       $state = Join-Path $root 'Rivet\state\sessions.json'
       New-Item -ItemType Directory -Force (Split-Path $state) | Out-Null
-      $old = $env:LOCALAPPDATA; $env:LOCALAPPDATA = $root
-      try { Open-Scene $ctx $state $urlA $null } finally { $env:LOCALAPPDATA = $old }
+      $old = $env:RIVET_DATA_ROOT; $env:RIVET_DATA_ROOT = $root
+      try { Open-Scene $ctx $state $urlA $null } finally { $env:RIVET_DATA_ROOT = $old }
       if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
       if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
       $code = Invoke-Launcher $root $link
@@ -2515,10 +2520,9 @@ function Invoke-CliInput($Name, $shots) {
 }
 
 # A hidden session: cloaked, still navigating; a frame read is refused under hidden and shows the
-# window under auto. The window stays off-screen because the test sets RIVET_KEEP_OFFSCREEN.
+# window under auto. The window stays off-screen because the whole run sets RIVET_KEEP_OFFSCREEN.
 function Invoke-CliHidden($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'cli-hidden' $urlA
-  $env:RIVET_KEEP_OFFSCREEN = '1'
   try {
     Open-Scene $ctx $state $urlA $null @('--display', 'hidden')
     if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
@@ -2538,7 +2542,7 @@ function Invoke-CliHidden($Name, $shots) {
     if ($r.Code -ne 0 -or -not $r.Value.promoted -or -not (Test-Path $bmp)) { return @('FAIL', $null, "auto did not show the window for a frame read: $($r.Text)") }
     if ([CloakWin]::Cloaked($ctx.Hwnd)) { return @('FAIL', $bmp, 'auto reported a promotion but the window is still cloaked') }
     @('PASS', $bmp, 'hidden window cloaked and navigating; hidden frame read refused with needs_visible; auto showed it and wrote the capture; open the bitmap to check it')
-  } finally { Remove-Item Env:\RIVET_KEEP_OFFSCREEN -ErrorAction SilentlyContinue; Stop-Scene $ctx }
+  } finally { Stop-Scene $ctx }
 }
 
 # --- CLI control channel -------------------------------------------------------------------
@@ -2550,6 +2554,18 @@ public static class CloakWin{
  public static bool Cloaked(IntPtr h){int v;return DwmGetWindowAttribute(h,14,out v,4)==0&&v!=0;}
 }
 '@
+
+# --- Run safety -----------------------------------------------------------------------------
+# Every row runs under RIVET_KEEP_OFFSCREEN with its Rivet files in this run's folder, and the
+# visible guard stops the run when a test window shows on a monitor, takes the foreground or holds
+# the mouse. The open-link rows hand a link to a running window and so run alone: while another
+# run is active they are not driven, and no other run starts while they are.
+. (Join-Path $PSScriptRoot 'windows-test-safety.ps1')
+$aloneRows = @($Features | Where-Object { $_ -like 'open-link-*' })
+$safety = $null
+if ($built) {
+  $safety = Start-RunSafety -OutDir $OutDir -Name 'features' -Alone:($aloneRows.Count -gt 0) -DropAloneRows
+}
 
 # --- Run ---------------------------------------------------------------------------------
 foreach ($name in $Browsers) {
@@ -2567,6 +2583,8 @@ foreach ($name in $Browsers) {
     }
     if (-not $built) { Add-Row $name $version $feature 'NOT_DRIVEN' $null "no browser was started: $buildNote"; continue }
     if (-not (Test-Path $exePath)) { Add-Row $name $version $feature 'NOT_DRIVEN' $null 'the browser is not installed'; continue }
+    Assert-RunSafe $safety
+    if ($aloneRows -contains $feature -and -not $safety.Alone) { Add-Row $name $version $feature 'NOT_DRIVEN' $null "the open-link rows run alone: $($safety.AloneRefused)"; continue }
     try {
       $result = switch ($feature) {
         'split' { Invoke-Split $name $version $shots }
@@ -2648,5 +2666,6 @@ Format-Rows $rows | Set-Content -Path $text -Encoding utf8
 ''
 Format-Rows $rows
 "json: $json"
+Stop-RunSafety $safety
 $bad = @($rows | Where-Object { $_.result -ne 'PASS' }).Count
 if ($bad) { exit 1 }

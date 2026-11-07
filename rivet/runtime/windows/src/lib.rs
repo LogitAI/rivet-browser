@@ -340,6 +340,8 @@ mod address_display;
 #[cfg(windows)]
 mod appbar;
 #[cfg(windows)]
+mod browser;
+#[cfg(windows)]
 mod browsers;
 #[cfg(windows)]
 mod builds;
@@ -361,6 +363,10 @@ mod ground;
 mod hooks;
 #[cfg(windows)]
 mod installed_browsers;
+#[cfg(windows)]
+mod offscreen;
+#[cfg(windows)]
+mod os;
 #[cfg(any(windows, test))]
 mod press;
 #[cfg(windows)]

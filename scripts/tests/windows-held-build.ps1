@@ -89,6 +89,9 @@ if ($NoBuild) {
 if (-not $built) { Write-Host 'NOT_DRIVEN: the build did not succeed, so no browser was started'; exit 3 }
 $rivet = Join-Path $debug 'rivet.exe'
 $runtime = Join-Path $debug 'rivet_runtime_windows.dll'
+# Off-screen and inactive windows, Rivet files in this run's folder, and the visible guard.
+. (Join-Path $PSScriptRoot 'windows-test-safety.ps1')
+$safety = Start-RunSafety -OutDir $OutDir -Name 'held-build'
 
 # --- The simulated installed browser: an unknown build ----------------------------------------
 $simulated = Join-Path $OutDir 'installed'
@@ -200,6 +203,7 @@ $after = @(Get-ProcessList | Where-Object { $_.CommandLine -like "*$profile_*" }
 Add-Result 'with nothing kept no window opens and the reason is said' (($exit -ne 0) -and ($after -eq 0) -and ($text -join ' ').Contains('no verified copy')) (($text | Select-Object -First 1) -join '')
 
 Stop-Mine $profile_
+Stop-RunSafety $safety
 $failed = @($results | Where-Object { -not $_.pass }).Count
 if ($failed) { Write-Host "$failed check(s) failed"; exit 1 }
 Write-Host 'all held build checks passed'

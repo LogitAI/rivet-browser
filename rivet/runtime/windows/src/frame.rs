@@ -13,8 +13,7 @@ use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
-    TME_NONCLIENT, TRACKMOUSEEVENT,
+    GetFocus, GetKeyState, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CallWindowProcW, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos,
@@ -42,6 +41,11 @@ use crate::feature::Step;
 use crate::press::Presses;
 use crate::spaces::{SavedTab, Spaces, MAX_SPACES};
 use crate::tab_rows::{self, Row};
+
+/// The composition root of the runtime's layers. A feature that has moved behind the operating
+/// system and browser access traits is given these adapters, and nothing else picks one.
+pub(crate) const OS: crate::os::win32::Win32 = crate::os::win32::Win32;
+pub(crate) const BROWSER: crate::browser::chromium::Chromium = crate::browser::chromium::Chromium;
 
 const BROWSER_CLASS: &str = "Chrome_WidgetWin_1";
 const ORIGINAL_PROC: &str = "Rivet.OriginalWindowProc";
@@ -476,7 +480,7 @@ unsafe fn tab_drag_start(window: HWND, lparam: LPARAM) {
     if start {
         // A press that became a drag is no long press.
         crate::features::link_preview::cancel_hold(window);
-        SetCapture(window);
+        rivet_platform_windows::focus::capture(window);
         // The press no longer clicks the tab.
         press_up(window);
         APPBAR_STATE.with(|states| {
@@ -515,7 +519,7 @@ unsafe fn tab_drag_end(window: HWND, release: Option<LPARAM>) {
     let Some(drag) = TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize))) else {
         return;
     };
-    ReleaseCapture();
+    rivet_platform_windows::focus::release(window);
     show_tab_drag(window, None);
     if let Some(lparam) = release.filter(|_| drag.live) {
         let point = POINT {
@@ -966,7 +970,7 @@ unsafe fn switch_space(window: HWND, index: usize) {
         return;
     };
     let target = with_spaces(window, |spaces| spaces.list()[index].clone());
-    let root = rivet_core::paths::local_app_data();
+    let root = rivet_core::paths::data_home();
     if let Some(hand_over) = root.as_deref().and_then(|root| {
         crate::spaces::hand_over(&target, crate::installed_browsers::current(), root)
     }) {
@@ -1073,7 +1077,7 @@ unsafe fn hand_over_to(
     let dir = hand_over.user_data_dir.to_string_lossy().into_owned();
     let (mut next, root) = (
         with_spaces(window, |spaces| spaces.clone()),
-        rivet_core::paths::local_app_data(),
+        rivet_core::paths::data_home(),
     );
     let Some(root) = root else {
         return;
@@ -1193,7 +1197,7 @@ thread_local! {
 
 /// The spaces file of this process's browser profile.
 pub(crate) fn spaces_file() -> Option<(std::path::PathBuf, String)> {
-    let root = rivet_core::paths::local_app_data()?;
+    let root = rivet_core::paths::data_home()?;
     let dir = crate::spaces::user_data_dir_of(
         std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()),
     );
@@ -1441,7 +1445,7 @@ unsafe fn open_menu(window: HWND, menu: Menu) {
             .insert(window as isize, (previous as isize, menu))
     });
     SetFocus(window);
-    SetCapture(window);
+    rivet_platform_windows::focus::capture_for_menu(window);
 }
 
 /// Whether a client point is inside the open menu, and the entry it is on.
@@ -1471,7 +1475,7 @@ unsafe fn close_menu(window: HWND) {
                 entry.0 = None;
             }
         });
-        ReleaseCapture();
+        rivet_platform_windows::focus::release(window);
         if previous != 0 {
             SetFocus(previous as HWND);
         }
@@ -1948,7 +1952,7 @@ unsafe fn end_drag(window: HWND) {
         apply_drag(window);
     }
     if DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize))) {
-        ReleaseCapture();
+        rivet_platform_windows::focus::release(window);
         APPBAR_STATE.with(|states| {
             if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
                 entry.0 = None;
@@ -3061,6 +3065,9 @@ unsafe extern "system" fn browser_proc(
 }
 
 unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if let Some(result) = crate::offscreen::message(window, message, wparam, lparam) {
+        return result;
+    }
     if message == RegisterWindowMessageW(wide("Rivet.NewStartPage").as_ptr()) && attached(window) {
         start_page(window);
         return 0;
@@ -3232,7 +3239,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 ROW_PRESS.with(|all| all.borrow_mut().insert(window as isize, hit));
                 // A grip drag may end anywhere, so its release comes back to this window.
                 if hit.1 == crate::features::split::RowButton::Grip {
-                    windows_sys::Win32::UI::Input::KeyboardAndMouse::SetCapture(window);
+                    rivet_platform_windows::focus::capture(window);
                 }
             }
             0
@@ -3257,7 +3264,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             let grip =
                 pressed.filter(|pressed| pressed.1 == crate::features::split::RowButton::Grip);
             if grip.is_some() {
-                windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+                rivet_platform_windows::focus::release(window);
             }
             if let Some(hit) =
                 grip.filter(|hit| crate::features::mini_window::grip_released(window, hit.0, x, y))
@@ -3493,7 +3500,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             tab_drag_press(window, hit, lparam);
             if hit == Some(AppbarHit::Resizer) {
                 DRAGGING.with(|set| set.borrow_mut().insert(window as isize));
-                SetCapture(window);
+                rivet_platform_windows::focus::capture(window);
             }
             press_down(window, hit);
             update_appbar(window);
@@ -3758,13 +3765,21 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         Some("closesel") => crate::features::tab_list::close(window, index),
                         // App window spike: a tab added through Chromium's own tab strip functions.
                         Some(word @ ("back" | "forward" | "reload" | "stop")) => {
-                            crate::features::page_bar::Command::parse(word).is_some_and(|command| {
-                                crate::features::page_bar::run(window, command)
+                            crate::features::page_bar::parse_command(word).is_some_and(|command| {
+                                crate::features::page_bar::run(
+                                    &OS,
+                                    &BROWSER,
+                                    crate::os::WindowId::from_hwnd(window),
+                                    command,
+                                )
                             })
                         }
                         Some("pages") => {
-                            let pages =
-                                crate::features::page_bar::pages(window).unwrap_or_default();
+                            let pages = crate::features::page_bar::pages(
+                                &BROWSER,
+                                crate::os::WindowId::from_hwnd(window),
+                            )
+                            .unwrap_or_default();
                             for page in &pages {
                                 crate::trace::trace(&format!(
                                     "page {} active {} title {:?} url {:?}",
@@ -3997,6 +4012,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ if message == attach_message() => {
+            // A test run's windows stay off every monitor and inactive from here on, the browser's
+            // new windows and bubbles among them.
+            crate::offscreen::keep_thread();
+            crate::offscreen::put_away(window);
             crate::features::look::first_look(window, crate::features::look::FirstLook::UiThread);
             crate::features::tab_list::connect_command_bar();
             create_appbar(window);

@@ -7,6 +7,7 @@
 pub mod background;
 pub mod chrome_build;
 pub mod control;
+pub mod focus;
 pub mod hold;
 pub mod row_port;
 pub mod row_recipe;

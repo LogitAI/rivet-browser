@@ -18,8 +18,6 @@ use rivet_protocol::{
 };
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
 
-/// Set by a test run so a window shown by a command stays where the test put it, off-screen.
-const KEEP_OFFSCREEN_VARIABLE: &str = "RIVET_KEEP_OFFSCREEN";
 /// How long the pipe thread waits for the UI thread to run a command.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
 
@@ -200,7 +198,7 @@ unsafe fn set_shown(window: HWND, shown: bool) -> Result<(), Failure> {
     }
     if shown {
         hidden().lock().unwrap().remove(&(window as isize));
-        if std::env::var_os(KEEP_OFFSCREEN_VARIABLE).is_none() {
+        if !rivet_platform_windows::focus::keep_offscreen() {
             bring_on_screen(window);
         }
     } else {
@@ -270,9 +268,12 @@ impl WindowBrowser {
     }
 
     unsafe fn count(&self) -> Result<usize, Failure> {
-        crate::features::page_bar::pages(self.window)
-            .map(|pages| pages.len())
-            .ok_or_else(|| unavailable("the tab strip"))
+        crate::features::page_bar::pages(
+            &crate::frame::BROWSER,
+            crate::os::WindowId::from_hwnd(self.window),
+        )
+        .map(|pages| pages.len())
+        .ok_or_else(|| unavailable("the tab strip"))
     }
 
     /// Makes page `index` the active one, for actions the browser runs on its active page.
@@ -314,8 +315,11 @@ impl WindowBrowser {
 
 impl control::Browser for WindowBrowser {
     fn pages(&mut self) -> Result<Vec<Page>, Failure> {
-        let pages = unsafe { crate::features::page_bar::pages(self.window) }
-            .ok_or_else(|| unavailable("the tab strip"))?;
+        let pages = crate::features::page_bar::pages(
+            &crate::frame::BROWSER,
+            crate::os::WindowId::from_hwnd(self.window),
+        )
+        .ok_or_else(|| unavailable("the tab strip"))?;
         Ok(pages
             .into_iter()
             .map(|page| Page {
@@ -373,7 +377,12 @@ impl control::Browser for WindowBrowser {
         };
         unsafe {
             self.focus(page)?;
-            crate::features::page_bar::run(self.window, command);
+            crate::features::page_bar::run(
+                &crate::frame::OS,
+                &crate::frame::BROWSER,
+                crate::os::WindowId::from_hwnd(self.window),
+                command,
+            );
         }
         Ok(())
     }
