@@ -14,6 +14,10 @@ param(
   [string]$Url = 'about:blank',
   [string]$OutDir
 )
+# The whole run, and every browser it starts, runs on a desktop of its own.
+. (Join-Path $PSScriptRoot 'windows-test-desktop.ps1')
+$desktopCode = Invoke-OnOwnDesktop $PSCommandPath $PSBoundParameters
+if ($null -ne $desktopCode) { exit $desktopCode }
 $Browsers = @($Browsers | ForEach-Object { $_ -split ',' })
 . (Join-Path $PSScriptRoot 'windows-features-lib.ps1')
 . (Join-Path $PSScriptRoot 'windows-processes.ps1')

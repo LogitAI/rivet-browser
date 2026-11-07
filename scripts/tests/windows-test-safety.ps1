@@ -40,6 +40,8 @@ $script:SafetyRepo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 function Get-RunRegistry { Join-Path $script:SafetyRepo '.scratch\runs' }
 
+. (Join-Path $PSScriptRoot 'windows-test-desktop.ps1')
+
 # The runs registered and still running, each with its process id, start time, folder and whether
 # it must be alone. A record whose process is gone, or whose id another process took, is removed.
 function Get-ActiveRuns {
@@ -117,7 +119,13 @@ function Start-RunSafety {
   $stop = Join-Path $OutDir 'guard-stop.txt'
   Remove-Item $log, $fail, $stop -ErrorAction SilentlyContinue
   $guardArgs = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'windows-visible-guard.ps1'), '-Mark', $OutDir, '-Log', $log, '-FailFile', $fail, '-StopFile', $stop, '-RunnerPid', $PID)
-  $guard = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $guardArgs -WindowStyle Hidden -PassThru
+  # A run on a test desktop of its own (windows-test-desktop.ps1) puts its guard on the person's
+  # desktop, where no window of a test process may appear at all.
+  $guard = if ($env:RIVET_TEST_DESKTOP) {
+    Start-OnDefaultDesktop (Get-Process -Id $PID).Path ($guardArgs + '-TestDesktop')
+  } else {
+    Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $guardArgs -WindowStyle Hidden -PassThru
+  }
   # No browser starts before the guard watches.
   foreach ($i in 1..100) { if (Test-Path $log) { break }; Start-Sleep -Milliseconds 100 }
   if (-not (Test-Path $log)) {

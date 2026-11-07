@@ -18,6 +18,10 @@ param(
   [string]$OutDir,
   [switch]$NoBuild
 )
+# The whole run, and every browser it starts, runs on a desktop of its own.
+. (Join-Path $PSScriptRoot 'windows-test-desktop.ps1')
+$desktopCode = Invoke-OnOwnDesktop $PSCommandPath $PSBoundParameters
+if ($null -ne $desktopCode) { exit $desktopCode }
 $ErrorActionPreference = 'Continue'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $root = Join-Path $repo 'rivet'
