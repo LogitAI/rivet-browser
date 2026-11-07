@@ -25,6 +25,10 @@ param(
   [double]$MinFreeGigabytes = 20
 )
 $ErrorActionPreference = 'Continue'
+# The whole run, its build and every browser, runs on a desktop of its own.
+. (Join-Path $PSScriptRoot 'windows-test-desktop.ps1')
+$desktopCode = Invoke-OnOwnDesktop $PSCommandPath $PSBoundParameters
+if ($null -ne $desktopCode) { exit $desktopCode }
 # Under -File a comma list arrives as one string.
 $Browsers = @($Browsers | ForEach-Object { $_ -split ',' })
 $Features = @($Features | ForEach-Object { $_ -split ',' })

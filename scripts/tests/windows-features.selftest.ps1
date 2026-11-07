@@ -298,5 +298,16 @@ $direct = @($scripts | Select-String -Pattern 'Start-Process\s+-FilePath\s+\$(Ex
 if ($direct.Count) { Write-Host "FAIL nfr5_runners_start_browsers_without_activation : $($direct -join ', ')"; $failures++ }
 else { Write-Host 'ok   nfr5_runners_start_browsers_without_activation : none through Start-Process' }
 
+# A run moves onto a desktop of its own with the arguments it was given.
+. (Join-Path $PSScriptRoot 'windows-test-desktop.ps1')
+$bound = [ordered]@{ Browsers = @('chrome', 'edge'); OutDir = 'D:\runs\run 52\chrome'; NoBuild = [System.Management.Automation.SwitchParameter]$true; Off = [System.Management.Automation.SwitchParameter]$false }
+$line = ConvertTo-RunnerArguments $bound
+$want = '-Browsers chrome,edge -OutDir "D:\runs\run 52\chrome" -NoBuild'
+if ($line -ne $want) { Write-Host "FAIL nfr5_a_run_keeps_its_arguments_on_its_own_desktop : $line"; $failures++ }
+else { Write-Host 'ok   nfr5_a_run_keeps_its_arguments_on_its_own_desktop' }
+$quoted = ConvertTo-CommandArgument 'C:\a b\'
+if ($quoted -ne '"C:\a b\\"') { Write-Host "FAIL nfr5_a_folder_argument_keeps_its_last_backslash : $quoted"; $failures++ }
+else { Write-Host 'ok   nfr5_a_folder_argument_keeps_its_last_backslash' }
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'
