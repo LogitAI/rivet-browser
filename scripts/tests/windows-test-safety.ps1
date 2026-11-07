@@ -61,7 +61,8 @@ function Get-ActiveRuns {
 # Whether a run that `wantsAlone` may start beside the `active` runs, and why not.
 function Test-RunMayStart([bool]$WantsAlone, $Active) {
   $others = @($Active | Where-Object { $_ })
-  $alone = @($others | Where-Object { $_.alone })
+  # A record written by an older runner holds the switch itself, {"IsPresent": ...}.
+  $alone = @($others | Where-Object { $_.alone -eq $true -or $_.alone.IsPresent -eq $true })
   if ($alone.Count) { return @($false, "the run in $($alone[0].out) (pid $($alone[0].pid)) must run alone") }
   if ($WantsAlone -and $others.Count) { return @($false, "$($others.Count) other run(s) are active, the first in $($others[0].out) (pid $($others[0].pid))") }
   @($true, '')
@@ -93,13 +94,14 @@ function Start-RunSafety {
   # The registry is read and written under one lock, so two runs starting together see each other.
   $lock = New-Object System.Threading.Mutex($false, 'Local\RivetTestRunRegistry')
   [void]$lock.WaitOne()
-  $alone = [bool]$Alone
+  # PowerShell names are not case sensitive: a variable named like the switch would stay a switch.
+  $runAlone = [bool]$Alone
   $note = ''
   try {
-    $ok, $why = Test-RunMayStart $alone (Get-ActiveRuns)
-    if (-not $ok -and $alone -and $DropAloneRows) {
+    $ok, $why = Test-RunMayStart $runAlone (Get-ActiveRuns)
+    if (-not $ok -and $runAlone -and $DropAloneRows) {
       $ok2, $why2 = Test-RunMayStart $false (Get-ActiveRuns)
-      if ($ok2) { $note = $why; $alone = $false; $ok = $true }
+      if ($ok2) { $note = $why; $runAlone = $false; $ok = $true }
       else { $why = $why2 }
     }
     if (-not $ok) {
@@ -110,7 +112,7 @@ function Start-RunSafety {
     New-Item -ItemType Directory -Force $dir | Out-Null
     $me = Get-Process -Id $PID
     $record = Join-Path $dir "$PID.json"
-    @{ pid = $PID; start = $me.StartTime.ToUniversalTime().Ticks; out = $OutDir; name = $Name; alone = $alone } |
+    @{ pid = $PID; start = $me.StartTime.ToUniversalTime().Ticks; out = $OutDir; name = $Name; alone = $runAlone } |
       ConvertTo-Json -Compress | Set-Content -Path $record -Encoding utf8
   } finally { $lock.ReleaseMutex(); $lock.Dispose() }
 
@@ -134,7 +136,7 @@ function Start-RunSafety {
     Write-Host "refusing to start the $Name run: the visible guard did not start"
     exit 2
   }
-  [pscustomobject]@{ Guard = $guard; Log = $log; FailFile = $fail; StopFile = $stop; Record = $record; DataRoot = $dataRoot; Alone = $alone; AloneRefused = $note }
+  [pscustomobject]@{ Guard = $guard; Log = $log; FailFile = $fail; StopFile = $stop; Record = $record; DataRoot = $dataRoot; Alone = $runAlone; AloneRefused = $note }
 }
 
 # Stops the run when the guard found a breach or is no longer watching. The guard has already

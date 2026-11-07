@@ -260,7 +260,8 @@ foreach ($case in @(
     @($true, $null, $true, 'nfr5_open_link_rows_start_when_no_other_run_is_active'),
     @($false, @($plain), $true, 'nfr5_runs_without_open_link_rows_start_side_by_side'),
     @($true, @($plain), $false, 'nfr5_open_link_rows_never_start_beside_another_run'),
-    @($false, @($lonely), $false, 'nfr5_no_run_starts_beside_open_link_rows'))) {
+    @($false, @($lonely), $false, 'nfr5_no_run_starts_beside_open_link_rows'),
+    @($false, @(([pscustomobject]@{ pid = 13; out = 'c'; alone = [pscustomobject]@{ IsPresent = $false } })), $true, 'nfr5_a_record_holding_a_false_switch_is_not_alone'))) {
   $ok, $why = Test-RunMayStart $case[0] $case[1]
   if ([bool]$ok -ne $case[2]) { Write-Host "FAIL $($case[3]) : wanted $($case[2]), got $ok ($why)"; $failures++ }
   else { Write-Host "ok   $($case[3]) : $ok" }
