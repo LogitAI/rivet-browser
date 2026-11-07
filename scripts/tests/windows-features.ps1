@@ -1004,9 +1004,17 @@ function Invoke-Mini($Name, $shots, [string]$Step) {
     Start-Sleep 2
     $tops = Get-MyTops $ctx
     Send-MiniCommand $ctx 1
+    # Rivet asks the browser for the Mini Window's own app window, which takes a moment to come.
+    $log = @()
+    foreach ($i in 1..60) {
+      Start-Sleep -Milliseconds 250
+      $log = @(Read-Log | Select-Object -Skip $before)
+      if ($log | Where-Object { $_ -match '^mini window: (open tab|kept the tab|off, |this build cannot move a tab)' }) { break }
+    }
+    Start-Sleep 1
     $mini = Find-MiniWindow $ctx $tops
-    Start-Sleep 3
-    $log = @(Read-Log | Select-Object -Skip $before)
+    $kept = @($log | Where-Object { $_ -match '^mini window: kept the tab, ' } | Select-Object -First 1)
+    if ($kept) { return @('FAIL', $null, ('the Mini Window did not open and the page stayed: {0}' -f ($kept[0] -replace '^mini window: kept the tab, ', ''))) }
     if (-not ($log | Where-Object { $_ -match '^mini window: open tab' })) {
       $off = @($log | Where-Object { $_ -match '^mini window: off, ' } | Select-Object -First 1)
       if ($off) { return @('NOT_DRIVEN', $null, ('the Mini Window is off on this build: {0}' -f ($off[0] -replace '^mini window: off, ', ''))) }

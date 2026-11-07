@@ -7,8 +7,8 @@
 use std::sync::OnceLock;
 
 use super::{
-    Availability, BrowserCommands, Capabilities, CapabilityReport, Feature, NavCommand, PageState,
-    Pages,
+    Availability, BrowserCommands, Capabilities, CapabilityReport, Feature, NavCommand, PageId,
+    PageState, Pages, TabEntry, TabMoves,
 };
 use crate::os::WindowId;
 
@@ -41,6 +41,82 @@ impl Pages for Chromium {
             )
         }
     }
+}
+
+impl TabMoves for Chromium {
+    fn tab_entries(&self, window: WindowId) -> Option<Vec<TabEntry>> {
+        // `open_tabs` reads the strip through the build's own verified functions, and returns
+        // nothing for a window whose tab strip cannot be read.
+        let tabs = unsafe { crate::features::tabs::open_tabs(window.hwnd())? };
+        Some(
+            tabs.into_iter()
+                .map(|tab| TabEntry {
+                    page: PageId::from_raw(tab.id),
+                    url: tab.saved.url,
+                    active: tab.saved.active,
+                })
+                .collect(),
+        )
+    }
+
+    fn profile_of(&self, page: PageId) -> Option<usize> {
+        let base = crate::features::tabs::base()?;
+        let contents = page.raw();
+        if contents == 0 {
+            return None;
+        }
+        // `WebContents::GetBrowserContext` at the row's checked address, or the context the row
+        // records at an offset of the contents. The page is one this process's tab strip just
+        // listed.
+        let context = match crate::features::app_window::recorded("ctx") {
+            Some(rva) => unsafe {
+                crate::features::tabs::function::<unsafe extern "system" fn(usize) -> usize>(
+                    base, rva,
+                )(contents)
+            },
+            None => {
+                let offset = crate::features::app_window::recorded("ctxoff")?;
+                read_word(contents + offset)?
+            }
+        };
+        (context != 0).then_some(context)
+    }
+
+    fn can_move_tabs(&self) -> bool {
+        crate::features::app_window::can_move_tabs()
+    }
+
+    fn move_tab(&self, from: WindowId, index: usize, to: WindowId) -> bool {
+        // Chromium's own detach and insert at the row's checked addresses, on the UI thread.
+        unsafe { crate::features::app_window::move_tab(from.hwnd(), index, to.hwnd(), true) }
+    }
+
+    fn close_page(&self, window: WindowId, page: PageId) -> bool {
+        unsafe { crate::features::tabs::close_tab_by_id(window.hwnd(), page.raw()) }
+    }
+
+    fn show_tab(&self, window: WindowId, index: usize) -> bool {
+        unsafe { crate::features::tabs::activate_tab(window.hwnd(), index) }
+    }
+}
+
+/// A word of this process's memory that may not be mapped.
+fn read_word(address: usize) -> Option<usize> {
+    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let mut value = 0usize;
+    let mut done = 0usize;
+    // ReadProcessMemory fails, instead of faulting, on an address that is not mapped.
+    let ok = unsafe {
+        ReadProcessMemory(
+            GetCurrentProcess(),
+            address as *const std::ffi::c_void,
+            (&mut value as *mut usize).cast(),
+            std::mem::size_of::<usize>(),
+            &mut done,
+        )
+    };
+    (ok != 0 && done == std::mem::size_of::<usize>()).then_some(value)
 }
 
 impl BrowserCommands for Chromium {

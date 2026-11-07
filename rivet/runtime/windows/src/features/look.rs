@@ -208,6 +208,8 @@ mod tests {
             0x5249_5650,
             0x5249_5652,
             0x5249_5654,
+            // The Mini Window opening's timer on the Rivet window it pops out of.
+            0x5249_4d4f,
         ] {
             assert_ne!(FIRST_LOOK_TIMER, other);
         }

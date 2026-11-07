@@ -242,7 +242,7 @@ pub unsafe fn pop_out(window: HWND, slot: usize) -> bool {
     if !crate::features::second_view::close_pane(window, slot) {
         return false;
     }
-    crate::features::mini_window::open(window, tab)
+    crate::features::mini_window::open(window, tab, false)
 }
 
 /// The part of a page near each edge where a drop splits it, as a share of its size.
