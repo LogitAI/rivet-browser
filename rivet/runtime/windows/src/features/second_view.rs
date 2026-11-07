@@ -1735,7 +1735,6 @@ pub(crate) unsafe fn on_mouse(
     lparam: isize,
     browser: &dyn Fn() -> isize,
 ) -> Option<isize> {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
@@ -1752,7 +1751,7 @@ pub(crate) unsafe fn on_mouse(
                 .find(|divider| inside(divider.rect, x, y))
             {
                 DRAGGING.store(divider.node, Ordering::Release);
-                SetCapture(window);
+                rivet_platform_windows::focus::capture(window);
                 return Some(0);
             }
             let Some(slot) = extra_at(window, x, y) else {
@@ -1803,7 +1802,7 @@ pub(crate) unsafe fn on_mouse(
             if DRAGGING.swap(usize::MAX, Ordering::AcqRel) != usize::MAX =>
         {
             if message == WM_LBUTTONUP {
-                ReleaseCapture();
+                rivet_platform_windows::focus::release(window);
             }
             Some(0)
         }

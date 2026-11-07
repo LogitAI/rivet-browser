@@ -18,8 +18,6 @@ use rivet_protocol::{
 };
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
 
-/// Set by a test run so a window shown by a command stays where the test put it, off-screen.
-const KEEP_OFFSCREEN_VARIABLE: &str = "RIVET_KEEP_OFFSCREEN";
 /// How long the pipe thread waits for the UI thread to run a command.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
 
@@ -200,7 +198,7 @@ unsafe fn set_shown(window: HWND, shown: bool) -> Result<(), Failure> {
     }
     if shown {
         hidden().lock().unwrap().remove(&(window as isize));
-        if std::env::var_os(KEEP_OFFSCREEN_VARIABLE).is_none() {
+        if !rivet_platform_windows::focus::keep_offscreen() {
             bring_on_screen(window);
         }
     } else {

@@ -848,7 +848,7 @@ fn state_path(override_path: Option<&std::path::Path>) -> Result<PathBuf, String
 /// Moves files older builds left elsewhere into the layout and removes what is past its limit.
 /// A move that fails because a file is open is tried again on the next start.
 fn tidy_files() {
-    let Some(local) = rivet_core::paths::local_app_data() else {
+    let Some(local) = rivet_core::paths::data_home() else {
         return;
     };
     rivet_core::paths::migrate(&local);

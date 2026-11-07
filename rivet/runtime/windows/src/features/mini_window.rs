@@ -602,7 +602,7 @@ unsafe extern "system" fn mini_proc(
 ) -> LRESULT {
     use windows_sys::Win32::Foundation::POINT as WinPoint;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+        TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, KillTimer, SetWindowLongPtrW, GWLP_WNDPROC, HTCAPTION, WM_CLOSE,
@@ -627,6 +627,13 @@ unsafe extern "system" fn mini_proc(
             nc_answer(row_hit(width, x, y), original)
         }
         WM_NCLBUTTONDOWN => {
+            // A press on the row starts the system's move loop, which holds the mouse. A posted
+            // press or one on a window nobody can see must not take the person's pointer.
+            if wparam == HTCAPTION as usize
+                && !rivet_platform_windows::focus::may_start_system_drag(mini)
+            {
+                return 0;
+            }
             if wparam == HTCAPTION as usize {
                 let mut point = WinPoint {
                     x: (lparam & 0xffff) as i16 as i32,
@@ -689,7 +696,7 @@ unsafe extern "system" fn mini_proc(
             match row_hit(width, x, y) {
                 Some(hit @ (Hit::Return | Hit::OpenTab | Hit::Close)) => {
                     with(mini, |state| state.pressed = Some(hit));
-                    SetCapture(mini);
+                    rivet_platform_windows::focus::capture(mini);
                     0
                 }
                 _ => call_original(mini, message, wparam, lparam),
@@ -699,7 +706,7 @@ unsafe extern "system" fn mini_proc(
             let Some(pressed) = with(mini, |state| state.pressed.take()).flatten() else {
                 return call_original(mini, message, wparam, lparam);
             };
-            ReleaseCapture();
+            rivet_platform_windows::focus::release(mini);
             let (x, y, width) = local(mini, lparam);
             if row_hit(width, x, y) == Some(pressed) {
                 match pressed {

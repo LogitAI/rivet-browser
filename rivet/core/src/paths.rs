@@ -33,6 +33,29 @@ pub fn local_app_data() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Set by a test run to a folder inside its own output folder. That folder then stands in for the
+/// local application data folder for every file Rivet makes, so a test's sessions, spaces and tab
+/// lists never land in the person's own Rivet folder. Browsers are still found where they are
+/// installed: only Rivet's own files move.
+pub const DATA_ROOT_VARIABLE: &str = "RIVET_DATA_ROOT";
+
+/// The folder that holds Rivet's root: a test run's own folder when `RIVET_DATA_ROOT` names one,
+/// else the local application data folder.
+pub fn data_home() -> Option<PathBuf> {
+    data_home_from(std::env::var_os(DATA_ROOT_VARIABLE), local_app_data())
+}
+
+/// As `data_home`, with the variable's value and the local application data folder given.
+pub fn data_home_from(
+    test_root: Option<std::ffi::OsString>,
+    local_app_data: Option<PathBuf>,
+) -> Option<PathBuf> {
+    test_root
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or(local_app_data)
+}
+
 /// The folders below one Rivet root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
@@ -40,9 +63,10 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// The layout of the current user, `None` when the local application data folder is unknown.
+    /// The layout of the current user, or of the test run that set `RIVET_DATA_ROOT`. `None` when
+    /// neither folder is known.
     pub fn current() -> Option<Self> {
-        local_app_data().map(|local| Self::under(&local))
+        data_home().map(|local| Self::under(&local))
     }
 
     /// The layout below a local application data folder, `<local>\Rivet`.
@@ -434,6 +458,22 @@ mod tests {
             Path::new(r"C:\Local\Rivet\cache\browsers")
         );
         assert_eq!(layout.logs(), Path::new(r"C:\Local\Rivet\logs"));
+    }
+
+    #[test]
+    fn nfr7_a_test_run_keeps_rivet_files_in_its_own_root() {
+        let local = Some(PathBuf::from("local"));
+        let run = data_home_from(Some("run-out".into()), local.clone());
+        assert_eq!(run.as_deref(), Some(Path::new("run-out")));
+        assert_eq!(
+            Layout::under(&run.unwrap()).spaces(),
+            Path::new("run-out")
+                .join("Rivet")
+                .join("state")
+                .join("spaces")
+        );
+        assert_eq!(data_home_from(Some("".into()), local.clone()), local);
+        assert_eq!(data_home_from(None, local.clone()), local);
     }
 
     #[test]
