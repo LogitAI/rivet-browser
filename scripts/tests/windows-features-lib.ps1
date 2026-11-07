@@ -271,7 +271,8 @@ function Format-Rows($Rows) {
 # stays in the window. Without it every other default space belongs to another browser, and a
 # switch would start that browser.
 function Write-SpaceSeed([string]$Profile, [string]$Key) {
-  $local = $env:LOCALAPPDATA
+  # A test run keeps its Rivet files in its own folder, which stands in for the local one.
+  $local = if ($env:RIVET_DATA_ROOT) { $env:RIVET_DATA_ROOT } else { $env:LOCALAPPDATA }
   $normal = $Profile.TrimEnd('\', '/').Replace('/', '\').ToLowerInvariant()
   # FNV-1a over the lower-cased profile path, as the runtime keys its spaces file.
   $hash = [System.Numerics.BigInteger]::Parse('14695981039346656037')
