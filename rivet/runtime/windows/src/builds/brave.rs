@@ -321,15 +321,6 @@ pub static BRAVE_63: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        // `BrowserTabStripModelDelegate::MoveTabsToNewWindow`, found statically by Chromium shape
-        // and unverified: the only delegate thunk whose target checks the indices' size and calls
-        // the tab mover, as in Chrome 156.0.8078.80.
-        move_to_new_window: Some(0x0B37C970),
-        move_to_new_window_prologue: &[
-            0x48, 0x8B, 0x49, 0x08, 0xE9, 0x77, 0xA8, 0x01, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
-            0xCC, 0xCC,
-        ],
-        move_to_new_window_vector_by_pointer: false,
         view_parent: 0x198,
         view_children: 0x1A0,
         operator_new: 0x6F4DE00,
@@ -729,14 +720,6 @@ pub static BRAVE_157_55: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        // `BrowserTabStripModelDelegate::MoveTabsToNewWindow`, found by name in this build's
-        // public symbols.
-        move_to_new_window: Some(0x0BF16A60),
-        move_to_new_window_prologue: &[
-            0x48, 0x8B, 0x49, 0x08, 0xE9, 0xC7, 0x86, 0x01, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
-            0xCC, 0xCC,
-        ],
-        move_to_new_window_vector_by_pointer: false,
         view_parent: 0x198,
         view_children: 0x1A0,
         operator_new: 0x73F5220,

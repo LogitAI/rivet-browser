@@ -38,16 +38,6 @@ pub static WHALE: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x50,
             0x44, 0x89,
         ],
-        // `BrowserTabStripModelDelegate::MoveTabsToNewWindow`, found statically by Chromium shape
-        // and unverified: it passes the browser's `BrowserWindowInterface`, 0x68 into it, to the
-        // function Chromium 143's body matches, the only one that checks an index vector by its
-        // ends and makes an app or normal window.
-        move_to_new_window: Some(0x0E4666C0),
-        move_to_new_window_prologue: &[
-            0x48, 0x8B, 0x41, 0x08, 0x48, 0x8D, 0x48, 0x68, 0x48, 0x85, 0xC0, 0x48, 0x0F, 0x44,
-            0xC8, 0xE9,
-        ],
-        move_to_new_window_vector_by_pointer: true,
         view_parent: 0x190,
         view_children: 0x198,
         operator_new: 0x3E4AB40,

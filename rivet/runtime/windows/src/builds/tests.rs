@@ -998,37 +998,31 @@ fn fr13_app_window_functions_match_the_installed_builds() {
 }
 
 #[test]
-fn fr9_every_app_window_row_records_the_move_to_new_window_delegate() {
-    // Builds of Chromium 150 and older keep a vector's end as a pointer; 156 keeps its size.
-    let expected: [(&str, [u16; 4], usize, bool); 8] = [
-        ("Google Chrome", [157, 0, 8103, 38], 0x0A9F_FF30, false),
-        ("Brave", [157, 1, 99, 55], 0x0BF1_6A60, false),
-        ("Google Chrome", [156, 0, 8078, 74], 0x09E57B00, false),
-        ("Google Chrome", [156, 0, 8078, 80], 0x09E4CC60, false),
-        ("Microsoft Edge", [156, 0, 4314, 58], 0x0A299420, false),
-        ("Brave", [156, 1, 98, 63], 0x0B37C970, false),
-        ("Naver Whale", [5, 39, 412, 57], 0x0E4666C0, true),
-        ("Samsung Internet", [30, 0, 4, 29], 0x0DBB8A50, true),
+fn fr9_app_window_rows_keep_only_the_way_back_of_the_mini_window() {
+    // The Mini Window goes out by the browser's command, which needs no address, and comes back by
+    // the tab strip's detach and insert, which every row with an app window part keeps.
+    let expected: [(&str, [u16; 4]); 8] = [
+        ("Google Chrome", [157, 0, 8103, 38]),
+        ("Brave", [157, 1, 99, 55]),
+        ("Google Chrome", [156, 0, 8078, 74]),
+        ("Google Chrome", [156, 0, 8078, 80]),
+        ("Microsoft Edge", [156, 0, 4314, 58]),
+        ("Brave", [156, 1, 98, 63]),
+        ("Naver Whale", [5, 39, 412, 57]),
+        ("Samsung Internet", [30, 0, 4, 29]),
     ];
-    for (browser, version, rva, by_pointer) in expected {
+    for (browser, version) in expected {
         let build = all()
             .iter()
             .find(|build| build.browser == browser && build.version == version)
             .unwrap_or_else(|| panic!("{browser} {version:?} has a row"));
         let row = build.app_window.as_ref().unwrap();
-        assert_eq!(row.move_to_new_window, Some(rva), "{browser} {version:?}");
-        assert_eq!(
-            row.move_to_new_window_prologue.len(),
-            16,
-            "{browser} {version:?}"
-        );
-        assert_eq!(
-            row.move_to_new_window_vector_by_pointer, by_pointer,
-            "{browser} {version:?}"
-        );
+        assert!(row.detach.is_some(), "{browser} {version:?}");
+        assert!(row.insert.is_some(), "{browser} {version:?}");
         assert_eq!(
             crate::features::app_window::row_value(row, "move_new"),
-            Some(rva)
+            None,
+            "{browser} {version:?}"
         );
     }
 }
