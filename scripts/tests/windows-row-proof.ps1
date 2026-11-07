@@ -4,7 +4,10 @@ param(
     [Parameter(Mandatory = $true)][string]$Browser,
     [Parameter(Mandatory = $true)][string]$Work
 )
-
+# The whole run, and every browser it starts, runs on a desktop of its own.
+. (Join-Path $PSScriptRoot 'windows-test-desktop.ps1')
+$desktopCode = Invoke-OnOwnDesktop $PSCommandPath $PSBoundParameters
+if ($null -ne $desktopCode) { exit $desktopCode }
 $ErrorActionPreference = 'Stop'
 # Opens a real Rivet window of a browser build the way an installed Rivet does, then measures it.
 # The window is never activated and keeps its off-screen place only on a machine with no monitor

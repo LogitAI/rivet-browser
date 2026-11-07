@@ -43,6 +43,9 @@ param(
   [switch]$SelfTest,
   # A dry run reports what it sees and stops nothing.
   [switch]$DryRun,
+  # The run's browsers live on a test desktop of their own, and this guard watches the person's
+  # desktop: any visible window of a test process here is a breach, on a monitor or not.
+  [switch]$TestDesktop,
   [int]$Seconds = 0,
   # When this file appears the guard ends on its own, so it can give the foreground lock back.
   [string]$StopFile
@@ -253,6 +256,9 @@ while ($true) {
     $seen++
     [void]$threads.Add([uint32]$p[7])
     $rect = @([int]$p[2], [int]$p[3], [int]$p[4], [int]$p[5])
+    if ($TestDesktop) {
+      Stop-Run "a test window showed on the person's desktop: window $($p[0]) pid $($p[1]) class $($p[6]) at $($rect -join ',')" $known.Ids
+    }
     if (Test-OnMonitor $rect $monitors) {
       Stop-Run "a test window showed on a monitor: window $($p[0]) pid $($p[1]) class $($p[6]) at $($rect -join ',')" $known.Ids
     }
