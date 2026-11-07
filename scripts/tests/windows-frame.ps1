@@ -83,7 +83,7 @@ public static class RivetFrameCheck {
                 BrowserIsTopLevel=GetParent(browser)==IntPtr.Zero && (style&0x40000000)==0,
                 BrowserIsResizable=(style&0x00040000)!=0,
                 ClientLeft=origin.X, ClientRight=origin.X+c.Right, ContentLeft=r.Left, ContentRight=r.Right,
-                ExpectedSidebar=(int)((268*dpi+48)/96)
+                ExpectedSidebar=(int)((276*dpi+48)/96)
             };
         } finally { SetThreadDpiAwarenessContext(prior); }
     }
@@ -97,7 +97,7 @@ function Test-Layout($Item, [string]$Step) {
     if (!$Item.BrowserIsResizable) { throw "FR-2: The browser window is fullscreen or lost its native frame$at." }
     # Fractional monitor scales round the browser's child window by up to one pixel.
     $left = $Item.ContentLeft - $Item.ClientLeft
-    if ([Math]::Abs($left - $Item.ExpectedSidebar) -gt 1) { throw "FR-2: The browser content starts $left px from the client edge, not beside the $($Item.ExpectedSidebar) px sidebar$at." }
+    if ([Math]::Abs($left - $Item.ExpectedSidebar) -gt 1) { throw "FR-2: The browser content starts $left px from the client edge, not beside the $($Item.ExpectedSidebar) px sidebar and its 8 DIP panel inset$at." }
     # The page keeps the frame's 8 DIP gap to the window edge.
     $gap = [int][Math]::Floor((8 * $Item.Dpi + 48) / 96)
     $right = $Item.ClientRight - $Item.ContentRight
