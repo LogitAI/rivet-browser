@@ -20,10 +20,16 @@
 #    takes the foreground lock for the run, when Windows lets it, and gives it back as it ends.
 #
 # Under RIVET_KEEP_OFFSCREEN `rivet session start` starts the browser with STARTF_USESHOWWINDOW and
-# SW_SHOWNOACTIVATE, so Chromium shows its first window without activating it. A runner that starts
-# a browser itself uses Start-TestBrowser below for the same reason: Start-Process with
-# -WindowStyle Hidden hands the browser SW_HIDE, which Chromium turns into SW_SHOWNORMAL followed by
-# SetForegroundWindow.
+# SW_SHOWMINNOACTIVE and without --window-position or --window-size. Those switches give the window
+# Chromium's normal show state, which it shows with SW_SHOWNORMAL and then activates whatever the
+# startup show command says. With the default show state Chromium shows its first window with the
+# startup command, minimized and inactive, so it lies on no monitor until the runtime attaches and
+# restores it off every monitor at 1600x1000. No test runner may add either switch to a browser that
+# shows a window. A runner that starts a browser itself, for a hand-off to a running test browser or
+# a headless capture, uses Start-TestBrowser below, which starts it without activation:
+# Start-Process with -WindowStyle Hidden hands the browser SW_HIDE, which Chromium turns into
+# SW_SHOWNORMAL followed by SetForegroundWindow. A hand-off's window is made by the running browser,
+# which shows it with its own startup command.
 #
 # Not done: starting test browsers on a desktop of their own (CreateDesktop and
 # STARTUPINFO.lpDesktop) would keep them from the person's desktop entirely, but the guard sees only

@@ -217,6 +217,26 @@ impl std::error::Error for LaunchError {}
 /// in the moment before the runtime cloaks it.
 pub const HIDDEN_WINDOW_POSITION: &str = "--window-position=-32000,-32000";
 
+/// The switches that place or size a browser window from its command line.
+const WINDOW_PLACEMENT_SWITCHES: [&str; 2] = ["--window-position=", "--window-size="];
+
+/// `arguments` without the switches that place or size the window. Chromium gives a window placed
+/// or sized from its command line the normal show state, and it shows a normal window with
+/// activation, so the window takes the foreground whatever show command the browser process was
+/// started with. Without them the window keeps the default show state, which shows with that
+/// start command. A test run starts its browsers this way and moves the window off every monitor
+/// once the runtime attaches.
+pub fn without_window_placement(arguments: Vec<String>) -> Vec<String> {
+    arguments
+        .into_iter()
+        .filter(|argument| {
+            !WINDOW_PLACEMENT_SWITCHES
+                .iter()
+                .any(|switch| argument.starts_with(switch))
+        })
+        .collect()
+}
+
 /// Builds a Chromium invocation without opening a debugging port.
 pub fn build_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchError> {
     plan_launch(request, false)
@@ -452,6 +472,26 @@ mod tests {
         assert!(!plan.arguments.contains(&"--headless=new".into()));
         let visible = build_controlled_launch_plan(&request(DisplayMode::Visible)).unwrap();
         assert!(!visible.arguments.contains(&HIDDEN_WINDOW_POSITION.into()));
+    }
+
+    #[test]
+    fn nfr5_test_launch_keeps_the_default_show_state() {
+        let mut plan = build_controlled_launch_plan(&request(DisplayMode::Hidden)).unwrap();
+        plan.arguments.push("--window-position=9000,1000".into());
+        plan.arguments.push("--window-size=1600,1000".into());
+        let kept = without_window_placement(plan.arguments.clone());
+        assert!(!kept.iter().any(|argument| {
+            argument.starts_with("--window-position=") || argument.starts_with("--window-size=")
+        }));
+        let expected: Vec<String> = plan
+            .arguments
+            .iter()
+            .filter(|argument| !argument.starts_with("--window-"))
+            .cloned()
+            .collect();
+        assert_eq!(kept, expected);
+        assert!(kept.contains(&"--app=https://example.test/".into()));
+        assert!(kept.contains(&"--no-first-run".into()));
     }
 
     #[test]

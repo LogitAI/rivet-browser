@@ -13,8 +13,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rivet_core::session::{SessionRecord, SessionRegistry};
 use rivet_core::{
-    build_controlled_launch_plan, build_launch_plan, profile_allows_rivet, DisplayMode,
-    LaunchRequest,
+    build_controlled_launch_plan, build_launch_plan, profile_allows_rivet,
+    without_window_placement, DisplayMode, LaunchRequest,
 };
 use rivet_platform_windows::hold::{self, Launch};
 use rivet_platform_windows::signed_table;
@@ -341,6 +341,12 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         build_launch_plan(&request)
     }
     .map_err(|error| error.to_string())?;
+    // A test run's window keeps the default show state, so its first show takes the start command
+    // and never the foreground. It shows minimized and the runtime brings it back off every
+    // monitor as it attaches.
+    if rivet_platform_windows::focus::keep_offscreen() {
+        plan.arguments = without_window_placement(std::mem::take(&mut plan.arguments));
+    }
     let app_window = plan
         .arguments
         .iter()

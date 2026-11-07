@@ -146,19 +146,21 @@ if ($NoBuild) {
   $built = (Test-Path (Join-Path $debug 'rivet.exe')) -and (Test-Path (Join-Path $debug 'rivet_runtime_windows.dll'))
   $buildNote = if ($built) { '' } else { 'no build output and -NoBuild given' }
   if ($built) { Write-Host 'build skipped (-NoBuild): the binaries are whatever the last build left' }
-  # A launcher without the off-screen flags would open a browser window on the owner's monitor.
-  if ($built -and -not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Join-Path $debug 'rivet.exe'))).Contains('--window-position=9000,1000'))) {
-    $built = $false; $buildNote = 'rivet.exe was not built with the off-screen test flags'
+  # A launcher without the test flags would start a browser with sync and sign-in on.
+  if ($built -and -not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Join-Path $debug 'rivet.exe'))).Contains('msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion'))) {
+    $built = $false; $buildNote = 'rivet.exe was not built with the test flags'
   }
 } else {
-  # The window flags exist for tests only: off-screen, no sync, no sign-in. CalculateNativeWinOcclusion
-  # is off because Chrome treats an off-screen window as covered and stops painting its pages, and a
-  # pixel check on an unpainted page proves nothing. It is the one flag beyond the installed launch
-  # that the usual off-screen test tool does not add. The launcher file is
-  # restored right after the build and must never be committed.
+  # The flags exist for tests only: no sync, no sign-in. CalculateNativeWinOcclusion is off because
+  # Chrome treats an off-screen window as covered and stops painting its pages, and a pixel check on
+  # an unpainted page proves nothing. No flag places or sizes the window: --window-position and
+  # --window-size give it the normal show state, which Chromium shows with activation. Under
+  # RIVET_KEEP_OFFSCREEN the browser starts minimized and the runtime restores the window off every
+  # monitor at 1600x1000. The launcher file is restored right after the build and must never be
+  # committed.
   $f = Join-Path $root 'core\src\lib.rs'
   $orig = [IO.File]::ReadAllText($f)
-  $flags = @('--disable-sync', '--no-first-run', '--no-default-browser-check', '--disable-features=msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion,Translate', '--lang=en-US', '--window-position=9000,1000', '--window-size=1600,1000')
+  $flags = @('--disable-sync', '--no-first-run', '--no-default-browser-check', '--disable-features=msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion,Translate', '--lang=en-US')
   $push = ($flags | ForEach-Object { "arguments.push(`"$_`".to_owned());" }) -join ' '
   # The visible launch is an app window now, so the test flags go in front of that push.
   $marker = 'arguments.push(format!("--app={}", request.url));'

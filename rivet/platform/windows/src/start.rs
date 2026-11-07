@@ -9,12 +9,18 @@
 //! may take the foreground, so a test browser started from a terminal took the person's keyboard
 //! before the Rivet runtime had even attached.
 //!
+//! This holds only for the default show state. `--window-position` and `--window-size` give the
+//! window the normal show state, which `HWNDMessageHandler::Show` turns into `SW_SHOWNORMAL` and
+//! `Activate` whatever the startup information says, so a test run starts without them.
+//!
 //! Under a test run (`RIVET_KEEP_OFFSCREEN`) the browser is therefore started with
-//! `STARTF_USESHOWWINDOW` and `SW_SHOWNOACTIVATE`. Chromium then shows its first window without
-//! activating it and skips `Activate`. Later windows of the same process read the same startup
-//! information, so a new window that shows with the default state is not activated either.
-//! `SW_SHOWMINNOACTIVE` would also keep the foreground, but a minimized window has no client area
-//! and Chromium stops drawing its pages, so `PrintWindow` could not capture them.
+//! `STARTF_USESHOWWINDOW` and `SW_SHOWMINNOACTIVE`. Chromium then shows its first window minimized
+//! without activating it and skips `Activate`. A minimized window lies on no monitor, so nothing of
+//! it shows at the default place Chromium picked, and the Rivet runtime restores it off every
+//! monitor, without activation, as it attaches. Chromium does not read `STARTF_USEPOSITION`: its
+//! window always has bounds of its own, and saved bounds are pulled back until part of the window
+//! is on a monitor. Later windows of the same process read the same startup information and show
+//! minimized too; the runtime restores each one off every monitor once.
 //!
 //! Outside a test run the browser starts exactly as before, through `std::process::Command`.
 
@@ -27,13 +33,15 @@ use std::path::Path;
 pub const STARTF_USESHOWWINDOW: u32 = 0x0000_0001;
 /// `SW_SHOWNOACTIVATE`: shown in its normal place and size, without activation.
 pub const SW_SHOWNOACTIVATE: u16 = 4;
+/// `SW_SHOWMINNOACTIVE`: shown minimized, without activation.
+pub const SW_SHOWMINNOACTIVE: u16 = 7;
 /// `CREATE_UNICODE_ENVIRONMENT`: the environment block is UTF-16.
 pub const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
 
 /// The startup show command a started browser gets, or `None` to leave the startup information as
 /// Windows makes it. Only a test run sets one.
 pub fn first_show(keep_offscreen: bool) -> Option<u16> {
-    keep_offscreen.then_some(SW_SHOWNOACTIVATE)
+    keep_offscreen.then_some(SW_SHOWMINNOACTIVE)
 }
 
 /// Appends `argument` to a command line the way the Microsoft C runtime splits it again.
@@ -243,10 +251,11 @@ mod tests {
     }
 
     #[test]
-    fn nfr5_test_browser_starts_without_activation() {
-        // A test run shows the first window in place and inactive, never minimized, so the page
-        // still draws and can be captured.
-        assert_eq!(first_show(true), Some(SW_SHOWNOACTIVATE));
+    fn nfr5_test_browser_starts_minimized_without_activation() {
+        // A test run's first window shows minimized and inactive, so it never lies on a monitor
+        // before the runtime restores it off every monitor.
+        assert_eq!(first_show(true), Some(SW_SHOWMINNOACTIVE));
+        assert_eq!(SW_SHOWMINNOACTIVE, 7);
         assert_eq!(SW_SHOWNOACTIVATE, 4);
         assert_eq!(STARTF_USESHOWWINDOW, 1);
     }
