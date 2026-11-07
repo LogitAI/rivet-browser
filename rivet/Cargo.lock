@@ -407,6 +407,7 @@ dependencies = [
 name = "rivet-core"
 version = "0.1.0"
 dependencies = [
+ "rivet-protocol",
  "serde",
  "serde_json",
 ]
@@ -416,6 +417,7 @@ name = "rivet-platform-windows"
 version = "0.1.0"
 dependencies = [
  "rivet-core",
+ "rivet-protocol",
  "serde",
  "serde_json",
  "windows-sys",
