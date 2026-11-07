@@ -31,7 +31,7 @@ rivet/runtime/windows/src/features/link_tabs.rs unsafe 6
 rivet/runtime/windows/src/features/link_tabs.rs windows_sys 2
 rivet/runtime/windows/src/features/look.rs unsafe 6
 rivet/runtime/windows/src/features/look.rs windows_sys 3
-rivet/runtime/windows/src/features/mini_window.rs unsafe 28
+rivet/runtime/windows/src/features/mini_window.rs unsafe 27
 rivet/runtime/windows/src/features/mini_window.rs windows_sys 25
 rivet/runtime/windows/src/features/navigation.rs rows 19
 rivet/runtime/windows/src/features/navigation.rs unsafe 17
