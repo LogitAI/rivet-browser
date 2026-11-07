@@ -1398,7 +1398,7 @@ function Invoke-AddressSuggest($Name, $shots) {
   $dir = Join-Path $pageDir 'suggest'
   New-Item -ItemType Directory -Force $dir | Out-Null
   foreach ($p in @(@('suggest-a', $script:ColourA), @('suggest-b', $script:ColourB))) {
-    [IO.File]::WriteAllText((Join-Path $dir "$($p[0]).html"), ("<!doctype html><meta charset=utf-8><title>$($p[0])</title><style>html,body{margin:0;height:100%;background:#{0:X6}}</style>" -f $p[1]))
+    [IO.File]::WriteAllText((Join-Path $dir "$($p[0]).html"), ("<!doctype html><meta charset=utf-8><title>$($p[0])</title><style>html,body{margin:0;height:100%;background:#" + ('{0:X6}' -f $p[1]) + "}</style>"))
   }
   $site = Start-LocalSite $dir
   $sa = "$($site.Base)/suggest-a.html"; $sb = "$($site.Base)/suggest-b.html"
