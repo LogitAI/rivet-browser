@@ -86,6 +86,26 @@ pub(crate) fn move_tab_command_is_safe(
     Ok(())
 }
 
+/// The id of the browser's move-tab-to-new-window command for this build and process, or why the
+/// Mini Window cannot use it here.
+pub(crate) fn move_command() -> Result<usize, String> {
+    let build = crate::builds::current().ok_or("no row matches this build")?;
+    let id = move_tab_to_new_window(build.browser, build.version)?;
+    move_tab_command_is_safe(
+        std::env::args_os().map(|argument| argument.to_string_lossy().into_owned()),
+    )?;
+    if needs_regression_check(build.browser) {
+        // The id is Chromium's for the build's milestone. This browser publishes no source that
+        // confirms it keeps the id, so each of its builds needs a regression check before support
+        // is claimed.
+        crate::trace::trace(&format!(
+            "app window: move command {id} for {} {:?} needs a regression check",
+            build.browser, build.version
+        ));
+    }
+    Ok(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

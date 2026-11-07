@@ -304,78 +304,17 @@ pub(crate) unsafe fn move_tab(from: HWND, index: usize, to: HWND, active: bool) 
     true
 }
 
-/// The id of the browser's move-tab-to-new-window command for this build and process, or why the
-/// Mini Window cannot use it here.
-pub(crate) fn move_command() -> Result<usize, String> {
-    use crate::browsers::chromium::commands;
-    let build = crate::builds::current().ok_or("no row matches this build")?;
-    let id = commands::move_tab_to_new_window(build.browser, build.version)?;
-    commands::move_tab_command_is_safe(
-        std::env::args_os().map(|argument| argument.to_string_lossy().into_owned()),
-    )?;
-    if commands::needs_regression_check(build.browser) {
-        // The id is Chromium's for the build's milestone. This browser publishes no source that
-        // confirms it keeps the id, so each of its builds needs a regression check before support
-        // is claimed.
-        crate::trace::trace(&format!(
-            "app window: move command {id} for {} {:?} needs a regression check",
-            build.browser, build.version
-        ));
-    }
-    Ok(id)
-}
-
-thread_local! {
-    /// The top-level windows made on this thread while the move command runs.
-    static CREATED: std::cell::RefCell<Vec<HWND>> = const { std::cell::RefCell::new(Vec::new()) };
-}
+pub(crate) use crate::browsers::chromium::commands::move_command;
 
 /// Moves the active tab of `window` into a new browser window with the browser's own command
 /// `command`, as its tab menu does, and returns the top-level windows the browser made while it ran
-/// it. The browser makes the window inside the command, on this thread, so the thread's own
-/// window-creation hook sees it being created.
+/// it.
 pub(crate) unsafe fn move_active_tab_to_new_window(window: HWND, command: usize) -> Vec<HWND> {
-    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SendMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_CBT, WM_COMMAND,
-    };
-    CREATED.with(|created| created.borrow_mut().clear());
-    let hook = SetWindowsHookExW(
-        WH_CBT,
-        Some(creation_hook),
-        std::ptr::null_mut(),
-        GetCurrentThreadId(),
-    );
-    if hook.is_null() {
-        crate::trace::trace("app window: no window-creation hook, so the move is not sent");
-        return Vec::new();
-    }
-    SendMessageW(window, WM_COMMAND, command, 0);
-    UnhookWindowsHookEx(hook);
-    let created = CREATED.with(|created| std::mem::take(&mut *created.borrow_mut()));
+    let created = crate::os::win32::send_command_collecting_windows(window, command);
     crate::trace::trace(&format!(
         "app window: move command {command} made windows {created:?}"
     ));
     created
-}
-
-/// Keeps every top-level window made on the thread while the move command runs.
-unsafe extern "system" fn creation_hook(
-    code: i32,
-    wparam: windows_sys::Win32::Foundation::WPARAM,
-    lparam: windows_sys::Win32::Foundation::LPARAM,
-) -> windows_sys::Win32::Foundation::LRESULT {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, CBT_CREATEWNDW, HCBT_CREATEWND, WS_CHILD,
-    };
-    if code == HCBT_CREATEWND as i32 && lparam != 0 {
-        let create = &*(lparam as *const CBT_CREATEWNDW);
-        let top_level = !create.lpcs.is_null() && ((*create.lpcs).style as u32 & WS_CHILD) == 0;
-        if top_level {
-            CREATED.with(|created| created.borrow_mut().push(wparam as HWND));
-        }
-    }
-    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
 }
 
 /// The window among `created` that the browser made for the moved tab: the first that `holds` it.
