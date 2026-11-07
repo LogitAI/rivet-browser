@@ -18,9 +18,12 @@ thread_local! {
 }
 
 /// Whether a window that just appeared holds pages that belong in a Rivet window. Developer tools
-/// keep their own window.
+/// keep their own window, and so does a window Rivet asked for as a Mini Window.
 pub fn takes_window(urls: &[String]) -> bool {
-    !urls.is_empty() && urls.iter().all(|url| !url.starts_with("devtools://"))
+    !urls.is_empty()
+        && urls.iter().all(|url| {
+            !url.starts_with("devtools://") && !crate::features::mini_window::is_marker_url(url)
+        })
 }
 
 /// The windows that appeared since `known`, and the new set of known windows.
@@ -51,16 +54,21 @@ pub(crate) unsafe fn tick(window: HWND) {
         *known = Some(now.iter().copied().collect());
         fresh
     });
-    if fresh.is_empty() || !in_front(window, &rivet) {
+    if fresh.is_empty() {
         return;
     }
+    let front = in_front(window, &rivet);
     for other in fresh {
         let urls: Vec<String> = crate::features::tabs::open_tabs(other as HWND)
             .unwrap_or_default()
             .into_iter()
             .map(|tab| tab.saved.url)
             .collect();
-        if !takes_window(&urls) {
+        // A window Rivet asked the browser for as a Mini Window is not a link's.
+        if crate::features::mini_window::holds_mini_request(other as HWND, &urls)
+            || !front
+            || !takes_window(&urls)
+        {
             continue;
         }
         let moved = move_all(window, other as HWND);
@@ -144,6 +152,16 @@ mod tests {
             "devtools://devtools/bundled/inspector.html".into()
         ]));
         assert!(!takes_window(&[]));
+    }
+
+    #[test]
+    fn fr9_links_never_take_the_window_rivet_asked_for_as_a_mini_window() {
+        assert!(!takes_window(&[
+            "file:///C:/Rivet/start.html?space=Work#rivet-mini-window-12-3".into()
+        ]));
+        assert!(takes_window(&[
+            "file:///C:/Rivet/start.html?space=Work".into()
+        ]));
     }
 
     #[test]

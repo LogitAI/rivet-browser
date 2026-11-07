@@ -933,6 +933,13 @@ unsafe fn start_url(space: &crate::spaces::SpaceInfo) -> Option<String> {
 }
 
 /// The address of the Rivet start page for the space `window` shows.
+pub(crate) fn start_page_of(window: crate::os::WindowId) -> Option<String> {
+    // The spaces of a window are Rivet's own state, and the runtime's folder is read from this
+    // module's own address.
+    unsafe { start_url_of(window.hwnd()) }
+}
+
+/// The address of the Rivet start page for the space `window` shows.
 pub(crate) unsafe fn start_url_of(window: HWND) -> Option<String> {
     let space = with_spaces(window, |spaces| spaces.list()[spaces.current()].clone());
     start_url(&space)
@@ -2052,6 +2059,11 @@ unsafe fn class_name(window: HWND) -> String {
     String::from_utf16_lossy(&class[..length.max(0) as usize])
 }
 
+/// Whether `window` has the class of the browser's top-level windows.
+pub(crate) unsafe fn is_browser_window_class(window: HWND) -> bool {
+    class_name(window) == BROWSER_CLASS
+}
+
 unsafe fn attach_message() -> u32 {
     RegisterWindowMessageW(wide(ATTACH_MESSAGE).as_ptr())
 }
@@ -2677,6 +2689,14 @@ pub(crate) unsafe fn update_card_caret(window: HWND, which: crate::appbar::caret
             }
         }
     });
+}
+
+/// `update_appbar` for a window that may have lost Rivet's frame, which is then left alone.
+pub(crate) fn redraw_appbar(window: crate::os::WindowId) {
+    // Only a window with Rivet's frame is drawn, on the UI thread that owns it.
+    if attached(window.hwnd()) {
+        unsafe { update_appbar(window.hwnd()) }
+    }
 }
 
 /// Places the appbar visual over the strip the browser's layout left free and redraws it when its

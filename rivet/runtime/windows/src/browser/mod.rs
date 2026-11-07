@@ -30,8 +30,8 @@
 //! | L. Frame, caption and paint | frame_layout, look, widgets | build values, reflection to find views |
 //! | M. Vertical tabs, side panel, bubbles, DevTools | vertical_tabs, side_panel, bubble_anchor, dev_tools | command ids, reflection, build values |
 //!
-//! Only the traits of groups A and C exist so far. A trait is added when the first feature that
-//! needs it moves, never before.
+//! Only the traits of groups A, C and I (`TabMoves`, for the Mini Window's opening) exist so far.
+//! A trait is added when the first feature that needs it moves, never before.
 
 pub(crate) mod chromium;
 
@@ -62,6 +62,48 @@ pub(crate) trait Pages {
     /// Every tab of `window` with its title and visible address, in strip order. `None` when the
     /// window's tab strip cannot be read.
     fn pages(&self, window: WindowId) -> Option<Vec<PageState>>;
+}
+
+/// A page of the browser. It names the page's web contents, which stay the same while the tab
+/// moves in the strip or between windows, and it is only compared, never followed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct PageId(usize);
+
+impl PageId {
+    pub(crate) const fn from_raw(raw: usize) -> Self {
+        Self(raw)
+    }
+
+    pub(crate) const fn raw(self) -> usize {
+        self.0
+    }
+}
+
+/// One tab of a window as the Mini Window sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TabEntry {
+    pub page: PageId,
+    /// The committed address, or the visible one before the first commit.
+    pub url: String,
+    pub active: bool,
+}
+
+/// Moves tabs between browser windows of this process: group I, the Mini Window out and back.
+pub(crate) trait TabMoves {
+    /// The tabs of `window` in strip order. `None` when the window's tab strip cannot be read.
+    fn tab_entries(&self, window: WindowId) -> Option<Vec<TabEntry>>;
+    /// The profile `page` belongs to, as a value that is only compared. `None` when the build
+    /// records no way to read it.
+    fn profile_of(&self, page: PageId) -> Option<usize>;
+    /// Whether the build can detach a tab from one window and insert it into another.
+    fn can_move_tabs(&self) -> bool;
+    /// Moves tab `index` of `from` to the end of `to`'s strip, as the tab `to` shows. Returns
+    /// whether the browser took the tab.
+    fn move_tab(&self, from: WindowId, index: usize, to: WindowId) -> bool;
+    /// Closes the tab of `page` in `window`.
+    fn close_page(&self, window: WindowId, page: PageId) -> bool;
+    /// Makes tab `index` the one `window` shows.
+    fn show_tab(&self, window: WindowId, index: usize) -> bool;
 }
 
 /// The browser's own command ids.

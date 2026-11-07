@@ -1,10 +1,12 @@
 //! The Mini Window: one page popped out of a Rivet window into its own small browser window.
 //!
-//! The page is browser content, so it lives in a real browser window of the same profile. Its tab
-//! moves there with the browser's own move-tab-to-new-window command and comes back with
-//! Chromium's detach and insert, so the page keeps its history and state. The new window, found by
-//! its creation during the command, is placed near where the page was, at a small size, as a
-//! normal top-level window that is not forced on top.
+//! The page is browser content, so it lives in a real browser window of the same profile. For a
+//! Rivet window opened with `--app=<url>`, Rivet asks the browser for one more app window and moves
+//! the tab there with Chromium's detach and insert (see `opening`). A window with an app controller
+//! uses the browser's own move-tab-to-new-window command instead. The tab comes back with the same
+//! detach and insert, so the page keeps its history and state. The new window holds that one tab
+//! and is placed near where the page was, at a small size, as a normal top-level window that is not
+//! forced on top.
 //!
 //! Rivet's slim row on that window is a DirectComposition visual of the window's own surface, like
 //! the appbar, with its input taken from the subclassed window. Its buttons return the page to the
@@ -42,9 +44,15 @@ use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows_numerics::{Matrix3x2, Vector2};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 
+use crate::browser::PageId;
 use crate::features::second_view::bare;
 use crate::features::split::Side;
+use crate::os::{NewWindows, ScreenRect, WindowId};
 use rivet_protocol::window::{Edge, MiniWindowCommand};
+
+mod opening;
+
+pub(crate) use opening::is_marker_url;
 
 /// The height of the Mini Window's own row, in DIPs.
 pub const ROW: i32 = 32;
@@ -72,6 +80,11 @@ const CLOSE_GLYPH: char = '\u{E8BB}';
 
 /// The timer that keeps the row's title current.
 const TITLE_TIMER: usize = 0x5249_4d57;
+/// The timer that shows a new Mini Window once the browser has laid it out below Rivet's row. It
+/// spells "RIMR".
+const REVEAL_TIMER: usize = 0x5249_4d52;
+/// How long a new Mini Window stays hidden after Rivet takes it.
+const REVEAL_AFTER_MS: u32 = 120;
 
 /// What a point of the Mini Window's row is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -277,13 +290,17 @@ unsafe fn tab_of(window: HWND, page: usize) -> Option<usize> {
 }
 
 /// Pops the window's tab `tab` out into a Mini Window of its own. The tab must not be the shown
-/// one, since the window's own page view shows that page.
+/// one, since the window's own page view shows that page, and the window keeps at least one other
+/// tab. `show_again` makes it the window's shown tab again when the Mini Window cannot open, for a
+/// caller that took it off the screen to pop it out. Returns whether the Mini Window opened or is
+/// being opened.
 ///
-/// The browser's move-tab-to-new-window command moves the active tab, so the tab is made active for
-/// the command and the page the window showed is shown again afterwards. The browser runs the
-/// command only for a window with more than one tab; a caller that pops out the only page opens a
-/// new tab first.
-pub unsafe fn open(window: HWND, tab: usize) -> bool {
+/// A window that has an app controller uses the browser's own move-tab-to-new-window command,
+/// which moves the active tab, so the tab is made active for the command and the page the window
+/// showed is shown again afterwards. Every other window, which is every window opened with
+/// `--app=<url>`, gets a Rivet app window that Rivet asks the browser for, and the tab moves there
+/// with Chromium's detach and insert.
+pub unsafe fn open(window: HWND, tab: usize, show_again: bool) -> bool {
     let page = bare::page_of_tab(window, tab);
     if page == 0 || page == bare::active(window) {
         crate::trace::trace(&format!(
@@ -291,31 +308,18 @@ pub unsafe fn open(window: HWND, tab: usize) -> bool {
         ));
         return false;
     }
-    // The way back is the browser's detach and insert.
+    // The move in and the way back are the browser's detach and insert.
     if !crate::features::app_window::can_move_tabs() {
         crate::trace::trace("mini window: this build cannot move a tab between windows");
         return false;
     }
-    let command = match crate::features::app_window::move_command() {
-        Ok(command) => command,
-        Err(reason) => {
-            crate::trace::trace(&format!("mini window: off, {reason}"));
-            return false;
-        }
-    };
     let Some(tabs) = crate::features::tabs::tabs(window) else {
         return false;
     };
     if tabs.len() < 2 {
-        crate::trace::trace(
-            "mini window: the browser moves a tab only out of a window with others",
-        );
+        crate::trace::trace("mini window: a Rivet window keeps at least one tab of its own");
         return false;
     }
-    let shown = tabs
-        .iter()
-        .find(|tab| tab.active)
-        .map(|tab| bare::page_of_tab(window, tab.index));
     let Some(area) = area(window) else {
         return false;
     };
@@ -326,6 +330,20 @@ pub unsafe fn open(window: HWND, tab: usize) -> bool {
         default_rect(area),
         crate::frame::layout_dpi(window) as f32 / 96.0,
     );
+    let command = match crate::features::app_window::move_command() {
+        Ok(command) => command,
+        Err(reason) => {
+            crate::trace::trace(&format!(
+                "mini window: the browser's move command is not used here ({reason}), so Rivet \
+                 opens the window"
+            ));
+            return ask_for_window(WindowId::from_hwnd(window), page, place, show_again);
+        }
+    };
+    let shown = tabs
+        .iter()
+        .find(|tab| tab.active)
+        .map(|tab| bare::page_of_tab(window, tab.index));
     if !crate::features::tabs::activate_tab(window, tab) {
         return false;
     }
@@ -348,41 +366,108 @@ pub unsafe fn open(window: HWND, tab: usize) -> bool {
     true
 }
 
+/// Asks the browser for a Rivet app window of its own for the page `page` of `owner`.
+fn ask_for_window(owner: WindowId, page: usize, place: ScreenRect, show_again: bool) -> bool {
+    // The start page lies beside the runtime and names the owner's space.
+    let Some(start_page) = crate::frame::start_page_of(owner) else {
+        crate::trace::trace(
+            "mini window: kept the tab, Rivet's start page is not beside the runtime",
+        );
+        return false;
+    };
+    let Ok(program) = std::env::current_exe() else {
+        crate::trace::trace("mini window: kept the tab, the browser program is unknown");
+        return false;
+    };
+    let request = opening::Request {
+        owner,
+        page: PageId::from_raw(page),
+        place,
+        start_page,
+        program,
+        own_arguments: std::env::args_os()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect(),
+        show_again,
+        is_rivet: is_rivet_window,
+        is_taken: |window| is_rivet_window(window) || is_mini(window.hwnd()),
+        done: opened,
+    };
+    opening::start(&crate::frame::OS, &crate::frame::BROWSER, request)
+}
+
+/// Whether `window` shows the Rivet frame.
+fn is_rivet_window(window: WindowId) -> bool {
+    crate::frame::rivet_windows().contains(&window.hwnd())
+}
+
+/// An opening ended: `made` is the new Mini Window and its place when the page moved there. The
+/// Rivet window's appbar shows its new state either way.
+fn opened(owner: WindowId, made: Option<(WindowId, ScreenRect)>) {
+    if let Some((mini, place)) = made {
+        adopt(owner.hwnd(), mini.hwnd(), place);
+    }
+    if is_rivet_window(owner) {
+        crate::frame::redraw_appbar(owner);
+    }
+}
+
 /// Takes the new browser window as the Mini Window of `owner`: places it, takes its messages and
 /// gives it Rivet's row.
-unsafe fn adopt(owner: HWND, mini: HWND, place: [i32; 4]) {
+fn adopt(owner: HWND, mini: HWND, place: [i32; 4]) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetTimer, SetWindowLongPtrW, SetWindowPos, GWLP_WNDPROC,
         SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER,
     };
-    let original = GetWindowLongPtrW(mini, GWLP_WNDPROC);
-    MINIS.with(|all| {
-        all.borrow_mut().insert(
-            mini as isize,
-            Mini {
-                owner,
-                original,
-                hover: None,
-                pressed: None,
-                grip_drag: false,
-                moving: false,
-                releasing: false,
-                surface: None,
-            },
-        )
-    });
-    SetWindowLongPtrW(mini, GWLP_WNDPROC, mini_proc as *const () as isize);
-    SetWindowPos(
-        mini,
-        std::ptr::null_mut(),
-        place[0],
-        place[1],
-        place[2],
-        place[3],
-        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-    );
-    SetTimer(mini, TITLE_TIMER, 500, None);
-    paint(mini);
+    // `mini` is a browser window of this process, taken on the UI thread that owns it, and every
+    // call fails without effect when the window has gone.
+    unsafe {
+        let original = GetWindowLongPtrW(mini, GWLP_WNDPROC);
+        MINIS.with(|all| {
+            all.borrow_mut().insert(
+                mini as isize,
+                Mini {
+                    owner,
+                    original,
+                    hover: None,
+                    pressed: None,
+                    grip_drag: false,
+                    moving: false,
+                    releasing: false,
+                    surface: None,
+                },
+            )
+        });
+        SetWindowLongPtrW(mini, GWLP_WNDPROC, mini_proc as *const () as isize);
+        SetWindowPos(
+            mini,
+            std::ptr::null_mut(),
+            place[0],
+            place[1],
+            place[2],
+            place[3],
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+        SetTimer(mini, TITLE_TIMER, 500, None);
+        paint(mini);
+        // A window Rivet asked the browser for was hidden while it was made. It shows once the
+        // browser has laid the page out below Rivet's row.
+        SetTimer(mini, REVEAL_TIMER, REVEAL_AFTER_MS, None);
+    }
+}
+
+/// Whether `window` belongs to the Mini Window, so links leave its tabs alone: it is a Mini Window,
+/// or it holds the start page of a Mini Window request. Such a window from a request that already
+/// gave up is closed.
+pub fn holds_mini_request(window: HWND, urls: &[String]) -> bool {
+    if is_mini(window) {
+        return true;
+    }
+    if !urls.iter().any(|url| is_marker_url(url)) {
+        return false;
+    }
+    opening::close_if_late(&crate::frame::OS, WindowId::from_hwnd(window), urls);
+    true
 }
 
 /// Takes the page of split pane `index` out of the split and pops it out. The other page stays as
@@ -409,7 +494,7 @@ pub unsafe fn pop_out_pane(window: HWND, index: usize) -> bool {
         crate::features::tabs::activate_tab(window, other);
     }
     crate::features::split::unsplit_active(window);
-    let done = open(window, tab);
+    let done = open(window, tab, false);
     crate::trace::trace(&format!("mini window: pop out pane {index}: {done}"));
     done
 }
@@ -433,7 +518,7 @@ pub unsafe fn pop_out_active(window: HWND) -> bool {
             }
         }
     }
-    let done = open(window, active);
+    let done = open(window, active, true);
     crate::trace::trace(&format!(
         "mini window: pop out the active tab {active}: {done}"
     ));
@@ -639,6 +724,10 @@ unsafe extern "system" fn mini_proc(
     if !is_mini(mini) {
         return call_original(mini, message, wparam, lparam);
     }
+    // A test run keeps its Mini Window off every monitor and inactive, as it keeps the Rivet window.
+    if let Some(result) = crate::offscreen::message(mini, message, wparam, lparam) {
+        return result;
+    }
     match message {
         WM_NCHITTEST => {
             let original = call_original(mini, message, wparam, lparam);
@@ -778,6 +867,11 @@ unsafe extern "system" fn mini_proc(
             paint(mini);
             0
         }
+        WM_TIMER if wparam == REVEAL_TIMER => {
+            KillTimer(mini, REVEAL_TIMER);
+            crate::frame::OS.set_hidden(WindowId::from_hwnd(mini), false);
+            0
+        }
         WM_SIZE | WM_DPICHANGED => {
             let result = call_original(mini, message, wparam, lparam);
             paint(mini);
@@ -793,6 +887,7 @@ unsafe extern "system" fn mini_proc(
         }
         WM_NCDESTROY => {
             KillTimer(mini, TITLE_TIMER);
+            KillTimer(mini, REVEAL_TIMER);
             let state = MINIS.with(|all| all.borrow_mut().remove(&(mini as isize)));
             let Some(state) = state else {
                 return 0;
@@ -1041,9 +1136,15 @@ impl Surface {
     }
 }
 
-/// Forgets a Rivet window that is going away. Its Mini Windows stay as browser windows of their
-/// own; a later return goes to another Rivet window.
-pub fn forget(_window: HWND) {}
+/// Forgets a Rivet window that is going away. A Mini Window still being opened from it closes. Its
+/// Mini Windows stay as browser windows of their own; a later return goes to another Rivet window.
+pub fn forget(window: HWND) {
+    opening::forget(
+        &crate::frame::OS,
+        &crate::frame::BROWSER,
+        WindowId::from_hwnd(window),
+    );
+}
 
 #[cfg(test)]
 mod tests {

@@ -24,8 +24,10 @@
 //! | Monitors and DPI | link_preview, mini_window, second_view, split | monitors |
 //! | Processes, pipes and files | app_window, control, side_panel | processes |
 //!
-//! Only `WindowCommands` exists so far. A trait is added when the first feature that needs it
-//! moves, never before, so the surface is always one that a feature really uses.
+//! `WindowCommands` and `NewWindows` exist so far. `NewWindows` serves the Mini Window's opening,
+//! which asks the browser for a window and looks after it while it is made. A trait is added when
+//! the first feature that needs it moves, never before, so the surface is always one that a
+//! feature really uses.
 
 pub(crate) mod win32;
 
@@ -49,4 +51,31 @@ impl WindowId {
 pub(crate) trait WindowCommands {
     /// Sends command `id` to `window` and returns once the window has handled it.
     fn send_command(&self, window: WindowId, id: usize);
+}
+
+/// A screen rectangle in pixels: x, y, width and height.
+pub(crate) type ScreenRect = [i32; 4];
+
+/// Asks for new browser windows and looks after them while they are made: the processes, window
+/// shape and timer groups, as far as the Mini Window uses them.
+pub(crate) trait NewWindows {
+    /// Starts `program` with `arguments` and returns without waiting for it.
+    fn launch(&self, program: &std::path::Path, arguments: &[String]) -> Result<(), String>;
+    /// From now until `stop_watching`, every top-level browser window this thread makes is created
+    /// at `place`, hidden, and kept from being activated. Fails when the watch cannot start.
+    fn watch_new_windows(&self, place: ScreenRect) -> Result<(), String>;
+    /// Ends the watch and returns the windows it saw made, in order.
+    fn stop_watching(&self) -> Vec<WindowId>;
+    /// The windows the running watch saw made so far.
+    fn watched(&self) -> Vec<WindowId>;
+    /// Hides or shows a window without changing its place, its activation or its taskbar button.
+    fn set_hidden(&self, window: WindowId, hidden: bool);
+    /// Asks a window to close, as its close button does.
+    fn close_window(&self, window: WindowId);
+    /// Every top-level browser window of this process.
+    fn browser_windows(&self) -> Vec<WindowId>;
+    /// Calls `tick` with `window` every `every_ms` milliseconds on this thread, until
+    /// `stop_ticking` with the same `timer`.
+    fn start_ticking(&self, window: WindowId, timer: usize, every_ms: u32, tick: fn(WindowId));
+    fn stop_ticking(&self, window: WindowId, timer: usize);
 }
