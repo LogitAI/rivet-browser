@@ -10,7 +10,7 @@ public static class Cmd{
 function Cmd-Id([int]$Id) { $r = [IntPtr]::Zero; [void][Cmd]::SendMessageTimeout($ctx.Hwnd, 0x111, [IntPtr]$Id, [IntPtr]::Zero, 2, 3000, [ref]$r) }
 function Titles { (Show-Windows $ctx | ForEach-Object { ($_ -split ' ', 3)[2] -replace ' \d+,\d+,\d+,\d+$', '' }) -join ' || ' }
 "start: $(Titles)"
-$p = Start-Process -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlB) -PassThru -WindowStyle Hidden
+$p = Start-TestBrowser -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlB)
 $null = $p.WaitForExit(20000); Start-Sleep 5
 "after hand-off to page-b: $(Titles)"
 Cmd-Id 33000; Start-Sleep 3     # IDC_BACK

@@ -5,7 +5,7 @@ function Titles { Send-Flag $ctx 'rivet-tab.txt' 'list' | Out-Null; (Read-Log | 
 $type = Join-Path $pageDir 'type.html'
 [IO.File]::WriteAllText($type, '<!doctype html><title>t</title><body style="margin:0;background:#fff"><input id=i style="width:90%;height:120px;font-size:60px;margin:20px" oninput="document.title=''typed:''+this.value">')
 $urlType = 'file:///' + ($type -replace '\\', '/')
-$p = Start-Process -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlType) -PassThru -WindowStyle Hidden
+$p = Start-TestBrowser -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $urlType)
 $null = $p.WaitForExit(20000); Start-Sleep 5
 Send-Flag $ctx 'rivet-tab.txt' 'move' | Out-Null; Start-Sleep 3
 Send-Flag $ctx 'rivet-tab.txt' 'activate 0' | Out-Null; Start-Sleep 2

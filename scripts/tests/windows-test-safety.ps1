@@ -16,7 +16,19 @@
 # 3. Registers the run below .scratch\runs. A run that must be alone, such as one with the
 #    open-link rows, is refused while another run is active, and no run starts beside it.
 # 4. Starts windows-visible-guard.ps1 on the run's folder. The guard stops this run, and only this
-#    run, when a test window shows on a monitor, takes the foreground or holds the mouse.
+#    run, when a test window shows on a monitor, takes the foreground or holds the mouse. It also
+#    takes the foreground lock for the run, when Windows lets it, and gives it back as it ends.
+#
+# Under RIVET_KEEP_OFFSCREEN `rivet session start` starts the browser with STARTF_USESHOWWINDOW and
+# SW_SHOWNOACTIVATE, so Chromium shows its first window without activating it. A runner that starts
+# a browser itself uses Start-TestBrowser below for the same reason: Start-Process with
+# -WindowStyle Hidden hands the browser SW_HIDE, which Chromium turns into SW_SHOWNORMAL followed by
+# SetForegroundWindow.
+#
+# Not done: starting test browsers on a desktop of their own (CreateDesktop and
+# STARTUPINFO.lpDesktop) would keep them from the person's desktop entirely, but the guard sees only
+# the input desktop, and whether PrintWindow with PW_RENDERFULLCONTENT returns the pages of a
+# GPU-composited Chromium window on a desktop that is never shown is not known. It stays an option.
 
 $script:SafetyRepo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
@@ -96,8 +108,9 @@ function Start-RunSafety {
 
   $log = Join-Path $OutDir 'guard.log'
   $fail = Join-Path $OutDir 'guard-failed.txt'
-  Remove-Item $log, $fail -ErrorAction SilentlyContinue
-  $guardArgs = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'windows-visible-guard.ps1'), '-Mark', $OutDir, '-Log', $log, '-FailFile', $fail, '-RunnerPid', $PID)
+  $stop = Join-Path $OutDir 'guard-stop.txt'
+  Remove-Item $log, $fail, $stop -ErrorAction SilentlyContinue
+  $guardArgs = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'windows-visible-guard.ps1'), '-Mark', $OutDir, '-Log', $log, '-FailFile', $fail, '-StopFile', $stop, '-RunnerPid', $PID)
   $guard = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $guardArgs -WindowStyle Hidden -PassThru
   # No browser starts before the guard watches.
   foreach ($i in 1..100) { if (Test-Path $log) { break }; Start-Sleep -Milliseconds 100 }
@@ -107,7 +120,7 @@ function Start-RunSafety {
     Write-Host "refusing to start the $Name run: the visible guard did not start"
     exit 2
   }
-  [pscustomobject]@{ Guard = $guard; Log = $log; FailFile = $fail; Record = $record; DataRoot = $dataRoot; Alone = $alone; AloneRefused = $note }
+  [pscustomobject]@{ Guard = $guard; Log = $log; FailFile = $fail; StopFile = $stop; Record = $record; DataRoot = $dataRoot; Alone = $alone; AloneRefused = $note }
 }
 
 # Stops the run when the guard found a breach or is no longer watching. The guard has already
@@ -127,6 +140,70 @@ function Assert-RunSafe($Safety) {
 function Stop-RunSafety($Safety) {
   if (-not $Safety) { return }
   Assert-RunSafe $Safety
-  Stop-Process -Id $Safety.Guard.Id -Force -ErrorAction SilentlyContinue
-  Remove-Item $Safety.Record -ErrorAction SilentlyContinue
+  # The guard ends on its own when asked, so it gives the foreground lock back. It is stopped only
+  # when it does not end in time.
+  Set-Content -Path $Safety.StopFile -Value 'stop'
+  if (-not $Safety.Guard.WaitForExit(3000)) { Stop-Process -Id $Safety.Guard.Id -Force -ErrorAction SilentlyContinue }
+  Remove-Item $Safety.Record, $Safety.StopFile -ErrorAction SilentlyContinue
+}
+
+if (-not ('RivetTestStart' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;using System.IO;using System.Runtime.InteropServices;
+public sealed class RivetTestProcess:IDisposable{
+ [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr h,uint ms);
+ [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+ IntPtr handle;public readonly int Id;
+ public RivetTestProcess(IntPtr h,int id){handle=h;Id=id;}
+ // Whether the process ended within `ms` milliseconds.
+ public bool WaitForExit(int ms){return handle==IntPtr.Zero||WaitForSingleObject(handle,(uint)ms)==0;}
+ [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr h,out uint code);
+ // The exit code once the process ended (259 while it runs).
+ public int ExitCode{get{uint code=0;if(handle!=IntPtr.Zero)GetExitCodeProcess(handle,out code);return (int)code;}}
+ public void Dispose(){if(handle!=IntPtr.Zero){CloseHandle(handle);handle=IntPtr.Zero;}}
+}
+public static class RivetTestStart{
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct SI{public int cb;public string reserved,desktop,title;public int x,y,w,h,xChars,yChars,fill,flags;public short show,reserved2;public IntPtr reserved3,input,output,error;}
+ [StructLayout(LayoutKind.Sequential)] struct PI{public IntPtr process,thread;public int id,threadId;}
+ [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool CreateProcessW(string app,System.Text.StringBuilder line,IntPtr pa,IntPtr ta,bool inherit,uint flags,IntPtr env,string dir,ref SI si,out PI pi);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetHandleInformation(IntPtr h,uint mask,uint flags);
+ [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+ // Starts `app` with the whole command line `line`: STARTF_USESHOWWINDOW (1) with
+ // SW_SHOWNOACTIVATE (4), so its first window shows without activation. Standard output goes to
+ // `output` when one is given; no other handle is inherited.
+ public static RivetTestProcess Start(string app,string line,string output){
+  var si=new SI();si.cb=Marshal.SizeOf(typeof(SI));si.flags=1;si.show=4;
+  FileStream file=null;
+  try{
+   if(output!=null){
+    file=new FileStream(output,FileMode.Create,FileAccess.Write,FileShare.ReadWrite|FileShare.Delete);
+    IntPtr h=file.SafeFileHandle.DangerousGetHandle();
+    if(!SetHandleInformation(h,1,1))throw new System.ComponentModel.Win32Exception();
+    si.flags|=0x100;si.output=h; // STARTF_USESTDHANDLES
+   }
+   PI pi;
+   if(!CreateProcessW(app,new System.Text.StringBuilder(line),IntPtr.Zero,IntPtr.Zero,output!=null,0,IntPtr.Zero,null,ref si,out pi))throw new System.ComponentModel.Win32Exception();
+   CloseHandle(pi.thread);
+   return new RivetTestProcess(pi.process,pi.id);
+  }finally{if(file!=null)file.Dispose();}
+ }
+}
+'@
+}
+
+# Starts a browser for a test the way `rivet session start` does under a test run: its first window
+# shows without activation. It takes the place of Start-Process -PassThru -WindowStyle Hidden, whose
+# SW_HIDE Chromium shows as SW_SHOWNORMAL and then activates. The arguments are joined as
+# Start-Process joins them, so each must be quoted already where it needs to be. The result has Id,
+# WaitForExit(milliseconds) and Dispose().
+function Start-TestBrowser {
+  param(
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    [string[]]$ArgumentList = @(),
+    [string]$RedirectStandardOutput
+  )
+  $line = '"' + $FilePath + '"'
+  if ($ArgumentList.Count) { $line += ' ' + ($ArgumentList -join ' ') }
+  $output = if ($RedirectStandardOutput) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RedirectStandardOutput) } else { $null }
+  [RivetTestStart]::Start($FilePath, $line, $output)
 }

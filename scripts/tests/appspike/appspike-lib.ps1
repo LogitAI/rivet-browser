@@ -5,6 +5,8 @@ $flagDir = $null; $logFile = $null
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null; $OutDir = (Resolve-Path $OutDir).Path
 . (Join-Path $PSScriptRoot "..\windows-features-lib.ps1")
+# Start-TestBrowser: a hand-off starts without activation, like the first launch.
+. (Join-Path $PSScriptRoot "..\windows-test-safety.ps1")
 $cargo = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin\cargo.exe' } else { (Get-Command cargo).Source }
 
 $table = [ordered]@{
@@ -193,7 +195,7 @@ function Stop-Scene($ctx) { Stop-Mine $ctx.ExeName $ctx.Profile }
 # Opens a second page in the running window the way a link from outside would: the browser's own
 # single-instance hand-off. Only after the first process is alive, so it cannot start a window.
 function Open-SecondPage($ctx, [string]$Url) {
-  $p = Start-Process -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $Url) -PassThru -WindowStyle Hidden
+  $p = Start-TestBrowser -FilePath $ctx.ExePath -ArgumentList @("--user-data-dir=`"$($ctx.Profile)`"", $Url)
   $null = $p.WaitForExit(20000)
   Start-Sleep 5
   $pids = New-Object 'System.Collections.Generic.HashSet[uint32]'

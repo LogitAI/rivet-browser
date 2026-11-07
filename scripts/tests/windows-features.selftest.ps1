@@ -266,5 +266,37 @@ foreach ($case in @(
   else { Write-Host "ok   $($case[3]) : $ok" }
 }
 
+# A browser a runner starts itself reads STARTF_USESHOWWINDOW with SW_SHOWNOACTIVATE, so Chromium
+# shows its first window without activation. A console probe reads its own startup information.
+$probe = @'
+Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class StartProbe{[StructLayout(LayoutKind.Sequential)] public struct SI{public int cb;public IntPtr a,b,c;public int x,y,w,h,xc,yc,fill,flags;public short show,r;public IntPtr r3,i,o,e;} [DllImport("kernel32.dll")] public static extern void GetStartupInfoW(ref SI si);}'
+$si = New-Object StartProbe+SI
+$si.cb = [Runtime.InteropServices.Marshal]::SizeOf($si)
+[StartProbe]::GetStartupInfoW([ref]$si)
+[Console]::Out.Write("$($si.flags) $($si.show)")
+'@
+if ($IsWindows) {
+  $probeDir = Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\rivet\target'))) 'start-probe'
+  New-Item -ItemType Directory -Force $probeDir | Out-Null
+  $probeOut = Join-Path $probeDir 'startup.txt'
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
+  $started = Start-TestBrowser -FilePath (Get-Process -Id $PID).Path -ArgumentList @('-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -RedirectStandardOutput $probeOut
+  $ended = $started.WaitForExit(60000)
+  $started.Dispose()
+  $seen = if ($ended) { (Get-Content -Raw $probeOut -ErrorAction SilentlyContinue) } else { 'did not end' }
+  $parts = "$seen".Trim() -split ' '
+  $ok = $ended -and $parts.Count -eq 2 -and (([int]$parts[0]) -band 1) -and [int]$parts[1] -eq 4
+  if (-not $ok) { Write-Host "FAIL nfr5_test_browser_starts_without_activation : wanted flags with 1 and show 4, got $seen"; $failures++ }
+  else { Write-Host "ok   nfr5_test_browser_starts_without_activation : $seen" }
+  Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue
+}
+
+# No runner starts a browser through Start-Process: its -WindowStyle Hidden hands the browser SW_HIDE,
+# which Chromium shows as SW_SHOWNORMAL and then activates.
+$scripts = @(Get-ChildItem (Join-Path $PSScriptRoot '*.ps1')) + @(Get-ChildItem (Join-Path $PSScriptRoot 'appspike\*.ps1'))
+$direct = @($scripts | Select-String -Pattern 'Start-Process\s+-FilePath\s+\$(ExePath|ctx\.ExePath|exe|browser|Browser)\b' | ForEach-Object { "$($_.Filename):$($_.LineNumber)" })
+if ($direct.Count) { Write-Host "FAIL nfr5_runners_start_browsers_without_activation : $($direct -join ', ')"; $failures++ }
+else { Write-Host 'ok   nfr5_runners_start_browsers_without_activation : none through Start-Process' }
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'
