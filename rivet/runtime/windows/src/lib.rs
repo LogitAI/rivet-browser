@@ -364,6 +364,8 @@ mod hooks;
 #[cfg(windows)]
 mod installed_browsers;
 #[cfg(windows)]
+mod offscreen;
+#[cfg(windows)]
 mod os;
 #[cfg(any(windows, test))]
 mod press;
