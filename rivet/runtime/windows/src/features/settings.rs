@@ -88,7 +88,8 @@ impl Row {
 
     /// The line under the label, for a setting that does not apply at once.
     pub(crate) fn note(self) -> Option<&'static str> {
-        (self == Row::Credentials).then_some("Applies from the next start of Rivet")
+        (self == Row::Credentials)
+            .then_some("Applies from the next start. Other managers: move passwords yourself")
     }
 }
 
@@ -659,6 +660,18 @@ unsafe fn reread(window: HWND) {
     });
 }
 
+/// The field's caret in client pixels while a text row is edited and the caret is shown.
+pub(crate) fn caret(window: HWND) -> Option<RECT> {
+    if busy() {
+        return None;
+    }
+    with_card(window, |card| {
+        card.editing
+            .filter(|_| card.open)
+            .and_then(|_| card.field.as_ref().and_then(|field| field.caret()))
+    })
+}
+
 /// Lets the appbar draw the field's pixels at their place, in client pixels.
 pub(crate) unsafe fn with_field_pixels<R>(
     window: HWND,
@@ -680,6 +693,14 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
     with_card(window, |card| {
         if !card.open {
             return None;
+        }
+        // A change made without a key, such as a drag that selects, counts too.
+        if card
+            .field
+            .as_ref()
+            .is_some_and(|field| field.take_changed())
+        {
+            card.generation += 1;
         }
         Some(View {
             x: x * f,
@@ -1192,8 +1213,15 @@ pub(crate) unsafe fn message(
             None
         }
         WM_TIMER if (TIMER_BASE..=TIMER_LAST).contains(&wparam) => {
+            // Most of the field's timers blink the caret, which moves only the caret's own visual.
+            let before = with_card(window, |card| card.generation);
             forward(window, message, wparam - TIMER_BASE, 0);
-            crate::frame::update_appbar(window);
+            let after = with_card(window, |card| card.generation);
+            if crate::features::field_caret::only_caret(before, after) {
+                crate::frame::update_card_caret(window, crate::appbar::caret::Which::Settings);
+            } else {
+                crate::frame::update_appbar(window);
+            }
             Some(0)
         }
         WM_KILLFOCUS | WM_SETFOCUS => {
@@ -1382,9 +1410,9 @@ mod tests {
             Some(Change::Provider(CredentialProvider::System))
         );
         assert_eq!(choices(Row::Credentials), ["Browser", "Windows"]);
-        assert!(Row::Credentials
-            .note()
-            .is_some_and(|note| note.contains("next start")));
+        assert!(Row::Credentials.note().is_some_and(
+            |note| note.contains("next start") && note.contains("move passwords yourself")
+        ));
     }
 
     #[test]

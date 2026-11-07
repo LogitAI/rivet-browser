@@ -403,6 +403,15 @@ pub static CHROME_156_74: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
+        // `BrowserTabStripModelDelegate::MoveTabsToNewWindow`, found by shape: the only delegate
+        // thunk whose target checks the indices' size and calls the tab mover, as in Chrome
+        // 156.0.8078.80 by symbol.
+        move_to_new_window: Some(0x09E57B00),
+        move_to_new_window_prologue: &[
+            0x48, 0x8B, 0x49, 0x08, 0xE9, 0xC7, 0xF8, 0x01, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+            0xCC, 0xCC,
+        ],
+        move_to_new_window_vector_by_pointer: false,
         view_parent: 0x198,
         view_children: 0x1A0,
         operator_new: 0x5A1E310,
@@ -820,6 +829,14 @@ pub static CHROME_156_80: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
+        // `BrowserTabStripModelDelegate::MoveTabsToNewWindow`, found by name in this build's
+        // public symbols.
+        move_to_new_window: Some(0x09E4CC60),
+        move_to_new_window_prologue: &[
+            0x48, 0x8B, 0x49, 0x08, 0xE9, 0xD7, 0xF8, 0x01, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+            0xCC, 0xCC,
+        ],
+        move_to_new_window_vector_by_pointer: false,
         view_parent: 0x198,
         view_children: 0x1A0,
         operator_new: 0x59FC170,
@@ -1198,6 +1215,459 @@ pub static CHROME_156_80: Build = Build {
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E],
+        top_inset_adjust: 0,
+    },
+};
+
+/// Chrome 157.0.8103.38's font functions and colour ids, found by name in its public symbols and
+/// in its colour id tables. Unverified.
+const DEV_CHROME_157_38: DevMode = DevMode {
+    colours: &[
+        (321, DEV_GROUND),
+        (1597, DEV_GROUND),
+        (801, 0),
+        (802, DEV_HOVER),
+        (1602, DEV_ICON),
+        (1603, DEV_ICON),
+        (1604, DEV_ICON_OFF),
+        (1607, DEV_ICON_HOT),
+        (1605, DEV_ICON_HOT),
+        (1606, DEV_ICON_OFF),
+        (1610, DEV_RULE),
+        (1618, DEV_HOVER),
+        (1619, DEV_RIPPLE),
+        (1651, DEV_ICON_HOT),
+        (1652, DEV_ICON_HOT),
+        (1653, DEV_ICON_HOT),
+        (1012, DEV_ICON),
+        (1013, DEV_ICON),
+        (1014, DEV_ICON_HOT),
+        (1055, DEV_ICON),
+        (1056, DEV_ICON),
+        (1059, DEV_ICON),
+        (1062, DEV_ICON_HOT),
+        (1063, DEV_ICON),
+    ],
+    font_new: 0x0323_9230, // ??0Font@gfx@@QEAA@AEBV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@H@Z
+    font_new_prologue: &[
+        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2,
+    ],
+    font_list_new: 0x0323_8F10, // ??0FontList@gfx@@QEAA@AEBVFont@1@@Z
+    font_list_new_prologue: &[
+        0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE,
+    ],
+    ..DEV_CHROME_156
+};
+
+/// Google Chrome 157.0.8103.38, ported by name from the 156.0.8078.80 row with this build's own public
+/// symbols, and every recorded first byte read from the installed module. Chromium 157 moved member
+/// offsets, vtable slots and colour ids, so each value that is not an address was read again from
+/// this build's instructions or its colour id tables. Every value here was found statically and is
+/// unverified: no window of this build has been driven yet.
+pub static CHROME_157_38: Build = Build {
+    omnibox: Some(super::omnibox_rows::OMNIBOX_CHROME_157_38),
+    app_window: Some(AppWindow {
+        feature_impl: Some(0x0012D300),
+        feature_impl_prologue: &[
+            0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x8B, 0x41, 0x10, 0x85, 0xC0,
+        ],
+        browser_type: 0x10,
+        detach: Some(0x0A894650),
+        detach_prologue: &[
+            0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xD6, 0x48, 0x8B, 0x05, 0xDF,
+            0xC9, 0x5E,
+        ],
+        insert: Some(0x0A894130),
+        insert_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
+            0xEC, 0x68,
+        ],
+        // `BrowserTabStripModelDelegate::MoveTabsToNewWindow`, found by name in this build's
+        // public symbols.
+        move_to_new_window: Some(0x0A9FFF30),
+        move_to_new_window_prologue: &[
+            0x48, 0x8B, 0x49, 0x08, 0xE9, 0xF7, 0xF6, 0x01, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+            0xCC, 0xCC,
+        ],
+        move_to_new_window_vector_by_pointer: false,
+        view_parent: 0x198,
+        view_children: 0x1A0,
+        operator_new: 0x5E75E90,
+        operator_new_prologue: &[
+            0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x82, 0xB1, 0x05, 0xFE,
+            0x48, 0x85,
+        ],
+        web_view_ctor: 0x92A120,
+        web_view_ctor_prologue: &[
+            0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05, 0x0F,
+            0x6F, 0x55,
+        ],
+        web_view_size: 0x520,
+        browser_context: Some(0x058600A0),
+        browser_context_prologue: &[
+            0x48, 0x8B, 0x81, 0x90, 0x02, 0x00, 0x00, 0xC3, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+            0xCC, 0xCC,
+        ],
+        browser_context_offset: None,
+        add_child: 0x5878A90,
+        add_child_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
+            0xEC, 0x88,
+        ],
+        set_contents: 0x10D5D50,
+        set_contents_prologue: &[
+            0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0xE8,
+            0x5E, 0x41,
+        ],
+        set_bounds: Some(0x048C81B0),
+        set_bounds_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
+            0xEC, 0xE8,
+        ],
+        focus_behavior: Some(0x0100E470),
+        focus_behavior_prologue: &[
+            0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x05,
+            0xBE, 0x2B,
+        ],
+        request_focus: Some(0x0290B640),
+        request_focus_prologue: &[
+            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x01, 0x48, 0x8B,
+            0x40, 0x50,
+        ],
+        request_focus_slot: None,
+        destructor_slot: 0x9,
+        bounds_changed_slot: Some(0x4B),
+        window_features: None,
+    }),
+    browser: "Google Chrome",
+    module: "chrome.dll",
+    version: [157, 0, 8103, 38],
+    toolbar: Toolbar {
+        get_widget_slot: 11,
+        dev: DEV_CHROME_157_38,
+        get_color: 0x0454_F050,
+        get_color_bytes: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
+            0x89, 0xD7,
+        ],
+        content_window_for_hwnd: 0x00E1_3BC0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        widget_for_window: 0x0321_2390, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
+        skip: "",
+        toolbar_layout: 0x0119_5EC0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
+    },
+    vertical: VerticalTabs {
+        supported: true,
+        slot: 0x100A_DE20, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
+        should_display: 0x0372_F780, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
+        browser_view_for_browser: 0x0031_9000, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
+        hwnd_for_view: 0x0373_9690,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
+        notify_mode_changed: 0x0A87_5880, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
+        update_collapse_action: 0x0204_3D80, // ??0VerticalTabStripStateController@tabs@@IEAA@AEAVBrowserWindowInterface@@@Z
+        destructor: 0x02AA_EA60, // ??_EVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
+        destructor_prologue: &[
+            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0xE8,
+        ],
+        browser_offset: 0x1B8,
+        mode_offset: 0x1E8,
+        width_offset: 0x1CC,
+        browser_view_view_vtable: 0x1016_E590, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
+        region_preferred_size: 0x0A8D_3A70, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        region_preferred_size_slot: 0x1017_6640, // .weak.??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$Cd
+        invalidate_layout: 0x0458_7C70,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
+        invalidate_layout_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+        ],
+        region_minimum_size: 0x0A8D_39E0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
+        region_minimum_prologue: &[
+            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
+            0x02, 0x00, 0x00, 0x00, 0x00,
+        ],
+        should_draw_tab_strip: 0x054D_6710, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
+        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
+        window_feature: ABSENT,
+        window_feature_prologue: &[0],
+        window_feature_tab_strip: 0,
+        window_feature_callers: (0, 0),
+        set_bounds_rect: ABSENT,
+        set_bounds_rect_prologue: &[0],
+        toolbar_in_view: 0,
+        detour_strip: false,
+        ..UNCHECKED_VERTICALTABS
+    },
+    navigation: Navigation {
+        supported: true,
+        content_window_for_hwnd: 0x00E1_3BC0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        browser_view_for_window: 0x0AB8_53E0, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
+        active_web_contents: 0x0AB8_5910, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        gurl_from_text: 0x045A_7640, // ??0GURL@@QEAA@V?$basic_string_view@DU?$char_traits@D@__Cr@std@@@__Cr@std@@@Z
+        gurl_wide: false,
+        gurl_empty: 0x059C_4BF0,           // ??0GURL@@QEAA@XZ
+        gurl_drop: 0x03EA_2C10,            // ??1GURL@@QEAA@XZ
+        open_url_params: 0x0744_1C10, // ??0OpenURLParams@content@@QEAA@AEBVGURL@@AEBUReferrer@1@W4WindowOpenDisposition@@W4PageTransition@ui
+        open_url_params_drop: 0x0225_DB70, // ??1OpenURLParams@content@@QEAA@XZ
+        open_url: 0x085D_FCE0, // ?OpenURL@WebContentsImpl@content@@UEAAPEAVWebContents@2@AEBUOpenURLParams@2@V?$OnceCallback@$$A6AXAE
+        signatures: &[
+            (0x00E1_3BC0, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x0AB8_53E0, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (
+                0x045A_7640,
+                &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+            ),
+            (0x059C_4BF0, &[0x48, 0x89, 0xC8, 0x0F, 0x57, 0xC0]),
+            (0x03EA_2C10, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28]),
+            (0x0744_1C10, &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53]),
+            (0x0225_DB70, &[0x41, 0x56, 0x56, 0x57, 0x53]),
+            (
+                0x085D_FCE0,
+                &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57],
+            ),
+            (0x0AB8_5910, &[0x48, 0x8B, 0x81, 0x58, 0x05, 0x00, 0x00]),
+        ],
+    },
+    tabs: Tabs {
+        supported: true,
+        content_window_for_hwnd: 0x00E1_3BC0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
+        browser_view_for_window: 0x0AB8_53E0, // ?GetBrowserViewForNativeWindow@BrowserView@@SAPEAV1@PEAVWindow@aura@@@Z
+        active_web_contents: 0x0AB8_5910, // ?GetActiveWebContents@BrowserView@@QEAAPEAVWebContents@content@@XZ
+        browser_in_view: 0x558,
+        groups: true,
+        get_tab_model: 0x0510_76F0, // ?Client@WebLocalFrameImpl@blink@@UEBAPEAVWebLocalFrameClient@2@XZ
+        tab_count: 0x0372_FB60,     // ?count@TabStripModel@@QEBAHXZ
+        tab_at: 0x031E_A110, // ?GetWebContentsAt@TabStripModel@@QEBAPEAVWebContents@content@@H@Z
+        tab_object: ABSENT,
+        tab_collection: 0,
+        tab_contents: 0,
+        activate_tab: 0x031E_A090, // ?ActivateTabAt@TabStripModel@@QEAAXHUTabStripUserGestureDetails@@@Z
+        close_tab: 0x0A89_B700,    // ?CloseWebContentsAt@TabStripModel@@QEAAXHI@Z
+        title: 0x00B7_7780, // ?GetTitle@WebContentsImpl@content@@UEAAAEBV?$basic_string@_SU?$char_traits@_S@__Cr@std@@V?$allocator
+        new_tab_prologue: &[],
+        new_tab_address: None,
+        new_tab_takes_address: false,
+        new_tab_delay_ms: 0,
+        new_tab_by_open_url: None,
+        new_tab: 0x0AA1_E2D0, // ?NewTab@chrome@@YAAEAVWebContents@content@@PEAVBrowserWindowInterface@@W4NewTabTypes@@@Z
+        last_committed_url: 0x0594_C7C0, // ?GetLastCommittedURL@WebContentsImpl@content@@UEBAAEBVGURL@@XZ
+        visible_url: 0x05E2_ECC0,        // ?GetVisibleURL@WebContentsImpl@content@@UEAAAEBVGURL@@XZ
+        get_group: 0x031E_A190, // ?GetTabGroupForTab@TabStripModel@@QEBA?AV?$optional@VTabGroupId@tab_groups@@@__Cr@std@@H@Z
+        has_group: 0x0A88_AA80, // ?ContainsTabGroup@TabGroupModel@@QEBA_NAEBVTabGroupId@tab_groups@@@Z
+        lookup_group: 0x0A88_AAE0, // ?GetTabGroup@TabGroupModel@@QEBAPEAVTabGroup@@AEBVTabGroupId@tab_groups@@@Z
+        change_group: 0x0A8A_2C00, // ?ChangeTabGroupVisuals@TabStripModel@@QEAAXAEBVTabGroupId@tab_groups@@VTabGroupVisualData@3@_N@Z
+        allocate: 0x05E7_5E90,     // ??2@YAPEAX_K@Z
+        add_to_new_group: 0x0A8A_06D0, // ?AddToNewGroup@TabStripModel@@QEAA?AVTabGroupId@tab_groups@@V?$vector@HV?$allocator@H@__Cr@std@@@__C
+        allocate_prologue: &[0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9],
+        add_to_new_group_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
+        ],
+        signatures: &[
+            (
+                0x031E_A190,
+                &[
+                    0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD6, 0x45, 0x85, 0xC0, 0x78,
+                ],
+            ),
+            (
+                0x0A88_AA80,
+                &[
+                    0x56, 0x57, 0x48, 0x83, 0xEC, 0x38, 0x49, 0x89, 0xD0, 0x48, 0x8B, 0x05,
+                ],
+            ),
+            (
+                0x0A88_AAE0,
+                &[
+                    0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x38, 0x48, 0x89, 0xD6,
+                ],
+            ),
+            (
+                0x0A8A_2C00,
+                &[
+                    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+                ],
+            ),
+            (0x00E1_3BC0, &[0x56, 0x48, 0x83, 0xEC, 0x20, 0xE8]),
+            (0x0AB8_53E0, &[0x48, 0x83, 0xEC, 0x28, 0xE8]),
+            (0x0AB8_5910, &[0x48, 0x8B, 0x81, 0x58, 0x05, 0x00, 0x00]),
+            (0x0510_76F0, &[0x48, 0x8B, 0x41, 0x30, 0xC3]),
+            (0x0372_FB60, &[0x48, 0x8B, 0x01, 0x8B, 0x40, 0x20, 0xC3]),
+            (0x031E_A110, &[0x48, 0x83, 0xEC, 0x28, 0x85, 0xD2]),
+            (0x031E_A090, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38]),
+            (0x0A89_B700, &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28]),
+            (0x00B7_7780, &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x81]),
+            (
+                0x0AA1_E2D0,
+                &[0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57],
+            ),
+            (0x0594_C7C0, &[0x48, 0x63, 0x81, 0xD4, 0x02, 0x00, 0x00]),
+            (0x05E2_ECC0, &[0x48, 0x8B, 0x81, 0xB0, 0x02, 0x00, 0x00]),
+        ],
+    },
+    split: Split {
+        supported: true,
+        add_to_new_split: 0x0A89_FA40, // ?AddToNewSplit@TabStripModel@@QEAA?AVSplitTabId@split_tabs@@V?$vector@HV?$allocator@H@__Cr@std@@@__C
+        split_adds_active: false,
+        split_vector_ends_by_pointer: false,
+        remove_split: 0x0A8A_1BD0, // ?RemoveSplit@TabStripModel@@QEAAXVSplitTabId@split_tabs@@@Z
+        get_split_for_tab: 0x031E_A1E0, // ?GetSplitForTab@TabStripModel@@QEBA?AV?$optional@VSplitTabId@split_tabs@@@__Cr@std@@H@Z
+        allocate: 0x05E7_5E90,          // ??2@YAPEAX_K@Z
+        set_rounded_corners: 0x0373_39E0, // ?SetRoundedCorners@ContentsContainerView@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_rounded_corners_prologue: &[
+            0xF3, 0x0F, 0x10, 0x02, 0x0F, 0x2E, 0x81, 0x7C, 0x04, 0x00, 0x00, 0x75, 0x33,
+        ],
+        set_rounded_corners_changed: 0x0373_3A20, // ?SetRoundedCorners@ContentsContainerView@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_rounded_corners_parity: 0x0373_39ED, // ?SetRoundedCorners@ContentsContainerView@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        update_border: 0x0214_AB60, // ?UpdateBorderAndOverlay@ContentsContainerView@@QEAAX_N00@Z
+        update_border_prologue: &[
+            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x48, 0x48, 0x89, 0xCE,
+        ],
+        set_border_slot: 0xf0 / 8,
+        set_visible_slot: 0x90 / 8,
+        outline_member: 0x440,
+        calculate_layout: 0x023F_6BF0, // ?CalculateProposedLayout@MultiContentsView@@EEBA?AUProposedLayout@views@@AEBVSizeBounds@3@@Z
+        calculate_layout_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+        ],
+        layout_delegate_offset: 0x320,
+        split_insets_member: 0x3fc,
+        containers_member: 0x348,
+        container_count_member: 0x350,
+        active_member: 0x3c0,
+        schedule_paint: 0x0567_0550, // ?SchedulePaint@View@views@@QEAAXXZ
+        schedule_paint_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x40, 0x48],
+        web_contents_focused: 0x0AB9_56B0, // ??_EMultiContentsViewDropTargetController@@UEAAPEAXI@Z
+        web_contents_focused_prologue: &[
+            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B, 0x81, 0x90, 0x03, 0x00, 0x00,
+        ],
+        container_layout: 0x0219_99B0, // ?CalculateProposedLayout@ContentsContainerView@@EEBA?AUProposedLayout@views@@AEBVSizeBounds@3@@Z
+        container_delegate_offset: 0x318,
+        mini_toolbar_member: 0x438,
+        flex_layout: 0x0545_7A60, // views::FlexLayout::CalculateProposedLayout
+        flex_layout_host: 0x38,
+        location_bar_vtable: 0x1015_9FB0, // LocationBarView primary vtable
+        view_size: 0x1D0,
+        signatures: &[
+            (
+                0x0A89_FA40,
+                &[
+                    0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+                ],
+            ),
+            (
+                0x0A8A_1BD0,
+                &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x58],
+            ),
+            (
+                0x031E_A1E0,
+                &[0x56, 0x48, 0x83, 0xEC, 0x20, 0x45, 0x85, 0xC0, 0x78],
+            ),
+            (
+                0x05E7_5E90,
+                &[0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9],
+            ),
+        ],
+    },
+    side_panel: SidePanel {
+        supported: true,
+        side_panel_vtable: 0x1014_07B0, // .weak.??_7SidePanel@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplate@
+        browser_offset: 0x558,
+        features_offset: 0xd0,
+        features_coordinator: 0x330,
+        browser_view_view_vtable: 0x1016_E590, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
+        coordinator_vtable: 0x1013_4880, // .weak.??_7SidePanelCoordinator@@6BSidePanelUIBase@@@.default.?RejectPromiseOnDestruction@?$CdmPromis
+        show: 0x09B4_B260, // ?Show@SidePanelUIBase@@UEAAXW4SidePanelEntryId@@V?$optional@W4SidePanelOpenTrigger@@@__Cr@std@@_N@Z
+        show_prologue: &[0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x58],
+        entry_id_to_string: 0x01F2_5F70, // ?SidePanelEntryIdToString@@YA?AV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@s
+        entry_id_to_string_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x89, 0xCE],
+        extension_entry: 22,
+        entry_count: 23,
+        hidden_entries: &[],
+        toggle: 0x09B5_3B40, // ?Toggle@SidePanelCoordinator@@UEAAXVSidePanelEntryKey@@W4SidePanelOpenTrigger@@@Z
+        toggle_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x60,
+        ],
+        entry_showing: 0x0371_E7F0, // ?IsSidePanelEntryShowing@SidePanelUIBase@@UEBA_NAEBVSidePanelEntryKey@@@Z
+        entry_showing_prologue: &[0x48, 0x8B, 0x49, 0x10, 0x80, 0x79, 0x30, 0x01],
+        registry_from: 0x0317_3C70, // ?From@SidePanelRegistry@@SAPEAV1@PEAVBrowserWindowInterface@@@Z
+        registry_from_prologue: &[0x48, 0x81, 0xC1, 0xA8, 0x00, 0x00, 0x00],
+        get_color_provider: 0x01E7_F070, // ?GetColorProvider@WebContentsImpl@content@@EEBAAEBVColorProvider@ui@@XZ
+        get_color_provider_prologue: &[
+            0x48, 0x8B, 0x89, 0x98, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x01, 0x48, 0x8B, 0x40, 0x08,
+        ],
+        source_in_widget: 0x48,
+        color_source: 0x98,
+        generate_colors_css: 0x05A1_D580, // ?GenerateColorsCss@ThemeSource@@SA?AV?$optional@V?$basic_string@DU?$char_traits@D@__Cr@std@@V?$alloc
+        generate_colors_css_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+        ],
+        layout_vtable: 0x100A_DB68, // .weak.??_7BrowserViewTabbedLayoutImpl@@6B@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplate@
+        proposed_slot: 16,
+        proposed: 0x012C_3340, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl@@MEBA?AUProposedLayout@BrowserViewLayoutImpl@@A
+        old_layout: None,
+        registry_end: None,
+        registry_in_coordinator: None,
+        registry_entries: None,
+        coordinator_browser: None,
+        entry_key_size: None,
+        extensions_by_toggle: None,
+        host_view: 0x38,
+        page_area: 0x50,
+        contents_container: 0xb8,
+        vertical_tabs: 0x80,
+        toolbar: 0x60,
+        contents_outline: 0x58,
+        side_panel: 0xc0,
+        side_panel_animation: 0xc8,
+        layout_immediately: 0x048C_8EC0, // ?LayoutImmediately@View@views@@AEAAXXZ
+        layout_immediately_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+        ],
+        event_handler_for_point: 0x0163_4870, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
+    },
+    layout: Layout {
+        on_paint_slot: 89,
+        provider_verified: true,
+        on_paint: 0x0161_7A90, // ?OnPaint@BrowserFrameViewWin@@MEAAXPEAVCanvas@gfx@@@Z
+        get_color_provider: 0x04F8_F7A0, // ?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ
+        draw_color: 0x0374_8C30,         // ?DrawColor@Canvas@gfx@@QEAAXI@Z
+        frame_ids: &[0x141, 0x142, 0x145, 0x146, 0x149],
+        corner_vtable: 0x101A_C8F0, // .weak.??_7CustomFloatingCorner@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
+        corner_paint: 0x0AB9_47C0,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
+        caption_vtable: 0x101E_13F0, // .weak.??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
+        caption_size_slot: 74,
+        caption_size: 0x0320_9420, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
+        caption_paint_slot: 113,
+        caption_paint: 0x01E3_7DF0, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
+        top_inset_slot: 126,
+        top_inset: 0x0AAD_2250, // ?GetTopInset@BrowserFrameViewWin@@UEBAH_N@Z
+        layout_slot: 23,
+        layout: 0x01A6_3550, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
+        set_bounds_rect: 0x048C_81B0, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
+        caption_container_offset: 0x3C0,
+        view_bounds_offset: 0x1C8,
+        browser_view_view_vtable: 0x1016_E590, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
+        frame_vtable: 0x1017_4650, // .weak.??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromis
+        layout_immediately: 0x048C_8EC0, // ?LayoutImmediately@View@views@@AEAAXXZ
+        layout_immediately_prologue: &[
+            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
+        ],
+        set_layer: 0x0100_6330, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
+        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
+        set_radius: 0x0321_CF10, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
+        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
+        set_masks: 0x0321_CF00, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
+        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
+        stack_at_top: 0x0AF4_77D0, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
+        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
+        set_opaque: 0x007E_9970, // ?SetFillsBoundsOpaquely@Layer@ui@@UEAAX_N@Z
+        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
+        on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        draw_color_prologue: &[0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B],
+        get_color_provider_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x78],
+        corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        layout_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53],
+        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        frame_browser_window_offset: 0x338,
+        browser_window_in_view: 0x1f0,
+        caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
+        caption_ink_ids: &[0x673, 0x674, 0x675],
         top_inset_adjust: 0,
     },
 };

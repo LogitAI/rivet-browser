@@ -61,6 +61,20 @@ pub(crate) const ROWS: &[AnchorRow] = &[
         verified: false,
     },
     AnchorRow {
+        browser: "Google Chrome",
+        version: [157, 0, 8103, 38],
+        get_anchor_rect: 0x0AF2_96E0,
+        prologue: PROLOGUE_D0,
+        verified: false,
+    },
+    AnchorRow {
+        browser: "Brave",
+        version: [157, 1, 99, 55],
+        get_anchor_rect: 0x0C3B_8D60,
+        prologue: PROLOGUE_D0,
+        verified: false,
+    },
+    AnchorRow {
         browser: "Microsoft Edge",
         version: [156, 0, 4314, 58],
         get_anchor_rect: 0x0330_BF40,
@@ -280,6 +294,8 @@ mod tests {
             .all(|row| !row.verified && row.prologue.len() >= 14));
         for (browser, version, at) in [
             ("Google Chrome", [156, 0, 8078, 80], 0x0AA7_2C00),
+            ("Google Chrome", [157, 0, 8103, 38], 0x0AF2_96E0),
+            ("Brave", [157, 1, 99, 55], 0x0C3B_8D60),
             ("Microsoft Edge", [156, 0, 4314, 58], 0x0330_BF40),
             ("Naver Whale", [5, 39, 412, 57], 0x0903_7B10),
             ("Samsung Internet", [30, 0, 4, 29], 0x090C_B920),

@@ -6,6 +6,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+pub mod control;
 pub mod credentials;
 pub mod link_rules;
 pub mod paths;
@@ -212,8 +213,23 @@ impl fmt::Display for LaunchError {
 
 impl std::error::Error for LaunchError {}
 
+/// Where a hidden window that the runtime controls opens: outside every monitor, so nothing shows
+/// in the moment before the runtime cloaks it.
+pub const HIDDEN_WINDOW_POSITION: &str = "--window-position=-32000,-32000";
+
 /// Builds a Chromium invocation without opening a debugging port.
 pub fn build_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchError> {
+    plan_launch(request, false)
+}
+
+/// Builds the invocation for a window the Rivet runtime will control. A hidden session is then an
+/// app window that the runtime cloaks, so its pages still navigate and run scripts in the browser
+/// and a later command can show it. Without the runtime a hidden session stays headless.
+pub fn build_controlled_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchError> {
+    plan_launch(request, true)
+}
+
+fn plan_launch(request: &LaunchRequest, controlled: bool) -> Result<LaunchPlan, LaunchError> {
     if request.browser.as_os_str().is_empty() {
         return Err(LaunchError::MissingBrowser);
     }
@@ -238,16 +254,24 @@ pub fn build_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchEr
     }
     arguments.extend(request.credentials.launch_arguments());
     match display {
-        DisplayMode::Visible => {
+        // A controlled hidden launch is an off-screen app window, so Rivet can still drive it.
+        DisplayMode::Visible | DisplayMode::Hidden
+            if controlled || matches!(display, DisplayMode::Visible) =>
+        {
+            if display == DisplayMode::Hidden {
+                arguments.push(HIDDEN_WINDOW_POSITION.to_owned());
+            }
             // An app window has no maker tab strip or toolbar.
             arguments.push(format!("--app={}", request.url));
         }
-        DisplayMode::Hidden => {
+        DisplayMode::Visible | DisplayMode::Hidden => {
             arguments.push("--headless=new".to_owned());
             arguments.push(request.url.clone());
         }
         DisplayMode::Auto => unreachable!("auto is resolved above"),
     }
+    // Chromium keeps only the last `--disable-features` list, which would drop the provider's.
+    let arguments = credentials::merge_disabled_features(arguments);
     Ok(LaunchPlan {
         program: request.browser.clone(),
         arguments,
@@ -255,7 +279,7 @@ pub fn build_launch_plan(request: &LaunchRequest) -> Result<LaunchPlan, LaunchEr
     })
 }
 
-fn is_supported_url(value: &str) -> bool {
+pub(crate) fn is_supported_url(value: &str) -> bool {
     value.starts_with("https://")
         || value.starts_with("http://")
         || value.starts_with("file://")
@@ -282,6 +306,22 @@ mod tests {
             display,
             credentials: CredentialProvider::Browser,
         }
+    }
+
+    #[test]
+    fn nfr8_launch_has_one_disable_features_list_with_the_provider_feature() {
+        let plan = build_launch_plan(&LaunchRequest {
+            credentials: CredentialProvider::System,
+            ..request(DisplayMode::Visible)
+        })
+        .unwrap();
+        let lists: Vec<&String> = plan
+            .arguments
+            .iter()
+            .filter(|argument| argument.starts_with("--disable-features="))
+            .collect();
+        assert_eq!(lists.len(), 1);
+        assert!(lists[0].contains("WebAuthenticationEnclaveAuthenticator"));
     }
 
     #[test]
@@ -399,6 +439,19 @@ mod tests {
             .iter()
             .any(|argument| argument.starts_with("--app=")));
         assert!(plan.arguments.contains(&"https://example.test/".into()));
+    }
+
+    #[test]
+    fn fr5_controlled_hidden_session_is_an_app_window_off_every_screen() {
+        let plan = build_controlled_launch_plan(&request(DisplayMode::Hidden)).unwrap();
+        assert_eq!(plan.display, DisplayMode::Hidden);
+        assert!(plan
+            .arguments
+            .contains(&"--app=https://example.test/".into()));
+        assert!(plan.arguments.contains(&HIDDEN_WINDOW_POSITION.into()));
+        assert!(!plan.arguments.contains(&"--headless=new".into()));
+        let visible = build_controlled_launch_plan(&request(DisplayMode::Visible)).unwrap();
+        assert!(!visible.arguments.contains(&HIDDEN_WINDOW_POSITION.into()));
     }
 
     #[test]

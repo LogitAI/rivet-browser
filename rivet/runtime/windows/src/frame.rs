@@ -1204,7 +1204,8 @@ pub(crate) fn spaces_file() -> Option<(std::path::PathBuf, String)> {
 }
 
 /// Restores the saved spaces, the appbar width and its hidden state when a window attaches.
-/// Missing or corrupt files leave the defaults. A corrupt file is kept under another name.
+/// A corrupt file is kept under another name and its copy is read instead. Without a good one the
+/// defaults stay.
 unsafe fn load_persisted(window: HWND) {
     let owns = PERSIST.with(|persist| {
         let mut persist = persist.borrow_mut();
@@ -1217,11 +1218,7 @@ unsafe fn load_persisted(window: HWND) {
     let Some((path, _)) = spaces_file().filter(|_| owns) else {
         return;
     };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let Some(mut stored) = Spaces::from_json(&text) else {
-        let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
+    let Some(mut stored) = crate::spaces::read_recovering(&path, Spaces::from_json) else {
         return;
     };
     let pending = stored.spaces.take_current_tabs();
@@ -1838,6 +1835,7 @@ unsafe fn relayout(window: HWND) {
 unsafe fn toggle_appbar(window: HWND) {
     close_menu(window);
     edit_layout(window, |layout| layout.toggle());
+    crate::trace::trace(&format!("appbar: hidden {}", layout_of(window).collapsed));
     sync_strip(window);
     SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
     KillTimer(window, PEEK_TIMER);
@@ -1854,6 +1852,7 @@ unsafe fn set_peek(window: HWND, on: bool) {
         changed
     });
     if changed {
+        crate::trace::trace(&format!("appbar: peek {on}"));
         SetTimer(window, PEEK_TIMER, 16, None);
     }
 }
@@ -2029,6 +2028,7 @@ unsafe fn apply_drag(window: HWND) {
     let factor = layout_dpi(window) as f32 / 96.0;
     let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
     if edit_layout(window, |layout| layout.set_width(wanted)) {
+        crate::trace::trace(&format!("appbar: width {}", layout_of(window).side));
         sync_strip(window);
         // The appbar takes its new width before the browser lays the page out, so what the
         // browser exposes is only ever ground or appbar, never the appbar's old surface over a
@@ -2114,23 +2114,36 @@ pub(crate) fn rivet_windows() -> Vec<HWND> {
     })
 }
 
-/// Every top-level browser window of this process, whoever made it. For the app window spike.
+/// Every top-level browser window of this process, whoever made it. Only windows of the browser's
+/// class are visited, so the half second tab timer does not read the class of every window.
 pub(crate) fn browser_windows_of_process() -> Vec<HWND> {
-    unsafe extern "system" fn each(window: HWND, found: LPARAM) -> i32 {
-        let mut owner = 0;
-        GetWindowThreadProcessId(window, &mut owner);
-        if owner == GetCurrentProcessId() && class_name(window) == BROWSER_CLASS {
-            (*(found as *mut Vec<HWND>)).push(window);
-        }
-        1
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowExW;
+    thread_local! {
+        static CLASS: Vec<u16> = wide(BROWSER_CLASS);
     }
     let mut found: Vec<HWND> = Vec::new();
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows(
-            Some(each),
-            &mut found as *mut _ as LPARAM,
-        )
-    };
+    CLASS.with(|class| unsafe {
+        let me = GetCurrentProcessId();
+        let mut window = FindWindowExW(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            class.as_ptr(),
+            std::ptr::null(),
+        );
+        while !window.is_null() {
+            let mut owner = 0;
+            GetWindowThreadProcessId(window, &mut owner);
+            if owner == me {
+                found.push(window);
+            }
+            window = FindWindowExW(
+                std::ptr::null_mut(),
+                window,
+                class.as_ptr(),
+                std::ptr::null(),
+            );
+        }
+    });
     found
 }
 
@@ -2167,28 +2180,49 @@ pub(crate) fn own_debug_directory() -> Option<std::path::PathBuf> {
 }
 
 fn own_debug_directory_in(arguments: impl Iterator<Item = String>) -> Option<std::path::PathBuf> {
-    arguments
-        .filter_map(|argument| {
-            argument
-                .strip_prefix("--user-data-dir=")
-                .map(|dir| std::path::PathBuf::from(dir.trim_matches('"')))
-        })
-        .next()
-        .map(|profile| profile.join("rivet-debug"))
-        .filter(|dir| dir.is_dir())
+    rivet_core::paths::session_debug_dir(arguments)
 }
 
-/// A debug switch file: the process's own when its profile has the folder, else the shared one.
-pub(crate) fn debug_switch(name: &str) -> Option<std::path::PathBuf> {
-    debug_directory().map(|dir| dir.join(name))
+/// The folder of debug command files that the window's timer looks in, decided once per process:
+/// the process's own when its profile has one, else the shared one when it exists. `None` means
+/// no folder existed when the first window attached, and the timer then touches no files at all,
+/// so an ordinary window never polls the disk. A tester places the folder before the launch.
+pub(crate) fn debug_switches() -> Option<&'static std::path::Path> {
+    static FOUND: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            pick_debug_switches(
+                own_debug_directory(),
+                rivet_core::paths::Layout::current().map(|layout| layout.debug()),
+                |dir| dir.is_dir(),
+            )
+        })
+        .as_deref()
+}
+
+fn pick_debug_switches(
+    own: Option<std::path::PathBuf>,
+    shared: Option<std::path::PathBuf>,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> Option<std::path::PathBuf> {
+    own.filter(|dir| exists(dir))
+        .or_else(|| shared.filter(|dir| exists(dir)))
+}
+
+/// Every how many tab refresh ticks the window checks that its taskbar identity is still Rivet's.
+const TASKBAR_CHECK_EVERY: u64 = 4;
+
+fn taskbar_check_due(tick: u64) -> bool {
+    tick % TASKBAR_CHECK_EVERY == 0
+}
+
+thread_local! {
+    static TAB_TICKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// The log a switched-on trace writes, rotated when it is full. `None` while the switch is off.
 fn trace_file(name: &str) -> Option<std::path::PathBuf> {
-    let path = rivet_core::paths::Layout::current()?.trace_file(name)?;
-    std::fs::create_dir_all(path.parent()?).ok()?;
-    rivet_core::paths::cap_log(&path);
-    Some(path)
+    crate::trace::switched(name)
 }
 
 pub(crate) unsafe fn runtime_directory() -> Option<std::path::PathBuf> {
@@ -2268,8 +2302,16 @@ pub unsafe fn attach(window: HWND) -> bool {
         return false;
     }
     SetPropW(window, key.as_ptr(), replaced as _);
+    // The window stays cloaked until it has Rivet's look, so no frame shows the browser's own strip.
+    crate::features::look::first_look(window, crate::features::look::FirstLook::Attached);
     // DirectComposition targets and frame changes belong on the UI thread that owns the window.
-    PostMessageW(window, attach_message(), 0, 0) != 0
+    let posted = PostMessageW(window, attach_message(), 0, 0) != 0;
+    if posted {
+        crate::features::control::serve(window);
+    } else {
+        crate::features::look::first_look(window, crate::features::look::FirstLook::AttachFailed);
+    }
+    posted
 }
 
 unsafe fn call_browser(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -2291,7 +2333,10 @@ fn caption_row_height(window: HWND) -> Option<i32> {
 fn top_inset_extra(window: HWND) -> Option<i32> {
     // A Rivet window has no title bar above its panel: the browser's top elements begin at the
     // panel's top gap on every browser, whatever height its own title bar has.
-    attached(window).then_some(frame_layout::PANEL_GAP)
+    // A Mini Window keeps the room of Rivet's row on its own surface.
+    attached(window)
+        .then_some(frame_layout::PANEL_GAP)
+        .or_else(|| crate::features::mini_window::top_inset(window))
 }
 
 /// The features of a Rivet window in the order they are installed. A feature the browser does not
@@ -2452,6 +2497,7 @@ fn attach_steps() -> Vec<Step<Attach>> {
             }) {
                 PostMessageW(window, group_probe_message(), 0, 0);
             }
+            crate::features::activity::switch_on_if_asked();
             // Tab titles and selection can change without a window title change.
             windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(
                 window,
@@ -2509,12 +2555,7 @@ unsafe fn create_appbar(window: HWND) {
     if attached(window) {
         return;
     }
-    if let Some(path) = own_debug_directory()
-        .map(|dir| dir.join("rivet-vertical-tabs.log"))
-        .filter(|path| path.is_file())
-    {
-        crate::trace::set_trace(path);
-    } else if let Some(path) = trace_file("rivet-vertical-tabs.log") {
+    if let Some(path) = trace_file("rivet-vertical-tabs.log") {
         crate::trace::set_trace(path);
     }
     // Without the layout hook the browser would draw underneath the appbar, so an unknown
@@ -2549,9 +2590,95 @@ unsafe fn compose_appbar(window: HWND) -> bool {
     true
 }
 
+/// Places or hides the top bar's caret alone, for a blink or a caret move that changed nothing
+/// else. The rest of the window's surface stays as it is.
+pub(crate) unsafe fn update_address_caret(window: HWND) {
+    let dpi = layout_dpi(window);
+    let caret = crate::features::address_bar::caret(window);
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.place_address_caret(caret, dpi, true) {
+                log(&format!(
+                    "rivet: could not draw the top bar's caret: {error}"
+                ));
+            }
+        }
+    });
+}
+
+thread_local! {
+    static TICK_GATE: RefCell<crate::features::tick_gate::Gate> = RefCell::default();
+}
+
+/// Whether the tab refresh timer saw anything the window's surface shows differently from the
+/// last tick: its tabs, titles and states, its pages and their rows, the top bar and the cards
+/// over the page, its size and its spaces. Pointer and key input draw on their own.
+unsafe fn tick_needs_draw(window: HWND) -> bool {
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    let visible = framed(window);
+    let address = if crate::features::address_bar::busy() {
+        None
+    } else {
+        crate::features::address_bar::view(window)
+    };
+    let command = if crate::features::command_bar::busy() {
+        None
+    } else {
+        crate::features::command_bar::view(window)
+    };
+    let card = if crate::features::settings::busy() {
+        None
+    } else {
+        crate::features::settings::view(window)
+    };
+    let spaces = with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()));
+    let signature = crate::features::tick_gate::signature(&[
+        &(client.right, client.bottom, layout_dpi(window), visible),
+        &layout_of(window),
+        &page_x(window),
+        &appbar_model(window),
+        &pane_rows(window),
+        &address,
+        &command,
+        &card,
+        &crate::features::link_preview::view(window),
+        &crate::features::link_rules::view(window),
+        &crate::dev_bar::view(window),
+        &crate::features::dev_page::window_in_dev_mode(window),
+        &held_warning(),
+        &spaces,
+        &open_menu_kind(window),
+        &dragging(window),
+        &frame_layout::panel_bounds(window),
+        &ground_holes(window),
+    ]);
+    TICK_GATE.with(|gate| gate.borrow_mut().due(window as isize, signature))
+}
+
+/// Places or hides the caret of the command bar or the settings card alone, for a blink that
+/// changed nothing else.
+pub(crate) unsafe fn update_card_caret(window: HWND, which: crate::appbar::caret::Which) {
+    use crate::appbar::caret::Which;
+    let dpi = layout_dpi(window);
+    let caret = match which {
+        Which::Address => crate::features::address_bar::caret(window),
+        Which::Command => crate::features::command_bar::caret(window),
+        Which::Settings => crate::features::settings::caret(window),
+    };
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.place_caret(which, caret, dpi, true) {
+                log(&format!("rivet: could not draw a field's caret: {error}"));
+            }
+        }
+    });
+}
+
 /// Places the appbar visual over the strip the browser's layout left free and redraws it when its
 /// size or DPI changed.
 pub(crate) unsafe fn update_appbar(window: HWND) {
+    crate::features::activity::count(crate::features::activity::Counter::AppbarUpdate);
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
     let dpi = layout_dpi(window);
@@ -2692,7 +2819,6 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             }
             sync_ground(window, appbar, visible, dpi);
             crate::side_rail::update(window, appbar, visible, dpi);
-            crate::features::mini_window::update(window, appbar, visible, dpi);
         }
     });
 }
@@ -2977,13 +3103,17 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         update_appbar(window);
         return 0;
     }
+    if message == crate::features::control::message() && attached(window) {
+        crate::features::control::take(window, lparam);
+        return 0;
+    }
     if message == windows_sys::Win32::UI::WindowsAndMessaging::WM_COPYDATA && attached(window) {
         if let Some(result) = crate::features::link_rules::copy_data(window, lparam) {
             return result;
         }
     }
-    // The command bar's scrim and the link preview's header lie over the pages, and the Mini
-    // Window floats over them, so they take the pointer and the keyboard before the pages do.
+    // The command bar's scrim and the link preview's header lie over the pages, so they take the
+    // pointer and the keyboard before the pages do.
     if attached(window) {
         if let Some(result) = crate::features::settings::message(window, message, wparam, lparam) {
             return result;
@@ -3003,9 +3133,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         }
         if let Some(result) = crate::features::page_links::message(window, message, wparam, lparam)
         {
-            return result;
-        }
-        if let Some(result) = crate::features::mini_window::on_mouse(window, message, lparam) {
             return result;
         }
     }
@@ -3428,6 +3555,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             // Every browser sends this on a resize, so the second view follows it on all of them.
             follow_second_view(window);
             update_appbar(window);
+            crate::features::window_corners::keep_round(window);
             result
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
@@ -3503,6 +3631,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             SPACES.with(|all| all.borrow_mut().remove(&(window as isize)));
             PRESSES.with(|all| all.borrow_mut().remove(&(window as isize)));
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
+            TICK_GATE.with(|gate| gate.borrow_mut().forget(window as isize));
             crate::features::address_bar::forget(window);
             crate::features::command_bar::forget(window);
             crate::features::settings::forget(window);
@@ -3523,6 +3652,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             RemovePropW(window, key.as_ptr());
             let original: WNDPROC = std::mem::transmute(original);
             CallWindowProcW(original, window, message, wparam, lparam)
+        }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
+            if crate::features::look::on_timer(window, wparam) =>
+        {
+            0
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam == OPEN_LATER_TIMER => {
             windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, OPEN_LATER_TIMER);
@@ -3557,24 +3691,51 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
             if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
-            crate::features::side_panel::tick(window, debug_directory().as_deref());
-            crate::features::tab_list::tick(window);
-            crate::features::command_bar::tick(window);
-            // A browser can write its own identity again, for example when a profile finishes
-            // loading. The taskbar groups by that identity, so Rivet puts its own back.
-            if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
-                crate::trace::trace("taskbar identity was replaced; applying Rivet's again");
-                let _ = taskbar::apply(window as isize, runtime_directory().as_deref());
-                set_rivet_icons(window);
+            use crate::features::activity::{add_since, clock, count, timed, Counter};
+            let tick_started = clock();
+            count(Counter::TabTick);
+            let tick = TAB_TICKS.with(|ticks| {
+                ticks.set(ticks.get() + 1);
+                ticks.get()
+            });
+            if debug_switches().is_some() {
+                count(Counter::DebugScan);
             }
-            if let Some(flag) = debug_directory().map(|dir| dir.join("rivet-split-now.flag")) {
+            timed(Counter::DebugMicros, || {
+                crate::features::side_panel::tick(window, debug_switches())
+            });
+            timed(Counter::ListMicros, || {
+                crate::features::tab_list::tick(window)
+            });
+            timed(Counter::FollowMicros, || {
+                crate::features::command_bar::tick(window);
+                // An extension page may load into the browser's side panel some time after the
+                // click that opened it, after the side rail's pointer timer has gone quiet.
+                crate::features::sidebar_page::follow(window);
+            });
+            // A browser can write its own identity again, for example when a profile finishes
+            // loading. The taskbar groups by that identity, so Rivet puts its own back. Reading the
+            // identity goes through the shell's property store, so it is not done on every tick.
+            let taskbar_started = clock();
+            if taskbar_check_due(tick) {
+                count(Counter::TaskbarCheck);
+                if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
+                    crate::trace::trace("taskbar identity was replaced; applying Rivet's again");
+                    let _ = taskbar::apply(window as isize, runtime_directory().as_deref());
+                    set_rivet_icons(window);
+                }
+            }
+            add_since(Counter::TaskbarMicros, taskbar_started);
+            crate::features::activity::report_on_tick();
+            let debug_started = clock();
+            if let Some(flag) = debug_switches().map(|dir| dir.join("rivet-split-now.flag")) {
                 if std::fs::remove_file(&flag).is_ok() {
                     crate::features::split::probe(window);
                 }
             }
             // A checked build runs one tab command from `rivet-tab.txt` without a pointer: `new [ADDRESS]`,
             // `activate N`, `close N` or `navigate ADDRESS`, and traces the tab list afterwards.
-            if let Some(flag) = debug_switch("rivet-tab.txt") {
+            if let Some(flag) = debug_switches().map(|dir| dir.join("rivet-tab.txt")) {
                 if let Ok(text) = std::fs::read_to_string(&flag) {
                     let _ = std::fs::remove_file(&flag);
                     let mut words = text.split_whitespace();
@@ -3710,6 +3871,33 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                             crate::trace::trace(&format!("address bar suggestions {found:?}"));
                             found.is_some()
                         }
+                        // `baranchors` traces where the address and its security chip sit, so a
+                        // test can click the chip; `baredit copy|cut|paste|undo|selectall` edits the
+                        // field through the text engine as the keyboard shortcuts do; `devactions`
+                        // traces the developer row's buttons.
+                        Some("baranchors") => {
+                            let anchors = crate::features::address_bar::anchors(window);
+                            crate::trace::trace(&format!(
+                                "address bar anchors {anchors:?} dpi {}",
+                                layout_dpi(window)
+                            ));
+                            anchors.is_some()
+                        }
+                        Some("baredit") => {
+                            let word = text.trim().trim_start_matches("baredit").trim();
+                            crate::features::address_bar::edit_for_test(window, word)
+                        }
+                        Some("devactions") => {
+                            let actions: Vec<_> = crate::features::dev_page::dev_actions()
+                                .into_iter()
+                                .map(|(action, _)| action)
+                                .collect();
+                            crate::trace::trace(&format!(
+                                "dev mode {} actions {actions:?}",
+                                crate::features::dev_page::window_in_dev_mode(window)
+                            ));
+                            true
+                        }
                         Some("barimedone") => {
                             crate::features::address_bar::finish_composition_for_test(window)
                         }
@@ -3758,7 +3946,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 }
             }
             // A checked build drops the first inactive tab on a side of the page without a pointer.
-            if let Some(flag) = debug_directory().map(|dir| dir.join("rivet-drop.flag")) {
+            if let Some(flag) = debug_switches().map(|dir| dir.join("rivet-drop.flag")) {
                 if let Ok(text) = std::fs::read_to_string(&flag) {
                     let _ = std::fs::remove_file(&flag);
                     use crate::features::split::Side;
@@ -3787,8 +3975,12 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     ));
                 }
             }
-            persist_tick(window);
-            update_appbar(window);
+            add_since(Counter::DebugMicros, debug_started);
+            timed(Counter::PersistMicros, || persist_tick(window));
+            if timed(Counter::GateMicros, || tick_needs_draw(window)) {
+                timed(Counter::DrawMicros, || update_appbar(window));
+            }
+            add_since(Counter::TickMicros, tick_started);
             0
         }
         _ if message == group_probe_message() && attached(window) => {
@@ -3805,8 +3997,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ if message == attach_message() => {
+            crate::features::look::first_look(window, crate::features::look::FirstLook::UiThread);
             crate::features::tab_list::connect_command_bar();
             create_appbar(window);
+            crate::features::window_corners::keep_round(window);
+            crate::features::look::first_look(window, crate::features::look::FirstLook::RivetDrawn);
             0
         }
         _ => call_browser(window, message, wparam, lparam),
@@ -3815,6 +4010,35 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn idle_timer_looks_for_no_debug_files_without_a_debug_folder() {
+        use std::path::{Path, PathBuf};
+        let own = Some(PathBuf::from("own"));
+        let shared = Some(PathBuf::from("shared"));
+        let none = |_: &Path| false;
+        assert_eq!(
+            super::pick_debug_switches(own.clone(), shared.clone(), none),
+            None
+        );
+        let only_shared = |dir: &Path| dir == Path::new("shared");
+        assert_eq!(
+            super::pick_debug_switches(own.clone(), shared.clone(), only_shared),
+            shared
+        );
+        assert_eq!(
+            super::pick_debug_switches(own.clone(), shared, |_: &Path| true),
+            own
+        );
+    }
+
+    #[test]
+    fn idle_taskbar_identity_is_checked_every_two_seconds_not_every_tick() {
+        let due: Vec<u64> = (1..=12)
+            .filter(|&tick| super::taskbar_check_due(tick))
+            .collect();
+        assert_eq!(due, vec![4, 8, 12]);
+    }
+
     #[test]
     fn nfr3_a_build_without_frame_paint_still_attaches_the_rivet_frame() {
         let steps = super::attach_steps();

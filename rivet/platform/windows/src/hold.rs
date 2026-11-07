@@ -26,7 +26,8 @@ const HOLD_GRANTS: [&str; 2] = ["*S-1-15-2-1:(OI)(CI)(RX)", "*S-1-15-2-2:(OI)(CI
 
 /// The builds with a complete and checked table row. The runtime's tests compare this list with its
 /// table, so the launcher and the runtime cannot disagree.
-pub const VERIFIED: [(&str, Version); 9] = [
+pub const VERIFIED: [(&str, Version); 11] = [
+    ("chrome.exe", [157, 0, 8103, 38]),
     ("chrome.exe", [156, 0, 8078, 80]),
     ("chrome.exe", [156, 0, 8078, 74]),
     ("chrome.exe", [156, 0, 8078, 48]),
@@ -35,6 +36,7 @@ pub const VERIFIED: [(&str, Version); 9] = [
     ("whale.exe", [5, 39, 412, 57]),
     ("brave.exe", [156, 1, 98, 62]),
     ("brave.exe", [156, 1, 98, 63]),
+    ("brave.exe", [157, 1, 99, 55]),
     ("samsunginternet.exe", [30, 0, 4, 29]),
 ];
 
@@ -492,7 +494,7 @@ pub fn refresh_with(
 /// The accounts of an app container, as the browser's installer grants them on its own folder. The
 /// browser's more restricted sandboxes read program files through them. Files copied later inherit it.
 fn allow_sandboxed_reads(folder: &Path) {
-    let _ = std::process::Command::new("icacls")
+    let _ = crate::background::hidden(&mut std::process::Command::new("icacls"))
         .arg(folder)
         .args(HOLD_GRANTS.iter().flat_map(|sid| ["/grant", *sid]))
         .stdout(std::process::Stdio::null())
@@ -878,7 +880,7 @@ mod tests {
         let root = scratch("acl");
         allow_sandboxed_reads(&root);
         std::fs::write(root.join("file"), "x").unwrap();
-        let listed = std::process::Command::new("icacls")
+        let listed = crate::background::hidden(&mut std::process::Command::new("icacls"))
             .arg(root.join("file"))
             .output()
             .unwrap();

@@ -114,6 +114,7 @@ impl Appbar {
     ) -> Result<()> {
         let Some(bar) = bar else {
             if self.command_painted.take().is_some() {
+                self.hide_caret(super::caret::Which::Command)?;
                 self.command.SetContent(None)?;
                 return self.device.Commit();
             }
@@ -121,6 +122,14 @@ impl Appbar {
         };
         self.command.SetOffsetX2(bar.x.round())?;
         self.command.SetOffsetY2(bar.y.round())?;
+        // The caret is a visual of its own, so a blink paints nothing here.
+        self.command_caret
+            .set_origin((bar.x.round(), bar.y.round()));
+        let field_caret = crate::features::command_bar::caret(window as _);
+        self.place_caret(super::caret::Which::Command, field_caret, dpi, false)?;
+        if !super::caret::card_needs_paint(self.command_painted.as_ref(), bar, dpi) {
+            return self.device.Commit();
+        }
         let (width, height) = (bar.width.round() as i32, bar.height.round() as i32);
         if width <= 0 || height <= 0 {
             return Ok(());
@@ -252,8 +261,8 @@ impl Appbar {
             }
             let origin = (bar.x, bar.y);
             let drawn =
-                command_bar::with_field_pixels(window as _, |place, bytes, pw, ph, caret| {
-                    canvas.field_pixels(place, bytes, pw, ph, caret, origin, dpi)
+                command_bar::with_field_pixels(window as _, |place, bytes, pw, ph, _caret| {
+                    canvas.field_pixels(place, bytes, pw, ph, None, origin, dpi)
                 });
             if let Some(result) = drawn {
                 result?;

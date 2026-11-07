@@ -158,6 +158,7 @@ mod tests {
             window_handle: 1,
             process_id: 2,
             url: String::new(),
+            display: "visible".into(),
         };
         let all = [
             record("1700000001-a", r"C:\B\chrome.exe"),

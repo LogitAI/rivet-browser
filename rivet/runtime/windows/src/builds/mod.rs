@@ -20,8 +20,8 @@ pub mod page_tool_rows;
 mod samsung;
 mod whale;
 
-pub use brave::{BRAVE, BRAVE_63};
-pub use chrome::{CHROME, CHROME_150, CHROME_156_74, CHROME_156_80};
+pub use brave::{BRAVE, BRAVE_157_55, BRAVE_63};
+pub use chrome::{CHROME, CHROME_150, CHROME_156_74, CHROME_156_80, CHROME_157_38};
 pub use edge::EDGE;
 pub use samsung::SAMSUNG;
 pub use whale::{WHALE, WHALE_ADD_TAB_AT};
@@ -129,6 +129,17 @@ pub struct AppWindow {
     pub detach_prologue: &'static [u8],
     pub insert: Option<usize>,
     pub insert_prologue: &'static [u8],
+    /// `BrowserTabStripModelDelegate::MoveTabsToNewWindow(this, tab indices)`, which reads only the
+    /// browser at `this + 8` and calls `chrome::MoveTabsToNewWindow` with it. That makes a new
+    /// window of the source window's profile and type for the tabs. The Mini Window is made with
+    /// it. The delegate is called rather than the function behind it, because builds differ in
+    /// where the `BrowserWindowInterface` sits in the browser and in what that function takes
+    /// after the indices; the delegate takes care of both.
+    pub move_to_new_window: Option<usize>,
+    pub move_to_new_window_prologue: &'static [u8],
+    /// How the index vector it takes is laid out: begin, end and capacity as pointers, or begin,
+    /// size and capacity. libc++ changed it between Chromium 150 and 156.
+    pub move_to_new_window_vector_by_pointer: bool,
     /// A `views::View` keeps its parent at this offset and its children vector right after it.
     pub view_parent: usize,
     pub view_children: usize,
@@ -892,15 +903,17 @@ pub fn unchecked_reason(build: &Build, feature: &str) -> &'static str {
 }
 
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 9] = [
+static TABLE: [&Build; 11] = [
     &CHROME_156_74,
     &CHROME_156_80,
+    &CHROME_157_38,
     &CHROME,
     &EDGE,
     &CHROME_150,
     &WHALE,
     &BRAVE,
     &BRAVE_63,
+    &BRAVE_157_55,
     &SAMSUNG,
 ];
 
