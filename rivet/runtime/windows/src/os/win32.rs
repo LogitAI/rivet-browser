@@ -97,6 +97,18 @@ thread_local! {
 impl super::NewWindows for Win32 {
     fn launch(&self, program: &std::path::Path, arguments: &[String]) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
+        if rivet_platform_windows::focus::keep_offscreen() {
+            // A test run starts the program as it started the browser: with SW_SHOWNOACTIVATE and
+            // no inherited handle, so neither this process nor a window it opens is activated.
+            return rivet_platform_windows::start::spawn_browser(
+                program,
+                arguments,
+                &[],
+                0x0800_0000,
+            )
+            .map(drop)
+            .map_err(|error| error.to_string());
+        }
         // CREATE_NO_WINDOW, and no handle of the browser reaches the program's standard streams.
         std::process::Command::new(program)
             .args(arguments)

@@ -12,6 +12,14 @@
 # reason is written to `-FailFile` in the run's folder, and the guard exits 1. Nothing else is
 # touched: the owner's own browsers never name the test folder.
 #
+# Before it reports that it watches, the guard also takes the foreground lock
+# (LockSetForegroundWindow with LSFW_LOCK), so no process can call SetForegroundWindow while the
+# test browsers start. Windows lets only a process that may set the foreground itself take the
+# lock, so a refusal is logged and the run goes on: the browsers already start without activation.
+# Windows drops the lock by itself when the person presses Alt or clicks another window, so their
+# own work is never held back for long. The guard gives the lock back on every way it ends by
+# itself: the run stopped, the runner ended, `-Seconds` passed or `-StopFile` appeared.
+#
 # Every 250 ms the guard also logs the foreground window's process, the cursor position and any
 # capture a test thread holds in the background, when they change. A cursor that moves is logged
 # only, since the guard cannot tell the person's hand from anything else.
@@ -28,7 +36,9 @@ param(
   [switch]$SelfTest,
   # A dry run reports what it sees and stops nothing.
   [switch]$DryRun,
-  [int]$Seconds = 0
+  [int]$Seconds = 0,
+  # When this file appears the guard ends on its own, so it can give the foreground lock back.
+  [string]$StopFile
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'windows-processes.ps1')
@@ -47,6 +57,9 @@ public static class GuardWin{
  [DllImport("user32.dll")] static extern bool GetCursorPos(out P p);
  [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint t,ref GUI g);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h,System.Text.StringBuilder s,int n);
+ [DllImport("user32.dll",SetLastError=true)] static extern bool LockSetForegroundWindow(uint code);
+ // LSFW_LOCK (1) or LSFW_UNLOCK (2): 0 when it worked, else the Windows error.
+ public static int ForegroundLock(bool on){return LockSetForegroundWindow(on?1u:2u)?0:Marshal.GetLastWin32Error();}
  public struct R{public int L,T,Ri,B;}
  public struct P{public int X,Y;}
  [StructLayout(LayoutKind.Sequential)] public struct GUI{public int cbSize;public uint flags;public IntPtr hwndActive,hwndFocus,hwndCapture,hwndMenuOwner,hwndMoveSize,hwndCaret;public R rcCaret;}
@@ -149,7 +162,19 @@ if (-not $Mark -or -not $Log) { throw 'give -Mark and -Log' }
 $markLower = $Mark.ToLowerInvariant().Replace('/', '\')
 # Command lines name the folder with either slash and in any case.
 function Test-Names([string]$CommandLine) { $CommandLine -and $CommandLine.ToLowerInvariant().Replace('/', '\').Contains($markLower) }
+# The lock is taken before the log exists, because the runner starts no browser before it does.
+$lockError = if ($DryRun) { -1 } else { [GuardWin]::ForegroundLock($true) }
+$locked = $lockError -eq 0
 New-Item -ItemType File -Force $Log | Out-Null
+Add-Content $Log "$(Get-Date -Format o) foreground lock: $(if ($locked) { 'on' } elseif ($DryRun) { 'not taken in a dry run' } else { "refused, error $lockError" })"
+# Every way the guard ends by itself gives the foreground lock back first.
+function Exit-Guard([int]$Code) {
+  if ($locked) {
+    $unlockError = [GuardWin]::ForegroundLock($false)
+    Add-Content $Log "$(Get-Date -Format o) foreground lock: $(if ($unlockError -eq 0) { 'off' } else { "release refused, error $unlockError" })"
+  }
+  exit $Code
+}
 $runner = if ($RunnerPid) { Get-Process -Id $RunnerPid -ErrorAction SilentlyContinue } else { $null }
 $runnerStart = if ($runner) { $runner.StartTime } else { $null }
 
@@ -196,7 +221,7 @@ function Stop-Run([string]$Reason, $Ids) {
   if ($DryRun) { return }
   Stop-Tests $Ids
   if ($FailFile) { Set-Content $FailFile $Reason }
-  exit 1
+  Exit-Guard 1
 }
 
 $start = Get-Date
@@ -255,13 +280,17 @@ while ($true) {
     }
     if ($runner -and ($runner.HasExited -or (Get-Process -Id $RunnerPid -ErrorAction SilentlyContinue).StartTime -ne $runnerStart)) {
       Add-Content $Log "$(Get-Date -Format o) the runner ended"
-      exit 0
+      Exit-Guard 0
     }
+  }
+  if ($StopFile -and ($tick % 12 -eq 0) -and (Test-Path $StopFile)) {
+    Add-Content $Log "$(Get-Date -Format o) the runner asked the guard to stop"
+    Exit-Guard 0
   }
   if ($seen -ne $lastSeen) {
     Add-Content $Log "$(Get-Date -Format o) watching $($known.Ids.Count) test processes, $seen visible windows, none on a monitor"
     $lastSeen = $seen
   }
-  if ($Seconds -gt 0 -and ((Get-Date) - $start).TotalSeconds -ge $Seconds) { exit 0 }
+  if ($Seconds -gt 0 -and ((Get-Date) - $start).TotalSeconds -ge $Seconds) { Exit-Guard 0 }
   Start-Sleep -Milliseconds 20
 }
