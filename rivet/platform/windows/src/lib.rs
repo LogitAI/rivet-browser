@@ -9,6 +9,7 @@ pub mod chrome_build;
 pub mod control;
 pub mod hold;
 pub mod row_port;
+pub mod row_recipe;
 pub mod row_watch;
 pub mod signed_table;
 #[cfg(windows)]
