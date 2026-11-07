@@ -44,8 +44,22 @@ function Resolve-Chrome {
     "$base$($answer.manifest.packages.package.name)"
 }
 
+# Edge's feed offers only an MSI, which wraps an update client whose payload 7-Zip cannot unpack. Edge's
+# own update service also lists the full installer of each exact version, and that one is a plain
+# Chromium installer with the browser in an archive.
+function Resolve-Edge {
+    $names = 'https://msedge.api.cdp.microsoft.com/api/v1.1/internal/contents/Browser/namespaces/Default/names'
+    $body = '{"targetingAttributes":{"IsInternalUser":false,"Updater":"MicrosoftEdgeUpdate","UpdaterVersion":"1.3.195.31"}}'
+    $files = Invoke-RestMethod -Method Post -ContentType 'application/json' -Body $body `
+        -Uri "$names/msedge-$Channel-win-x64/versions/$Version/files?action=GenerateDownloadInfo&foregroundPriority=true"
+    $full = @($files) | Where-Object FileId -eq "MicrosoftEdge_X64_$Version.exe" | Select-Object -First 1
+    if (-not $full) { throw "Edge's update service lists no full installer for $Version yet." }
+    $full.Url
+}
+
 $url = switch ($Browser) {
     'Google Chrome' { Resolve-Chrome }
+    'Microsoft Edge' { Resolve-Edge }
     default {
         if (-not $Download) { throw "The feed names no installer for $Browser $Version yet." }
         $Download
@@ -54,24 +68,39 @@ $url = switch ($Browser) {
 if ($ResolveOnly) { $url; return }
 
 New-Item -ItemType Directory -Force $Out | Out-Null
-$package = Join-Path $Out (Split-Path $url -Leaf)
+# Edge's address names a file by its id and carries a query, so the package gets a plain name.
+$leaf = if ($Browser -eq 'Microsoft Edge') { "MicrosoftEdge_X64_$Version.exe" } else { Split-Path ([uri]$url).AbsolutePath -Leaf }
+$package = Join-Path $Out $leaf
 curl.exe -fsSL -o $package $url
 if ($LASTEXITCODE -ne 0) { throw "Could not download $url" }
 $unpacked = Join-Path $Out 'files'
-if ($Browser -eq 'Microsoft Edge') {
-    Start-Process msiexec.exe -Wait -ArgumentList @('/a', "`"$package`"", '/qn', "TARGETDIR=`"$unpacked`"")
+if ($Browser -eq 'Brave') {
+    # Brave publishes only update-client installers. Their payload is split into several branch
+    # streams that 7-Zip reads as one, so the files come out damaged. A runner is thrown away after
+    # the job and has no Brave of its own, so the silent installer installs this exact build.
+    $installed = Join-Path $env:ProgramFiles 'BraveSoftware\Brave-Browser\Application'
+    if (Test-Path $installed) { throw "This runner already has Brave at $installed, so the build would not be the one asked for." }
+    $setup = Start-Process $package -Wait -PassThru
+    if ($setup.ExitCode -ne 0) { throw "Brave's installer exited with $($setup.ExitCode)" }
+    $unpacked = $installed
 } else {
     7z x $package "-o$unpacked" -y | Out-Null
-}
-# Installers keep the browser in an archive within the archive.
-foreach ($inner in Get-ChildItem $unpacked -Recurse -File | Where-Object Extension -in '.7z', '.xz') {
-    7z x $inner.FullName "-o$unpacked" -y | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "7-Zip could not unpack $url" }
+    # Installers keep the browser in an archive within the archive.
+    foreach ($inner in Get-ChildItem $unpacked -Recurse -File | Where-Object Extension -in '.7z', '.xz') {
+        7z x $inner.FullName "-o$unpacked" -y | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "7-Zip could not unpack $($inner.Name) from $url" }
+    }
 }
 $moduleName = if ($Browser -eq 'Microsoft Edge') { 'msedge.dll' } else { 'chrome.dll' }
 $executableName = @{ 'Google Chrome' = 'chrome.exe'; 'Microsoft Edge' = 'msedge.exe'; 'Brave' = 'brave.exe' }[$Browser]
 $module = Get-ChildItem $unpacked -Recurse -File -Filter $moduleName | Where-Object { $_.Directory.Name -eq $Version } | Select-Object -First 1
 if (-not $module) { throw "$moduleName of version $Version is not in the unpacked files of $url" }
 $executable = Join-Path $module.Directory.Parent.FullName $executableName
+# Edge's full installer keeps its executable in the version folder, and its setup copies it up beside
+# the folder when it installs. The copy here gives the same layout as an installed Edge.
+$versioned = Join-Path $module.Directory.FullName $executableName
+if (-not (Test-Path $executable) -and (Test-Path $versioned)) { Copy-Item $versioned $executable }
 if (-not (Test-Path $executable)) { throw "$executableName is not beside the version folder" }
 if ($module.VersionInfo.FileVersion -notlike "*$Version*" -and (($module.VersionInfo.FileMajorPart, $module.VersionInfo.FileMinorPart, $module.VersionInfo.FileBuildPart, $module.VersionInfo.FilePrivatePart) -join '.') -ne $Version) {
     throw "$($module.FullName) reports version $($module.VersionInfo.FileVersion), not $Version"

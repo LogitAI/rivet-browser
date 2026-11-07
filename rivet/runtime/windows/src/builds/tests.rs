@@ -1503,3 +1503,34 @@ fn fr12_edge_58_and_whale_57_record_the_page_view_that_moves_below_the_bar() {
         );
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn nfr6_newest_row_of_each_ported_browser_has_its_symbol_key() {
+    // The row job ports a new build from the newest row of its browser, read through that row's
+    // public symbols. A newest row without its symbol key stops every later row of the browser.
+    let table: serde_json::Value =
+        serde_json::from_str(CHECKED_IN).expect("the checked-in table is JSON");
+    let mut rows = crate::compiled_rows();
+    rows.extend(table["rows"].as_array().cloned().unwrap_or_default());
+    let version_of = |row: &serde_json::Value| -> Vec<u64> {
+        row["build"]["version"]
+            .as_array()
+            .map(|parts| parts.iter().filter_map(serde_json::Value::as_u64).collect())
+            .unwrap_or_default()
+    };
+    for browser in ["Google Chrome", "Microsoft Edge", "Brave"] {
+        let newest = rows
+            .iter()
+            .filter(|row| row["build"]["browser"] == browser && !row["frame"].is_null())
+            .max_by_key(|row| version_of(row))
+            .unwrap_or_else(|| panic!("{browser} has a row"));
+        let version: Vec<String> = version_of(newest).iter().map(u64::to_string).collect();
+        let key = format!("{browser} {}", version.join("."));
+        assert!(
+            table["symbols"][key.as_str()].is_string(),
+            "{key} has no symbol key in rows/table.json"
+        );
+    }
+}
+
