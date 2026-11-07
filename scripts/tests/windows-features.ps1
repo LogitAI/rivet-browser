@@ -233,9 +233,11 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   $deadline = (Get-Date).AddSeconds(45)
   $attached = $false
   while ((Get-Date) -lt $deadline) {
-    $mine = Get-MyProcesses $ctx.ExeName $ctx.Profile | Where-Object { $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
-    if (-not $mine) { $ctx.Error = 'the browser exited after launch'; return }
-    $h = (Get-BrowserWindow $mine.ProcessId)
+    # A browser can run more than one process without a --type switch, such as Whale's tray
+    # process, so the frame window is looked for in each of them.
+    $mine = @(Get-MyProcesses $ctx.ExeName $ctx.Profile | Where-Object { $_.CommandLine -notlike '*--type=*' })
+    if (-not $mine.Count) { $ctx.Error = 'the browser exited after launch'; return }
+    $h = Get-BrowserWindow ($mine | ForEach-Object { [int]$_.ProcessId })
     if ($h -and $h -ne [IntPtr]::Zero) {
       $ctx.Hwnd = $h
       if ([FeatureWin]::GetProp($h, 'Rivet.OriginalWindowProc') -ne [IntPtr]::Zero) { $attached = $true; break }
@@ -1620,9 +1622,9 @@ function Invoke-OpenLink($Name, $shots, [string]$Mode) {
     if ($appWindowRvas.Contains($Name)) { Set-Content (Join-Path $flagDir 'rivet-spike.txt') $appWindowRvas[$Name] }
     $code = Invoke-Launcher $root $link
     $ctx = [pscustomobject]@{ Name = $Name; ExeName = $exeName; ExePath = $exePath; Profile = $started; Hwnd = [IntPtr]::Zero; Error = $null; Dpi = 96; Feature = $feature }
-    $mine = Get-MyProcesses $exeName $started | Where-Object { $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
-    if (-not $mine) { return @('FAIL', $null, "the launcher started no browser on the saved profile (exit $code)") }
-    $ctx.Hwnd = (Get-BrowserWindow $mine.ProcessId)
+    $mine = @(Get-MyProcesses $exeName $started | Where-Object { $_.CommandLine -notlike '*--type=*' })
+    if (-not $mine.Count) { return @('FAIL', $null, "the launcher started no browser on the saved profile (exit $code)") }
+    $ctx.Hwnd = Get-BrowserWindow ($mine | ForEach-Object { [int]$_.ProcessId })
     if ($ctx.Hwnd -and $ctx.Hwnd -ne [IntPtr]::Zero) { $ctx.Dpi = [FeatureWin]::GetDpiForWindow($ctx.Hwnd) }
     if ($null -eq $code) { return @('FAIL', $null, 'the launcher did not finish') }
     if ($code -ne 0) { return @('FAIL', $null, "the launcher exited $code") }
