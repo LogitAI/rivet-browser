@@ -7,6 +7,9 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null; $OutDir = (Resolve-Path 
 . (Join-Path $PSScriptRoot "..\windows-features-lib.ps1")
 # Start-TestBrowser: a hand-off starts without activation, like the first launch.
 . (Join-Path $PSScriptRoot "..\windows-test-safety.ps1")
+# The spike build places no window, so the test switch keeps every window off every monitor:
+# the browser starts minimized and the runtime restores it off-screen as it attaches.
+$env:RIVET_KEEP_OFFSCREEN = '1'
 $cargo = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin\cargo.exe' } else { (Get-Command cargo).Source }
 
 $table = [ordered]@{

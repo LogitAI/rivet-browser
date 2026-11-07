@@ -17,8 +17,15 @@
 # test browsers start. Windows lets only a process that may set the foreground itself take the
 # lock, so a refusal is logged and the run goes on: the browsers already start without activation.
 # Windows drops the lock by itself when the person presses Alt or clicks another window, so their
-# own work is never held back for long. The guard gives the lock back on every way it ends by
-# itself: the run stopped, the runner ended, `-Seconds` passed or `-StopFile` appeared.
+# own work is never held back for long. The lock stays as a second barrier: while it holds, a
+# browser path that still calls SetForegroundWindow is refused. Giving it back can fail with error
+# 5 once Windows dropped it or another process holds the foreground; that is only logged, since
+# nothing is left locked then. The guard gives the lock back on every way it ends by itself: the
+# run stopped, the runner ended, `-Seconds` passed or `-StopFile` appeared.
+#
+# A test browser's window first shows minimized, at -32000,-32000, which touches no monitor. The
+# on-screen check makes no exception for it or for any moment of a launch: a window restored onto
+# a monitor before or after the runtime attaches stops the run.
 #
 # Every 250 ms the guard also logs the foreground window's process, the cursor position and any
 # capture a test thread holds in the background, when they change. A cursor that moves is logged
@@ -109,7 +116,9 @@ if ($SelfTest) {
     @(@(9000, 1000, 10600, 2000), $false, 'a test window at the off-screen spot'),
     @(@(3800, 500, 4200, 700), $true, 'a window that only overlaps the second monitor edge'),
     @(@(-50, -50, 1, 1), $true, 'a window that touches the top left corner'),
-    @(@(100, 100, 100, 300), $false, 'an empty window')
+    @(@(100, 100, 100, 300), $false, 'an empty window'),
+    @(@(-32000, -32000, -31840, -31972), $false, 'nfr5: a minimized first show touches no monitor'),
+    @(@(208, 52, 1808, 1052), $true, 'nfr5: a test window restored at the default spot stops the run')
   )
   $failed = 0
   foreach ($case in $cases) {

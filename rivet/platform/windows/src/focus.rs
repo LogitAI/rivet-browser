@@ -63,6 +63,30 @@ pub fn offscreen_spot(rect: Rect, screen: Rect) -> Option<(i32, i32)> {
     overlaps(rect, screen).then_some((screen[2] + OFFSCREEN_MARGIN, rect[1]))
 }
 
+/// The size, in pixels, of the window a test run starts. Its pages and captures are laid out for it.
+pub const TEST_WINDOW_SIZE: (i32, i32) = (1600, 1000);
+
+/// Where the window a test run starts is restored to: right of every monitor in `screen`, level
+/// with its top, at [`TEST_WINDOW_SIZE`].
+pub fn test_window_place(screen: Rect) -> Rect {
+    let left = screen[2] + OFFSCREEN_MARGIN;
+    let top = screen[1];
+    [
+        left,
+        top,
+        left + TEST_WINDOW_SIZE.0,
+        top + TEST_WINDOW_SIZE.1,
+    ]
+}
+
+/// Whether a test run restores a top-level window now. A test browser shows each new window
+/// minimized, so it lies on no monitor while it is new. Such a window is restored once, the first
+/// time it is seen minimized before it was ever seen restored; a window a test minimizes later
+/// stays minimized.
+pub fn restores_first_show(minimized: bool, seen_before: bool) -> bool {
+    minimized && !seen_before
+}
+
 /// A `WINDOWPOS` request: its flags, place and size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaceRequest {
@@ -270,6 +294,34 @@ mod tests {
             button_down: true,
             keep_offscreen: false,
         }));
+    }
+
+    #[test]
+    fn nfr5_test_window_is_restored_off_every_monitor_at_its_test_size() {
+        let place = test_window_place(SCREEN);
+        assert_eq!(
+            place,
+            [
+                3840 + OFFSCREEN_MARGIN,
+                0,
+                3840 + OFFSCREEN_MARGIN + 1600,
+                1000
+            ]
+        );
+        assert_eq!(offscreen_spot(place, SCREEN), None);
+        let left_monitor = [-1920, -200, 1920, 1080];
+        assert_eq!(
+            offscreen_spot(test_window_place(left_monitor), left_monitor),
+            None
+        );
+    }
+
+    #[test]
+    fn nfr5_minimized_first_show_is_restored_once() {
+        assert!(restores_first_show(true, false));
+        assert!(!restores_first_show(true, true));
+        assert!(!restores_first_show(false, false));
+        assert!(!restores_first_show(false, true));
     }
 
     #[test]
