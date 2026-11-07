@@ -84,10 +84,13 @@ struct Watch {
     made: Vec<HWND>,
 }
 
+/// A running tick: its window, its timer and what it calls.
+type Tick = (usize, usize, fn(WindowId));
+
 thread_local! {
     static WATCH: std::cell::RefCell<Option<Watch>> = const { std::cell::RefCell::new(None) };
     /// What each running tick calls, by window and timer.
-    static TICKS: std::cell::RefCell<Vec<(usize, usize, fn(WindowId))>> =
+    static TICKS: std::cell::RefCell<Vec<Tick>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 

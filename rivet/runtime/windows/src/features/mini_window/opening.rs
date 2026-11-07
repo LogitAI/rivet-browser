@@ -659,8 +659,11 @@ mod tests {
         }
     }
 
+    /// A finished opening: the owner window and the Mini Window with its place, if one opened.
+    type Done = (WindowId, Option<(WindowId, ScreenRect)>);
+
     thread_local! {
-        static DONE: RefCell<Vec<(WindowId, Option<(WindowId, ScreenRect)>)>> =
+        static DONE: RefCell<Vec<Done>> =
             const { RefCell::new(Vec::new()) };
     }
 
