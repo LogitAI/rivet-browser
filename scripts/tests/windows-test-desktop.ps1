@@ -52,14 +52,19 @@ public static class RivetTestDesktop{
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassNameW(IntPtr h,System.Text.StringBuilder s,int n);
  [StructLayout(LayoutKind.Sequential)] struct RC{public int L,T,R,B;}
  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out RC r);
- // The largest visible, unowned Chromium frame window of process `pid` on this thread's desktop.
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr GetPropW(IntPtr h,string name);
+ // The visible, unowned Chromium frame window of the processes `pids` on this thread's desktop that Rivet
+ // took, else the largest one. Some browsers keep more than one frame window.
  // A fresh desktop gives every process an input indicator window of its own, which .NET can pick as
  // the main window, so the browser frame is found by its class.
- public static IntPtr BrowserWindow(int pid){
+ public static IntPtr BrowserWindow(int[] pids){
+  var set=new System.Collections.Generic.HashSet<uint>();foreach(var x in pids)set.Add((uint)x);
   IntPtr best=IntPtr.Zero;long area=-1;
-  EnumWindows((h,l)=>{uint p;GetWindowThreadProcessId(h,out p);if(p!=(uint)pid||!IsWindowVisible(h)||GetWindow(h,4)!=IntPtr.Zero)return true;
+  EnumWindows((h,l)=>{uint p;GetWindowThreadProcessId(h,out p);if(!set.Contains(p)||!IsWindowVisible(h)||GetWindow(h,4)!=IntPtr.Zero)return true;
    var b=new System.Text.StringBuilder(64);GetClassNameW(h,b,64);if(b.ToString()!="Chrome_WidgetWin_1")return true;
-   RC r;GetWindowRect(h,out r);long a=(long)(r.R-r.L)*(r.B-r.T);if(a>area){area=a;best=h;}return true;},IntPtr.Zero);
+   RC r;GetWindowRect(h,out r);long a=(long)(r.R-r.L)*(r.B-r.T);
+   if(GetPropW(h,"Rivet.OriginalWindowProc")!=IntPtr.Zero)a+=1L<<40;
+   if(a>area){area=a;best=h;}return true;},IntPtr.Zero);
   return best;
  }
  // GENERIC_ALL on a new desktop of the calling process's window station.
@@ -124,8 +129,8 @@ function Invoke-OnOwnDesktop([string]$Script, $Bound) {
   }
 }
 
-# The browser frame window of process `$ProcessId`, or [IntPtr]::Zero while it has none.
-function Get-BrowserWindow([int]$ProcessId) { [RivetTestDesktop]::BrowserWindow($ProcessId) }
+# The browser frame window of the processes `$ProcessId`, or [IntPtr]::Zero while they have none.
+function Get-BrowserWindow([int[]]$ProcessId) { [RivetTestDesktop]::BrowserWindow($ProcessId) }
 
 # Starts `$File` with `$Arguments` on the person's own desktop, for the guard of a run that is on a
 # test desktop. The result has Id, HasExited, ExitCode and WaitForExit(milliseconds).
