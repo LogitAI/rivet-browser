@@ -270,9 +270,12 @@ impl WindowBrowser {
     }
 
     unsafe fn count(&self) -> Result<usize, Failure> {
-        crate::features::page_bar::pages(self.window)
-            .map(|pages| pages.len())
-            .ok_or_else(|| unavailable("the tab strip"))
+        crate::features::page_bar::pages(
+            &crate::frame::BROWSER,
+            crate::os::WindowId::from_hwnd(self.window),
+        )
+        .map(|pages| pages.len())
+        .ok_or_else(|| unavailable("the tab strip"))
     }
 
     /// Makes page `index` the active one, for actions the browser runs on its active page.
@@ -314,8 +317,11 @@ impl WindowBrowser {
 
 impl control::Browser for WindowBrowser {
     fn pages(&mut self) -> Result<Vec<Page>, Failure> {
-        let pages = unsafe { crate::features::page_bar::pages(self.window) }
-            .ok_or_else(|| unavailable("the tab strip"))?;
+        let pages = crate::features::page_bar::pages(
+            &crate::frame::BROWSER,
+            crate::os::WindowId::from_hwnd(self.window),
+        )
+        .ok_or_else(|| unavailable("the tab strip"))?;
         Ok(pages
             .into_iter()
             .map(|page| Page {
@@ -373,7 +379,12 @@ impl control::Browser for WindowBrowser {
         };
         unsafe {
             self.focus(page)?;
-            crate::features::page_bar::run(self.window, command);
+            crate::features::page_bar::run(
+                &crate::frame::OS,
+                &crate::frame::BROWSER,
+                crate::os::WindowId::from_hwnd(self.window),
+                command,
+            );
         }
         Ok(())
     }
