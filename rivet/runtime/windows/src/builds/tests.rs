@@ -1503,3 +1503,93 @@ fn fr12_edge_58_and_whale_57_record_the_page_view_that_moves_below_the_bar() {
         );
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn nfr6_newest_row_of_each_ported_browser_has_its_symbol_key() {
+    // The row job ports a new build from the newest row of its browser, read through that row's
+    // public symbols. A newest row without its symbol key stops every later row of the browser.
+    let table: serde_json::Value =
+        serde_json::from_str(CHECKED_IN).expect("the checked-in table is JSON");
+    let mut rows = crate::compiled_rows();
+    rows.extend(table["rows"].as_array().cloned().unwrap_or_default());
+    let version_of = |row: &serde_json::Value| -> Vec<u64> {
+        row["build"]["version"]
+            .as_array()
+            .map(|parts| parts.iter().filter_map(serde_json::Value::as_u64).collect())
+            .unwrap_or_default()
+    };
+    for browser in ["Google Chrome", "Microsoft Edge", "Brave"] {
+        let newest = rows
+            .iter()
+            .filter(|row| row["build"]["browser"] == browser && !row["frame"].is_null())
+            .max_by_key(|row| version_of(row))
+            .unwrap_or_else(|| panic!("{browser} has a row"));
+        let version: Vec<String> = version_of(newest).iter().map(u64::to_string).collect();
+        let key = format!("{browser} {}", version.join("."));
+        assert!(
+            table["symbols"][key.as_str()].is_string(),
+            "{key} has no symbol key in rows/table.json"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn nfr6_recipes_read_every_row_value_they_cover_again_from_its_own_module() {
+    // Replays the row job's recipes on the modules this machine has: the installed Chrome and
+    // Brave 157, the held Chrome 156 and the installed Edge 156. Each hand-made row value that a
+    // recipe covers must come out the same, which is what lets a later build get them without a
+    // person. Chromium 157 moved these values (0x560 to 0x558, 0x528 to 0x520, slot 127 to 126),
+    // so a recipe that only copied them would fail here.
+    use crate::row_data::RowValue;
+    use rivet_platform_windows::{chrome_build::PeFile, row_recipe};
+    let table: serde_json::Value =
+        serde_json::from_str(CHECKED_IN).expect("the checked-in table is JSON");
+    let edge_156 = table["rows"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter().find(|row| {
+                row["build"]["browser"] == "Microsoft Edge"
+                    && row["build"]["version"] == serde_json::json!([156, 0, 4314, 58])
+            })
+        })
+        .map(|row| row["build"].clone());
+    let mut cases: Vec<(serde_json::Value, std::path::PathBuf)> = vec![
+        (
+            crate::builds::CHROME_157_38.to_row(),
+            r"C:\Program Files\Google\Chrome\Application\157.0.8103.38\chrome.dll".into(),
+        ),
+        (
+            crate::builds::BRAVE_157_55.to_row(),
+            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\157.1.99.55\chrome.dll"
+                .into(),
+        ),
+    ];
+    if let Some(held) = rivet_core::paths::Layout::current().map(|layout| layout.held_browsers()) {
+        cases.push((
+            crate::builds::CHROME_156_80.to_row(),
+            held.join(r"chrome\156.0.8078.80\156.0.8078.80\chrome.dll"),
+        ));
+    }
+    if let Some(edge) = edge_156 {
+        cases.push((
+            edge,
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\156.0.4314.58\msedge.dll".into(),
+        ));
+    }
+    for (row, module) in cases {
+        // A machine without this build has nothing to replay it on.
+        let Ok(bytes) = std::fs::read(&module) else {
+            continue;
+        };
+        let pe = PeFile::parse(&bytes).expect("a 64-bit module");
+        let mut derived_row = row.clone();
+        let derived = row_recipe::derive_row(&mut derived_row, &pe);
+        let name = format!("{} {}", row["browser"], row["version"]);
+        assert!(derived.failed.is_empty(), "{name}: {:?}", derived.failed);
+        assert_eq!(derived_row, row, "{name}: {:?}", derived.read);
+        // The member offset, the object size and the frame slots at least.
+        assert!(derived.read.len() >= 7, "{name}: {:?}", derived.read);
+    }
+}

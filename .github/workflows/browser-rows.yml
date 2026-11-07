@@ -13,6 +13,10 @@
 # The signed table is published as this repository's `builds-table` release, which Rivet downloads
 # without signing in. A fork or copy without the signing secret runs only the gate job, which does
 # nothing.
+#
+# A failure is never silent: a failed build opens or updates the issue named after it, with the step
+# that failed, its reason and the capture of the failing window. Each step records its reason in
+# `failure.txt` before it stops.
 name: Browser rows
 
 on:
@@ -24,6 +28,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 concurrency:
   group: browser-rows
@@ -122,6 +127,13 @@ jobs:
           "builds=$json" >> $env:GITHUB_OUTPUT
           exit 0
 
+      - name: Tell a person that the watch failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./.github/scripts/rows/report-failure.ps1 -Title "Browser rows: the watch failed"
+
   row:
     name: Row for ${{ matrix.build.browser }} ${{ matrix.build.version }}
     needs: watch
@@ -148,6 +160,7 @@ jobs:
       - name: Get the build and its symbols
         id: build
         run: |
+          trap { Add-Content (Join-Path $env:RUNNER_TEMP failure.txt) "Get the build: $_"; break }
           ./.github/scripts/rows/fetch-browser.ps1 `
             -Browser "${{ matrix.build.browser }}" -Version "${{ matrix.build.version }}" `
             -Channel "${{ matrix.build.channel }}" -Download "${{ matrix.build.download }}" `
@@ -155,28 +168,30 @@ jobs:
 
       - name: Download the symbols of this build and of the row before it
         run: |
+          trap { Add-Content (Join-Path $env:RUNNER_TEMP failure.txt) "Download the symbols: $_"; break }
           $browser = "${{ matrix.build.browser }}"
           $version = "${{ matrix.build.version }}"
           $prior = Join-Path $env:RUNNER_TEMP "prior.json"
           $tables = @("--table", "rivet/runtime/windows/rows/table.json")
           ./tools/rivet-rows.exe prior $browser $version @tables | Set-Content $prior
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) { throw "rivet-rows found no prior row for $browser $version" }
           $priorVersion = (Get-Content -Raw $prior | ConvertFrom-Json).frame.version
           $symbols = (Get-Content -Raw rivet/runtime/windows/rows/table.json | ConvertFrom-Json).symbols
           $priorKey = $symbols."$browser $priorVersion"
-          if (-not $priorKey) { throw "The table holds no symbol key for $browser $priorVersion" }
+          if (-not $priorKey) { throw "The table holds no symbol key for the prior row $browser $priorVersion. Add it to rows/table.json with chrome-builds pdb-key." }
           $newKey = ./tools/chrome-builds.exe pdb-key "${{ steps.build.outputs.module }}"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) { throw "chrome-builds could not read the symbol key of the new module" }
           ./.github/scripts/rows/fetch-symbols.ps1 -Browser $browser -Key $priorKey -Out (Join-Path $env:RUNNER_TEMP "prior.pdb")
           ./.github/scripts/rows/fetch-symbols.ps1 -Browser $browser -Key ($newKey -split '/')[1] -Out (Join-Path $env:RUNNER_TEMP "new.pdb")
 
       - name: Make the row
         id: made
         run: |
+          trap { Add-Content (Join-Path $env:RUNNER_TEMP failure.txt) "Make the row: $_"; break }
           $temp = $env:RUNNER_TEMP
           ./tools/chrome-builds.exe port "$temp/prior.json" "$temp/prior.pdb" "$temp/new.pdb" "${{ steps.build.outputs.module }}" "${{ matrix.build.version }}" "$temp/row.json" "$temp/report.json"
           $code = $LASTEXITCODE
-          if ($code -ne 0 -and $code -ne 3) { exit $code }
+          if ($code -ne 0 -and $code -ne 3) { throw "chrome-builds port exited with $code; report.json says why" }
           # Fingerprints let a Rivet find these functions in a later build that has no row yet. A row
           # whose addresses cannot all be fingerprinted is still a good row, just without them.
           ./tools/chrome-builds.exe fingerprint "$temp/row.json" "${{ steps.build.outputs.module }}" "$temp/row.json"
@@ -188,6 +203,7 @@ jobs:
       - name: Prove the row on the real browser
         if: steps.made.outputs.for_review == 'false'
         run: |
+          trap { Add-Content (Join-Path $env:RUNNER_TEMP failure.txt) "Prove the row: $_"; break }
           $temp = $env:RUNNER_TEMP
           # A throwaway key: this proves the same path a user's table takes, and nothing it signs leaves this job.
           $pair = ./tools/chrome-builds.exe table-key
@@ -200,9 +216,9 @@ jobs:
           ./tools/chrome-builds.exe table-sign "$temp/part.json" "$temp/test.bin"
           Push-Location rivet
           cargo build -p rivet -p rivet-runtime-windows
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) { throw "cargo build exited with $LASTEXITCODE" }
           target/debug/rivet.exe builds apply "$temp/test.bin"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) { throw "rivet builds apply refused the test table" }
           Pop-Location
           ./scripts/tests/windows-row-proof.ps1 `
             -Rivet rivet/target/debug/rivet.exe -Runtime rivet/target/debug/rivet_runtime_windows.dll `
@@ -213,6 +229,7 @@ jobs:
         run: |
           # A browser is listed as supported only when every feature check passed on it. A check
           # that could not run counts as failed, so its row is not published.
+          trap { Add-Content (Join-Path $env:RUNNER_TEMP failure.txt) "Drive every feature: $_"; break }
           $temp = $env:RUNNER_TEMP
           $name = "${{ matrix.build.browser }}".ToLower()
           $features = Join-Path $temp "session/features"
@@ -221,10 +238,11 @@ jobs:
           ./scripts/tests/windows-features.ps1 -NoBuild -Browsers $name `
             -Executable "${{ steps.build.outputs.executable }}" -OutDir $features
           ./tools/chrome-builds.exe gate (Join-Path $features "results.json") $name
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) { throw "a feature check failed or could not run; results.json lists which" }
           Set-Content (Join-Path $temp "session/features-passed") "${{ matrix.build.version }}"
 
       - uses: actions/upload-artifact@v4
+        id: files
         if: always()
         with:
           name: row-${{ matrix.build.browser }}-${{ matrix.build.version }}
@@ -237,6 +255,17 @@ jobs:
             ${{ runner.temp }}/session/features-passed
             ${{ runner.temp }}/session/features/results.json
           retention-days: 30
+
+      - name: Tell a person that this build failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./.github/scripts/rows/report-failure.ps1 `
+            -Title "Row failed: ${{ matrix.build.browser }} ${{ matrix.build.version }}" `
+            -Reasons (Join-Path $env:RUNNER_TEMP failure.txt) `
+            -Capture (Join-Path $env:RUNNER_TEMP session/row-failed.png) `
+            -Files "${{ steps.files.outputs.artifact-url }}"
 
       - name: Ask a person about a row the generator cannot vouch for
         if: steps.made.outputs.for_review == 'true'
@@ -310,6 +339,13 @@ jobs:
           gh release upload $env:RELEASE_TAG table.bin --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "published=true" >> $env:GITHUB_OUTPUT
+
+      - name: Tell a person that publishing failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./.github/scripts/rows/report-failure.ps1 -Title "Browser rows: publishing the table failed"
 
       - name: Record the rows in the repository
         if: steps.publish.outputs.published == 'true'

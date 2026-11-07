@@ -4,9 +4,10 @@
 //! So each address of the prior row is named through the prior build's public symbols, the same
 //! decorated names are looked up in the new build's symbols, and the instruction bytes that guard
 //! each hook are read again from the new module. Values that are not addresses (member offsets,
-//! colour ids, layout constants) are carried over. They have no public symbols, so a row that
-//! crosses a milestone is never published without a person's review, and every row must still pass
-//! on the real browser.
+//! table slots, object sizes) are read again from the new module where `row_recipe` has a recipe
+//! for them, and a recipe that fails stops the row. The rest are carried over. They have no public
+//! symbols, so a row that crosses a milestone lists each of them and is never published without a
+//! person's review, and every row must still pass on the real browser.
 //!
 //! A row is plain data here, in the form the runtime writes: a `usize` is a `0x` string, and bytes
 //! are bare hex. A value this code cannot explain stops the row: it goes to review rather than to
@@ -57,6 +58,10 @@ pub struct PortReport {
     pub private: Vec<String>,
     pub bytes_changed: Vec<String>,
     pub slots_moved: Vec<String>,
+    /// Values that are not addresses, read again from the new module by their recipes.
+    pub derived: Vec<String>,
+    /// Values that are not addresses and have no recipe, so they were carried over.
+    pub carried: Vec<String>,
 }
 
 fn is_address(value: u64) -> bool {
@@ -864,10 +869,12 @@ fn begin_row(prior: &Value, version: &str) -> (Value, PortReport) {
             .review
             .push(format!("{} is not a four part version", version));
     }
+    report.carried = crate::row_recipe::without_recipe(&prior["build"]);
     if prior_version.split('.').next() != version.split('.').next() {
         report.review.push(format!(
-            "the milestone changed from {prior_version} to {}: member offsets, colour ids and layout constants have no public symbols, so they were carried over unchecked",
-            version
+            "the milestone changed from {prior_version} to {version}: {} values have no recipe and were carried over unchecked: {}",
+            report.carried.len(),
+            report.carried.join(", ")
         ));
     }
     row["build"]["version"] = json!(parts);
@@ -988,6 +995,15 @@ fn finish_row(
     refresh_frame_guard(&mut row["frame"], pe, &mut report);
     check_vtable_slots(&mut row["build"], pe, &mut report);
     check_frame_slot(&mut row["frame"], pe, &mut report);
+    // Last, since the recipes read the addresses of the new build.
+    let derived = crate::row_recipe::derive_row(&mut row["build"], pe);
+    report.derived.extend(derived.read);
+    report.review.extend(
+        derived
+            .failed
+            .into_iter()
+            .map(|reason| format!("a value could not be read from the new build: {reason}")),
+    );
     (row, report)
 }
 
@@ -1314,10 +1330,21 @@ fn check_frame_slot(frame: &mut Value, pe: &PeFile, report: &mut PortReport) {
         report.review.push("the frame entry is incomplete".into());
         return;
     };
-    if pe.pointer_rva(vtable + slot * 8) != Some(function) {
-        report.review.push(format!(
+    if pe.pointer_rva(vtable + slot * 8) == Some(function) {
+        return;
+    }
+    // A milestone that removes a virtual function moves the slot, and the table itself says where
+    // the function went, as the recipes of the build's own slots do.
+    match pe.vtable_slot(vtable, function) {
+        Some(moved) => {
+            frame["client_view_slot"] = json!(moved);
+            report
+                .derived
+                .push(format!("frame.client_view_slot: {slot:#x} -> {moved:#x}"));
+        }
+        None => report.review.push(format!(
             "the frame vtable {vtable:#x} slot {slot} does not hold {function:#x}"
-        ));
+        )),
     }
 }
 
