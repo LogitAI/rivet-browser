@@ -5,7 +5,7 @@
 #   $code = Invoke-OnOwnDesktop $PSCommandPath $PSBoundParameters
 #   if ($null -ne $code) { exit $code }
 #
-# Invoke-OnOwnDesktop creates the desktop rivet-test-<pid> in the current window station and starts
+# Invoke-OnOwnDesktop creates the desktop rivet-test-<pid> in this process's window station and starts
 # the same runner there with the same arguments. Everything the runner starts, `rivet session start`,
 # the launcher and the browser, inherits that desktop. Windows never shows another desktop's windows
 # on the input desktop, never gives one of them the foreground and never routes the mouse to them.
@@ -40,6 +40,10 @@ public static class RivetTestDesktop{
  [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int which);
  [DllImport("user32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern IntPtr CreateDesktopW(string name,IntPtr device,IntPtr mode,uint flags,uint access,IntPtr security);
  [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
+ [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformationW(IntPtr o,int index,System.Text.StringBuilder name,int length,out int needed);
+ // The name of this process's window station: WinSta0 on a person's session, another on a service.
+ public static string Station(){var b=new System.Text.StringBuilder(256);int n;return GetUserObjectInformationW(GetProcessWindowStation(),2,b,512,out n)?b.ToString():"WinSta0";}
  // GENERIC_ALL on a new desktop of the calling process's window station.
  public static IntPtr Create(string name){var d=CreateDesktopW(name,IntPtr.Zero,IntPtr.Zero,0,0x10000000,IntPtr.Zero);if(d==IntPtr.Zero)throw new System.ComponentModel.Win32Exception();return d;}
  public static bool Close(IntPtr desktop){return CloseDesktop(desktop);}
@@ -88,7 +92,7 @@ function Invoke-OnOwnDesktop([string]$Script, $Bound) {
   $name = "rivet-test-$PID"
   $desktop = [RivetTestDesktop]::Create($name)
   try {
-    $env:RIVET_TEST_DESKTOP = "WinSta0\$name"
+    $env:RIVET_TEST_DESKTOP = "$([RivetTestDesktop]::Station())\$name"
     $pwsh = (Get-Process -Id $PID).Path
     $line = (ConvertTo-CommandArgument $pwsh) + ' -NoProfile -File ' + (ConvertTo-CommandArgument $Script) + ' ' + (ConvertTo-RunnerArguments $Bound)
     $runner = [RivetTestDesktop]::Start($env:RIVET_TEST_DESKTOP, $line, $true)
@@ -106,5 +110,5 @@ function Invoke-OnOwnDesktop([string]$Script, $Bound) {
 # test desktop. The result has Id, HasExited, ExitCode and WaitForExit(milliseconds).
 function Start-OnDefaultDesktop([string]$File, [string[]]$Arguments) {
   $line = (ConvertTo-CommandArgument $File) + ' ' + (($Arguments | ForEach-Object { ConvertTo-CommandArgument $_ }) -join ' ')
-  [RivetTestDesktop]::Start('WinSta0\Default', $line, $false)
+  [RivetTestDesktop]::Start("$([RivetTestDesktop]::Station())\Default", $line, $false)
 }

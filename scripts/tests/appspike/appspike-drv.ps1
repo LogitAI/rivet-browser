@@ -1,6 +1,10 @@
 # Drives one browser in an app window and runs a scenario script: pwsh -File scripts/tests/appspike/appspike-drv.ps1 -Name chrome -Script scripts/tests/appspike/s4.ps1
 # SPIKE_FILE='detach RVA;insert RVA' writes the spike addresses, SPIKE_EARLY=1 loads the runtime before the first window.
 param([string]$Name = 'chrome', [string]$Script = '', [string]$Url = '')
+# The whole run, and every browser it starts, runs on a desktop of its own.
+. (Join-Path $PSScriptRoot '..\windows-test-desktop.ps1')
+$desktopCode = Invoke-OnOwnDesktop $PSCommandPath $PSBoundParameters
+if ($null -ne $desktopCode) { exit $desktopCode }
 $env:SPIKE_OUT = Join-Path (Get-Location) '.scratch\spike'
 . (Join-Path $PSScriptRoot 'appspike-lib.ps1')
 Add-Type -TypeDefinition @'
