@@ -2643,8 +2643,8 @@ foreach ($name in $Browsers) {
         'sidebar-open-button' { Invoke-SidebarOpenButton $name $shots }
         'dev-row' { Invoke-DevRow $name $shots }
         'address-editing' { Invoke-AddressEditing $name $shots }
-        'security-chip' { @('NOT_DRIVEN', $null, 'the page info bubble opened on a monitor at 5023,1005 in an off-screen run, which the visible guard stopped; it stays off until the bubble is kept by the window') }
-        'permission-bubble' { @('NOT_DRIVEN', $null, 'the permission bubble opened a browser window on a monitor in an off-screen run, which the visible guard stopped; it stays off until the bubble is kept off-screen') }
+        'security-chip' { Invoke-SecurityChip $name $shots }
+        'permission-bubble' { Invoke-PermissionBubble $name $shots }
         'password-bubble' { Invoke-PasswordBubble $name $shots }
         'typing-keeps-active' { Invoke-TypingKeepsActive $name $shots }
         'cli-control' { Invoke-CliControl $name $shots }
