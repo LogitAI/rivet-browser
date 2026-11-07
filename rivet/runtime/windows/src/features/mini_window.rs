@@ -1,9 +1,10 @@
 //! The Mini Window: one page popped out of a Rivet window into its own small browser window.
 //!
 //! The page is browser content, so it lives in a real browser window of the same profile. Its tab
-//! moves there with Chromium's own move-to-new-window function and comes back with Chromium's
-//! detach and insert, so the page keeps its history and state. The new window is placed near
-//! where the page was, at a small size, as a normal top-level window that is not forced on top.
+//! moves there with the browser's own move-tab-to-new-window command and comes back with
+//! Chromium's detach and insert, so the page keeps its history and state. The new window, found by
+//! its creation during the command, is placed near where the page was, at a small size, as a
+//! normal top-level window that is not forced on top.
 //!
 //! Rivet's slim row on that window is a DirectComposition visual of the window's own surface, like
 //! the appbar, with its input taken from the subclassed window. Its buttons return the page to the
@@ -275,16 +276,13 @@ unsafe fn tab_of(window: HWND, page: usize) -> Option<usize> {
         .position(|tab| tab.id == page)
 }
 
-/// The browser window of this process, other than `except`, whose tab strip holds `page`.
-unsafe fn window_holding(page: usize, except: HWND) -> Option<HWND> {
-    crate::frame::browser_windows_of_process()
-        .into_iter()
-        .filter(|window| *window != except)
-        .find(|window| tab_of(*window, page).is_some())
-}
-
-/// Pops the window's tab `tab` out into a Mini Window of its own. The tab must not be the active
+/// Pops the window's tab `tab` out into a Mini Window of its own. The tab must not be the shown
 /// one, since the window's own page view shows that page.
+///
+/// The browser's move-tab-to-new-window command moves the active tab, so the tab is made active for
+/// the command and the page the window showed is shown again afterwards. The browser runs the
+/// command only for a window with more than one tab; a caller that pops out the only page opens a
+/// new tab first.
 pub unsafe fn open(window: HWND, tab: usize) -> bool {
     let page = bare::page_of_tab(window, tab);
     if page == 0 || page == bare::active(window) {
@@ -293,10 +291,31 @@ pub unsafe fn open(window: HWND, tab: usize) -> bool {
         ));
         return false;
     }
+    // The way back is the browser's detach and insert.
     if !crate::features::app_window::can_move_tabs() {
         crate::trace::trace("mini window: this build cannot move a tab between windows");
         return false;
     }
+    let command = match crate::features::app_window::move_command() {
+        Ok(command) => command,
+        Err(reason) => {
+            crate::trace::trace(&format!("mini window: off, {reason}"));
+            return false;
+        }
+    };
+    let Some(tabs) = crate::features::tabs::tabs(window) else {
+        return false;
+    };
+    if tabs.len() < 2 {
+        crate::trace::trace(
+            "mini window: the browser moves a tab only out of a window with others",
+        );
+        return false;
+    }
+    let shown = tabs
+        .iter()
+        .find(|tab| tab.active)
+        .map(|tab| bare::page_of_tab(window, tab.index));
     let Some(area) = area(window) else {
         return false;
     };
@@ -307,11 +326,17 @@ pub unsafe fn open(window: HWND, tab: usize) -> bool {
         default_rect(area),
         crate::frame::layout_dpi(window) as f32 / 96.0,
     );
-    if !crate::features::app_window::move_tab_to_new_window(window, tab) {
-        crate::trace::trace("mini window: no move to a new window for this build");
+    if !crate::features::tabs::activate_tab(window, tab) {
         return false;
     }
-    let Some(mini) = window_holding(page, window) else {
+    let created = crate::features::app_window::move_active_tab_to_new_window(window, command);
+    if let Some(index) = shown.and_then(|shown| tab_of(window, shown)) {
+        crate::features::tabs::activate_tab(window, index);
+    }
+    let made = crate::features::app_window::window_made_for(&created, |made| {
+        made != window && tab_of(made, page).is_some()
+    });
+    let Some(mini) = made else {
         crate::trace::trace("mini window: the browser made no window for the tab");
         return false;
     };

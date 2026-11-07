@@ -65,11 +65,6 @@ pub(crate) fn prologues(row: &AppWindow) -> Vec<(&'static str, usize, &'static [
         ("detach", row.detach, row.detach_prologue),
         ("insert", row.insert, row.insert_prologue),
         (
-            "move_new",
-            row.move_to_new_window,
-            row.move_to_new_window_prologue,
-        ),
-        (
             "browser_context",
             row.browser_context,
             row.browser_context_prologue,
@@ -126,7 +121,6 @@ pub(crate) fn row_value(row: &AppWindow, name: &str) -> Option<usize> {
         "kind" => Some(row.browser_type),
         "detach" => row.detach,
         "insert" => row.insert,
-        "move_new" => row.move_to_new_window,
         "vparent" => Some(row.view_parent),
         "vchildren" => Some(row.view_children),
         "new" => Some(row.operator_new),
@@ -310,72 +304,83 @@ pub(crate) unsafe fn move_tab(from: HWND, index: usize, to: HWND, active: bool) 
     true
 }
 
-/// `BrowserTabStripModelDelegate::MoveTabsToNewWindow(this, tab indices)`.
-type MoveToNew = unsafe extern "system" fn(*const [usize; 2], *const [usize; 3]);
-
-/// The words of a `std::vector<int>` that holds the ints at `data`: begin, end and the end of its
-/// storage on builds that keep the end by pointer, begin, size and capacity on the others.
-pub(crate) fn index_vector(data: usize, count: usize, by_pointer: bool) -> [usize; 3] {
-    if by_pointer {
-        [data, data + count * 4, data + count * 4]
-    } else {
-        [data, count, count]
+/// The id of the browser's move-tab-to-new-window command for this build and process, or why the
+/// Mini Window cannot use it here.
+pub(crate) fn move_command() -> Result<usize, String> {
+    use crate::browsers::chromium::commands;
+    let build = crate::builds::current().ok_or("no row matches this build")?;
+    let id = commands::move_tab_to_new_window(build.browser, build.version)?;
+    commands::move_tab_command_is_safe(
+        std::env::args_os().map(|argument| argument.to_string_lossy().into_owned()),
+    )?;
+    if commands::needs_regression_check(build.browser) {
+        // The id is Chromium's for the build's milestone. This browser publishes no source that
+        // confirms it keeps the id, so each of its builds needs a regression check before support
+        // is claimed.
+        crate::trace::trace(&format!(
+            "app window: move command {id} for {} {:?} needs a regression check",
+            build.browser, build.version
+        ));
     }
+    Ok(id)
 }
 
-/// Moves tab `index` of `window` into a new window of the same profile and the same browser type
-/// with Chromium's own move-to-new-window function. The browser makes and shows the window.
-pub(crate) unsafe fn move_tab_to_new_window(window: HWND, index: usize) -> bool {
-    let Some(base) = crate::features::tabs::base() else {
-        return false;
-    };
-    let Some(rva) = recorded("move_new") else {
-        return false;
-    };
-    let by_pointer = checked_row().is_some_and(|row| row.move_to_new_window_vector_by_pointer);
-    let Some(browser) = crate::features::tabs::browser(base, window) else {
-        return false;
-    };
-    let indices: [i32; 1] = [index as i32];
-    let vector = index_vector(indices.as_ptr() as usize, indices.len(), by_pointer);
-    // The browser's own `BrowserTabStripModelDelegate`, which the call reaches through its vtable.
-    // A stand-in without one faults on the first virtual call.
-    let Some(image) = crate::chromium::image::recorded() else {
-        return false;
-    };
-    let read = |address: usize| {
-        crate::chromium::memory::readable(address, 8).then(|| *(address as *const usize))
-    };
-    let Some(delegate) = delegate_in(
-        read,
-        browser as usize,
-        (image.base, image.base + image.size),
-    ) else {
-        crate::trace::trace("app window: the browser holds no tab strip delegate");
-        return false;
-    };
-    crate::features::tabs::function::<MoveToNew>(base, rva)(delegate as *const [usize; 2], &vector);
-    crate::trace::trace(&format!("app window: moved tab {index} to a new window"));
-    true
+thread_local! {
+    /// The top-level windows made on this thread while the move command runs.
+    static CREATED: std::cell::RefCell<Vec<HWND>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// The browser's tab strip delegate: an object the browser points to, within its first 0x800 bytes,
-/// that starts with a vtable in the browser's module and keeps the browser right after it, as
-/// `BrowserTabStripModelDelegate` keeps its `browser_`. `read` gives a word, or `None` where memory
-/// cannot be read.
-pub(crate) fn delegate_in(
-    read: impl Fn(usize) -> Option<usize>,
-    browser: usize,
-    module: (usize, usize),
-) -> Option<usize> {
-    (0..0x800usize).step_by(8).find_map(|offset| {
-        let object = read(browser.checked_add(offset)?)?;
-        let vtable = read(object)?;
-        ((module.0..module.1).contains(&vtable)
-            && object != browser
-            && read(object.checked_add(8)?)? == browser)
-            .then_some(object)
-    })
+/// Moves the active tab of `window` into a new browser window with the browser's own command
+/// `command`, as its tab menu does, and returns the top-level windows the browser made while it ran
+/// it. The browser makes the window inside the command, on this thread, so the thread's own
+/// window-creation hook sees it being created.
+pub(crate) unsafe fn move_active_tab_to_new_window(window: HWND, command: usize) -> Vec<HWND> {
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_CBT, WM_COMMAND,
+    };
+    CREATED.with(|created| created.borrow_mut().clear());
+    let hook = SetWindowsHookExW(
+        WH_CBT,
+        Some(creation_hook),
+        std::ptr::null_mut(),
+        GetCurrentThreadId(),
+    );
+    if hook.is_null() {
+        crate::trace::trace("app window: no window-creation hook, so the move is not sent");
+        return Vec::new();
+    }
+    SendMessageW(window, WM_COMMAND, command, 0);
+    UnhookWindowsHookEx(hook);
+    let created = CREATED.with(|created| std::mem::take(&mut *created.borrow_mut()));
+    crate::trace::trace(&format!(
+        "app window: move command {command} made windows {created:?}"
+    ));
+    created
+}
+
+/// Keeps every top-level window made on the thread while the move command runs.
+unsafe extern "system" fn creation_hook(
+    code: i32,
+    wparam: windows_sys::Win32::Foundation::WPARAM,
+    lparam: windows_sys::Win32::Foundation::LPARAM,
+) -> windows_sys::Win32::Foundation::LRESULT {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, CBT_CREATEWNDW, HCBT_CREATEWND, WS_CHILD,
+    };
+    if code == HCBT_CREATEWND as i32 && lparam != 0 {
+        let create = &*(lparam as *const CBT_CREATEWNDW);
+        let top_level = !create.lpcs.is_null() && ((*create.lpcs).style as u32 & WS_CHILD) == 0;
+        if top_level {
+            CREATED.with(|created| created.borrow_mut().push(wparam as HWND));
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+/// The window among `created` that the browser made for the moved tab: the first that `holds` it.
+pub(crate) fn window_made_for(created: &[HWND], holds: impl Fn(HWND) -> bool) -> Option<HWND> {
+    created.iter().copied().find(|window| holds(*window))
 }
 
 /// Offsets of the browser object that hold the browser type of an app window (`TYPE_APP`, 2).
@@ -756,34 +761,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fr9_the_move_goes_through_the_browser_s_own_tab_strip_delegate() {
-        let browser = 0x1000_0000usize;
-        let module = (0x7000_0000usize, 0x7100_0000usize);
-        let delegate = 0x2000_0000usize;
-        let other = 0x3000_0000usize;
-        let read = |at: usize| -> Option<usize> {
-            match at {
-                // A pointer to an object that keeps the browser but has no vtable in the module.
-                a if a == browser + 0x10 => Some(other),
-                a if a == other => Some(0x5000_0000),
-                a if a == other + 8 => Some(browser),
-                a if a == browser + 0x40 => Some(delegate),
-                a if a == delegate => Some(0x7050_0000),
-                a if a == delegate + 8 => Some(browser),
-                a if (browser..browser + 0x800).contains(&a) => Some(0),
-                _ => None,
-            }
-        };
-        assert_eq!(delegate_in(read, browser, module), Some(delegate));
-        assert_eq!(delegate_in(|_| None, browser, module), None);
-    }
-
-    #[test]
-    fn fr9_the_tab_index_vector_follows_the_builds_libcxx_layout() {
-        // Chromium 156 builds libc++ with the vector that keeps its size.
-        assert_eq!(index_vector(0x1000, 1, false), [0x1000, 1, 1]);
-        // Older builds keep its end and the end of its storage as pointers.
-        assert_eq!(index_vector(0x1000, 1, true), [0x1000, 0x1004, 0x1004]);
+    fn fr9_the_mini_window_is_the_window_the_browser_created_for_the_tab() {
+        let tooltip = 0x10 as HWND;
+        let mini = 0x20 as HWND;
+        let later = 0x30 as HWND;
+        // Of the windows made during the command, the one that holds the moved tab is taken, never
+        // a window that only happened to exist.
+        assert_eq!(
+            window_made_for(&[tooltip, mini, later], |window| window == mini),
+            Some(mini)
+        );
+        assert_eq!(window_made_for(&[tooltip], |window| window == mini), None);
+        assert_eq!(window_made_for(&[], |_| true), None);
     }
 
     const CHROMIUM: Features = Features {

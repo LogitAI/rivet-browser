@@ -1003,7 +1003,9 @@ function Invoke-Mini($Name, $shots, [string]$Step) {
     Start-Sleep 3
     $log = @(Read-Log | Select-Object -Skip $before)
     if (-not ($log | Where-Object { $_ -match '^mini window: open tab' })) {
-      if ($log | Where-Object { $_ -match '^mini window: (no move to a new window|this build cannot move a tab)' }) { return @('NOT_DRIVEN', $null, 'this build has no recorded move-to-new-window or tab insert function') }
+      $off = @($log | Where-Object { $_ -match '^mini window: off, ' } | Select-Object -First 1)
+      if ($off) { return @('NOT_DRIVEN', $null, ('the Mini Window is off on this build: {0}' -f ($off[0] -replace '^mini window: off, ', ''))) }
+      if ($log | Where-Object { $_ -match '^mini window: this build cannot move a tab' }) { return @('NOT_DRIVEN', $null, 'this build has no recorded tab detach or insert function') }
       return @('FAIL', $null, 'the runtime did not open a Mini Window for the pop-out command')
     }
     # The focused pane pops out. A posted click may not move the focus, so either page may float.
