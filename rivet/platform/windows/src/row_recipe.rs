@@ -222,7 +222,10 @@ pub fn first_load(bytes: &[u8]) -> Option<u64> {
         return None;
     }
     match modrm >> 6 {
-        0b01 => rest.first().filter(|byte| **byte < 0x80).map(|byte| u64::from(*byte)),
+        0b01 => rest
+            .first()
+            .filter(|byte| **byte < 0x80)
+            .map(|byte| u64::from(*byte)),
         0b10 => rest
             .get(..4)
             .map(|bytes| u64::from(u32::from_le_bytes(bytes.try_into().expect("four bytes")))),
@@ -280,7 +283,8 @@ fn allocation_sizes(pe: &PeFile, constructor: u32) -> (BTreeSet<u64>, usize) {
             if bytes[at] != 0xE8 {
                 continue;
             }
-            let relative = i32::from_le_bytes(bytes[at + 1..at + 5].try_into().expect("four bytes"));
+            let relative =
+                i32::from_le_bytes(bytes[at + 1..at + 5].try_into().expect("four bytes"));
             let target = i64::from(base) + at as i64 + 5 + i64::from(relative);
             if target != i64::from(constructor) {
                 continue;
@@ -326,7 +330,10 @@ fn run(recipe: &Recipe, build: &Value, pe: &PeFile) -> Result<Option<u64>, Strin
             first_load(bytes).map(Some).ok_or_else(|| {
                 format!(
                     "{function} {target:#x} does not start by reading a member of this: {}",
-                    bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+                    bytes
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
                 )
             })
         }
@@ -426,7 +433,10 @@ pub fn without_recipe(build: &Value) -> Vec<String> {
             Value::Array(items) => {
                 // An array of numbers is one value, such as a list of colour ids.
                 if !items.is_empty() && items.iter().all(|item| number(item).is_some()) {
-                    if items.iter().any(|item| number(item).is_some_and(|value| value < LOWEST_ADDRESS)) {
+                    if items
+                        .iter()
+                        .any(|item| number(item).is_some_and(|value| value < LOWEST_ADDRESS))
+                    {
                         out.push(path.to_owned());
                     }
                     return;
@@ -495,7 +505,10 @@ mod tests {
 
     #[test]
     fn nfr6_a_member_offset_is_read_from_the_accessor_that_loads_it() {
-        assert_eq!(first_load(&[0x48, 0x8B, 0x81, 0x58, 0x05, 0x00, 0x00]), Some(0x558));
+        assert_eq!(
+            first_load(&[0x48, 0x8B, 0x81, 0x58, 0x05, 0x00, 0x00]),
+            Some(0x558)
+        );
         assert_eq!(first_load(&[0x48, 0x8B, 0x41, 0x30, 0xC3]), Some(0x30));
         // `mov rax, [r9 + 0x30]` reads another object, and a store is not a read.
         assert_eq!(first_load(&[0x49, 0x8B, 0x41, 0x30]), None);
@@ -553,7 +566,13 @@ mod tests {
         let derived = derive_row(&mut build, &pe);
         assert_eq!(build["layout"]["top_inset_slot"], 2);
         assert_eq!(build["layout"]["layout_slot"], "0x1");
-        assert_eq!(derived.read, vec!["layout.top_inset_slot: 0x3 -> 0x2", "layout.layout_slot: 0x1"]);
+        assert_eq!(
+            derived.read,
+            vec![
+                "layout.top_inset_slot: 0x3 -> 0x2",
+                "layout.layout_slot: 0x1"
+            ]
+        );
         assert!(derived.failed.is_empty());
     }
 
@@ -584,7 +603,10 @@ mod tests {
         for function in [0x10_1100u32, 0x10_1000] {
             second.extend(pointer(function));
         }
-        let bytes = module(&[(0x10_8000, first.as_slice()), (0x10_8100, second.as_slice())]);
+        let bytes = module(&[
+            (0x10_8000, first.as_slice()),
+            (0x10_8100, second.as_slice()),
+        ]);
         let pe = PeFile::parse(&bytes).unwrap();
         let mut build = json!({
             "toolbar": {
@@ -594,7 +616,10 @@ mod tests {
         });
         let derived = derive_row(&mut build, &pe);
         assert!(
-            derived.failed.iter().any(|line| line.starts_with("toolbar.paint_slot: its recipes disagree")),
+            derived
+                .failed
+                .iter()
+                .any(|line| line.starts_with("toolbar.paint_slot: its recipes disagree")),
             "{:?}",
             derived.failed
         );
@@ -607,6 +632,9 @@ mod tests {
             "tabs": {"browser_in_view": "0x558", "title": "0x00b77780", "groups": true},
             "layout": {"frame_ids": [0x141, 0x142], "caption_container_offset": "0x3c0"},
         });
-        assert_eq!(without_recipe(&build), vec!["layout.caption_container_offset", "layout.frame_ids"]);
+        assert_eq!(
+            without_recipe(&build),
+            vec!["layout.caption_container_offset", "layout.frame_ids"]
+        );
     }
 }
