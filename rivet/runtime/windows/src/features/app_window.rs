@@ -338,11 +338,44 @@ pub(crate) unsafe fn move_tab_to_new_window(window: HWND, index: usize) -> bool 
     };
     let indices: [i32; 1] = [index as i32];
     let vector = index_vector(indices.as_ptr() as usize, indices.len(), by_pointer);
-    // The delegate keeps its browser right after its vtable and reads nothing else of itself.
-    let delegate: [usize; 2] = [0, browser as usize];
-    crate::features::tabs::function::<MoveToNew>(base, rva)(&delegate, &vector);
+    // The browser's own `BrowserTabStripModelDelegate`, which the call reaches through its vtable.
+    // A stand-in without one faults on the first virtual call.
+    let Some(image) = crate::chromium::image::recorded() else {
+        return false;
+    };
+    let read = |address: usize| {
+        crate::chromium::memory::readable(address, 8).then(|| *(address as *const usize))
+    };
+    let Some(delegate) = delegate_in(
+        read,
+        browser as usize,
+        (image.base, image.base + image.size),
+    ) else {
+        crate::trace::trace("app window: the browser holds no tab strip delegate");
+        return false;
+    };
+    crate::features::tabs::function::<MoveToNew>(base, rva)(delegate as *const [usize; 2], &vector);
     crate::trace::trace(&format!("app window: moved tab {index} to a new window"));
     true
+}
+
+/// The browser's tab strip delegate: an object the browser points to, within its first 0x800 bytes,
+/// that starts with a vtable in the browser's module and keeps the browser right after it, as
+/// `BrowserTabStripModelDelegate` keeps its `browser_`. `read` gives a word, or `None` where memory
+/// cannot be read.
+pub(crate) fn delegate_in(
+    read: impl Fn(usize) -> Option<usize>,
+    browser: usize,
+    module: (usize, usize),
+) -> Option<usize> {
+    (0..0x800usize).step_by(8).find_map(|offset| {
+        let object = read(browser.checked_add(offset)?)?;
+        let vtable = read(object)?;
+        ((module.0..module.1).contains(&vtable)
+            && object != browser
+            && read(object.checked_add(8)?)? == browser)
+            .then_some(object)
+    })
 }
 
 /// Offsets of the browser object that hold the browser type of an app window (`TYPE_APP`, 2).
@@ -721,6 +754,29 @@ pub(crate) fn install_features() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr9_the_move_goes_through_the_browser_s_own_tab_strip_delegate() {
+        let browser = 0x1000_0000usize;
+        let module = (0x7000_0000usize, 0x7100_0000usize);
+        let delegate = 0x2000_0000usize;
+        let other = 0x3000_0000usize;
+        let read = |at: usize| -> Option<usize> {
+            match at {
+                // A pointer to an object that keeps the browser but has no vtable in the module.
+                a if a == browser + 0x10 => Some(other),
+                a if a == other => Some(0x5000_0000),
+                a if a == other + 8 => Some(browser),
+                a if a == browser + 0x40 => Some(delegate),
+                a if a == delegate => Some(0x7050_0000),
+                a if a == delegate + 8 => Some(browser),
+                a if (browser..browser + 0x800).contains(&a) => Some(0),
+                _ => None,
+            }
+        };
+        assert_eq!(delegate_in(read, browser, module), Some(delegate));
+        assert_eq!(delegate_in(|_| None, browser, module), None);
+    }
 
     #[test]
     fn fr9_the_tab_index_vector_follows_the_builds_libcxx_layout() {
