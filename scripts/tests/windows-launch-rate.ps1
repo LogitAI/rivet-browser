@@ -67,7 +67,7 @@ foreach ($name in $Browsers) {
       $mine = Get-ProcessList $exeName | Where-Object { $_.CommandLine -like "*$profile_*" -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
       if ($mine) {
         $alive = $true
-        $h = (Get-Process -Id $mine.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle
+        $h = (Get-BrowserWindow $mine.ProcessId)
         if ($h -and $h -ne [IntPtr]::Zero -and [LaunchWin]::GetProp($h, 'Rivet.OriginalWindowProc') -ne [IntPtr]::Zero) { $attached = $true; break }
       }
       Start-Sleep 1

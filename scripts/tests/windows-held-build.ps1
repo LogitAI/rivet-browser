@@ -144,7 +144,7 @@ $deadline = (Get-Date).AddSeconds(45)
 while ((Get-Date) -lt $deadline -and $sessionLine) {
   $mine = Get-ProcessList $exeName | Where-Object { $_.CommandLine -like "*$profile_*" -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
   if (-not $mine) { Start-Sleep 1; continue }
-  $h = (Get-Process -Id $mine.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle
+  $h = (Get-BrowserWindow $mine.ProcessId)
   if ($h -and $h -ne [IntPtr]::Zero) {
     $hwnd = $h
     if ([HeldWin]::GetProp($h, 'Rivet.OriginalWindowProc') -ne [IntPtr]::Zero) { $attached = $true; break }
