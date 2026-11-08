@@ -310,5 +310,13 @@ $quoted = ConvertTo-CommandArgument 'C:\a b\'
 if ($quoted -ne '"C:\a b\\"') { Write-Host "FAIL nfr5_a_folder_argument_keeps_its_last_backslash : $quoted"; $failures++ }
 else { Write-Host 'ok   nfr5_a_folder_argument_keeps_its_last_backslash' }
 
+# A browser started with no output to keep, as the launcher rows start rivet-launcher.exe.
+if ($IsWindows) {
+  $p = Start-TestBrowser -FilePath $env:ComSpec -ArgumentList '/c', 'exit', '7'
+  $done = $p.WaitForExit(10000); $code = $p.ExitCode; $p.Dispose()
+  if (-not $done -or $code -ne 7) { Write-Host "FAIL nfr5_a_test_process_starts_without_an_output_file : exit $code"; $failures++ }
+  else { Write-Host 'ok   nfr5_a_test_process_starts_without_an_output_file' }
+}
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'
