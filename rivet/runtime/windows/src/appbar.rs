@@ -187,6 +187,44 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> D2D_RECT_F {
     }
 }
 
+/// The ground of a page's row from `x` for `width`, `height` tall from `y`, as rectangles and their
+/// colours. `hole` is the browser's own address as (left from `x`, width), which shows through.
+///
+/// The ground is one run of paper to the right end, caption buttons included. Two fills that meet
+/// at a fractional pixel each cover that pixel only in part, so the browser's own frame showed
+/// through between them as a thin line. The band just above the lower edge is also covered under
+/// the hole, where the browser draws the line under its own toolbar.
+fn pane_row_ground(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    hole: Option<(f32, f32)>,
+) -> Vec<(D2D_RECT_F, u32)> {
+    let edge = rect(x, y + height - 1.0, width, 1.0);
+    let Some((left, room)) = hole else {
+        return vec![(rect(x, y, width, height), PAPER), (edge, HAIRLINE)];
+    };
+    let after = left + room;
+    vec![
+        (rect(x, y, left, height), PAPER),
+        (rect(x + after, y, width - after, height), PAPER),
+        (
+            rect(
+                x + left,
+                y + height - 1.0 - TOOLBAR_LINE,
+                room,
+                TOOLBAR_LINE,
+            ),
+            PAPER,
+        ),
+        (edge, HAIRLINE),
+    ]
+}
+
+/// How much of the row above its lower edge is kept from the browser's own toolbar line.
+const TOOLBAR_LINE: f32 = 2.0;
+
 /// The geometry the shown surface was painted for. The visual keeps the surface alive.
 struct Painted {
     width: i32,
@@ -2342,7 +2380,6 @@ impl Canvas<'_> {
         let (ox, oy) = (row.reach_left / scale, row.y / scale);
         let w = row.width / scale;
         let h = vh - oy;
-        let clip_w = vw - ox;
         self.fill(rect(0.0, oy, ox, h), PAPER)?;
         self.fill(
             rect(vw - row.reach_right / scale, oy, row.reach_right / scale, h),
@@ -2355,22 +2392,11 @@ impl Canvas<'_> {
             .iter()
             .find(|b| b.0 == RowButton::Address && row.editable)
             .map(|b| (b.1, b.2));
-        match hole {
-            Some((left, width)) => {
-                self.fill(rect(ox, oy, left, h), PAPER)?;
-                let after = left + width;
-                self.fill(rect(ox + after, oy, clip_w - after, h), PAPER)?;
-                self.fill(rect(ox, oy + h - 1.0, clip_w, 1.0), HAIRLINE)?;
-            }
-            None => {
-                self.fill(rect(ox, oy, clip_w, h), PAPER)?;
-                self.fill(rect(ox, oy + h - 1.0, clip_w, 1.0), HAIRLINE)?;
-            }
+        for (area, colour) in pane_row_ground(ox, oy, full - ox, h, hole) {
+            self.fill(area, colour)?;
         }
         if caption > 0.0 {
             // Rivet draws the caption buttons on the row of the page at the window's top right.
-            self.fill(rect(vw, oy, full - vw, h), PAPER)?;
-            self.fill(rect(vw, oy + h - 1.0, full - vw, 1.0), HAIRLINE)?;
             // The window buttons fade with the rest of a row whose page is not focused.
             self.with_opacity(crate::features::split::row_ink_opacity(row.active), || {
                 self.caption_buttons(full, oy, h, row.caption_hover, row.zoomed, false)
@@ -2712,5 +2738,35 @@ mod tests {
         assert!(row_is_dark(true, false));
         assert!(!row_is_dark(false, false));
         assert!(!row_is_dark(true, true));
+    }
+
+    #[test]
+    fn fr9_a_page_row_ground_has_no_seam_where_the_browser_shows_through() {
+        // A right page at 1.125 scale: the caption buttons start at a fractional pixel.
+        let (x, y, width, height) = (0.0, 0.0, 636.0, 57.0);
+        let covered = |ground: &[(D2D_RECT_F, u32)], px: f32, py: f32| {
+            ground
+                .iter()
+                .any(|(r, _)| r.left <= px && px < r.right && r.top <= py && py < r.bottom)
+        };
+        for hole in [None, Some((140.0, 276.0))] {
+            let ground = pane_row_ground(x, y, width, height, hole);
+            // One run of paper reaches the right end, so nothing meets where the caption begins.
+            let runs: Vec<_> = ground
+                .iter()
+                .filter(|(r, c)| *c == PAPER && (r.right - (x + width)).abs() < 0.01)
+                .collect();
+            assert_eq!(runs.len(), 1, "{hole:?}");
+            assert!(runs[0].0.left <= 498.0 - 1.0);
+            // The lower band is covered across the whole row, hole included.
+            for px in [10.0, 200.0, 400.0, 600.0] {
+                assert!(covered(&ground, px, height - 2.5), "{hole:?} at {px}");
+                assert!(covered(&ground, px, height - 0.5), "{hole:?} at {px}");
+            }
+            // The browser's own address still shows through the middle of the hole.
+            if let Some((left, room)) = hole {
+                assert!(!covered(&ground, left + room / 2.0, height / 2.0));
+            }
+        }
     }
 }
