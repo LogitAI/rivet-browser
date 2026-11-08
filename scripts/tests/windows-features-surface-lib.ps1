@@ -158,8 +158,13 @@ function Test-OpenButtonFade($Away, $Near, $Over, [int]$Page, [int[]]$Box) {
   $dn = [SurfacePixels]::MeanDiff($Away.Pixels, $Near.Pixels, $Away.Width, $Away.Height, $x0, $y0, $x1, $y1)
   $do = [SurfacePixels]::MeanDiff($Away.Pixels, $Over.Pixels, $Away.Width, $Away.Height, $x0, $y0, $x1, $y1)
   if ($dn -lt 2) { return New-Verdict 'FAIL' ('the open button does not appear near the corner (change {0:N1})' -f $dn) }
-  if ($do -lt $dn * 1.2) { return New-Verdict 'FAIL' ('the button near the corner is not fainter than under the pointer (near {0:N1}, over {1:N1})' -f $dn, $do) }
-  New-Verdict 'PASS' ('hidden away, faint near the corner ({0:N1}), solid over it ({1:N1})' -f $dn, $do)
+  # Near the corner the study's button is 60% of a light ground and soft ink; under the pointer it is
+  # whole, on a 6% dark ground with ink. On a bright page the light ground changes more than the
+  # dark one, so the two states are told apart from each other, not by which changes the page more.
+  if ($do -lt 2) { return New-Verdict 'FAIL' ('the open button does not show under the pointer (change {0:N1})' -f $do) }
+  $between = [SurfacePixels]::MeanDiff($Near.Pixels, $Over.Pixels, $Near.Width, $Near.Height, $x0, $y0, $x1, $y1)
+  if ($between -lt 1.5) { return New-Verdict 'FAIL' ('the button looks the same near the corner and under the pointer (difference {0:N1})' -f $between) }
+  New-Verdict 'PASS' ('hidden away, faint near the corner ({0:N1}), its hover look under the pointer ({1:N1}, {2:N1} apart)' -f $dn, $do, $between)
 }
 
 # The developer row: its background differs from the plain row and it carries at least `Buttons`
