@@ -249,8 +249,19 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   # Park off-screen without activating, as the installed build's window would sit on the owner's monitor.
   [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, 1800, 1067, 0x14) | Out-Null
   [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
-  $ctx.Dpi = [FeatureWin]::GetDpiForWindow($ctx.Hwnd)
   Start-Sleep 8
+  $ctx.Dpi = Get-LayoutDpi $ctx
+}
+
+# The scale the browser laid the window out at, as the runtime reports it, which every part of
+# Rivet's look follows. Windows can report another DPI for the window, as it does on a test desktop
+# and while a window crosses monitors, so the checks measure at the browser's scale. Without a
+# report yet, the window's own DPI.
+function Get-LayoutDpi($ctx) {
+  $hex = '{0:x}' -f $ctx.Hwnd.ToInt64()
+  $line = @(Read-Log | Where-Object { $_ -match "^layout dpi: window 0x$hex at (\d+)$" }) | Select-Object -Last 1
+  if ($line -and $line -match ' at (\d+)$') { return [int]$Matches[1] }
+  [FeatureWin]::GetDpiForWindow($ctx.Hwnd)
 }
 
 function Get-Capture($ctx, [string]$Path) {
@@ -1627,7 +1638,7 @@ function Invoke-OpenLink($Name, $shots, [string]$Mode) {
     $mine = @(Get-MyProcesses $exeName $started | Where-Object { $_.CommandLine -notlike '*--type=*' })
     if (-not $mine.Count) { return @('FAIL', $null, "the launcher started no browser on the saved profile (exit $code)") }
     $ctx.Hwnd = Get-BrowserWindow ($mine | ForEach-Object { [int]$_.ProcessId })
-    if ($ctx.Hwnd -and $ctx.Hwnd -ne [IntPtr]::Zero) { $ctx.Dpi = [FeatureWin]::GetDpiForWindow($ctx.Hwnd) }
+    if ($ctx.Hwnd -and $ctx.Hwnd -ne [IntPtr]::Zero) { $ctx.Dpi = Get-LayoutDpi $ctx }
     if ($null -eq $code) { return @('FAIL', $null, 'the launcher did not finish') }
     if ($code -ne 0) { return @('FAIL', $null, "the launcher exited $code") }
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
