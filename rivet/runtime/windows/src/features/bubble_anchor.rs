@@ -293,6 +293,7 @@ unsafe extern "system" fn get_anchor_rect(
             chip,
             PAGE_INFO.load(Ordering::Acquire),
         );
+        crate::trace::trace(&format!("bubble anchor: chose {:?}", *result));
     }
     result
 }

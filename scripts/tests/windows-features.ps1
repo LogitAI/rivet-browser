@@ -2133,9 +2133,74 @@ function Wait-NewTops($ctx, $Before, [int]$Seconds = 10) {
 
 # A browser bubble belongs inside the Rivet window near the address row: its top no more than 48
 # DIPs below the address and its left between the row's start and the address's end.
+if (-not ('BubbleScreen' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;using System.Collections.Generic;using System.Runtime.InteropServices;
+public sealed class BubbleMonitor { public int[] Rect; public double Scale; public bool Primary; }
+public static class BubbleScreen{
+ public delegate bool EM(IntPtr m,IntPtr dc,IntPtr r,IntPtr l);
+ [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr dc,IntPtr clip,EM f,IntPtr l);
+ [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr m,int type,out uint x,out uint y);
+ [StructLayout(LayoutKind.Sequential)] struct MI{public int cb;public int L,T,R,B,WL,WT,WR,WB;public uint flags;}
+ [DllImport("user32.dll")] static extern bool GetMonitorInfoW(IntPtr m,ref MI info);
+ // Every monitor in physical pixels, with its scale; the caller is per-monitor DPI aware.
+ public static List<BubbleMonitor> Monitors(){
+  var o=new List<BubbleMonitor>();
+  EnumDisplayMonitors(IntPtr.Zero,IntPtr.Zero,(m,dc,r,l)=>{uint x,y;if(GetDpiForMonitor(m,0,out x,out y)!=0)x=96;var i=new MI();i.cb=Marshal.SizeOf(typeof(MI));GetMonitorInfoW(m,ref i);
+   o.Add(new BubbleMonitor{Rect=new[]{i.L,i.T,i.R,i.B},Scale=Math.Max(96u,x)/96.0,Primary=(i.flags&1)!=0});return true;},IntPtr.Zero);
+  return o;
+ }
+}
+'@
+}
+
+# Where Chromium puts a screen pixel in screen DIPs, as display::win::ScreenWin lays displays out:
+# the primary monitor at zero, a monitor touching it at the primary's DIP edge with its offset at the
+# primary's scale. `Near` is the monitor of the window's middle. A second implementation of the
+# runtime's own mapping, so the check does not trust the code it checks.
+function ConvertTo-ScreenDips([double]$X, [double]$Y, $Near, $Primary) {
+  $l, $t, $r, $b = $Near.Rect; $pl, $pt, $pr, $pb = $Primary.Rect
+  $s = $Near.Scale; $ps = $Primary.Scale
+  if ($l -eq $pl -and $t -eq $pt -and $r -eq $pr -and $b -eq $pb) { $ox = 0; $oy = 0 }
+  elseif ($l -eq $pr) { $ox = ($pr - $pl) / $ps; $oy = ($t - $pt) / $ps }
+  elseif ($r -eq $pl) { $ox = - ($r - $l) / $s; $oy = ($t - $pt) / $ps }
+  elseif ($t -eq $pb) { $ox = ($l - $pl) / $ps; $oy = ($pb - $pt) / $ps }
+  elseif ($b -eq $pt) { $ox = ($l - $pl) / $ps; $oy = - ($b - $t) / $s }
+  else { $ox = $l / $s; $oy = $t / $s }
+  @(($ox + ($X - $l) / $s), ($oy + ($Y - $t) / $s))
+}
+
+# The last anchor the runtime handed Chromium, from its trace, as x, y, width and height in screen DIPs.
+function Get-ChosenAnchor {
+  $line = @(Read-Log | Where-Object { $_ -match '^bubble anchor: chose \[' }) | Select-Object -Last 1
+  if (-not $line) { return $null }
+  @([regex]::Matches($line, '-?\d+') | ForEach-Object { [int]$_.Value })
+}
+
 function Test-BubbleNearBar($ctx, $Bubble, $Anchors) {
-  if (-not $Bubble.Inside) { return New-Verdict 'FAIL' ('the bubble opened outside the Rivet window at {0},{1}' -f $Bubble.L, $Bubble.T) }
   $o = Get-ClientOffset $ctx; $s = $Anchors.Dpi / 96.0
+  $w = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$w) | Out-Null
+  $mons = @([BubbleScreen]::Monitors())
+  $onMonitor = @($mons | Where-Object { $_.Rect[0] -lt $w.Ri -and $_.Rect[2] -gt $w.L -and $_.Rect[1] -lt $w.B -and $_.Rect[3] -gt $w.T }).Count -gt 0
+  if (-not $onMonitor) {
+    # Off every monitor Chromium fits a bubble to a display the window is not on, so where the
+    # bubble lands sideways says nothing. The anchor Rivet hands Chromium is checked exactly
+    # instead, and the bubble's top by the row.
+    $chosen = Get-ChosenAnchor
+    if (-not $chosen) { return New-Verdict 'FAIL' 'the runtime traced no anchor for the bubble' }
+    $mx = ($w.L + $w.Ri) / 2; $my = ($w.T + $w.B) / 2
+    $near = $mons | Sort-Object { [Math]::Max(0, [Math]::Max($_.Rect[0] - $mx, $mx - $_.Rect[2])) + [Math]::Max(0, [Math]::Max($_.Rect[1] - $my, $my - $_.Rect[3])) } | Select-Object -First 1
+    $primary = $mons | Where-Object { $_.Primary } | Select-Object -First 1
+    $target = if ($Bubble.PageInfo) { $Anchors.Chip } else { $Anchors.Address }
+    $want = ConvertTo-ScreenDips ($o.ScreenX + $target[0] * $s) ($o.ScreenY + $target[1] * $s) ([pscustomobject]@{ Rect = $near.Rect; Scale = $s }) $primary
+    if ([Math]::Abs($chosen[0] - $want[0]) -gt 1 -or [Math]::Abs($chosen[1] - $want[1]) -gt 1) {
+      return New-Verdict 'FAIL' ('the runtime handed Chromium the anchor {0},{1}, not the {2} at {3:N0},{4:N0} DIPs' -f $chosen[0], $chosen[1], $(if ($Bubble.PageInfo) { 'chip' } else { 'address' }), $want[0], $want[1])
+    }
+    $top = $o.ScreenY + $Anchors.Address[1] * $s; $bottom = $o.ScreenY + ($Anchors.Address[1] + $Anchors.Address[3]) * $s
+    if ($Bubble.T -lt $top - 8 * $s -or $Bubble.T -gt $bottom + 48 * $s) { return New-Verdict 'FAIL' ('the bubble top {0} is not by the address row ({1:N0} to {2:N0})' -f $Bubble.T, $top, $bottom) }
+    return New-Verdict 'PASS' ('anchor {0},{1} DIPs is the {2} exactly; bubble top {3} by the row; its left edge is not checked: the window is off every monitor, where Chromium fits a bubble to another display' -f $chosen[0], $chosen[1], $(if ($Bubble.PageInfo) { 'chip' } else { 'address' }), ($Bubble.T - $o.ScreenY))
+  }
+  if (-not $Bubble.Inside) { return New-Verdict 'FAIL' ('the bubble opened outside the Rivet window at {0},{1}' -f $Bubble.L, $Bubble.T) }
   $addrLeft = $o.ScreenX + $Anchors.Chip[0] * $s
   $addrRight = $o.ScreenX + ($Anchors.Address[0] + $Anchors.Address[2]) * $s
   $addrTop = $o.ScreenY + $Anchors.Address[1] * $s
@@ -2394,6 +2459,7 @@ function Invoke-SecurityChip($Name, $shots) {
     $shot = Get-Capture $ctx (Join-Path $shots 'security-chip-2-open.png')
     if ($found.Count -eq 0) { return @('FAIL', $shot.Path, 'no page info bubble appeared') }
     Get-Capture ([pscustomobject]@{ Hwnd = $found[0].Hwnd }) (Join-Path $shots 'security-chip-3-bubble.png') | Out-Null
+    $found[0] | Add-Member -Force PageInfo $true
     $v = Test-BubbleNearBar $ctx $found[0] $anchors
     @($v.Verdict, $shot.Path, "page info opened; $($v.Reason)")
   } finally { Stop-Scene $ctx }
