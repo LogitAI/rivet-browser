@@ -167,6 +167,7 @@ pub(crate) struct Found {
     pub visited: usize,
 }
 
+const MIN_DEPTH: usize = 2;
 const MAX_DEPTH: usize = 4;
 const FIELDS: usize = 0x800;
 const MAX_NODES: usize = 4000;
@@ -186,7 +187,9 @@ pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<
             ));
         }
         visited += 1;
-        if class_name(ranges, object).as_deref() == Some("RootView") {
+        // The RootView lies three pointers past the handler: its host, the widget, the view. Names
+        // are only read that deep, which keeps the walk inside its budget.
+        if path.len() >= MIN_DEPTH && class_name(ranges, object).as_deref() == Some("RootView") {
             root = Some((object, path));
             break;
         }
@@ -207,6 +210,105 @@ pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<
     let (root_view, path) = root.ok_or("no RootView reached from the window")?;
     let (children, parent) = view_list(ranges, root_view)
         .ok_or("no view list below the RootView whose views point back to it")?;
+    let browser_view = browser_view_below(ranges, root_view, children, start, budget);
+    Ok(Found {
+        root_view,
+        path,
+        children,
+        parent,
+        browser_view,
+        visited,
+    })
+}
+
+/// A build's fingerprint from its headers: the link time stamp and the image size.
+pub(crate) fn fingerprint(headers: &[u8]) -> Option<(u32, u32)> {
+    let u32_at = |at: usize| {
+        headers
+            .get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let nt = u32_at(0x3C)? as usize;
+    if headers.get(nt..nt + 4) != Some(b"PE\0\0") {
+        return None;
+    }
+    Some((u32_at(nt + 8)?, u32_at(nt + 24 + 56)?))
+}
+
+/// The offsets a walk derived, kept for the rest of the process by build fingerprint, so the
+/// walk's budget is paid once per build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Offsets {
+    path: Vec<usize>,
+    children: usize,
+    parent: usize,
+}
+
+static CACHE: std::sync::Mutex<Vec<((u32, u32), Offsets)>> = std::sync::Mutex::new(Vec::new());
+
+/// `find`, but through the offsets this build's earlier walk derived when there are some. The
+/// cached path must still end at the view named `RootView`; when it does not, the walk runs again.
+/// Returns what was found and whether the cache gave it.
+pub(crate) fn find_cached(
+    ranges: &Ranges,
+    handler: usize,
+    budget: Duration,
+    build: (u32, u32),
+) -> Result<(Found, bool), String> {
+    let start = Instant::now();
+    let known = CACHE.lock().ok().and_then(|cache| {
+        cache
+            .iter()
+            .find(|(key, _)| *key == build)
+            .map(|(_, offsets)| offsets.clone())
+    });
+    if let Some(offsets) = known {
+        let root = offsets
+            .path
+            .iter()
+            .try_fold(handler, |object, field| word(object + field));
+        if let Some(root_view) =
+            root.filter(|root| class_name(ranges, *root).as_deref() == Some("RootView"))
+        {
+            let browser_view =
+                browser_view_below(ranges, root_view, offsets.children, start, budget);
+            return Ok((
+                Found {
+                    root_view,
+                    path: offsets.path,
+                    children: offsets.children,
+                    parent: offsets.parent,
+                    browser_view,
+                    visited: 0,
+                },
+                true,
+            ));
+        }
+    }
+    let found = find(ranges, handler, budget)?;
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.retain(|(key, _)| *key != build);
+        cache.push((
+            build,
+            Offsets {
+                path: found.path.clone(),
+                children: found.children,
+                parent: found.parent,
+            },
+        ));
+    }
+    Ok((found, false))
+}
+
+/// The first view named `BrowserView` below `root`, through the view list at `children`.
+fn browser_view_below(
+    ranges: &Ranges,
+    root: usize,
+    children: usize,
+    start: Instant,
+    budget: Duration,
+) -> Option<usize> {
+    let root_view = root;
     let mut browser_view = None;
     let mut stack = vec![(root_view, 0)];
     while let Some((view, depth)) = stack.pop() {
@@ -226,14 +328,7 @@ pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<
             break;
         }
     }
-    Ok(Found {
-        root_view,
-        path,
-        children,
-        parent,
-        browser_view,
-        visited,
-    })
+    browser_view
 }
 
 /// The views a `std::vector<View*>` at `view + field` holds.
@@ -319,6 +414,17 @@ mod tests {
         assert_eq!(load_target(&read, 0x1000), Some(0x2000 + 4 + 7 + 0x100));
         assert_eq!(load_target(&read, 0x3000), Some(0x3000 + 7 - 0x10));
         assert_eq!(load_target(&read, 0x4000), None);
+    }
+
+    #[test]
+    fn nfr3_a_build_is_known_by_its_link_time_and_image_size() {
+        let mut headers = vec![0u8; 0x200];
+        headers[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        headers[0x80..0x84].copy_from_slice(b"PE\0\0");
+        headers[0x88..0x8C].copy_from_slice(&0x6543_2100u32.to_le_bytes());
+        headers[0x80 + 24 + 56..0x80 + 24 + 60].copy_from_slice(&0x0F00_0000u32.to_le_bytes());
+        assert_eq!(fingerprint(&headers), Some((0x6543_2100, 0x0F00_0000)));
+        assert_eq!(fingerprint(&[0u8; 8]), None);
     }
 
     #[test]
