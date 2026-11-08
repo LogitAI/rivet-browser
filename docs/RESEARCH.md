@@ -639,3 +639,39 @@ Brave `.63`, Whale `.57`, Samsung `.29`이고 화면 밖 시험 프로필(동기
 
 app window와 두 번째 `ContentsWebView`는 다섯 브라우저 모두에서 그려진다. 회사 코드 없이 분할과 Sidebar를 만들 수 있는
 길이 있다. 탭 소유, 키 입력, 말풍선 위치, Chrome 시작 종료, 회사 띠는 남은 문제다.
+
+## 2026-11-09: 빌드 값 없이 HWND에서 view에 닿는 길 (Chromium M150 공개 소스)
+
+Whale 5.39.412.57은 Chromium 150.0.7871.252다. 상단 줄 아래 페이지 위치를 빌드마다 사람이 찾은 주소 없이 읽을 수
+있는지 공개 소스 `refs/branch-heads/7871`에서 확인했다. 받은 파일은 `.scratch/m150-src/`에 있다.
+
+### 확인한 사실
+
+- `gfx::SetWindowUserData`는 `GWLP_USERDATA`에 `WindowImpl*`를 넣고, `WindowImpl`의 창 프로시저는
+  `CHECK_EQ(this, GetWindowUserData(hwnd))`로 같은 값을 다시 읽는다
+  ([window_impl.cc](https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/7871/ui/gfx/win/window_impl.cc),
+  [hwnd_util.cc](https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/7871/ui/gfx/win/hwnd_util.cc)).
+- `views::HWNDMessageHandler`는 `gfx::WindowImpl`을 상속한다
+  ([hwnd_message_handler.h](https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/7871/ui/views/win/hwnd_message_handler.h)).
+  그래서 브라우저 HWND의 `GWLP_USERDATA`는 빌드 값 없이 `HWNDMessageHandler`를 준다.
+- `ui::ViewProp`은 Win32 창 속성이 아니라 프로세스 안의 `std::set`이다
+  ([view_prop.cc](https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/7871/ui/base/view_prop.cc)).
+  Chromium 함수 없이는 읽을 수 없다.
+- 그 다음 고리(`HWNDMessageHandler::delegate_`, `DesktopWindowTreeHostWin`, native widget, `Widget`, `root_view_`)는
+  모두 멤버 위치이고 빌드마다 다르다.
+- `ui::metadata::MetaDataProvider`의 가상 함수는 소멸자와 `GetClassMetaData()` 하나다. `View`는 이것을 여덟 번째
+  부모로 상속한다. `ClassMetaData`는 `type_name_`을 실행 파일 안 정적 문자열의 `string_view`로 갖고,
+  `FindMemberData`로 X, Y, Width, Height를 준다
+  ([metadata_types.h](https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/7871/ui/base/metadata/metadata_types.h),
+  [view.h](https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/7871/ui/views/view.h)).
+- M150 `browser_view.cc`는 BrowserView에 `kBrowserViewElementId`를 붙인다. 이 가지에는 `kTopContainerElementId`와
+  contents container id가 없다
+  ([browser_view.cc](https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/7871/chrome/browser/ui/views/frame/browser_view.cc)).
+  M150의 페이지 view는 id가 아니라 메타데이터 클래스 이름으로 찾아야 한다.
+
+### 결론
+
+빌드 값 없이 들어가는 입구는 `GWLP_USERDATA`의 `HWNDMessageHandler`다. 그 뒤는 메모리만 읽는 탐색으로 포인터
+고리를 따라가고, 끝이 메타데이터 이름 `RootView`인 view일 때만 받아들이는 방법이 남는다. 후보에 가상 함수를 부르기
+전에 vtable이 모듈의 읽기 전용 데이터에 있고 칸이 코드 구역을 가리키는지 확인해야 한다. 찾은 위치는 Chrome, Edge,
+Brave, Samsung의 기존 행과 같아야 쓸 수 있다.
