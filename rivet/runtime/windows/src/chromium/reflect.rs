@@ -191,7 +191,7 @@ pub(crate) struct Found {
     pub parent: usize,
     pub browser_view: Option<usize>,
     /// How far the browser view's `views::View` part lies from the object the walk reached.
-    pub view_part: usize,
+    pub view_part: isize,
     pub visited: usize,
 }
 
@@ -254,21 +254,27 @@ pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<
         children,
         parent,
         browser_view: Some(view),
-        view_part: view - browser_view,
+        view_part: view as isize - browser_view as isize,
         visited,
     })
 }
 
+/// How far around the object the walk reached its `views::View` part and parent field may lie. The
+/// object's metadata part, through which the walk named it, comes late among `View`'s bases, so the
+/// `View` part can begin before it.
+const AROUND: usize = 0x800;
+
 /// The view that holds the object at `object` in its view list, as (holder, view list field, parent
-/// field, view): a field of the object names a view, and one of that view's own fields lists an
-/// address within the object's first 0x400 bytes. That address is the object's `views::View` part,
-/// which need not be its first base, and the parent field is counted from it.
+/// field, view): a field near the object names a view, and one of that view's own fields lists an
+/// address near the object at or before that field. That address is the object's `views::View`
+/// part, and the parent field is counted from it.
 fn parent_link(ranges: &Ranges, object: usize) -> Option<(usize, usize, usize, usize)> {
-    for field in (0..FIELDS).step_by(8) {
-        let Some(holder) = word(object + field) else {
-            break;
+    let near = object.saturating_sub(AROUND)..object + AROUND;
+    for at in near.clone().step_by(8) {
+        let Some(holder) = word(at) else {
+            continue;
         };
-        if (object..object + 0x400).contains(&holder)
+        if near.contains(&holder)
             || !is_object(ranges, holder)
             || class_name(ranges, holder).is_none()
         {
@@ -277,15 +283,14 @@ fn parent_link(ranges: &Ranges, object: usize) -> Option<(usize, usize, usize, u
         for children in (0..FIELDS).step_by(8) {
             let listed = children_of(holder, children)
                 .into_iter()
-                .find(|view| (object..object + 0x400).contains(view) && *view <= object + field);
+                .find(|view| near.contains(view) && *view <= at);
             if let Some(view) = listed {
-                return Some((holder, children, object + field - view, view));
+                return Some((holder, children, at - view, view));
             }
         }
     }
     None
 }
-
 /// A build's fingerprint from its headers: the link time stamp and the image size.
 pub(crate) fn fingerprint(headers: &[u8]) -> Option<(u32, u32)> {
     let u32_at = |at: usize| {
@@ -307,7 +312,7 @@ struct Offsets {
     path: Vec<usize>,
     children: usize,
     parent: usize,
-    view_part: usize,
+    view_part: isize,
 }
 
 static CACHE: std::sync::Mutex<Vec<((u32, u32), Offsets)>> = std::sync::Mutex::new(Vec::new());
@@ -335,8 +340,9 @@ pub(crate) fn find_cached(
         if let Some(view) =
             root.filter(|root| class_name(ranges, *root).as_deref() == Some("BrowserView"))
         {
-            let browser_view = Some(view + offsets.view_part);
-            let root_view = word(view + offsets.view_part + offsets.parent).unwrap_or(0);
+            let part = view.wrapping_add_signed(offsets.view_part);
+            let browser_view = Some(part);
+            let root_view = word(part + offsets.parent).unwrap_or(0);
             return Ok((
                 Found {
                     root_view,
