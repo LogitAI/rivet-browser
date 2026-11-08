@@ -348,6 +348,22 @@ if ($IsWindows) {
   if (-not ($seen -and $kept -and $untouched)) { Write-Host "FAIL nfr5_a_run_reads_the_held_browsers_and_never_writes_them : seen $seen kept $kept untouched $untouched"; $failures++ }
   else { Write-Host 'ok   nfr5_a_run_reads_the_held_browsers_and_never_writes_them' }
 }
+# A run's leftovers are the processes it started and those naming its folder, never others.
+if ($IsWindows) {
+  $t = Join-Path $PSScriptRoot '..\..\.scratch\selftest-leftovers'
+  New-Item -ItemType Directory -Force $t | Out-Null
+  $t = (Resolve-Path $t).Path
+  $named = Start-Process -PassThru -WindowStyle Hidden $env:ComSpec -ArgumentList '/c', 'ping', '-n', '30', '127.0.0.1', '>', "`"$t\ping.txt`""
+  $other = Start-Process -PassThru -WindowStyle Hidden $env:ComSpec -ArgumentList '/c', 'ping', '-n', '30', '127.0.0.1'
+  $started = Start-TestBrowser -FilePath $env:ComSpec -ArgumentList '/c', 'ping', '-n', '30', '127.0.0.1'
+  Start-Sleep 1
+  $found = @(Get-RunLeftovers $t | ForEach-Object { [int]$_.ProcessId })
+  foreach ($id in $named.Id, $other.Id, $started.Id) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+  $started.Dispose(); Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+  $ok = ($found -contains $named.Id) -and ($found -contains $started.Id) -and -not ($found -contains $other.Id) -and -not ($found -contains $PID)
+  if (-not $ok) { Write-Host "FAIL nfr5_a_run_ends_with_only_its_own_processes_found : found $($found -join ',')"; $failures++ }
+  else { Write-Host 'ok   nfr5_a_run_ends_with_only_its_own_processes_found' }
+}
 # A window on a monitor breaches the person's screen only on the person's own desktop.
 $breach = 0
 foreach ($case in @(@($true, '', $true), @($true, 'WinSta0\rivet-test-1', $false), @($false, '', $false))) {
