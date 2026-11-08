@@ -178,12 +178,53 @@ pub(crate) fn bubble_window(active: usize, page_info: usize, windows: &[usize]) 
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 type GetAnchorRect = unsafe extern "system" fn(*const core::ffi::c_void, *mut Rect) -> *mut Rect;
 
+/// Where Chromium puts a monitor's top left corner in screen DIPs. The primary monitor starts at
+/// zero, and a monitor beside it starts where the primary ends in DIPs, offset along the shared edge
+/// by its physical offset at the primary's scale, as `display::win::ScreenWin` lays displays out. A
+/// monitor that touches no edge of the primary keeps its physical place at its own scale.
+pub(crate) fn dip_origin(monitor: ([i32; 4], f32), primary: ([i32; 4], f32)) -> (f32, f32) {
+    let ([l, t, r, b], scale) = monitor;
+    let ([pl, pt, pr, pb], ps) = primary;
+    let (pw, ph) = ((pr - pl) as f32 / ps, (pb - pt) as f32 / ps);
+    if [l, t, r, b] == [pl, pt, pr, pb] {
+        (0.0, 0.0)
+    } else if l == pr {
+        (pw, (t - pt) as f32 / ps)
+    } else if r == pl {
+        (-((r - l) as f32 / scale), (t - pt) as f32 / ps)
+    } else if t == pb {
+        ((l - pl) as f32 / ps, ph)
+    } else if b == pt {
+        ((l - pl) as f32 / ps, -((b - t) as f32 / scale))
+    } else {
+        (l as f32 / scale, t as f32 / scale)
+    }
+}
+
+/// A point in physical screen pixels as Chromium's screen DIPs, on `monitor`.
+pub(crate) fn to_dips(
+    (x, y): (f32, f32),
+    monitor: ([i32; 4], f32),
+    primary: ([i32; 4], f32),
+) -> (f32, f32) {
+    let (ox, oy) = dip_origin(monitor, primary);
+    let ([l, t, _, _], scale) = monitor;
+    (ox + (x - l as f32) / scale, oy + (y - t as f32) / scale)
+}
+
 /// Client DIPs of `window` as screen DIPs.
 unsafe fn to_screen(window: HWND, [x, y, w, h]: [f32; 4]) -> Rect {
     let factor = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
     let mut origin = POINT { x: 0, y: 0 };
     ClientToScreen(window, &mut origin);
-    let (ox, oy) = (origin.x as f32 / factor, origin.y as f32 / factor);
+    let (ox, oy) = match crate::os::win32::monitors_of(window) {
+        Some((near, primary)) => to_dips(
+            (origin.x as f32, origin.y as f32),
+            (near.rect, factor),
+            (primary.rect, primary.scale),
+        ),
+        None => (origin.x as f32 / factor, origin.y as f32 / factor),
+    };
     [
         (ox + x).round() as i32,
         (oy + y).round() as i32,
@@ -323,6 +364,32 @@ mod tests {
         assert_eq!(choose([500, 400, 40, 20], PAGE, ADDRESS, CHIP, true), CHIP);
         assert!(with_page_info(std::ptr::null_mut(), || PAGE_INFO.load(Ordering::Acquire)));
         assert!(!PAGE_INFO.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn fr12_screen_dips_follow_chromiums_display_layout_on_mixed_scales() {
+        // A 200% primary of 2880 x 1800 and a 125% monitor to its right, 725 pixels lower.
+        let primary = ([0, 0, 2880, 1800], 2.0);
+        let right = ([2880, 725, 5440, 2165], 1.25);
+        assert_eq!(dip_origin(primary, primary), (0.0, 0.0));
+        assert_eq!(dip_origin(right, primary), (1440.0, 362.5));
+        // The window's client origin at (9000, 1000) pixels, past that monitor's edge, as Chromium
+        // put the window's own anchor in the trace: 1440 + 6120 / 1.25 and 362.5 + 275 / 1.25.
+        assert_eq!(to_dips((9000.0, 1000.0), right, primary), (6336.0, 582.5));
+        // Monitors left of, above and below the primary, and a single monitor.
+        assert_eq!(
+            dip_origin(([-1920, 0, 0, 1080], 1.0), primary),
+            (-1920.0, 0.0)
+        );
+        assert_eq!(
+            dip_origin(([0, -1080, 1920, 0], 1.0), primary),
+            (0.0, -1080.0)
+        );
+        assert_eq!(
+            dip_origin(([500, 1800, 2420, 2880], 1.0), primary),
+            (250.0, 900.0)
+        );
+        assert_eq!(to_dips((100.0, 50.0), primary, primary), (50.0, 25.0));
     }
 
     #[test]

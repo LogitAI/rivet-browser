@@ -294,3 +294,45 @@ unsafe extern "system" fn watch_hook(
     }
     CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
 }
+
+/// A monitor as Windows reports it: its rectangle in physical pixels as left, top, right and bottom,
+/// its scale (pixels per DIP) and whether it is the primary one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Monitor {
+    pub rect: [i32; 4],
+    pub scale: f32,
+    pub primary: bool,
+}
+
+/// The monitor nearest to `window`, and the primary monitor.
+pub(crate) unsafe fn monitors_of(window: HWND) -> Option<(Monitor, Monitor)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HMONITOR, MONITORINFO,
+        MONITORINFOF_PRIMARY, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
+    };
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    unsafe fn describe(monitor: HMONITOR) -> Option<Monitor> {
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if monitor.is_null() || GetMonitorInfoW(monitor, &mut info) == 0 {
+            return None;
+        }
+        let (mut x, mut y) = (96u32, 96u32);
+        if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) != 0 {
+            x = 96;
+        }
+        let r = info.rcMonitor;
+        Some(Monitor {
+            rect: [r.left, r.top, r.right, r.bottom],
+            scale: x.max(96) as f32 / 96.0,
+            primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
+        })
+    }
+    let near = describe(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST))?;
+    let primary = describe(MonitorFromPoint(
+        POINT { x: 0, y: 0 },
+        MONITOR_DEFAULTTOPRIMARY,
+    ))?;
+    Some((near, primary))
+}
