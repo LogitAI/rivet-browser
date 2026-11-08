@@ -2386,6 +2386,21 @@ function Invoke-SidebarOpenButton($Name, $shots) {
 
 # FR-11: a 127.0.0.1 page starts in developer mode; its row has its own background, a monospace
 # address and seven buttons left of the caption buttons.
+# The buttons of the developer row a build leaves out, and why, from the runtime's `dev mode` line.
+# Inspect element and Console run the browser's own Ctrl+Shift+C and Ctrl+Shift+J commands, whose
+# ids a build's row must record. Network and Performance open DevTools panels through Chromium's
+# DevTools functions, which the row must also record.
+function Get-MissingDevButtons([string]$Line) {
+  $have = @([regex]::Matches(($Line -replace '^.*actions', ''), '\w+') | ForEach-Object { $_.Value })
+  $why = [ordered]@{
+    Inspect = 'Inspect element: the build row records no command for Ctrl+Shift+C'
+    Console = 'Console: the build row records no command for Ctrl+Shift+J'
+    Network = 'Network: the build row records no DevTools function to open its panel'
+    Performance = 'Performance: the build row records no DevTools function to open its panel'
+  }
+  @($why.Keys | Where-Object { $have -notcontains $_ } | ForEach-Object { $why[$_] })
+}
+
 function Invoke-DevRow($Name, $shots) {
   $site = Start-LocalSite $siteDir
   $ctx = $null
@@ -2420,7 +2435,7 @@ function Invoke-DevRow($Name, $shots) {
     $row = Test-DevRow $plain $wide @($rowTop, $rowBottom) $span ([Math]::Min(7, $count))
     if ($row.Verdict -ne 'PASS') { return @($row.Verdict, $wide.Path, "$($row.Reason); the build offers $count buttons") }
     $notes = @($row.Reason)
-    if ($count -lt 7) { return @('FAIL', $wide.Path, "$($notes -join '; '); the build offers $count of the seven buttons") }
+    if ($count -lt 7) { return @('FAIL', $wide.Path, "$($notes -join '; '); the build offers $count of the seven buttons, missing $((Get-MissingDevButtons $line) -join '; ')") }
     $text = @([int]($bar.PageLeft + 130 * $s), [int]($rowTop + 10 * $s), ($span[0] - [int](8 * $s)), [int]($rowBottom - 10 * $s))
     $narrow = Get-InkWidth $one $text; $wideInk = Get-InkWidth $wide $text
     $mono = Test-Monospace $narrow $wideInk $s ($text[2] - $text[0])
