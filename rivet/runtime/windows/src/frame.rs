@@ -175,7 +175,7 @@ unsafe fn trace_reflection(window: HWND) -> bool {
     let ranges = reflect::ranges_of(image.base, &reflect::sections(headers));
     let handler = GetWindowLongPtrW(window, GWLP_USERDATA) as usize;
     let started = std::time::Instant::now();
-    let found = reflect::find(&ranges, handler, std::time::Duration::from_millis(200));
+    let found = reflect::find(&ranges, handler, std::time::Duration::from_millis(500));
     let took = started.elapsed().as_millis();
     let host = crate::hooks::page_area::laid_out_host(window);
     match found {

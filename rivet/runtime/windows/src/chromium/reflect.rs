@@ -167,6 +167,7 @@ pub(crate) struct Found {
     pub visited: usize,
 }
 
+const MIN_DEPTH: usize = 2;
 const MAX_DEPTH: usize = 4;
 const FIELDS: usize = 0x800;
 const MAX_NODES: usize = 4000;
@@ -186,7 +187,9 @@ pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<
             ));
         }
         visited += 1;
-        if class_name(ranges, object).as_deref() == Some("RootView") {
+        // The RootView lies three pointers past the handler: its host, the widget, the view. Names
+        // are only read that deep, which keeps the walk inside its budget.
+        if path.len() >= MIN_DEPTH && class_name(ranges, object).as_deref() == Some("RootView") {
             root = Some((object, path));
             break;
         }
