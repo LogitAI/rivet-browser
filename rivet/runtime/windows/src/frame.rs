@@ -259,6 +259,7 @@ fn await_layout(window: HWND) {
 /// the short reveal, by when Rivet's surfaces are drawn at that layout's scale; later ones do not.
 unsafe fn laid_out(window: HWND) {
     if take_waiting(window) {
+        GAVE_UP.with(|all| all.borrow_mut().remove(&(window as isize)));
         crate::trace::trace(&format!(
             "attach: complete, the browser laid window {:#x} out for Rivet's frame",
             window as usize
@@ -318,6 +319,8 @@ unsafe fn on_attach_layout_timer(window: HWND) {
         }
         AttachRetry::GiveUp => {
             KillTimer(window, ATTACH_LAYOUT_TIMER);
+            // The window's own events ask again from here on, with no more polling.
+            GAVE_UP.with(|all| all.borrow_mut().insert(window as isize));
             crate::trace::trace(&format!(
                 "attach: warning, the browser never laid window {:#x} out for Rivet's frame after {} tries",
                 window as usize, ATTACH_LAYOUT_TRIES
@@ -3279,7 +3282,52 @@ unsafe extern "system" fn browser_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    handle(window, message, wparam, lparam)
+    let result = handle(window, message, wparam, lparam);
+    after_event(window, message, wparam);
+    result
+}
+
+thread_local! {
+    /// The windows whose retries ran out before the browser laid them out for Rivet's frame.
+    static GAVE_UP: RefCell<HashSet<isize>> = RefCell::new(HashSet::new());
+    /// Set while Rivet asks a window again, so the ask's own messages do not ask once more.
+    static ASKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a window event asks the browser again to lay the window out for Rivet's frame: only for
+/// a window that still waits for that layout after its timed retries ran out, and only on an event
+/// after which the browser lays out, a restore or size, a show or an activation.
+fn ask_on_event(waiting: bool, gave_up: bool, message: u32, wparam: WPARAM) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SIZE_MINIMIZED, WM_ACTIVATE, WM_SHOWWINDOW, WM_SIZE,
+    };
+    if !(waiting && gave_up) {
+        return false;
+    }
+    match message {
+        WM_SIZE => wparam != SIZE_MINIMIZED as WPARAM,
+        WM_SHOWWINDOW => wparam != 0,
+        WM_ACTIVATE => wparam & 0xFFFF != 0,
+        _ => false,
+    }
+}
+
+/// After the window handled a message: asks again for the layout for Rivet's frame when the event
+/// is one the browser lays out after, for a window whose timed retries ran out.
+unsafe fn after_event(window: HWND, message: u32, wparam: WPARAM) {
+    let gave_up = GAVE_UP.with(|all| all.borrow().contains(&(window as isize)));
+    if ASKING.with(|asking| asking.get())
+        || !ask_on_event(is_waiting(window), gave_up, message, wparam)
+    {
+        return;
+    }
+    crate::trace::trace(&format!(
+        "attach: window {:#x} still not laid out for Rivet's frame; asked again on message {message:#x}",
+        window as usize
+    ));
+    ASKING.with(|asking| asking.set(true));
+    relayout(window);
+    ASKING.with(|asking| asking.set(false));
 }
 
 unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -4293,6 +4341,26 @@ mod tests {
                     <= crate::features::look::LONGEST_HIDE_MS
             )
         };
+    }
+
+    #[test]
+    fn fr2_after_the_retries_a_restore_asks_the_browser_again() {
+        use super::ask_on_event;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SIZE_MINIMIZED, SIZE_RESTORED, WM_ACTIVATE, WM_MOVE, WM_SHOWWINDOW, WM_SIZE,
+        };
+        // A restore, a show and an activation of a window that gave up ask again.
+        assert!(ask_on_event(true, true, WM_SIZE, SIZE_RESTORED as usize));
+        assert!(ask_on_event(true, true, WM_SHOWWINDOW, 1));
+        assert!(ask_on_event(true, true, WM_ACTIVATE, 1));
+        // Minimizing, hiding, deactivating and other messages do not.
+        assert!(!ask_on_event(true, true, WM_SIZE, SIZE_MINIMIZED as usize));
+        assert!(!ask_on_event(true, true, WM_SHOWWINDOW, 0));
+        assert!(!ask_on_event(true, true, WM_ACTIVATE, 0));
+        assert!(!ask_on_event(true, true, WM_MOVE, 0));
+        // While the timed retries run, or once the layout came, events ask nothing.
+        assert!(!ask_on_event(true, false, WM_SIZE, SIZE_RESTORED as usize));
+        assert!(!ask_on_event(false, true, WM_SIZE, SIZE_RESTORED as usize));
     }
 
     #[test]
