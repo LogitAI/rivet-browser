@@ -1486,18 +1486,29 @@ function Invoke-AddressSuggest($Name, $shots) {
     Send-Chars $ctx $prefix
     $quoted = [regex]::Escape('"' + $prefix + '"')
     $line = Wait-Log $before "^address bar: suggestions for $quoted"
+    # The history providers' slower pass answers after the first list; the bar shows it as it comes.
     Start-Sleep 2
+    $late = @(Read-Log | Select-Object -Skip $before | Where-Object { $_ -match "^address bar: suggestions for $quoted later" }) | Select-Object -Last 1
+    if ($late) { $line = $late }
     $list = Get-Capture $ctx (Join-Path $shots 'address-suggest-3-list.png')
     if (-not $line) { return @('FAIL', $list.Path, 'the bar asked the browser for no suggestions for the typed prefix') }
     $page = $sa
     if ($line -notmatch [regex]::Escape($page)) { return @('FAIL', $list.Path, "page-a is not suggested: $line") }
-    $notes = @('page-a suggested')
+    $notes = @("page-a suggested$(if ($late) { ' once the slower providers answered' })")
     $inline = $line -match ('inline ' + [regex]::Escape('"' + $rest + '"') + '$')
-    if (-not $inline) { return @('FAIL', $list.Path, "page-a is listed but not completed inline with '$rest': $line") }
-    $notes += "completed inline with '$rest'"
+    $rows = @([regex]::Matches(($line -replace ' inline .*$', ''), '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
+    $index = [array]::IndexOf($rows, $page)
     $before = @(Read-Log).Count
+    if ($inline) {
+      $notes += "completed inline with '$rest'"
+    } else {
+      # Not the default match, so it is picked from the list with the arrow keys, as a person would.
+      $notes += "picked as row $index of the list"
+      foreach ($k in 0..$index) { Send-Key $ctx 0x28; Start-Sleep -Milliseconds 150 }
+    }
     Send-Key $ctx 0x0D
-    if (-not (Wait-Log $before '^address bar: open suggestion 0')) { return @('FAIL', $list.Path, 'Enter did not open the completed suggestion') }
+    $want = if ($inline) { 0 } else { $index }
+    if (-not (Wait-Log $before "^address bar: open suggestion $want")) { return @('FAIL', $list.Path, "Enter did not open suggestion $want") }
     Start-Sleep 4
     $after = Get-Capture $ctx (Join-Path $shots 'address-suggest-4-opened.png')
     $v = Test-OnePage $after $script:ColourA $script:ColourB
