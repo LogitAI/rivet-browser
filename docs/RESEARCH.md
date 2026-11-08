@@ -705,6 +705,6 @@ Brave, Samsung의 기존 행과 같아야 쓸 수 있다.
 
 ### 결론
 
-메타데이터로 이름을 읽고 `BrowserView`에 닿는 데까지는 빌드 값 없이 된다. Chrome, Brave, Edge에서 행과 같은 값을
+메타데이터로 이름을 읽고 `BrowserView`에 닿는 데까지는 빌드 값 없이 된다. 자식 목록 규칙은 M150 무렵 빌드인 Samsung과 Whale에서 행과 같은 browser view를 냈다. 나중에 Whale의 페이지 영역 hook을 만들 때 쓸 수 있는 결과다. Chrome, Brave, Edge에서 행과 같은 값을
 내는 부모와 자식 목록 규칙은 아직 없다. Whale 상단 줄, Sidebar 열기 단추, 전체화면 Sidebar, 두 번째 페이지 키 입력은
 페이지 영역 배치 hook이 없어 생기는 알려진 공백으로 남긴다.
