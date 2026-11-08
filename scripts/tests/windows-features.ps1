@@ -230,6 +230,7 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   }
   if (-not $session) { $ctx.Error = "rivet session start did not report the runtime loaded: $raw"; return }
   $ctx | Add-Member -Force SessionId (($session | ConvertFrom-Json).session_id)
+  $ctx | Add-Member -Force State $state
   $deadline = (Get-Date).AddSeconds(45)
   $attached = $false
   while ((Get-Date) -lt $deadline) {
@@ -269,7 +270,16 @@ function Get-LayoutDpi($ctx) {
     Start-Sleep -Milliseconds 250
   }
   if ($line -and $line -match ' at (\d+)$') { return [int]$Matches[1] }
-  # No fallback: the test process's own idea of the window's DPI can differ from the browser's.
+  # The attach can trace before the trace file is open. Rivet then reports the scale with a capture,
+  # through `rivet read frame`, as for every other script. The test process's own idea of the
+  # window's DPI is never used: it can differ from the browser's.
+  if ($ctx.SessionId -and $ctx.State) {
+    $capture = Join-Path $OutDir "scale-$($ctx.SessionId).bmp"
+    $out = & (Join-Path $debug 'rivet.exe') read frame --out $capture --id $ctx.SessionId --state $ctx.State --json 2>$null
+    Remove-Item -LiteralPath $capture -ErrorAction SilentlyContinue
+    try { $read = $out | ConvertFrom-Json } catch { $read = $null }
+    if ($read -and $read.ok -and $read.layout_dpi) { return [int]$read.layout_dpi }
+  }
   $null
 }
 
