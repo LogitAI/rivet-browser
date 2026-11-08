@@ -235,6 +235,16 @@ unsafe extern "system" fn get_anchor_rect(
         return result;
     }
     if let Some((page, address, chip)) = targets(window) {
+        let original = *result;
+        crate::trace::trace(&format!(
+            "bubble anchor: original {original:?} address {address:?} chip {chip:?} client origin {:?} layout dpi {}",
+            {
+                let mut origin = POINT { x: 0, y: 0 };
+                ClientToScreen(window, &mut origin);
+                (origin.x, origin.y)
+            },
+            crate::frame::layout_dpi(window)
+        ));
         *result = choose(
             *result,
             page,
