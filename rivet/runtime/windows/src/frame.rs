@@ -195,14 +195,15 @@ unsafe fn trace_reflection(window: HWND) -> bool {
         match found {
             Ok((found, cached)) => crate::trace::trace(&format!(
                 "reflect: browser view by path {:x?}, view list at {:#x}, parent at {:#x} (row {:#x}), \
-                 browser view {:x?} (row {:x?}), same {}, cached {cached}, {} objects, {took} ms \
-                 on a worker thread",
+                 browser view {:x?} (row {:x?}, view part +{:#x}), same {}, cached {cached}, \
+                 {} objects, {took} ms on a worker thread",
                 found.path,
                 found.children,
                 found.parent,
                 parent_row,
                 found.browser_view,
                 host,
+                found.view_part,
                 found.parent == parent_row
                     && found.browser_view.is_some()
                     && found.browser_view == host,
