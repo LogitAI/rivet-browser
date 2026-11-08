@@ -1751,6 +1751,23 @@ function Get-ProviderPrefs([string]$Profile) {
 # filled by the browser. `system`: the browser's password manager stays off, so it neither offers
 # to save nor fills; the save through Windows passkeys needs Windows Hello, which only a person at
 # the machine can answer, so that half is reported as not driven.
+# The text of the password manager log in tab `$Tab` of the app window, read through the window's
+# accessibility tree. The tab is made active for the read.
+function Get-PasswordLog($ctx, [int]$Tab) {
+  if (-not (Send-Flag $ctx 'rivet-tab.txt' "activate $Tab")) { return @() }
+  Start-Sleep 2
+  Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+  $root = [Windows.Automation.AutomationElement]::FromHandle($ctx.Hwnd)
+  $texts = @()
+  # The page's own text joins the tree a moment after a reader first asks for it.
+  foreach ($i in 1..8) {
+    $all = $root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
+    $texts = @(foreach ($e in $all) { $e.Current.Name })
+    if ($texts -match '^Message:|Decision') { break }
+    Start-Sleep 2
+  }
+  $texts
+}
 function Invoke-Credentials($Name, $shots, [string]$Provider) {
   $feature = "credentials-$Provider"
   $server = $null
@@ -1764,6 +1781,12 @@ function Invoke-Credentials($Name, $shots, [string]$Provider) {
     $want = ($Provider -eq 'browser')
     if (-not $prefs -or $prefs.Save -ne $want -or $prefs.AutoSignIn -ne $want) {
       return @('FAIL', $null, "the profile does not start with the $Provider provider: save=$($prefs.Save) autosignin=$($prefs.AutoSignIn)")
+    }
+    # The browser's own log of its password manager, in a second tab of this test profile, records
+    # each save decision while it is open. It is read only when the form is not filled on load.
+    $internals = $false
+    if ($Provider -eq 'browser' -and $env:RIVET_TEST_DESKTOP) {
+      $internals = (Send-Flag $ctx 'rivet-tab.txt' 'new chrome://password-manager-internals') -and (Send-Flag $ctx 'rivet-tab.txt' 'activate 0')
     }
     $tops = @(Get-MyTops $ctx)
     # Only now is the form sent, so the save offer is a window that was not there before. Sent while
@@ -1821,6 +1844,19 @@ function Invoke-Credentials($Name, $shots, [string]$Provider) {
     Start-Sleep 3
     $filled = Get-Capture $ctx (Join-Path $shots "$feature-3-filled.png")
     $v = Test-OnePage $filled $script:ColourC $script:ColourA
+    if ($v.Verdict -ne 'PASS' -and $internals) {
+      # Some browsers never fill a form as it loads and wait for the account to be picked; Brave
+      # always does. Its log then shows the save itself: the offer, the decision to save, and the one
+      # saved account the fresh form found while it waits for the user name. Names stay hidden there.
+      $log = (Get-PasswordLog $ctx 1) -join "`n"
+      $asked = $log -match 'Decision: ASK the user' -and $log -match 'Show password prompt'
+      $saved = $log -match 'Decision: SAVE the newly created credential' -and $log -match 'Number of unique matched credentials:\s*1'
+      $waits = $log -match 'wait_for_username:\s*true'
+      if ($asked -and $saved -and $waits) {
+        return @('NOT_DRIVEN', $filled.Path, 'the browser offered to save the fake account, Save was accepted, its log decided to save it and found it on the fresh form; it fills only once the account is picked (wait_for_username), so the fill was not driven')
+      }
+      return @('FAIL', $filled.Path, "the saved fake account was not filled, and the browser's log shows asked $asked, saved $saved, waits for the user name $waits")
+    }
     if ($v.Verdict -ne 'PASS') { return @('FAIL', $filled.Path, "the saved fake account was not filled: $($v.Reason)") }
     @('PASS', $filled.Path, 'the browser offered to save the fake account, Save was accepted, and a fresh load of the form was filled by the browser')
   } finally {
