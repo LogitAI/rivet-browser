@@ -258,6 +258,34 @@ pub(crate) unsafe fn activate_on_test_desktop(window: HWND) -> bool {
         || windows_sys::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow() == window
 }
 
+/// Focuses `window`, or with `popup` its top owned window such as the password save offer, for a
+/// row that needs a focused window. Both go through the one test desktop gate before any window is
+/// looked up. Returns whether a window was activated.
+pub(crate) unsafe fn focus_for_row(window: HWND, popup: bool) -> bool {
+    focus_target(window, popup, focus::activation_allowed(), || {
+        owned_popup(window)
+    })
+    .is_some_and(|target| activate_on_test_desktop(target))
+}
+
+/// The window a row's focus request goes to: none unless the gate allows activation, else
+/// `window` itself or, with `popup`, what `find` returns.
+fn focus_target(
+    window: HWND,
+    popup: bool,
+    allowed: bool,
+    find: impl FnOnce() -> Option<HWND>,
+) -> Option<HWND> {
+    if !allowed {
+        return None;
+    }
+    if popup {
+        find()
+    } else {
+        Some(window)
+    }
+}
+
 /// The top window a browser window shows over itself, such as its password save offer: the first
 /// visible window, in the thread's top-down order, that `window` owns.
 pub(crate) unsafe fn owned_popup(window: HWND) -> Option<HWND> {
@@ -397,6 +425,28 @@ pub(crate) unsafe fn message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nfr5_focusing_the_save_offer_takes_the_same_test_desktop_gate_as_the_window() {
+        let window = 10 as HWND;
+        let offer = 50 as HWND;
+        // Off a test desktop nothing is focused, and the offer is not even looked up.
+        for popup in [false, true] {
+            let target = focus_target(window, popup, false, || panic!("looked up"));
+            assert_eq!(target, None);
+        }
+        // On one, the window or its offer.
+        assert_eq!(focus_target(window, false, true, || None), Some(window));
+        assert_eq!(
+            focus_target(window, true, true, || Some(offer)),
+            Some(offer)
+        );
+        // This test's own thread is not on a test desktop, so the real gate refuses both.
+        unsafe {
+            assert!(!focus_for_row(window, false));
+            assert!(!focus_for_row(window, true));
+        }
+    }
 
     #[test]
     fn nfr8_the_save_offer_to_focus_is_the_top_visible_window_the_browser_window_owns() {
