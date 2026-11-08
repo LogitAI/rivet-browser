@@ -268,6 +268,32 @@ unsafe fn laid_out(window: HWND) {
     }
 }
 
+/// What the attach needs to know of a window: whether it is shown, minimized or framed, and its
+/// size, which decide whether the browser lays it out for Rivet's frame.
+unsafe fn window_state(window: HWND) -> String {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, WS_VISIBLE};
+    let style = GetWindowLongPtrW(window, GWL_STYLE) as u32;
+    let mut rect: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut rect);
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    format!(
+        "attached {} visible {} style-visible {} minimized {} maximized {} sizing frame {} window [{}, {}, {}, {}] client {}x{}",
+        attached(window),
+        IsWindowVisible(window) != 0,
+        style & WS_VISIBLE != 0,
+        IsIconic(window) != 0,
+        IsZoomed(window) != 0,
+        style & WS_THICKFRAME != 0,
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom,
+        client.right,
+        client.bottom
+    )
+}
+
 /// Whether the window still waits for the browser's layout for Rivet's frame.
 fn is_waiting(window: HWND) -> bool {
     AWAITING_LAYOUT.with(|all| all.borrow().contains(&(window as isize)))
@@ -2010,8 +2036,16 @@ unsafe fn relayout(window: HWND) {
     // The frame view lays out again on request, which also works for a maximized window.
     crate::features::vertical_tabs::invalidate_strip(window);
     if frame_layout::relayout(window) {
+        if is_waiting(window) {
+            crate::trace::trace("attach: asked the frame view to lay out again");
+        }
         update_appbar(window);
         return;
+    }
+    if is_waiting(window) {
+        crate::trace::trace(
+            "attach: asked for a frame change, as the frame view's layout is not recorded",
+        );
     }
     SetWindowPos(
         window,
@@ -3183,6 +3217,13 @@ pub(crate) unsafe fn layout_dpi(window: HWND) -> u32 {
 fn reserved_width(window: HWND, bounds: frame_layout::Rect) -> Option<i32> {
     unsafe {
         if !attached(window) || !framed(window) {
+            if is_waiting(window) {
+                crate::trace::trace(&format!(
+                    "attach: layout of window {:#x} not for Rivet's frame: {}",
+                    window as usize,
+                    window_state(window)
+                ));
+            }
             return None;
         }
         // The browser is laying the window out for Rivet's frame; the first such layout after the
@@ -3938,7 +3979,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         {
             // The reveal came from the longest hide while the window still waited for the browser
             // to lay it out for Rivet's frame: the window showed before Rivet's look was in place.
-            if take_waiting(window) {
+            // The window keeps waiting, so the retries and then its own events still ask for it.
+            if is_waiting(window) {
                 crate::trace::trace(&format!(
                     "first look: warning, window {:#x} shown after the longest hide of {} ms \
                      without the browser's layout for Rivet's frame",
@@ -4317,6 +4359,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             crate::offscreen::put_away(window);
             crate::features::look::first_look(window, crate::features::look::FirstLook::UiThread);
             await_layout(window);
+            crate::trace::trace(&format!(
+                "attach: window {:#x} waits for the browser's layout for Rivet's frame: {}",
+                window as usize,
+                window_state(window)
+            ));
             // The browser may not lay the window out for Rivet's frame, as when it was minimized at
             // the attach; it is asked again until it does.
             // Temporary probe: RIVET_PROBE_NO_ATTACH_RETRY turns the timed retry off, to measure
@@ -4385,6 +4432,22 @@ mod tests {
         assert!(!super::take_waiting(other));
         assert!(super::take_waiting(window));
         assert!(!super::take_waiting(window), "later layouts change nothing");
+    }
+
+    #[test]
+    fn fr2_the_longest_hide_leaves_the_window_waiting_for_its_layout() {
+        let window = 0x3000 as super::HWND;
+        super::await_layout(window);
+        // The reveal after the longest hide only reads the mark.
+        assert!(super::is_waiting(window));
+        assert!(super::is_waiting(window));
+        // The retry timer still asks again, and the layout that comes later completes the attach.
+        assert_eq!(
+            super::attach_retry(super::is_waiting(window), 3),
+            super::AttachRetry::AskAgain(4)
+        );
+        assert!(super::take_waiting(window));
+        assert!(!super::is_waiting(window));
     }
 
     /// Windows and the browser can disagree on a window's scale: while the window crosses monitors
