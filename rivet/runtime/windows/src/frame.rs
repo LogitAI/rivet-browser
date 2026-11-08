@@ -2396,6 +2396,13 @@ pub unsafe fn attach(window: HWND) -> bool {
     // DirectComposition targets and frame changes belong on the UI thread that owns the window.
     let posted = PostMessageW(window, attach_message(), 0, 0) != 0;
     if posted {
+        // The scale Rivet draws at from the start, before the browser's first layout records its
+        // own; a browser may lay out a window only once a second tab opens.
+        crate::trace::trace(&format!(
+            "layout dpi: window {:#x} at {}",
+            window as usize,
+            layout_dpi(window)
+        ));
         crate::features::control::serve(window);
     } else {
         crate::features::look::first_look(window, crate::features::look::FirstLook::AttachFailed);
