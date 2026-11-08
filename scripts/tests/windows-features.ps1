@@ -246,9 +246,8 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   }
   if ($ctx.Hwnd -eq [IntPtr]::Zero) { $ctx.Error = 'the browser opened no window'; return }
   if (-not $attached) { $ctx.Error = 'attach-failed' }
-  # Park without activating: on a test desktop on a monitor of its own, else off every monitor.
-  $park = Get-ParkPlace
-  [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, $park[0], $park[1], 1800, 1067, 0x14) | Out-Null
+  # Park off-screen without activating, as the installed build's window would sit on the owner's monitor.
+  [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, 1800, 1067, 0x14) | Out-Null
   [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   $ctx.Dpi = [FeatureWin]::GetDpiForWindow($ctx.Hwnd)
   Start-Sleep 8
