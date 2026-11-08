@@ -440,6 +440,55 @@ pub(crate) fn facts(ranges: &Ranges, view: usize, parent: usize, reached: Option
         reached.map(|reached| reached as isize - view as isize)
     )
 }
+
+/// What the decode sees in the object at `object`: for each part whose first word is a module
+/// vtable, (part, vtable offset in the module, GetClassMetaData slot offset, the load it decodes
+/// as (offset, whether a word), and whether that names readable metadata), at most `limit` of them.
+pub(crate) fn parts(ranges: &Ranges, base: usize, object: usize, limit: usize) -> String {
+    let mut seen = Vec::new();
+    for part in (0..0x800).step_by(8) {
+        if seen.len() >= limit {
+            break;
+        }
+        if !is_object(ranges, object + part) {
+            continue;
+        }
+        let table = word(object + part).unwrap_or(0);
+        let slot = word(table + 8).unwrap_or(0);
+        let load = load_target(&bytes, slot);
+        let meta =
+            load.and_then(|(target, is_word)| if is_word { word(target) } else { Some(target) });
+        let readable_meta = meta.is_some_and(|meta| meta != 0 && readable(meta, 0x90));
+        seen.push(format!(
+            "({part:#x}, {:#x}, {:#x}, {:x?}, {readable_meta})",
+            table.wrapping_sub(base),
+            slot.wrapping_sub(base),
+            load.map(|(target, is_word)| (target.wrapping_sub(base), is_word))
+        ));
+    }
+    seen.join(" ")
+}
+
+/// The fields of the view at `view` that name an object whose class decodes, as (field, name,
+/// metadata part), at most `limit` of them.
+pub(crate) fn named_fields(ranges: &Ranges, view: usize, limit: usize) -> String {
+    let mut seen = Vec::new();
+    for field in (0..0x800).step_by(8) {
+        if seen.len() >= limit {
+            break;
+        }
+        let Some(target) = word(view + field) else {
+            break;
+        };
+        if target == view || !is_object(ranges, target) {
+            continue;
+        }
+        if let Some((name, part)) = name_and_part(ranges, target, 0x800) {
+            seen.push(format!("({field:#x}, {name}, {part:#x})"));
+        }
+    }
+    seen.join(" ")
+}
 #[cfg(test)]
 mod tests {
     use super::*;
