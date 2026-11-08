@@ -162,6 +162,42 @@ const SETTINGS_ROW: f32 = 34.0;
 const SETTINGS_PAD: f32 = 4.0;
 const FOOT_HEIGHT: f32 = 38.0;
 
+/// Finds the window's views by class metadata from the window's own user data, and traces them
+/// beside the browser view and parent field this build's row records. Returns whether it ran.
+unsafe fn trace_reflection(window: HWND) -> bool {
+    use crate::chromium::reflect;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
+    let Some(image) = crate::chromium::image::recorded() else {
+        crate::trace::trace("reflect: the browser module is not known");
+        return false;
+    };
+    let headers = std::slice::from_raw_parts(image.base as *const u8, 0x1000.min(image.size));
+    let ranges = reflect::ranges_of(image.base, &reflect::sections(headers));
+    let handler = GetWindowLongPtrW(window, GWLP_USERDATA) as usize;
+    let started = std::time::Instant::now();
+    let found = reflect::find(&ranges, handler, std::time::Duration::from_millis(200));
+    let took = started.elapsed().as_millis();
+    let host = crate::hooks::page_area::laid_out_host(window);
+    match found {
+        Ok(found) => crate::trace::trace(&format!(
+            "reflect: root view by path {:x?}, view list at {:#x}, parent at {:#x} (row {:#x}), \
+             browser view {:x?} (row {:x?}), same {}, {} objects, {took} ms",
+            found.path,
+            found.children,
+            found.parent,
+            crate::chromium::view::View::PARENT,
+            found.browser_view,
+            host,
+            found.parent == crate::chromium::view::View::PARENT
+                && found.browser_view.is_some()
+                && found.browser_view == host,
+            found.visited,
+        )),
+        Err(error) => crate::trace::trace(&format!("reflect: {error}, {took} ms")),
+    }
+    true
+}
+
 /// The warning of this process when it runs from a held browser build. The clock is read once per
 /// process, and the time left is worked out anew for each paint because a window can stay open for days.
 fn held_warning() -> Option<String> {
@@ -3858,6 +3894,9 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         // The top bar: `bar` starts editing the address, `bartext` traces what it holds,
                         // `barsecurity` the page's security level and `barinfo` opens the page info bubble.
                         Some("bar") => crate::features::address_bar::focus(window),
+                        // `reflect` finds the window's views by their class metadata, reading memory
+                        // only, and traces what it found beside what this build's row says.
+                        Some("reflect") => trace_reflection(window),
                         // `focuswindow`: a row that needs a focused window, on a test desktop only.
                         // `focuswindow popup` focuses the window's top owned window instead, such as
                         // the browser's password save offer, so its default button takes Enter.

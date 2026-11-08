@@ -2615,6 +2615,21 @@ function Invoke-PermissionBubble($Name, $shots) {
 
 # FR-12: the browser's password save bubble, after a fake sign in on a loopback page, is anchored
 # by the address row inside the Rivet window. Fake credentials only, on a fresh test profile.
+# Reflection first: the runtime finds the window's views by their class metadata from the
+# window's own user data, reading memory only, and the views and parent field it derives must equal
+# what this build's row records.
+function Invoke-ViewReflection($Name, $shots) {
+  $ctx, $one, $early = Open-SurfaceScene $Name 'view-reflection' $urlA $shots
+  try {
+    if ($early) { return $early }
+    $before = @(Read-Log).Count
+    if (-not (Send-Flag $ctx 'rivet-tab.txt' 'reflect')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the reflect command') }
+    $line = Wait-Log $before '^reflect:' 10
+    if (-not $line) { return @('NOT_DRIVEN', $one.Path, 'the runtime traced no reflection') }
+    if ($line -match ', same true,') { return @('PASS', $one.Path, $line) }
+    @('FAIL', $one.Path, $line)
+  } finally { if ($ctx) { Stop-Scene $ctx } }
+}
 function Invoke-PasswordBubble($Name, $shots) {
   $site = Start-LocalSite $siteDir
   $ctx = $null
@@ -2883,6 +2898,7 @@ foreach ($name in $Browsers) {
         'security-chip' { Invoke-SecurityChip $name $shots }
         'permission-bubble' { Invoke-PermissionBubble $name $shots }
         'password-bubble' { Invoke-PasswordBubble $name $shots }
+        'view-reflection' { Invoke-ViewReflection $name $shots }
         'typing-keeps-active' { Invoke-TypingKeepsActive $name $shots }
         'cli-control' { Invoke-CliControl $name $shots }
         'cli-input' { if ($env:RIVET_TEST_DESKTOP) { @('NOT_DRIVEN', $null, 'a page takes typed text only in an active window, and no test window is ever activated') } else { Invoke-CliInput $name $shots } }
