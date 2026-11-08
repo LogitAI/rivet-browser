@@ -1683,7 +1683,7 @@ function Invoke-OpenLink($Name, $shots, [string]$Mode) {
 function New-LoginPages {
   $hexA = '#{0:X6}' -f $script:ColourA; $hexC = '#{0:X6}' -f $script:ColourC
   $style = "<style>html,body{margin:0;height:100%;background:$hexA}body:has(input:autofill),body:has(input:-webkit-autofill){background:$hexC}input{font-size:20px;margin:20px}</style>"
-  $form = "<form method=get action=done.html autocomplete=on><input id=u name=username autocomplete=username><input id=p name=password type=password autocomplete=current-password><button>Sign in</button></form>"
+  $form = "<form method=get action=done.html autocomplete=on><input id=u name=username autocomplete=username autofocus><input id=p name=password type=password autocomplete=current-password><button>Sign in</button></form>"
   $js = "<script>if(location.hash==='#submit'){setTimeout(function(){u.value='rivet-test-user';p.value='not-a-real-password-1';document.forms[0].requestSubmit()},1500)}</script>"
   [IO.File]::WriteAllText((Join-Path $pageDir 'login.html'), "<!doctype html><meta charset=utf-8><title>login</title>$style$form$js")
   $hexB = '#{0:X6}' -f $script:ColourB
@@ -1753,9 +1753,23 @@ function Invoke-Credentials($Name, $shots, [string]$Provider) {
     # the scene still settled, the offer was already among the windows taken as the scene's own.
     # The browser offers to save a password only in an active window. On a test desktop of its own
     # the runtime may activate the window, which reaches no person's screen or keyboard.
-    if ($env:RIVET_TEST_DESKTOP) { Send-Flag $ctx 'rivet-tab.txt' 'focuswindow' | Out-Null }
-    $go = Invoke-Rivet $ctx $state @('nav', 'go', ($server.Url + '?send#submit'))
-    if ($go.Code -ne 0) { return @('NOT_DRIVEN', $null, "the login page could not be opened to send the form: $($go.Text)") }
+    if ($env:RIVET_TEST_DESKTOP) {
+      # The browser saves what a person typed, so the fake account is typed into the focused form,
+      # as keys the focused window takes, and sent with Enter.
+      if (-not (Send-Flag $ctx 'rivet-tab.txt' 'focuswindow')) { return @('NOT_DRIVEN', $null, 'the window could not be focused on the test desktop') }
+      Start-Sleep 1
+      Send-Chars $ctx 'rivet-test-user'
+      Send-Key $ctx 0x09
+      [FeatureWin]::PostMessage($ctx.Hwnd, 0x102, [IntPtr]9, [IntPtr]1) | Out-Null
+      Start-Sleep -Milliseconds 300
+      Send-Chars $ctx 'not-a-real-password-1'
+      Start-Sleep -Milliseconds 300
+      Send-Key $ctx 0x0D
+      [FeatureWin]::PostMessage($ctx.Hwnd, 0x102, [IntPtr]13, [IntPtr]1) | Out-Null
+    } else {
+      $go = Invoke-Rivet $ctx $state @('nav', 'go', ($server.Url + '?send#submit'))
+      if ($go.Code -ne 0) { return @('NOT_DRIVEN', $null, "the login page could not be opened to send the form: $($go.Text)") }
+    }
     # The form sends itself 1.5 s after load. The browser's save offer is a window of its own; it is
     # moved off-screen without activation as soon as it appears, then its default button is pressed.
     $bubble = $null
