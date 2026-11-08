@@ -373,7 +373,11 @@ function Open-SecondPage($ctx, [string]$Url, [switch]$AllowOwned) {
   Start-Sleep 4
   if (@(Get-MyTops $ctx | Where-Object { & $isNew $_ }).Count -gt 0) { return $false }
   # The page must be a tab of the app window itself.
-  (Send-Flag $ctx 'rivet-tab.txt' 'list') -and ((Get-TabUrls) -contains $Url)
+  $listed = (Send-Flag $ctx 'rivet-tab.txt' 'list') -and ((Get-TabUrls) -contains $Url)
+  # Whale traces the scale it lays the window out at only once a second tab is laid out, after the
+  # scene read its scale, so the scale is read again here.
+  if ($listed) { $ctx.Dpi = Get-LayoutDpi $ctx }
+  $listed
 }
 
 # --- Features -----------------------------------------------------------------------------
