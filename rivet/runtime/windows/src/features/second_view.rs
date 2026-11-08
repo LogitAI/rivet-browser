@@ -56,11 +56,13 @@ pub(crate) const PREVIEW_HEADER: i32 = 40;
 
 /// Where a floating page sits in the page area `full`, below its header. The study's preview keeps
 /// 64 DIPs at the sides, 20 above its header and 40 below. A small window keeps a narrower margin.
-pub(crate) fn floating(full: [i32; 4]) -> [i32; 4] {
+pub(crate) fn floating(full: [i32; 4], reserve: i32) -> [i32; 4] {
     let [x, y, w, h] = full;
     let side = 64.min(w / 10);
     let top = 20.min(h / 10);
-    let bottom = 40.min(h / 10);
+    // `reserve` DIPs at the page bottom belong to a notice that sits there, such as the held build
+    // warning, so the floating page keeps clear of them.
+    let bottom = 40.min(h / 10).max(reserve);
     [
         x + side,
         y + top + PREVIEW_HEADER,
@@ -700,7 +702,7 @@ pub(crate) fn layout(full: [i32; 4], mode: Mode, rail: i32) -> ([i32; 4], [i32; 
     let [x, y, w, h] = full;
     match mode {
         Mode::Inset | Mode::Split => (full, [x + w, y, 0, h]),
-        Mode::Floating => (full, floating(full)),
+        Mode::Floating => (full, floating(full, crate::frame::held_reserve())),
         Mode::Docked { width } => {
             let width = width.clamp(0, w.max(0));
             (full, [x + w - width, y, width, h])
