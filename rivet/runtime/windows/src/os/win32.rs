@@ -309,7 +309,7 @@ pub(crate) unsafe fn monitors_of(window: HWND) -> Option<(Monitor, Monitor)> {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HMONITOR, MONITORINFO,
-        MONITORINFOF_PRIMARY, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
+        MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
     };
     use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
     unsafe fn describe(monitor: HMONITOR) -> Option<Monitor> {
@@ -326,7 +326,8 @@ pub(crate) unsafe fn monitors_of(window: HWND) -> Option<(Monitor, Monitor)> {
         Some(Monitor {
             rect: [r.left, r.top, r.right, r.bottom],
             scale: x.max(96) as f32 / 96.0,
-            primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
+            // MONITORINFOF_PRIMARY
+            primary: info.dwFlags & 1 != 0,
         })
     }
     let near = describe(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST))?;
