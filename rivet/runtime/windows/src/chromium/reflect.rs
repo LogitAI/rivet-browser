@@ -85,11 +85,23 @@ pub(crate) fn load_target(
     let rel =
         |bytes: &[u8], from: usize| i32::from_le_bytes(bytes[from..from + 4].try_into().unwrap());
     let mut code_at = at;
-    let first = read(code_at, 5)?;
-    if first[0] == 0xE9 {
-        code_at = (code_at as i64 + 5 + rel(&first, 1) as i64) as usize;
+    // A slot of a base that is not the object's first holds a thunk that moves `this` back to the
+    // object (`sub rcx, n` or `add rcx, n`) before it jumps to the class's own function, which may
+    // in turn jump to `MetaData()`. Up to three such steps are followed.
+    for _ in 0..3 {
+        let head = read(code_at, 12)?;
+        let skip = match head[..3] {
+            [0x48, 0x83, 0xE9] | [0x48, 0x83, 0xC1] => 4,
+            [0x48, 0x81, 0xE9] | [0x48, 0x81, 0xC1] => 7,
+            _ => 0,
+        };
+        if head[skip] == 0xE9 {
+            code_at = (code_at as i64 + skip as i64 + 5 + rel(&head, skip + 1) as i64) as usize;
+        } else {
+            break;
+        }
     }
-    let code = read(code_at, 64)?;
+    let code = read(code_at, 128)?;
     (0..code.len() - 7)
         .find(|&i| code[i] == 0x48 && code[i + 1] == 0x8D && code[i + 2] == 0x05)
         .map(|i| (code_at as i64 + i as i64 + 7 + rel(&code, i + 3) as i64) as usize)
@@ -180,18 +192,27 @@ pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<
     let mut queue = VecDeque::from([(handler, Vec::new())]);
     let mut visited = 0;
     let mut root = None;
+    // The first class names met, so a walk that misses says what it saw.
+    let mut names: Vec<String> = Vec::new();
     while let Some((object, path)) = queue.pop_front() {
         if start.elapsed() > budget || visited > MAX_NODES {
             return Err(format!(
-                "no RootView within the budget after {visited} objects"
+                "no RootView within the budget after {visited} objects; names met {names:?}"
             ));
         }
         visited += 1;
         // The RootView lies three pointers past the handler: its host, the widget, the view. Names
         // are only read that deep, which keeps the walk inside its budget.
-        if path.len() >= MIN_DEPTH && class_name(ranges, object).as_deref() == Some("RootView") {
-            root = Some((object, path));
-            break;
+        if path.len() >= MIN_DEPTH {
+            if let Some(name) = class_name(ranges, object) {
+                if name == "RootView" {
+                    root = Some((object, path));
+                    break;
+                }
+                if names.len() < 12 && !names.contains(&name) {
+                    names.push(name);
+                }
+            }
         }
         if path.len() >= MAX_DEPTH {
             continue;
@@ -207,7 +228,8 @@ pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<
             }
         }
     }
-    let (root_view, path) = root.ok_or("no RootView reached from the window")?;
+    let (root_view, path) =
+        root.ok_or_else(|| format!("no RootView reached from the window; names met {names:?}"))?;
     let (children, parent) = view_list(ranges, root_view)
         .ok_or("no view list below the RootView whose views point back to it")?;
     let browser_view = browser_view_below(ranges, root_view, children, start, budget);
@@ -396,7 +418,7 @@ mod tests {
     fn nfr3_a_class_metadata_load_is_decoded_through_one_jump() {
         // At 0x1000: jmp to 0x2000. At 0x2000: some bytes, then lea rax,[rip+0x100], ret.
         let read = |at: usize, length: usize| -> Option<Vec<u8>> {
-            let mut code = vec![0xCCu8; 64];
+            let mut code = vec![0xCCu8; 128];
             if at == 0x1000 {
                 code[0] = 0xE9;
                 code[1..5].copy_from_slice(&(0x2000i32 - 0x1005).to_le_bytes());
@@ -404,6 +426,10 @@ mod tests {
                 code[..4].copy_from_slice(&[0x48, 0x83, 0xEC, 0x28]);
                 code[4..7].copy_from_slice(&[0x48, 0x8D, 0x05]);
                 code[7..11].copy_from_slice(&0x100i32.to_le_bytes());
+            } else if at == 0x5000 {
+                code[..4].copy_from_slice(&[0x48, 0x83, 0xE9, 0x10]);
+                code[4] = 0xE9;
+                code[5..9].copy_from_slice(&(0x1000i32 - 0x5009).to_le_bytes());
             } else if at == 0x3000 {
                 code[..3].copy_from_slice(&[0x48, 0x8D, 0x05]);
                 code[3..7].copy_from_slice(&(-0x10i32).to_le_bytes());
@@ -414,6 +440,8 @@ mod tests {
         assert_eq!(load_target(&read, 0x1000), Some(0x2000 + 4 + 7 + 0x100));
         assert_eq!(load_target(&read, 0x3000), Some(0x3000 + 7 - 0x10));
         assert_eq!(load_target(&read, 0x4000), None);
+        // A thunk: sub rcx, 0x10, then jmp to 0x1000, which jumps on to 0x2000.
+        assert_eq!(load_target(&read, 0x5000), Some(0x2000 + 4 + 7 + 0x100));
     }
 
     #[test]
