@@ -229,6 +229,23 @@ function Assert-RunSafe($Safety) {
   }
 }
 
+# The processes of this run still alive: the ones it started by id, and any process whose command
+# line names this run's folder, where all its test profiles live. Processes are never matched by
+# name, so a person's own browser is never one of them.
+function Get-RunLeftovers([string]$OutDir, [int[]]$Keep = @()) {
+  $mine = $OutDir.TrimEnd('\')
+  $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  # The runner itself and the runners that started it name the folder too, and are not left over.
+  $keep = [System.Collections.Generic.HashSet[int]]::new()
+  foreach ($k in $Keep) { [void]$keep.Add($k) }
+  $at = $PID
+  while ($at -and $keep.Add([int]$at)) { $at = ($all | Where-Object ProcessId -eq $at | Select-Object -First 1).ParentProcessId }
+  @($all | Where-Object {
+      -not $keep.Contains([int]$_.ProcessId) -and (
+        ($script:StartedTestPids.ContainsKey([int]$_.ProcessId) -and [Math]::Abs(($script:StartedTestPids[[int]$_.ProcessId] - $_.CreationDate).TotalSeconds) -lt 1) -or
+        ($_.CommandLine -and $_.CommandLine.IndexOf($mine, [StringComparison]::OrdinalIgnoreCase) -ge 0))
+    })
+}
 function Stop-RunSafety($Safety) {
   if (-not $Safety) { return }
   Assert-RunSafe $Safety
@@ -237,7 +254,16 @@ function Stop-RunSafety($Safety) {
   Set-Content -Path $Safety.StopFile -Value 'stop'
   if (-not $Safety.Guard.WaitForExit(3000)) { Stop-Process -Id $Safety.Guard.Id -Force -ErrorAction SilentlyContinue }
   Remove-Item $Safety.Record, $Safety.StopFile -ErrorAction SilentlyContinue
-  # A run only reads the person's held browsers. Anything changed there is reported and fails the run.
+  # A run ends with none of its processes left. Any still alive are stopped and listed, and the run
+  # fails, since a test browser left running holds the runtime's library and blocks the next build.
+  $left = @(Get-RunLeftovers $Safety.OutDir @($Safety.Guard.Id))
+  if ($left.Count) {
+    $list = $left | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.Name, $_.CommandLine }
+    $left | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    $list | Set-Content (Join-Path $Safety.OutDir 'leftover-processes.txt')
+    Write-Host "FAIL the run left $($left.Count) of its processes running; they were stopped, see leftover-processes.txt"
+    exit 5
+  }  # A run only reads the person's held browsers. Anything changed there is reported and fails the run.
   $changed = @(Compare-Object $Safety.HeldBefore @(Get-HeldSnapshot) | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
   if ($changed.Count) {
     $changed | Set-Content (Join-Path $Safety.OutDir 'held-changed.txt')
@@ -296,6 +322,10 @@ public static class RivetTestStart{
 # SW_HIDE Chromium shows as SW_SHOWNORMAL and then activates. The arguments are joined as
 # Start-Process joins them, so each must be quoted already where it needs to be. The result has Id,
 # WaitForExit(milliseconds) and Dispose().
+# The processes this run started itself, by id, for the check when the run ends.
+# A process id comes back to another process once its own ends, so each is kept with its start time.
+$script:StartedTestPids = [System.Collections.Generic.Dictionary[int, datetime]]::new()
+
 function Start-TestBrowser {
   param(
     [Parameter(Mandatory = $true)][string]$FilePath,
@@ -305,5 +335,7 @@ function Start-TestBrowser {
   $line = '"' + $FilePath + '"'
   if ($ArgumentList.Count) { $line += ' ' + ($ArgumentList -join ' ') }
   $output = if ($RedirectStandardOutput) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RedirectStandardOutput) } else { $null }
-  [RivetTestStart]::Start($FilePath, $line, $output)
+  $started = [RivetTestStart]::Start($FilePath, $line, $output)
+  if ($started) { try { $script:StartedTestPids[$started.Id] = (Get-Process -Id $started.Id -ErrorAction Stop).StartTime } catch {} }
+  $started
 }
