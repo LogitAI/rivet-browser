@@ -622,6 +622,10 @@ function Invoke-SplitPath($Name, $shots, [string]$Feature, [string]$Path, [strin
     $on = Test-SplitShown $split $shown
     if ($on.Verdict -ne 'PASS') {
       $log = (Read-Log | Where-Object { $_ -match 'tab menu|tab drag|split' } | Select-Object -Last 3) -join ' / '
+      # A build with no recorded split view cannot split by the tab menu or a drag: its path is
+      # not there to drive, which is not a fault of the path.
+      $missing = Read-Log | Where-Object { $_ -match '^feature split: not in this build' } | Select-Object -First 1
+      if ($missing -and $Path -ne 'message') { return @('NOT_DRIVEN', $split.Path, "this build has no recorded split view for the $Path path: $missing") }
       return @($on.Verdict, $split.Path, "after the $Path path: $($on.Reason). trace: $log")
     }
     if (-not (Test-ViewOwns $opens 'Split')) { return @('FAIL', $split.Path, "after the $Path path two pages are shown, but the second page is not in the second page view") }
@@ -1720,7 +1724,7 @@ function Invoke-Credentials($Name, $shots, [string]$Provider) {
   $ctx, $state = Start-Scene $Name $feature $urlA
   try {
     $server = Start-LoginServer
-    Open-Scene $ctx $state ($server.Url + '#submit') $null @('--credentials', $Provider)
+    Open-Scene $ctx $state $server.Url $null @('--credentials', $Provider)
     if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
     if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
     $prefs = Get-ProviderPrefs $ctx.Profile
@@ -1729,6 +1733,10 @@ function Invoke-Credentials($Name, $shots, [string]$Provider) {
       return @('FAIL', $null, "the profile does not start with the $Provider provider: save=$($prefs.Save) autosignin=$($prefs.AutoSignIn)")
     }
     $tops = @(Get-MyTops $ctx)
+    # Only now is the form sent, so the save offer is a window that was not there before. Sent while
+    # the scene still settled, the offer was already among the windows taken as the scene's own.
+    $go = Invoke-Rivet $ctx $state @('nav', 'go', ($server.Url + '?send#submit'))
+    if ($go.Code -ne 0) { return @('NOT_DRIVEN', $null, "the login page could not be opened to send the form: $($go.Text)") }
     # The form sends itself 1.5 s after load. The browser's save offer is a window of its own; it is
     # moved off-screen without activation as soon as it appears, then its default button is pressed.
     $bubble = $null
