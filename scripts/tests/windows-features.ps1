@@ -1256,19 +1256,26 @@ function Invoke-LinkNewTab($Name, $shots) {
     [FeatureWin]::PostMessage($target, 0x202, [IntPtr]0, $l) | Out-Null
     # No window of the test may touch a visible monitor at any time. The popup is asked for
     # off-screen; if any window still lands on a monitor the check fails, and the window is closed.
-    $extraSeen = $false; $onMonitor = $false
+    $extraSeen = $false; $onMonitor = $false; $landed = @()
     foreach ($i in 1..600) {
       Start-Sleep -Milliseconds 10
       foreach ($t in @(Get-MyTops $ctx)) {
         if ($t -ne $ctx.Hwnd -and $before -notcontains $t) { $extraSeen = $true }
         if ([FeatureMonitor]::OnMonitor($t)) {
           $onMonitor = $true
+          $wr = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($t, [ref]$wr) | Out-Null
+          $wp = [uint32]0; [FeatureWin]::GetWindowThreadProcessId($t, [ref]$wp) | Out-Null
+          $cls = New-Object Text.StringBuilder 64; [FeatureWin]::GetClassName($t, $cls, 64) | Out-Null
+          $landed += ('{0} pid {1} class {2} at {3},{4},{5},{6}' -f $t, $wp, $cls, $wr.L, $wr.T, $wr.Ri, $wr.B)
           [FeatureWin]::SetWindowPos($t, [IntPtr]::Zero, 9000, 1000, 800, 600, 0x14) | Out-Null
           if ($t -ne $ctx.Hwnd) { [FeatureWin]::PostMessage($t, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
         }
       }
     }
-    if ($onMonitor) { $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png'); return @('FAIL', $shot.Path, 'a window of the test appeared on a visible monitor') }
+    # On a test desktop of its own no monitor shows anything, and the guard watches the person's
+    # desktop. A window that lands on a monitor there is noted, not a breach of anyone's screen.
+    $placed = ($landed | Select-Object -Unique) -join '; '
+    if (Test-VisibleBreach $onMonitor $env:RIVET_TEST_DESKTOP) { $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png'); return @('FAIL', $shot.Path, "a window of the test appeared on a visible monitor: $placed") }
     Start-Sleep 3
     $left = @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ })
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
@@ -1277,7 +1284,7 @@ function Invoke-LinkNewTab($Name, $shots) {
     if (-not ($urls | Where-Object { $_ -match 'page-c' }) -and -not $extraSeen) { return @('NOT_DRIVEN', $shot.Path, 'the click did not open the link') }
     if ($left.Count -gt 0) { foreach ($t in $left) { [FeatureWin]::PostMessage($t, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }; return @('FAIL', $shot.Path, 'the link stayed in a window of its own') }
     if (-not ($urls | Where-Object { $_ -match 'page-c' })) { return @('FAIL', $shot.Path, "page-c is not a tab of the Rivet window: $($urls -join ' ')") }
-    @('PASS', $shot.Path, "the new-window link is a tab of the Rivet window; a window of its own showed first: $extraSeen")
+    @('PASS', $shot.Path, "the new-window link is a tab of the Rivet window; a window of its own showed first: $extraSeen$(if ($placed) { "; on a monitor of the test desktop: $placed" })")
   } finally { Stop-Scene $ctx }
 }
 
