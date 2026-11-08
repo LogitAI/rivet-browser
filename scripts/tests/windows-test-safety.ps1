@@ -98,17 +98,9 @@ function Start-RunSafety {
     # When the run cannot be alone, it starts without those rows instead of not at all.
     [switch]$DropAloneRows
   )
-  # On a test desktop of its own nothing can reach the person's screen, so the browser runs as an
-  # installed one does: its windows sit on a monitor of that desktop and take its foreground. The
-  # window then has the DPI of that monitor in Windows and in Chromium alike. Off every monitor,
-  # Windows gives it the primary monitor's DPI while Chromium scales for the nearest monitor, and
-  # every row would measure a window the person never sees.
-  if ($env:RIVET_TEST_DESKTOP) {
-    Remove-Item Env:\RIVET_KEEP_OFFSCREEN -ErrorAction SilentlyContinue
-    $env:RIVET_TEST_PLACE = Get-TestPlace
-  } else {
-    $env:RIVET_KEEP_OFFSCREEN = '1'
-  }
+  # A run on a test desktop keeps RIVET_KEEP_OFFSCREEN too: without it `rivet session start` waits
+  # on that desktop and never returns, so the switch stays until that is understood.
+  $env:RIVET_KEEP_OFFSCREEN = '1'
   $dataRoot = Join-Path $OutDir 'rivet-data'
   New-Item -ItemType Directory -Force $dataRoot | Out-Null
   $env:RIVET_DATA_ROOT = $dataRoot
