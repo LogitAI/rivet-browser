@@ -32,8 +32,9 @@ pub(crate) enum FirstLook {
     UiThread,
     /// The attach could not go on; the window stays the browser's.
     AttachFailed,
-    /// Rivet's surfaces exist and the browser has been asked to lay out for them.
-    RivetDrawn,
+    /// The browser laid the window out for Rivet's frame, at its own scale, after Rivet's surfaces
+    /// were drawn. Until then a frame can still hold the browser's own title strip.
+    LaidOut,
     /// The reveal timer fired.
     Timer,
 }
@@ -45,7 +46,7 @@ pub(crate) fn cloak_at(moment: FirstLook) -> Option<bool> {
     match moment {
         FirstLook::Attached => Some(true),
         FirstLook::AttachFailed | FirstLook::Timer => Some(false),
-        FirstLook::UiThread | FirstLook::RivetDrawn => None,
+        FirstLook::UiThread | FirstLook::LaidOut => None,
     }
 }
 
@@ -53,7 +54,7 @@ pub(crate) fn cloak_at(moment: FirstLook) -> Option<bool> {
 pub(crate) fn reveal_in(moment: FirstLook) -> Option<u32> {
     match moment {
         FirstLook::UiThread => Some(LONGEST_HIDE_MS),
-        FirstLook::RivetDrawn => Some(REVEAL_AFTER_MS),
+        FirstLook::LaidOut => Some(REVEAL_AFTER_MS),
         FirstLook::Attached | FirstLook::AttachFailed | FirstLook::Timer => None,
     }
 }
@@ -155,17 +156,21 @@ mod tests {
         FirstLook::Attached,
         FirstLook::UiThread,
         FirstLook::AttachFailed,
-        FirstLook::RivetDrawn,
+        FirstLook::LaidOut,
         FirstLook::Timer,
     ];
 
     #[test]
     fn fr12_window_is_cloaked_from_the_attach_until_rivets_look_is_drawn() {
         assert_eq!(cloak_at(FirstLook::Attached), Some(true));
-        // Drawing Rivet's surfaces does not show the window at once: the browser still has to lay
-        // out for them, so the reveal waits a few frames.
-        assert_eq!(cloak_at(FirstLook::RivetDrawn), None);
-        assert_eq!(reveal_in(FirstLook::RivetDrawn), Some(REVEAL_AFTER_MS));
+        // Taking the attach on the UI thread does not show the window: the browser still has to lay
+        // it out for Rivet's frame, and until it does a frame can hold its own title strip at
+        // another scale. Only the longest hide shows it without that layout.
+        assert_eq!(cloak_at(FirstLook::UiThread), None);
+        assert_eq!(reveal_in(FirstLook::UiThread), Some(LONGEST_HIDE_MS));
+        // The browser's layout for Rivet's frame starts the short reveal.
+        assert_eq!(cloak_at(FirstLook::LaidOut), None);
+        assert_eq!(reveal_in(FirstLook::LaidOut), Some(REVEAL_AFTER_MS));
         assert_eq!(cloak_at(FirstLook::Timer), Some(false));
     }
 

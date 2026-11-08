@@ -243,6 +243,35 @@ pub(crate) fn held_reserve() -> i32 {
     }
 }
 
+thread_local! {
+    /// The windows that took the attach and wait for the browser to lay them out for Rivet's frame.
+    static AWAITING_LAYOUT: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Marks, as the UI thread takes the attach, that the window waits for the browser to lay it out
+/// for Rivet's frame. It stays cloaked until then, or until the longest hide passes: until that
+/// layout a frame can still hold the browser's own title strip, at another scale.
+fn await_layout(window: HWND) {
+    AWAITING_LAYOUT.with(|all| all.borrow_mut().push(window as isize));
+}
+
+/// The browser laid the window out for Rivet's frame. The first such layout after the attach starts
+/// the short reveal, by when Rivet's surfaces are drawn at that layout's scale; later ones do not.
+unsafe fn laid_out(window: HWND) {
+    if take_waiting(window) {
+        crate::features::look::first_look(window, crate::features::look::FirstLook::LaidOut);
+    }
+}
+
+/// Whether the window waited for its layout, which it then no longer does.
+fn take_waiting(window: HWND) -> bool {
+    AWAITING_LAYOUT.with(|all| {
+        let mut all = all.borrow_mut();
+        let at = all.iter().position(|key| *key == window as isize);
+        at.map(|at| all.remove(at)).is_some()
+    })
+}
+
 /// The warning of this process when it runs from a held browser build. The clock is read once per
 /// process, and the time left is worked out anew for each paint because a window can stay open for days.
 fn held_warning() -> Option<String> {
@@ -3083,6 +3112,9 @@ fn reserved_width(window: HWND, bounds: frame_layout::Rect) -> Option<i32> {
         if !attached(window) || !framed(window) {
             return None;
         }
+        // The browser is laying the window out for Rivet's frame; the first such layout after the
+        // attach lets the window show.
+        laid_out(window);
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(window, &mut client);
         let layout_width = bounds.x + bounds.width;
@@ -4152,10 +4184,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             crate::offscreen::keep_thread();
             crate::offscreen::put_away(window);
             crate::features::look::first_look(window, crate::features::look::FirstLook::UiThread);
+            await_layout(window);
             crate::features::tab_list::connect_command_bar();
             create_appbar(window);
             crate::features::window_corners::keep_round(window);
-            crate::features::look::first_look(window, crate::features::look::FirstLook::RivetDrawn);
             0
         }
         _ => call_browser(window, message, wparam, lparam),
@@ -4164,6 +4196,19 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fr12_only_the_first_layout_after_the_attach_starts_the_reveal() {
+        let (window, other) = (0x1000 as super::HWND, 0x2000 as super::HWND);
+        assert!(
+            !super::take_waiting(window),
+            "a layout before the attach changes nothing"
+        );
+        super::await_layout(window);
+        assert!(!super::take_waiting(other));
+        assert!(super::take_waiting(window));
+        assert!(!super::take_waiting(window), "later layouts change nothing");
+    }
+
     /// Windows and the browser can disagree on a window's scale: while the window crosses monitors
     /// of different DPIs, or when it lies off every monitor. Rivet's bar, rows, second page view and
     /// hit areas sit on the browser's layout, so every conversion between pixels and DIPs takes the
