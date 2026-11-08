@@ -2043,21 +2043,8 @@ unsafe fn relayout(window: HWND) {
         return;
     }
     // A frame change only marks the browser's views for a layout on its next compositor frame,
-    // and a cloaked or off-screen window may draw none. A size change lays the root view out at
-    // once in `views::Widget::OnNativeWidgetSizeChanged`, so a window that still waits is resized
-    // by one pixel and back, which no one sees while it is cloaked.
-    if asks_by_size(
-        is_waiting(window),
-        IsIconic(window) != 0,
-        IsZoomed(window) != 0,
-    ) {
-        crate::trace::trace("attach: asked with a size change, which the browser lays out at once");
-        let mut rect: RECT = std::mem::zeroed();
-        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(window, &mut rect);
-        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
-        let flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
-        SetWindowPos(window, std::ptr::null_mut(), 0, 0, width, height - 1, flags);
-        SetWindowPos(window, std::ptr::null_mut(), 0, 0, width, height, flags);
+    // and a cloaked or off-screen window may draw none; a size change lays it out at once.
+    if nudge(window, "retry") {
         update_appbar(window);
         return;
     }
@@ -2078,12 +2065,86 @@ unsafe fn relayout(window: HWND) {
     update_appbar(window);
 }
 
-/// Whether the browser is asked for its layout by a size change: only for a window that still
-/// waits for it and has a size of its own, neither minimized nor maximized.
-fn asks_by_size(waiting: bool, minimized: bool, maximized: bool) -> bool {
-    waiting && !minimized && !maximized
+/// The window's state that decides whether it may be nudged.
+#[derive(Debug, Clone, Copy, Default)]
+struct NudgeState {
+    waiting: bool,
+    cloaked: bool,
+    minimized: bool,
+    maximized: bool,
+    snapped: bool,
+    fullscreen: bool,
 }
 
+/// Whether the browser is asked for its layout by a size change: only for a window that still
+/// waits for it, is still cloaked so no one sees the change, and has a size of its own, neither
+/// minimized, maximized, snapped nor fullscreen.
+fn asks_by_size(state: NudgeState) -> bool {
+    state.waiting
+        && state.cloaked
+        && !state.minimized
+        && !state.maximized
+        && !state.snapped
+        && !state.fullscreen
+}
+
+/// Resizes a window that still waits for the browser's layout for Rivet's frame by one pixel and
+/// back. The size change lays the root view out at once, in
+/// `views::Widget::OnNativeWidgetSizeChanged`, and the exact first rect is put back and checked.
+/// Returns whether the window was nudged.
+unsafe fn nudge(window: HWND, why: &str) -> bool {
+    use windows_sys::Win32::Graphics::Dwm::DWMWA_CLOAKED;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsWindowArranged};
+    let mut cloaked: u32 = 0;
+    DwmGetWindowAttribute(
+        window,
+        DWMWA_CLOAKED as u32,
+        (&mut cloaked as *mut u32).cast(),
+        std::mem::size_of::<u32>() as u32,
+    );
+    let state = NudgeState {
+        waiting: is_waiting(window),
+        cloaked: cloaked != 0,
+        minimized: IsIconic(window) != 0,
+        maximized: IsZoomed(window) != 0,
+        snapped: IsWindowArranged(window) != 0,
+        // Chromium removes the sizing frame of a fullscreen window.
+        fullscreen: GetWindowLongPtrW(window, GWL_STYLE) as u32 & WS_THICKFRAME == 0,
+    };
+    if !asks_by_size(state) {
+        if state.waiting {
+            crate::trace::trace(&format!(
+                "attach: no nudge of window {:#x} ({why}): {state:?}",
+                window as usize
+            ));
+        }
+        return false;
+    }
+    let mut before: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut before);
+    let (width, height) = (before.right - before.left, before.bottom - before.top);
+    let flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
+    SetWindowPos(window, std::ptr::null_mut(), 0, 0, width, height - 1, flags);
+    SetWindowPos(
+        window,
+        std::ptr::null_mut(),
+        before.left,
+        before.top,
+        width,
+        height,
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
+    let mut after: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut after);
+    let restored = (after.left, after.top, after.right, after.bottom)
+        == (before.left, before.top, before.right, before.bottom);
+    crate::trace::trace(&format!(
+        "attach: nudged window {:#x} ({why}) by one pixel and back, rect restored {restored}, laid out {}",
+        window as usize,
+        !is_waiting(window)
+    ));
+    true
+}
 /// Hides the docked appbar so the page takes its width, or docks it again.
 unsafe fn toggle_appbar(window: HWND) {
     close_menu(window);
@@ -4408,6 +4469,9 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             }
             crate::features::tab_list::connect_command_bar();
             create_appbar(window);
+            // The browser may have laid the window out before the appbar was registered, which
+            // leaves that layout without Rivet's frame; one nudge while it is still cloaked asks again.
+            nudge(window, "attach");
             crate::features::window_corners::keep_round(window);
             0
         }
@@ -4471,14 +4535,43 @@ mod tests {
 
     #[test]
     fn fr2_a_window_that_still_waits_is_asked_by_a_size_change() {
-        use super::asks_by_size;
-        assert!(asks_by_size(true, false, false));
-        // Minimized and maximized windows keep their size; a laid out window is not asked.
-        assert!(!asks_by_size(true, true, false));
-        assert!(!asks_by_size(true, false, true));
-        assert!(!asks_by_size(false, false, false));
+        use super::{asks_by_size, NudgeState};
+        let waiting = NudgeState {
+            waiting: true,
+            cloaked: true,
+            ..NudgeState::default()
+        };
+        assert!(asks_by_size(waiting));
+        // Never on a visible window, and never on one whose size is not its own.
+        for state in [
+            NudgeState {
+                cloaked: false,
+                ..waiting
+            },
+            NudgeState {
+                minimized: true,
+                ..waiting
+            },
+            NudgeState {
+                maximized: true,
+                ..waiting
+            },
+            NudgeState {
+                snapped: true,
+                ..waiting
+            },
+            NudgeState {
+                fullscreen: true,
+                ..waiting
+            },
+            NudgeState {
+                waiting: false,
+                ..waiting
+            },
+        ] {
+            assert!(!asks_by_size(state), "{state:?}");
+        }
     }
-
     #[test]
     fn fr2_the_longest_hide_leaves_the_window_waiting_for_its_layout() {
         let window = 0x3000 as super::HWND;
