@@ -253,6 +253,20 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
   if ($dpi) { $ctx.Dpi = $dpi } elseif (-not $ctx.Error) { $ctx.Error = 'the runtime traced no scale for the window' }
+  # Every scene checks that the attach finished: the browser laid the window out for Rivet's frame.
+  if (-not $ctx.Error) {
+    $done = $null
+    foreach ($i in 1..10) {
+      $done = @(Read-Log | Where-Object { $_ -match '^attach: complete' }) | Select-Object -First 1
+      if ($done) { break }
+      Start-Sleep -Milliseconds 500
+    }
+    if (-not $done) {
+      $last = @(Read-Log | Where-Object { $_ -match '^attach: ' }) | Select-Object -Last 1
+      $ctx.Error = 'attach-incomplete'
+      $ctx | Add-Member -Force AttachNote $(if ($last) { $last } else { 'the browser never laid the window out for Rivet''s frame' })
+    }
+  }
 }
 
 # The scale the browser laid the window out at, as the runtime reports it, which every part of
@@ -327,7 +341,14 @@ function Send-Flag($ctx, [string]$File, [string]$Text) {
 }
 
 # After a launch: a Rivet window that never attached is a failure of the browser build.
-function Test-Attached($ctx) { $ctx.Error -ne 'attach-failed' }
+function Test-Attached($ctx) { $ctx.Error -notin @('attach-failed', 'attach-incomplete') }
+
+# Why the window is not Rivet's: no attach at all, or an attach whose later steps never came, which
+# leaves a person a Rivet window without its address bar and page layout.
+function Get-AttachFailure($ctx) {
+  if ($ctx.Error -eq 'attach-incomplete') { return "Rivet's attach did not finish: $($ctx.AttachNote)" }
+  'Rivet did not attach to the window'
+}
 
 # Stops the scene's browser, keeps its trace under the run's `traces` folder and deletes its test
 # profile, so a long run does not fill the disk. Captures are kept where they were written.
@@ -396,10 +417,10 @@ function Invoke-Split($Name, $version, $shots) {
   $ctx, $state = Start-Scene $Name 'split' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots 'split-1-page-a.png')
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
     $v = Test-OnePage $one $script:ColourA $script:ColourB
     if ($v.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $one.Path, "the first test page was not shown: $($v.Reason)") }
     if (-not (Open-SecondPage $ctx $urlB)) { return @('NOT_DRIVEN', $one.Path, 'the second page did not open as a tab of the app window alone') }
@@ -434,10 +455,10 @@ function Invoke-Sidebar($Name, $version, $shots) {
   $ctx, $state = Start-Scene $Name 'sidebar' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $before = Get-Capture $ctx (Join-Path $shots 'sidebar-1-before.png')
     if (-not $before) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $before.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $before.Path, (Get-AttachFailure $ctx)) }
     # The rail is the sidebar's closed state. `sim open` is the click on its open button and
     # `sim entry 0` the click on its first entry, both through the rail's own handler.
     if (-not (Send-Flag $ctx 'rivet-sidepanel.flag' 'sim open')) { return @('NOT_DRIVEN', $before.Path, 'the runtime did not take the open command') }
@@ -482,8 +503,8 @@ function Invoke-NewTab($Name, $version, $shots) {
   $ctx, $state = Start-Scene $Name 'newtab' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { $c = Get-Capture $ctx (Join-Path $shots 'newtab-1.png'); return @('FAIL', $c.Path, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { $c = Get-Capture $ctx (Join-Path $shots 'newtab-1.png'); return @('FAIL', $c.Path, (Get-AttachFailure $ctx)) }
     # `list` is not a tab command, so the runtime changes nothing and only traces the tab list.
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'the runtime did not take the tab list command') }
     $first = Get-TabUrls
@@ -509,8 +530,8 @@ function Invoke-Space($Name, $version, $shots) {
   try {
     Open-Scene $ctx $state $urlA { $script:seeded = Write-SpaceSeed $ctx.Profile $Name }
     $seeded = $script:seeded
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { $c = Get-Capture $ctx (Join-Path $shots 'space-1.png'); return @('FAIL', $c.Path, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { $c = Get-Capture $ctx (Join-Path $shots 'space-1.png'); return @('FAIL', $c.Path, (Get-AttachFailure $ctx)) }
     Send-RivetMessage $ctx 'Rivet.NewStartPage'
     Start-Sleep 6
     $one = Get-Capture $ctx (Join-Path $shots 'space-1-first.png')
@@ -612,10 +633,10 @@ function Invoke-SplitPath($Name, $shots, [string]$Feature, [string]$Path, [strin
     if ($AfterSpace) { $seedBlock = { $script:seeded = Write-SpaceSeed $ctx.Profile $Name } }
     Open-Scene $ctx $state $urlA $seedBlock
     $seeded = $script:seeded
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots "$Feature-1-page-a.png")
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
     if ($AfterSpace) {
       # One space switch first: the window keeps one start tab of the other space.
       $f = $ctx.Dpi / 96.0
@@ -703,10 +724,10 @@ function Invoke-SplitGrid($Name, $shots, [string]$Feature) {
   $ctx, $state = Start-Scene $Name $Feature $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots "$Feature-1-page-a.png")
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
     $v = Test-OnePage $one $script:ColourA $script:ColourB
     if ($v.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $one.Path, "the first test page was not shown: $($v.Reason)") }
     # The pages, the drops and the arrangement they must give. The last page opened is active and
@@ -781,8 +802,8 @@ function Invoke-SplitRows($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'split-rows' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     if (-not (Open-SecondPage $ctx $urlB)) { return @('NOT_DRIVEN', $null, 'the second page did not open as a tab of the app window alone') }
     Send-RivetMessage $ctx 'Rivet.ToggleSplit'
     Start-Sleep 6
@@ -847,9 +868,9 @@ function Invoke-SplitOneTab($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'split-one-tab' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots 'split-one-tab-1.png')
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
     $v = Test-OnePage $one $script:ColourA $script:ColourB
     if ($v.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $one.Path, "the test page was not shown: $($v.Reason)") }
     $notes = @()
@@ -966,10 +987,10 @@ function Invoke-BarLayout($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'bar-layout' $urlTop
   try {
     Open-Scene $ctx $state $urlTop $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots 'bar-layout-1.png')
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
     $scale = $ctx.Dpi / 96.0
     $barDip = if ($demo) { $demo.BarHeight } else { 44 }
     $bar = Test-BarAtTop $one $script:ColourA $script:ColourC $scale $barDip
@@ -1041,8 +1062,8 @@ function Invoke-Mini($Name, $shots, [string]$Step) {
   $ctx, $state = Start-Scene $Name "mini-$Step" $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     if (-not (Open-SecondPage $ctx $urlB)) { return @('NOT_DRIVEN', $null, 'the second page did not open as a tab of the app window alone') }
     Send-RivetMessage $ctx 'Rivet.ToggleSplit'
     Start-Sleep 6
@@ -1172,8 +1193,8 @@ function Get-Sections {
 # A window with the pages a, b and c as its three tabs, or the reason it could not be made.
 function Open-ThreeTabs($ctx, $state, $shots, [string]$Prefix) {
   Open-Scene $ctx $state $urlA $null
-  if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return $ctx.Error }
-  if (-not (Test-Attached $ctx)) { return 'Rivet did not attach to the window' }
+  if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return $ctx.Error }
+  if (-not (Test-Attached $ctx)) { return (Get-AttachFailure $ctx) }
   if (-not (Open-SecondPage $ctx $urlB)) { return 'the second page did not open as a tab of the app window alone' }
   if (-not (Open-SecondPage $ctx $urlC)) { return 'the third page did not open as a tab of the app window alone' }
   $null
@@ -1257,8 +1278,8 @@ function Invoke-CtrlTSetting($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'ctrl-t-setting' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     foreach ($command in 'ctrlt newtab', 'sections') { if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $null, "'$command' was not taken") } }
     if ((Get-Sections).CtrlT -ne 'new_tab_page') { return @('FAIL', $null, 'the setting did not change') }
     Send-RivetMessage $ctx 'Rivet.CtrlT'
@@ -1275,8 +1296,8 @@ function Invoke-LinkNewTab($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'link-new-tab' $urlLink
   try {
     Open-Scene $ctx $state $urlLink $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     $before = Get-MyTops $ctx
     $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
     $page = [FeatureWin]::Inside($ctx.Hwnd, (& { $p = New-Object FeatureWin+P; $p.X = [int]($cr.Ri * 0.7); $p.Y = [int]($cr.B / 2); [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$p) | Out-Null; $p }))
@@ -1323,10 +1344,10 @@ function Invoke-CommandBar($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'command-bar' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots 'command-bar-1-before.png')
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'command')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the command bar command') }
     Start-Sleep 1
     if (-not (Read-Log | Where-Object { $_ -match 'command bar: open: true' })) { return @('FAIL', $one.Path, 'the command bar did not open') }
@@ -1352,8 +1373,8 @@ function Invoke-RivetSettings($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'rivet-settings' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     $tops = @(Get-MyTops $ctx)
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'settings')) { return @('NOT_DRIVEN', $null, 'the runtime did not take the settings command') }
     Start-Sleep 1
@@ -1386,8 +1407,8 @@ function Invoke-LinkRules($Name, $shots) {
     $rulesFile = Join-Path $flagDir 'link-rules.json'
     [IO.File]::WriteAllText($rulesFile, '{"rules":[{"pattern":{"kind":"prefix","value":"http://127.0.0.1:9/mini"},"target":{"kind":"mini-window"}}]}')
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     if (-not $ctx.SessionId) { return @('NOT_DRIVEN', $null, 'the session reported no id') }
     $rivet = Join-Path $debug 'rivet.exe'
     & $rivet session open --id $ctx.SessionId --state $state 'http://127.0.0.1:9/plain' 2>&1 | Out-Null
@@ -1419,10 +1440,10 @@ function Invoke-LinkPreview($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'link-preview' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots 'link-preview-1.png')
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
     if (-not (Open-SecondPage $ctx $urlB)) { return @('NOT_DRIVEN', $one.Path, 'the second page did not open as a tab of the app window alone') }
     $opens = Get-ViewOpens 'Floating'
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'preview 0')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the preview command') }
@@ -1492,10 +1513,10 @@ function Invoke-AddressSuggest($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'address-suggest' $sb
   try {
     Open-Scene $ctx $state $sb $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots 'address-suggest-1-page-a.png')
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
     $before = @(Read-Log).Count
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the bar command') }
     Send-Chars $ctx $sa
@@ -1565,8 +1586,8 @@ function Invoke-AppbarWidth($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'appbar-width' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     $f = $ctx.Dpi / 96.0
     $y = [int](300 * $f)
     $start = @(Read-Log).Count
@@ -1599,8 +1620,8 @@ function Invoke-AppbarPeek($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'appbar-peek' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     $f = $ctx.Dpi / 96.0
     # The real pointer is never over the off-screen window, which would end a peek at once. This
     # flag keeps the peek until the posted pointer leaves.
@@ -1679,8 +1700,8 @@ function Invoke-OpenLink($Name, $shots, [string]$Mode) {
       New-Item -ItemType Directory -Force (Split-Path $state) | Out-Null
       $old = $env:RIVET_DATA_ROOT; $env:RIVET_DATA_ROOT = $root
       try { Open-Scene $ctx $state $urlA $null } finally { $env:RIVET_DATA_ROOT = $old }
-      if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-      if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+      if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+      if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
       $code = Invoke-Launcher $root $link
       if ($null -eq $code) { return @('FAIL', $null, 'the launcher did not finish') }
       Start-Sleep 3
@@ -1809,8 +1830,8 @@ function Invoke-Credentials($Name, $shots, [string]$Provider) {
   try {
     $server = Start-LoginServer
     Open-Scene $ctx $state $server.Url $null @('--credentials', $Provider)
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     $prefs = Get-ProviderPrefs $ctx.Profile
     $want = ($Provider -eq 'browser')
     if (-not $prefs -or $prefs.Save -ne $want -or $prefs.AutoSignIn -ne $want) {
@@ -1949,10 +1970,10 @@ function Invoke-ViewInput($Name, $shots, [string]$Feature, [string]$Typing) {
   $ctx, $state = Start-Scene $Name $Feature $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots "$Feature-1-page-a.png")
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
     if (-not (Open-SecondPage $ctx $second)) { return @('NOT_DRIVEN', $one.Path, 'the second page did not open as a tab of the app window alone') }
     $opens = Get-ViewOpens 'Split'
     Send-RivetMessage $ctx 'Rivet.ToggleSplit'
@@ -1990,10 +2011,10 @@ function Invoke-TabMoves($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'tab-moves' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $one = Get-Capture $ctx (Join-Path $shots 'tab-moves-1.png')
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
     foreach ($url in @($urlB, $urlC, $urlD)) {
       # Open-SecondPage fails, and closes it at once, when any other window shows up.
       if (-not (Open-SecondPage $ctx $url)) { return @('FAIL', $one.Path, "opening $([IO.Path]::GetFileName($url)) made another window or did not land in the app window") }
@@ -2043,11 +2064,11 @@ function Invoke-FirstFrame($Name, $shots) {
     }).AddArgument($exe).AddArgument($ctx.Profile)
     $running = $watch.BeginInvoke()
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
     $frames = @($watch.EndInvoke($running) | ForEach-Object { $_ })
     $steady = Get-Capture $ctx (Join-Path $shots 'first-frame-settled.png')
     if (-not $steady) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $steady.Path, 'Rivet did not attach to the window') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $steady.Path, (Get-AttachFailure $ctx)) }
     # Only frames a person could see count: a frame the window composed while cloaked never shows.
     $all = @($frames | ForEach-Object { [pscustomobject]@{ Pixels = $_[3]; Width = $_[1]; Height = $_[2]; Ms = $_[0]; Cloaked = [bool]$_[4] } })
     $caps = @($all | Where-Object { -not $_.Cloaked })
@@ -2231,10 +2252,10 @@ $urlMark = 'file:///' + ($markPath -replace '\\', '/')
 function Open-SurfaceScene($Name, [string]$Feature, [string]$Url, $shots) {
   $ctx, $state = Start-Scene $Name $Feature $Url
   Open-Scene $ctx $state $Url $null
-  if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return $ctx, $null, @('NOT_DRIVEN', $null, $ctx.Error) }
+  if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return $ctx, $null, @('NOT_DRIVEN', $null, $ctx.Error) }
   $one = Get-Capture $ctx (Join-Path $shots "$Feature-1-start.png")
   if (-not $one) { return $ctx, $null, @('NOT_DRIVEN', $null, 'no capture') }
-  if (-not (Test-Attached $ctx)) { return $ctx, $one, @('FAIL', $one.Path, 'Rivet did not attach to the window') }
+  if (-not (Test-Attached $ctx)) { return $ctx, $one, @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
   $ctx, $one, $null
 }
 
@@ -2755,8 +2776,8 @@ function Invoke-CliControl($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'cli-control' $urlA
   try {
     Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     if (-not $ctx.SessionId) { return @('NOT_DRIVEN', $null, 'the session reported no id') }
     $notes = @()
     $r = Invoke-Rivet $ctx $state @('page', 'open', $urlB)
@@ -2798,8 +2819,8 @@ function Invoke-CliInput($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'cli-input' $url
   try {
     Open-Scene $ctx $state $url $null
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     $r = Invoke-Rivet $ctx $state @('input', 'click', '200', '200')
     $r = Invoke-Rivet $ctx $state @('input', 'type', 'rivet')
     if ($r.Code -ne 0) { return @('FAIL', $null, "input type exited $($r.Code): $($r.Text)") }
@@ -2821,8 +2842,8 @@ function Invoke-CliHidden($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'cli-hidden' $urlA
   try {
     Open-Scene $ctx $state $urlA $null @('--display', 'hidden')
-    if ($ctx.Error -and $ctx.Error -ne 'attach-failed') { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, 'Rivet did not attach to the window') }
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     if (-not $ctx.SessionId) { return @('NOT_DRIVEN', $null, 'the hidden session reported no id') }
     if (-not [CloakWin]::Cloaked($ctx.Hwnd)) { return @('FAIL', $null, 'the hidden session window is not cloaked') }
     $r = Invoke-Rivet $ctx $state @('nav', 'go', $urlB, '--display', 'hidden')
