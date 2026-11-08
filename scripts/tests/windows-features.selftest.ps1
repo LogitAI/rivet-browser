@@ -341,5 +341,13 @@ if ($IsWindows) {
   else { Write-Host 'ok   nfr5_a_run_sees_the_held_browsers_and_never_removes_them' }
 }
 
+# A window on a monitor breaches the person's screen only on the person's own desktop.
+$breach = 0
+foreach ($case in @(@($true, '', $true), @($true, 'WinSta0\rivet-test-1', $false), @($false, '', $false))) {
+  if ((Test-VisibleBreach $case[0] $case[1]) -ne $case[2]) { $breach++ }
+}
+if ($breach) { Write-Host "FAIL nfr5_only_the_persons_desktop_has_visible_monitors : $breach cases"; $failures++ }
+else { Write-Host 'ok   nfr5_only_the_persons_desktop_has_visible_monitors' }
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'

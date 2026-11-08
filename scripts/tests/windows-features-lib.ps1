@@ -483,3 +483,10 @@ function Test-FirstFrames($Frames, $Steady, [int]$X0, [int]$X1, [int]$Y1) {
   if ($painted -eq 0) { return New-Verdict 'NOT_DRIVEN' "no painted frame was caught before the window settled ($blank blank)" }
   New-Verdict 'PASS' "$painted painted frames before the window settled all look like it; $blank blank"
 }
+
+# Whether a test window on a monitor is a breach of the person's screen. A run on a test desktop of
+# its own (`TestDesktop` names it) shows nothing on any screen, so only a run on the person's own
+# desktop breaches it.
+function Test-VisibleBreach([bool]$OnMonitor, [string]$TestDesktop) {
+  $OnMonitor -and -not $TestDesktop
+}
