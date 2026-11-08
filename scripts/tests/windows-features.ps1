@@ -1496,7 +1496,7 @@ function Invoke-AddressSuggest($Name, $shots) {
     if ($line -notmatch [regex]::Escape($page)) { return @('FAIL', $list.Path, "page-a is not suggested: $line") }
     $notes = @("page-a suggested$(if ($late) { ' once the slower providers answered' })")
     $inline = $line -match ('inline ' + [regex]::Escape('"' + $rest + '"') + '$')
-    $rows = @([regex]::Matches(($line -replace ' inline .*$', ''), '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
+    $rows = @([regex]::Matches((($line -replace '^[^\[]*\[', '') -replace ' inline .*$', ''), '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
     $index = [array]::IndexOf($rows, $page)
     $before = @(Read-Log).Count
     if ($inline) {
