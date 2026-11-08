@@ -323,24 +323,31 @@ if ($IsWindows) {
   else { Write-Host 'ok   nfr5_a_test_process_starts_without_an_output_file' }
 }
 
-# A run's Rivet folder sees the held browser copies through a junction, and removing the folder
-# never removes the copies.
+# A run's Rivet folder sees the held browser copies through the runs' own copy of them. Removing the
+# folder never removes them, and nothing the run writes there reaches the person's folder.
 if ($IsWindows) {
   $t = Join-Path $PSScriptRoot '..\..\.scratch\selftest-held'
   Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
-  New-Item -ItemType Directory -Force (Join-Path $t 'local\Rivet\browsers\chrome') | Out-Null
-  Set-Content (Join-Path $t 'local\Rivet\browsers\chrome\keep.txt') 'keep'
-  $saved = $env:LOCALAPPDATA; $env:LOCALAPPDATA = Join-Path $t 'local'
+  New-Item -ItemType Directory -Force (Join-Path $t 'local\Rivet\cache\browsers\chrome\1.2.3.4') | Out-Null
+  Set-Content (Join-Path $t 'local\Rivet\cache\browsers\chrome\1.2.3.4\keep.txt') 'keep'
+  $saved = $env:LOCALAPPDATA; $savedMirror = $env:RIVET_TEST_HELD_MIRROR
+  $env:LOCALAPPDATA = Join-Path $t 'local'; $env:RIVET_TEST_HELD_MIRROR = Join-Path $t 'mirror'
   try {
+    $before = @(Get-HeldSnapshot)
     Add-HeldBrowsers (Join-Path $t 'run')
-    $seen = Test-Path (Join-Path $t 'run\Rivet\browsers\chrome\keep.txt')
+    $seen = Test-Path (Join-Path $t 'run\Rivet\cache\browsers\chrome\1.2.3.4\keep.txt')
+    New-Item -ItemType Directory -Force (Join-Path $t 'run\Rivet\cache\browsers\chrome\5.6.7.8') | Out-Null
+    Set-Content (Join-Path $t 'run\Rivet\cache\browsers\chrome\hold-state.json') '{}'
+    $untouched = -not @(Compare-Object $before @(Get-HeldSnapshot)).Count
     Remove-HeldBrowsers (Join-Path $t 'run'); Remove-Item -Recurse -Force (Join-Path $t 'run')
-    $kept = Test-Path (Join-Path $t 'local\Rivet\browsers\chrome\keep.txt')
-  } finally { $env:LOCALAPPDATA = $saved; Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue }
-  if (-not ($seen -and $kept)) { Write-Host "FAIL nfr5_a_run_sees_the_held_browsers_and_never_removes_them : seen $seen kept $kept"; $failures++ }
-  else { Write-Host 'ok   nfr5_a_run_sees_the_held_browsers_and_never_removes_them' }
+    $kept = Test-Path (Join-Path $t 'local\Rivet\cache\browsers\chrome\1.2.3.4\keep.txt')
+  } finally {
+    $env:LOCALAPPDATA = $saved; $env:RIVET_TEST_HELD_MIRROR = $savedMirror
+    Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+  }
+  if (-not ($seen -and $kept -and $untouched)) { Write-Host "FAIL nfr5_a_run_reads_the_held_browsers_and_never_writes_them : seen $seen kept $kept untouched $untouched"; $failures++ }
+  else { Write-Host 'ok   nfr5_a_run_reads_the_held_browsers_and_never_writes_them' }
 }
-
 # A window on a monitor breaches the person's screen only on the person's own desktop.
 $breach = 0
 foreach ($case in @(@($true, '', $true), @($true, 'WinSta0\rivet-test-1', $false), @($false, '', $false))) {

@@ -46,23 +46,73 @@ function Get-RunRegistry { Join-Path $script:SafetyRepo '.scratch\runs' }
 # whose new build has no row yet from its held copy, so a run's Rivet folder `$Root` sees the same
 # copies, through a junction rather than a copy of whole browsers.
 function Add-HeldBrowsers([string]$Root) {
-  if (-not $env:LOCALAPPDATA) { return }
-  $held = Join-Path $env:LOCALAPPDATA 'Rivet\browsers'
-  $link = Join-Path $Root 'Rivet\browsers'
-  if ((Test-Path $held) -and -not (Test-Path $link)) {
-    New-Item -ItemType Directory -Force (Split-Path $link) | Out-Null
-    New-Item -ItemType Junction -Path $link -Target $held | Out-Null
+  $mirror = Update-HeldMirror
+  if (-not $mirror) { return }
+  $dir = Join-Path $Root 'Rivet\cache\browsers'
+  if (Test-Path $dir) { return }
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  foreach ($browser in Get-ChildItem -Directory -LiteralPath $mirror -ErrorAction SilentlyContinue) {
+    New-Item -ItemType Junction -Path (Join-Path $dir $browser.Name) -Target $browser.FullName | Out-Null
   }
 }
 
-# Removes the junction Add-HeldBrowsers made in `$Root`, and only the junction, before the folder
-# is removed, so no removal can reach the held browsers themselves.
-function Remove-HeldBrowsers([string]$Root) {
-  $link = Join-Path $Root 'Rivet\browsers'
-  $item = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
-  if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { [IO.Directory]::Delete($link, $false) }
+# The person's held copies, which a run reads and never writes. Rivet keeps them below
+# cache\browsers; copies an older build kept below Rivet\browsers are read too.
+function Get-HeldSources {
+  if (-not $env:LOCALAPPDATA) { return @() }
+  @('Rivet\cache\browsers', 'Rivet\browsers') | ForEach-Object { Join-Path $env:LOCALAPPDATA $_ } | Where-Object { Test-Path $_ }
 }
 
+# The test runs' own copy of the held browsers, below .scratch. A junction to the person's folder
+# let a run write there: Rivet held new builds and saved its hold state through it. Each held
+# build missing here is copied once, read only from the person's folder, and runs link this copy.
+function Update-HeldMirror {
+  $sources = @(Get-HeldSources)
+  if (-not $sources.Count) { return $null }
+  $mirror = if ($env:RIVET_TEST_HELD_MIRROR) { $env:RIVET_TEST_HELD_MIRROR } else { Join-Path $script:SafetyRepo '.scratch\held-browsers' }
+  $lock = New-Object System.Threading.Mutex($false, 'Local\RivetTestHeldMirror')
+  [void]$lock.WaitOne()
+  try {
+    foreach ($source in $sources) {
+      foreach ($browser in Get-ChildItem -Directory -LiteralPath $source -ErrorAction SilentlyContinue) {
+        foreach ($build in Get-ChildItem -Directory -LiteralPath $browser.FullName -ErrorAction SilentlyContinue) {
+          if ($build.Name -match '\.(partial|removing)-') { continue }
+          $to = Join-Path $mirror "$($browser.Name)\$($build.Name)"
+          if (Test-Path $to) { continue }
+          $part = "$to.partial-copy"
+          Remove-Item -Recurse -Force $part -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $part | Out-Null
+          Copy-Item -Recurse -Force -Path (Join-Path $build.FullName '*') -Destination $part
+          Rename-Item -LiteralPath $part -NewName (Split-Path $to -Leaf)
+        }
+      }
+    }
+  } finally { $lock.ReleaseMutex(); $lock.Dispose() }
+  $mirror
+}
+
+# What a run must leave as it was in the person's held copies: each entry two levels down, with
+# its size and time. A run that changed any of it wrote to the person's folder.
+function Get-HeldSnapshot {
+  @(foreach ($source in Get-HeldSources) {
+      Get-ChildItem -Force -Recurse -Depth 1 -LiteralPath $source -ErrorAction SilentlyContinue |
+        ForEach-Object { '{0}|{1}|{2}' -f $_.FullName, $(if ($_.PSIsContainer) { '' } else { $_.Length }), $_.LastWriteTimeUtc.Ticks }
+    }) | Sort-Object
+}
+# Removes the junctions Add-HeldBrowsers made in `$Root`, and only junctions, before the folder is
+# removed, so no removal can reach the held browsers themselves. A run of an older harness linked
+# the whole folder, at either place.
+function Remove-HeldBrowsers([string]$Root) {
+  $isLink = { param($path) $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue; $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+  foreach ($whole in 'Rivet\browsers', 'Rivet\cache\browsers') {
+    $path = Join-Path $Root $whole
+    if (& $isLink $path) { [IO.Directory]::Delete($path, $false) }
+  }
+  $dir = Join-Path $Root 'Rivet\cache\browsers'
+  foreach ($link in Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue) {
+    if (& $isLink $link.FullName) { [IO.Directory]::Delete($link.FullName, $false) }
+  }
+}
 # The runs registered and still running, each with its process id, start time, folder and whether
 # it must be alone. A record whose process is gone, or whose id another process took, is removed.
 function Get-ActiveRuns {
@@ -105,6 +155,7 @@ function Start-RunSafety {
   New-Item -ItemType Directory -Force $dataRoot | Out-Null
   $env:RIVET_DATA_ROOT = $dataRoot
   # The signed build table is Rivet's own cache, not browser data. An installed build would read it.
+  $heldBefore = @(Get-HeldSnapshot)
   if ($env:LOCALAPPDATA) {
     $table = Join-Path $env:LOCALAPPDATA 'Rivet\cache\builds\table.bin'
     $copy = Join-Path $dataRoot 'Rivet\cache\builds'
@@ -160,7 +211,7 @@ function Start-RunSafety {
     Write-Host "refusing to start the $Name run: the visible guard did not start"
     exit 2
   }
-  [pscustomobject]@{ Guard = $guard; Log = $log; FailFile = $fail; StopFile = $stop; Record = $record; DataRoot = $dataRoot; Alone = $runAlone; AloneRefused = $note }
+  [pscustomobject]@{ Guard = $guard; Log = $log; FailFile = $fail; StopFile = $stop; Record = $record; DataRoot = $dataRoot; Alone = $runAlone; AloneRefused = $note; HeldBefore = $heldBefore; OutDir = $OutDir }
 }
 
 # Stops the run when the guard found a breach or is no longer watching. The guard has already
@@ -185,6 +236,13 @@ function Stop-RunSafety($Safety) {
   Set-Content -Path $Safety.StopFile -Value 'stop'
   if (-not $Safety.Guard.WaitForExit(3000)) { Stop-Process -Id $Safety.Guard.Id -Force -ErrorAction SilentlyContinue }
   Remove-Item $Safety.Record, $Safety.StopFile -ErrorAction SilentlyContinue
+  # A run only reads the person's held browsers. Anything changed there is reported and fails the run.
+  $changed = @(Compare-Object $Safety.HeldBefore @(Get-HeldSnapshot) | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" })
+  if ($changed.Count) {
+    $changed | Set-Content (Join-Path $Safety.OutDir 'held-changed.txt')
+    Write-Host "FAIL the run changed the person's held browsers: $($changed.Count) entries, see held-changed.txt"
+    exit 4
+  }
 }
 
 if (-not ('RivetTestStart' -as [type])) {
