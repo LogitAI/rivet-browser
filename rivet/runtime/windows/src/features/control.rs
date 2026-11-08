@@ -540,6 +540,7 @@ unsafe fn capture(window: HWND) -> Result<Frame, Failure> {
                 width: width as u32,
                 height: height as u32,
                 bgra,
+                layout_dpi: crate::frame::layout_dpi(window),
             })
         } else {
             Err(Failure::refused(

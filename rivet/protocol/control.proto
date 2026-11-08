@@ -162,6 +162,9 @@ message Frame {
   uint32 width = 1;
   uint32 height = 2;
   bytes bgra = 3;
+  // The scale the window is laid out and drawn at, as a DPI: 96 is 100%. It is the browser's own
+  // layout scale, which can differ from what Windows reports for the window.
+  uint32 layout_dpi = 4;
 }
 
 message Done {}

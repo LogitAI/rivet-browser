@@ -280,11 +280,17 @@ pub fn render(
             std::fs::write(path, bmp(frame)?)
                 .map_err(|error| format!("could not write {}: {error}", path.display()))?;
             (
-                serde_json::json!({ "width": frame.width, "height": frame.height, "path": path.to_string_lossy() }),
+                serde_json::json!({
+                    "width": frame.width,
+                    "height": frame.height,
+                    "layout_dpi": frame.layout_dpi,
+                    "path": path.to_string_lossy(),
+                }),
                 format!(
-                    "wrote {}x{} capture to {}",
+                    "wrote {}x{} capture at {} DPI to {}",
                     frame.width,
                     frame.height,
+                    frame.layout_dpi,
                     path.display()
                 ),
             )
@@ -452,11 +458,34 @@ mod tests {
     }
 
     #[test]
+    fn fr4_read_frame_reports_its_layout_scale_in_json() {
+        let dir = rivet_core::paths::TestDir::new("rivet-frame-scale");
+        let path = dir.path().join("frame.bmp");
+        let frame = response(
+            control_response::Result::Frame(rivet_protocol::Frame {
+                width: 1,
+                height: 1,
+                bgra: vec![0, 0, 0, 255],
+                layout_dpi: 120,
+            }),
+            Visibility::Visible,
+            false,
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&render(&frame, true, Some(&path)).unwrap()).unwrap();
+        assert_eq!(json["layout_dpi"], 120);
+        assert!(render(&frame, false, Some(&path))
+            .unwrap()
+            .contains("at 120 DPI"));
+    }
+
+    #[test]
     fn fr5_a_capture_becomes_a_top_down_bitmap() {
         let frame = rivet_protocol::Frame {
             width: 2,
             height: 1,
             bgra: vec![1, 2, 3, 255, 4, 5, 6, 255],
+            layout_dpi: 120,
         };
         let file = bmp(&frame).unwrap();
         assert_eq!(&file[..2], b"BM");
@@ -465,7 +494,8 @@ mod tests {
         assert!(bmp(&rivet_protocol::Frame {
             width: 3,
             height: 1,
-            bgra: vec![0; 4]
+            bgra: vec![0; 4],
+            layout_dpi: 96,
         })
         .is_err());
     }
