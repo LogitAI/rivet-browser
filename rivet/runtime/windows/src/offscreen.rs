@@ -258,6 +258,34 @@ pub(crate) unsafe fn activate_on_test_desktop(window: HWND) -> bool {
         || windows_sys::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow() == window
 }
 
+/// The top window a browser window shows over itself, such as its password save offer: the first
+/// visible window, in the thread's top-down order, that `window` owns.
+pub(crate) unsafe fn owned_popup(window: HWND) -> Option<HWND> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, GetWindow, GW_OWNER};
+    unsafe extern "system" fn visit(found: HWND, list: LPARAM) -> i32 {
+        let list = &mut *(list as *mut Vec<(usize, usize, bool)>);
+        list.push((
+            found as usize,
+            GetWindow(found, GW_OWNER) as usize,
+            IsWindowVisible(found) != 0,
+        ));
+        1
+    }
+    let thread = GetWindowThreadProcessId(window, std::ptr::null_mut());
+    let mut list: Vec<(usize, usize, bool)> = Vec::new();
+    EnumThreadWindows(thread, Some(visit), &mut list as *mut _ as LPARAM);
+    first_owned(&list, window as usize).map(|found| found as HWND)
+}
+
+/// The first of `windows`, given top-down as (window, owner, visible), that is visible and owned by
+/// `owner`.
+fn first_owned(windows: &[(usize, usize, bool)], owner: usize) -> Option<usize> {
+    windows
+        .iter()
+        .find(|(found, by, visible)| *visible && *by == owner && *found != owner)
+        .map(|(found, _, _)| *found)
+}
+
 /// Before a window is made: a top-level one starts off every monitor. Before a window is
 /// activated: it is not, so no test window ever takes the foreground or the keyboard.
 unsafe extern "system" fn cbt_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -363,5 +391,27 @@ pub(crate) unsafe fn message(
             None
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nfr8_the_save_offer_to_focus_is_the_top_visible_window_the_browser_window_owns() {
+        let browser = 10;
+        let windows = [
+            (30, 0, true),
+            (40, browser, false),
+            (50, browser, true),
+            (60, browser, true),
+            (browser, 0, true),
+        ];
+        assert_eq!(first_owned(&windows, browser), Some(50));
+        assert_eq!(
+            first_owned(&[(30, 0, true), (40, browser, false)], browser),
+            None
+        );
     }
 }
