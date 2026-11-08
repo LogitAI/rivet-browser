@@ -112,6 +112,12 @@ const DEV_EDGE: u32 = 0x17181b;
 const DEV_ICON: u32 = 0xc4c7ce;
 const DEV_ADDRESS: u32 = 0xaeb2ba;
 
+/// Whether a window's own top row is dark: in developer mode, and not a split pane's row, which is
+/// drawn with the pane.
+pub(crate) fn row_is_dark(dev: bool, pane: bool) -> bool {
+    dev && !pane
+}
+
 /// The ground, lower edge and icon ink of the top row: dark while the page is in developer mode,
 /// as the browser's own row under the caption buttons and the developer buttons then is.
 pub(crate) fn row_colours(dev: bool) -> (u32, u32, u32) {
@@ -1053,7 +1059,8 @@ impl Appbar {
         };
         let (w, h) = (width as f32 / scale, height as f32 / scale);
         let draw = || -> Result<()> {
-            let (ground, edge, icon_ink) = row_colours(bar.dev && !bar.pane);
+            let dark = row_is_dark(bar.dev, bar.pane);
+            let (ground, edge, icon_ink) = row_colours(dark);
             if bar.pane {
                 // Only the address of a pane's row: the row around it is drawn with the row.
                 canvas.fill(rect(0.0, 0.0, w, h - 1.0), PAPER)?;
@@ -1081,7 +1088,7 @@ impl Appbar {
                                 '\u{E72A}',
                                 if !bar.can_forward {
                                     0xd3d1d6
-                                } else if bar.dev && !bar.pane {
+                                } else if dark {
                                     icon_ink
                                 } else {
                                     MUTED
@@ -1186,7 +1193,9 @@ impl Appbar {
                 }
             }
             if !bar.pane {
-                canvas.caption_buttons(w, 0.0, h, bar.caption_hover, bar.zoomed, self.dark_row)?;
+                // The glyphs follow the ground drawn under them in this same paint, so they never stay
+                // white on a light row after the page leaves developer mode.
+                canvas.caption_buttons(w, 0.0, h, bar.caption_hover, bar.zoomed, dark)?;
             }
             if list_h > 0.0 {
                 if let Some((left, lw)) = crate::features::address_bar::dropdown_of(w, bar.pane) {
@@ -2695,5 +2704,13 @@ mod tests {
         assert_eq!(row_colours(true), (0x2a2c31, 0x17181b, 0xc4c7ce));
         // Any other page keeps the paper row, where the dark caption glyphs show.
         assert_eq!(row_colours(false), (PAPER, HAIRLINE, SOFT_INK));
+    }
+
+    #[test]
+    fn fr11_the_caption_glyphs_follow_the_row_they_are_drawn_on() {
+        // The row and its caption glyphs take one answer, so leaving developer mode turns both light.
+        assert!(row_is_dark(true, false));
+        assert!(!row_is_dark(false, false));
+        assert!(!row_is_dark(true, true));
     }
 }
