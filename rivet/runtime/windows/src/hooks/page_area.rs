@@ -49,21 +49,23 @@ pub(crate) fn laid_out_host(window: HWND) -> Option<usize> {
 pub unsafe fn page_geometry(window: HWND) -> Option<PageGeometry> {
     let host = HOST_VIEWS.with(|views| views.borrow().get(&(window as isize)).copied())?;
     let (top, height) = AREAS.with(|areas| areas.borrow().get(&(window as isize)).copied())?;
-    // Views keep their bounds at +0x1c8 and their parent at +0x198. The page area lies in the
-    // browser view, so its origin is the sum of the bounds of the view and its ancestors.
+    // The page area lies in the browser view, so its origin is the sum of the bounds of the view and
+    // its ancestors, at the offsets this build keeps them.
+    let bounds_offset = crate::builds::get().layout.view_bounds_offset;
+    let parent_offset = View::parent_offset(bounds_offset)?;
     let (mut x, mut y, mut width) = (0, 0, 0);
     let mut view = host;
     for depth in 0..16 {
-        if !readable(view + View::BOUNDS, 16) {
+        if !readable(view + bounds_offset, 16) || !readable(view + parent_offset, 8) {
             return None;
         }
-        let bounds = View::at(view).bounds();
+        let bounds = View::at(view).bounds(bounds_offset);
         x += bounds[0];
         y += bounds[1];
         if depth == 0 {
             width = bounds[2];
         }
-        view = View::at(view).parent_address();
+        view = View::at(view).parent_address(parent_offset);
         if view == 0 || !readable(view, 8) {
             break;
         }
@@ -287,6 +289,9 @@ static OWN_AREAS: std::sync::Mutex<Vec<(isize, [i32; 4])>> = std::sync::Mutex::n
 
 unsafe fn window_position(view: usize) -> [i32; 2] {
     let offset = crate::builds::get().layout.view_bounds_offset;
+    let Some(parent) = View::parent_offset(offset) else {
+        return [0, 0];
+    };
     let (mut x, mut y, mut at) = (0, 0, view);
     for _ in 0..16 {
         if at == 0 {
@@ -295,13 +300,10 @@ unsafe fn window_position(view: usize) -> [i32; 2] {
         let bounds = *((at + offset) as *const [i32; 4]);
         x += bounds[0];
         y += bounds[1];
-        at = *((at + VIEW_PARENT) as *const usize);
+        at = *((at + parent) as *const usize);
     }
     [x, y]
 }
-
-/// Where a view keeps its parent.
-const VIEW_PARENT: usize = 0x198;
 
 pub(crate) unsafe fn remember_own_area(window: HWND, view: usize) {
     if crate::builds::get().side_panel.proposed != crate::builds::ABSENT
