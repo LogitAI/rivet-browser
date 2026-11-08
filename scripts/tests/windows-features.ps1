@@ -69,7 +69,6 @@ public static class FeatureWin{
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int w,int ht,uint f);
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
- [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint f);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out R r);
  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h,out R r);
@@ -251,7 +250,8 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, 1800, 1067, 0x14) | Out-Null
   [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
-  $ctx.Dpi = Get-LayoutDpi $ctx
+  $dpi = Get-LayoutDpi $ctx
+  if ($dpi) { $ctx.Dpi = $dpi } elseif (-not $ctx.Error) { $ctx.Error = 'the runtime traced no scale for the window' }
 }
 
 # The scale the browser laid the window out at, as the runtime reports it, which every part of
@@ -260,8 +260,8 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
 # report yet, the window's own DPI.
 function Get-LayoutDpi($ctx) {
   $hex = '{0:x}' -f $ctx.Hwnd.ToInt64()
-  # The runtime traces the scale it lays the window out at once it attached. Read before that, the
-  # window DPI can differ from it, so the trace is waited for a moment before falling back.
+  # The runtime traces the scale it draws the window at when it attaches, and again whenever the
+  # browser's layout gives another. The last one traced is the scale.
   $line = $null
   foreach ($i in 1..20) {
     $line = @(Read-Log | Where-Object { $_ -match "^layout dpi: window 0x$hex at (\d+)$" }) | Select-Object -Last 1
@@ -269,7 +269,8 @@ function Get-LayoutDpi($ctx) {
     Start-Sleep -Milliseconds 250
   }
   if ($line -and $line -match ' at (\d+)$') { return [int]$Matches[1] }
-  [FeatureWin]::GetDpiForWindow($ctx.Hwnd)
+  # No fallback: the test process's own idea of the window's DPI can differ from the browser's.
+  $null
 }
 
 function Get-Capture($ctx, [string]$Path) {
@@ -376,7 +377,7 @@ function Open-SecondPage($ctx, [string]$Url, [switch]$AllowOwned) {
   $listed = (Send-Flag $ctx 'rivet-tab.txt' 'list') -and ((Get-TabUrls) -contains $Url)
   # Whale traces the scale it lays the window out at only once a second tab is laid out, after the
   # scene read its scale, so the scale is read again here.
-  if ($listed) { $ctx.Dpi = Get-LayoutDpi $ctx }
+  if ($listed) { $dpi = Get-LayoutDpi $ctx; if ($dpi) { $ctx.Dpi = $dpi } }
   $listed
 }
 
@@ -1688,7 +1689,7 @@ function Invoke-OpenLink($Name, $shots, [string]$Mode) {
     $mine = @(Get-MyProcesses $exeName $started | Where-Object { $_.CommandLine -notlike '*--type=*' })
     if (-not $mine.Count) { return @('FAIL', $null, "the launcher started no browser on the saved profile (exit $code)") }
     $ctx.Hwnd = Get-BrowserWindow ($mine | ForEach-Object { [int]$_.ProcessId })
-    if ($ctx.Hwnd -and $ctx.Hwnd -ne [IntPtr]::Zero) { $ctx.Dpi = Get-LayoutDpi $ctx }
+    if ($ctx.Hwnd -and $ctx.Hwnd -ne [IntPtr]::Zero) { $dpi = Get-LayoutDpi $ctx; if ($dpi) { $ctx.Dpi = $dpi } }
     if ($null -eq $code) { return @('FAIL', $null, 'the launcher did not finish') }
     if ($code -ne 0) { return @('FAIL', $null, "the launcher exited $code") }
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
