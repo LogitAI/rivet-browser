@@ -4,9 +4,14 @@ use std::ffi::c_void;
 
 use windows_sys::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT};
 
+/// How many readable regions are remembered. A walk over browser objects reads the module's data
+/// and several heap regions in turn, so remembering only the last one asked the system each time.
+const REMEMBERED: usize = 16;
+
 thread_local! {
-    /// The last region found readable, so a scan over one object does not query every word.
-    static REGION: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    /// The regions last found readable, so a scan over objects does not query every word.
+    static REGIONS: std::cell::RefCell<([(usize, usize); REMEMBERED], usize)> =
+        const { std::cell::RefCell::new(([(0, 0); REMEMBERED], 0)) };
 }
 
 pub(crate) fn readable(address: usize, length: usize) -> bool {
@@ -16,8 +21,14 @@ pub(crate) fn readable(address: usize, length: usize) -> bool {
     let Some(last) = address.checked_add(length) else {
         return false;
     };
-    let (start, end) = REGION.with(|region| region.get());
-    if address >= start && last <= end {
+    let known = REGIONS.with(|regions| {
+        regions
+            .borrow()
+            .0
+            .iter()
+            .any(|(start, end)| address >= *start && last <= *end)
+    });
+    if known {
         return true;
     }
     let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
@@ -39,7 +50,12 @@ pub(crate) fn readable(address: usize, length: usize) -> bool {
         info.BaseAddress as usize,
         info.BaseAddress as usize + info.RegionSize,
     );
-    REGION.with(|cell| cell.set(region));
+    REGIONS.with(|regions| {
+        let mut regions = regions.borrow_mut();
+        let next = regions.1;
+        regions.0[next] = region;
+        regions.1 = (next + 1) % REMEMBERED;
+    });
     last <= region.1
 }
 
