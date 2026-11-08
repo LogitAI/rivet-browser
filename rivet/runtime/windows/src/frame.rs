@@ -217,6 +217,18 @@ unsafe fn trace_reflection(window: HWND) -> bool {
                 .ok()
                 .map(|(object, _, _)| object);
             crate::trace::trace(&reflect::facts(&ranges, view, parent_row, reached));
+            let holder = crate::chromium::memory::readable(view + parent_row, 8)
+                .then(|| unsafe { *((view + parent_row) as *const usize) });
+            if let Some(holder) = holder {
+                crate::trace::trace(&format!(
+                    "facts: holder parts {}",
+                    reflect::parts(&ranges, ranges.text.0, holder, 12)
+                ));
+            }
+            crate::trace::trace(&format!(
+                "facts: view fields naming a class {}",
+                reflect::named_fields(&ranges, view, 16)
+            ));
         }
     });
     true

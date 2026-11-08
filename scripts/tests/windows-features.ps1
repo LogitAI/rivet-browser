@@ -2626,6 +2626,8 @@ function Invoke-ViewReflection($Name, $shots) {
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'reflect')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the reflect command') }
     $line = Wait-Log $before '^reflect:' 10
     if (-not $line) { return @('NOT_DRIVEN', $one.Path, 'the runtime traced no reflection') }
+    # The runtime traces what it saw around the row's browser view after; it is kept in the trace.
+    $null = Wait-Log $before '^facts: view fields' 10
     if ($line -match ', same true,') { return @('PASS', $one.Path, $line) }
     @('FAIL', $one.Path, $line)
   } finally { if ($ctx) { Stop-Scene $ctx } }
