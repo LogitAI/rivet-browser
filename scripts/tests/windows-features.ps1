@@ -2371,7 +2371,15 @@ function Invoke-DevRow($Name, $shots) {
     $plain = Get-Capture $ctx (Join-Path $shots 'dev-row-3-plain.png')
     $bar = Test-BarAtTop $plain $script:ColourA $script:ColourC $s
     if ($bar.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $plain.Path, "the row could not be found: $($bar.Reason)") }
-    $rowTop = [int]($bar.PageTop - 44 * $s); $rowBottom = $bar.PageTop
+    # The row from the runtime's own place for the address, since a browser infobar (Brave's analytics
+    # notice on a new profile) can sit between the row and the page.
+    $anc = Get-BarAnchors $ctx
+    if ($anc) {
+      $co = Get-ClientOffset $ctx
+      $rowTop = [int]($co.Y + ($anc.Address[1] - (44 - $anc.Address[3]) / 2) * $s); $rowBottom = [int]($rowTop + 44 * $s)
+    } else {
+      $rowTop = [int]($bar.PageTop - 44 * $s); $rowBottom = $bar.PageTop
+    }
     $capLeft = [int]($bar.PageRight - 3 * 46 * $s)
     $span = @([int]($capLeft - (6 + 7 * 30) * $s), $capLeft)
     $row = Test-DevRow $plain $wide @($rowTop, $rowBottom) $span ([Math]::Min(7, $count))
