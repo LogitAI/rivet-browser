@@ -13,7 +13,9 @@ use rivet_platform_windows::textservices::{Field, TIMER_BASE, TIMER_LAST};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::UI::Input::Ime::{ImmAssociateContextEx, IACE_DEFAULT};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, PostMessageW};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetClientRect, KillTimer, PostMessageW, SetTimer,
+};
 
 use crate::features::split::{CAPTION_ROOM, ROW_HEIGHT, TOGGLE_ROOM};
 
@@ -275,6 +277,10 @@ struct Bar {
     inline: String,
     /// Whether the last key deleted text. The browser completes nothing inline then.
     deleting: bool,
+    /// The next re-read of the browser's result after a query, while one is due.
+    refresh_step: Option<usize>,
+    /// Whether the query being re-read may complete inline.
+    refresh_inline: bool,
 }
 
 thread_local! {
@@ -301,6 +307,8 @@ fn with_bar<R>(window: HWND, work: impl FnOnce(&mut Bar) -> R) -> R {
             queried: String::new(),
             inline: String::new(),
             deleting: false,
+            refresh_step: None,
+            refresh_inline: false,
         });
         work(bar)
     })
@@ -732,7 +740,32 @@ unsafe fn begin(window: HWND, bar: &mut Bar) {
     bar.generation += 1;
 }
 
+/// The timer that re-reads the browser's result while a query's slower providers answer. It runs
+/// only after a key changed the text, is replaced by the next key and is stopped when editing ends.
+const REFRESH_TIMER: usize = 0x5281;
+/// When the result is read again after a query, in milliseconds from the previous read. The
+/// history providers' slower pass and the search engine answer within these.
+pub(crate) const REFRESH_DELAYS_MS: [u32; 3] = [100, 200, 500];
+
+/// What the re-read timer does after read `step`: wait the next delay, or stop for good. It stops
+/// when editing ended or the last step was read.
+pub(crate) fn next_refresh(step: usize, editing: bool) -> Option<u32> {
+    if !editing {
+        return None;
+    }
+    REFRESH_DELAYS_MS.get(step).copied()
+}
+
+/// Whether a re-read changed what the list shows, so that only a change redraws it.
+pub(crate) fn result_changed(
+    before: &[crate::features::omnibox::Suggestion],
+    after: &[crate::features::omnibox::Suggestion],
+) -> bool {
+    before != after
+}
+
 unsafe fn end(bar: &mut Bar) {
+    bar.refresh_step = None;
     if let Some(field) = bar.field.as_ref() {
         field.send(0x0008, 0, 0); // WM_KILLFOCUS
     }
@@ -890,8 +923,22 @@ unsafe fn refresh_suggestions(window: HWND) {
     let found = if text.trim().is_empty() {
         Some(Vec::new())
     } else {
-        crate::features::omnibox::suggest_with(window, &text, inline)
+        crate::features::omnibox::suggest_with(window, &text, inline, true, true)
     };
+    // Each key starts the re-reads over; the last key's query is the one that answers.
+    let first = next_refresh(0, true);
+    with_bar(window, |bar| {
+        bar.refresh_step = first.map(|_| 0);
+        bar.refresh_inline = inline;
+    });
+    match first {
+        Some(delay) if !text.trim().is_empty() => {
+            SetTimer(window, REFRESH_TIMER, delay, None);
+        }
+        _ => {
+            KillTimer(window, REFRESH_TIMER);
+        }
+    }
     let shown = with_bar(window, |bar| {
         bar.suggestions = found.unwrap_or_default();
         bar.suggestions.truncate(SUGGESTIONS_SHOWN);
@@ -973,6 +1020,84 @@ pub(crate) unsafe fn message(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> Option<LRESULT> {
+    // The re-read timer is the bar's own, so it is stopped here whatever else happens.
+    if message == WM_TIMER && wparam == REFRESH_TIMER {
+        if busy() {
+            KillTimer(window, REFRESH_TIMER);
+        } else {
+            // Reads the browser's result again while its slower providers answer, and redraws
+            // the list only when it changed. Stops after the last step or once editing ended.
+            {
+                KillTimer(window, REFRESH_TIMER);
+                let Some((step, text, inline)) = with_bar(window, |bar| {
+                    let step = bar.refresh_step?;
+                    bar.editing
+                        .then(|| (step, bar.queried.clone(), bar.refresh_inline))
+                }) else {
+                    with_bar(window, |bar| bar.refresh_step = None);
+                    return Some(0);
+                };
+                let found =
+                    crate::features::omnibox::suggest_with(window, &text, inline, true, false);
+                let changed = with_bar(window, |bar| {
+                    let Some(mut found) = found else {
+                        return false;
+                    };
+                    found.truncate(SUGGESTIONS_SHOWN);
+                    if !result_changed(&bar.suggestions, &found) {
+                        return false;
+                    }
+                    bar.suggestions = found;
+                    bar.selected = None;
+                    // A completion that arrived late is shown only while the field still holds the typed text
+                    // alone, with the caret at its end.
+                    let late = bar
+                        .suggestions
+                        .first()
+                        .map(|first| first.inline.clone())
+                        .unwrap_or_default();
+                    if bar.inline.is_empty() && !late.is_empty() {
+                        if let Some(field) = bar.field.as_ref() {
+                            if field.text() == text
+                                && may_complete_inline(&text, selection(field), bar.deleting)
+                            {
+                                let (full, start, end) = completed(&text, &late);
+                                field.set_text(&full);
+                                field.send(EM_SETSEL, start, end as isize);
+                                field.take_changed();
+                                bar.inline = late;
+                            }
+                        }
+                    }
+                    bar.generation += 1;
+                    true
+                });
+                if changed {
+                    let shown = with_bar(window, |bar| {
+                        let rows: Vec<&str> = bar
+                            .suggestions
+                            .iter()
+                            .map(|s| s.destination.as_str())
+                            .collect();
+                        format!("{rows:?} inline {:?}", bar.inline)
+                    });
+                    crate::trace::trace(&format!(
+                        "address bar: suggestions for {text:?} later: {shown}"
+                    ));
+                    crate::frame::update_appbar(window);
+                }
+                let editing = with_bar(window, |bar| bar.editing);
+                match next_refresh(step + 1, editing) {
+                    Some(delay) => {
+                        with_bar(window, |bar| bar.refresh_step = Some(step + 1));
+                        SetTimer(window, REFRESH_TIMER, delay, None);
+                    }
+                    None => with_bar(window, |bar| bar.refresh_step = None),
+                }
+            }
+        }
+        return Some(0);
+    }
     // The text engine and the input method send the window messages while the bar is busy with one,
     // such as a change of capture. Those are the browser's to handle.
     if !shown_in(window) || busy() {
@@ -1444,6 +1569,37 @@ pub(crate) fn caret(window: HWND) -> Option<RECT> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_late_suggestions_are_read_a_few_times_after_a_key_and_never_at_idle() {
+        // After a key: three reads, at 100, then 200, then 500 ms, then nothing more.
+        assert_eq!(next_refresh(0, true), Some(100));
+        assert_eq!(next_refresh(1, true), Some(200));
+        assert_eq!(next_refresh(2, true), Some(500));
+        assert_eq!(next_refresh(3, true), None);
+        // Editing ended: nothing is read again, whatever step was due.
+        assert_eq!(next_refresh(0, false), None);
+        assert_eq!(next_refresh(1, false), None);
+    }
+
+    #[test]
+    fn fr12_a_late_read_redraws_only_when_the_result_changed() {
+        use crate::features::omnibox::Suggestion;
+        let one = |destination: &str| Suggestion {
+            contents: destination.into(),
+            description: String::new(),
+            destination: destination.into(),
+            fill: destination.into(),
+            inline: String::new(),
+        };
+        let typed = vec![one("http://127.0.0.1/alp")];
+        let later = vec![
+            one("http://127.0.0.1/alpha.html"),
+            one("http://127.0.0.1/alp"),
+        ];
+        assert!(!result_changed(&typed, &typed.clone()));
+        assert!(result_changed(&typed, &later));
+    }
 
     #[test]
     fn fr12_edit_commands_are_the_text_engines_own_clipboard_and_undo_messages() {
