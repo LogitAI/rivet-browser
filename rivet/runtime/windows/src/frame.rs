@@ -194,7 +194,7 @@ unsafe fn trace_reflection(window: HWND) -> bool {
         let parent_row = crate::chromium::view::View::PARENT;
         match found {
             Ok((found, cached)) => crate::trace::trace(&format!(
-                "reflect: root view by path {:x?}, view list at {:#x}, parent at {:#x} (row {:#x}), \
+                "reflect: browser view by path {:x?}, view list at {:#x}, parent at {:#x} (row {:#x}), \
                  browser view {:x?} (row {:x?}), same {}, cached {cached}, {} objects, {took} ms \
                  on a worker thread",
                 found.path,

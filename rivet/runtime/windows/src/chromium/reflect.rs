@@ -8,8 +8,8 @@
 //!
 //! The way in needs no build value either: `gfx::WindowImpl` keeps itself in the window's
 //! `GWLP_USERDATA`, and `views::HWNDMessageHandler` is a `WindowImpl`. From there pointer fields are
-//! followed, a few hops deep, until one leads to the view whose class is `RootView`. Below it the
-//! view list is found as the field of pointers to views whose own parent field points back.
+//! followed, a few hops deep, until one leads to the view whose class is `BrowserView`. The view
+//! that holds it, its view list and its parent field are then found together.
 
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
@@ -184,6 +184,7 @@ pub(crate) fn class_name(ranges: &Ranges, view: usize) -> Option<String> {
 /// What the walk found, with the offsets it derived.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Found {
+    /// The view whose view list holds the browser view.
     pub root_view: usize,
     pub path: Vec<usize>,
     pub children: usize,
@@ -197,8 +198,8 @@ const MAX_DEPTH: usize = 4;
 const FIELDS: usize = 0x800;
 const MAX_NODES: usize = 4000;
 
-/// Follows pointer fields from the window's `HWNDMessageHandler` to its `RootView`, then derives
-/// the view list and parent fields and finds the `BrowserView` below it, within `budget`.
+/// Follows pointer fields from the window's `HWNDMessageHandler` to its `BrowserView` within
+/// `budget`, then derives the view list and parent fields from the view that holds it.
 pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<Found, String> {
     let start = Instant::now();
     let mut seen = HashSet::new();
@@ -210,15 +211,15 @@ pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<
     while let Some((object, path)) = queue.pop_front() {
         if start.elapsed() > budget || visited > MAX_NODES {
             return Err(format!(
-                "no RootView within the budget after {visited} objects; names met {names:?}"
+                "no BrowserView within the budget after {visited} objects; names met {names:?}"
             ));
         }
         visited += 1;
-        // The RootView lies three pointers past the handler: its host, the widget, the view. Names
-        // are only read that deep, which keeps the walk inside its budget.
+        // Views lie at least two pointers past the handler. Names are only read that deep, which
+        // keeps the walk inside its budget.
         if path.len() >= MIN_DEPTH {
             if let Some(name) = class_name(ranges, object) {
-                if name == "RootView" {
+                if name == "BrowserView" {
                     root = Some((object, path));
                     break;
                 }
@@ -241,19 +242,38 @@ pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<
             }
         }
     }
-    let (root_view, path) =
-        root.ok_or_else(|| format!("no RootView reached from the window; names met {names:?}"))?;
-    let (children, parent) = view_list(ranges, root_view)
-        .ok_or("no view list below the RootView whose views point back to it")?;
-    let browser_view = browser_view_below(ranges, root_view, children, start, budget);
+    let (browser_view, path) =
+        root.ok_or_else(|| format!("no BrowserView reached from the window; names met {names:?}"))?;
+    let (holder, children, parent) = parent_link(ranges, browser_view)
+        .ok_or("no view holds the BrowserView in a view list it points back from")?;
     Ok(Found {
-        root_view,
+        root_view: holder,
         path,
         children,
         parent,
-        browser_view,
+        browser_view: Some(browser_view),
         visited,
     })
+}
+
+/// The view that holds `view` in its view list, as (holder, view list field, parent field): a
+/// field of `view` that names a view, which in one of its own fields lists `view`.
+fn parent_link(ranges: &Ranges, view: usize) -> Option<(usize, usize, usize)> {
+    for parent in (0..FIELDS).step_by(8) {
+        let Some(holder) = word(view + parent) else {
+            break;
+        };
+        if holder == view || !is_object(ranges, holder) || class_name(ranges, holder).is_none() {
+            continue;
+        }
+        let listed = (0..FIELDS)
+            .step_by(8)
+            .find(|field| children_of(holder, *field).contains(&view));
+        if let Some(children) = listed {
+            return Some((holder, children, parent));
+        }
+    }
+    None
 }
 
 /// A build's fingerprint from its headers: the link time stamp and the image size.
@@ -282,7 +302,7 @@ struct Offsets {
 static CACHE: std::sync::Mutex<Vec<((u32, u32), Offsets)>> = std::sync::Mutex::new(Vec::new());
 
 /// `find`, but through the offsets this build's earlier walk derived when there are some. The
-/// cached path must still end at the view named `RootView`; when it does not, the walk runs again.
+/// cached path must still end at the view named `BrowserView`; when it does not, the walk runs again.
 /// Returns what was found and whether the cache gave it.
 pub(crate) fn find_cached(
     ranges: &Ranges,
@@ -290,7 +310,6 @@ pub(crate) fn find_cached(
     budget: Duration,
     build: (u32, u32),
 ) -> Result<(Found, bool), String> {
-    let start = Instant::now();
     let known = CACHE.lock().ok().and_then(|cache| {
         cache
             .iter()
@@ -302,11 +321,11 @@ pub(crate) fn find_cached(
             .path
             .iter()
             .try_fold(handler, |object, field| word(object + field));
-        if let Some(root_view) =
-            root.filter(|root| class_name(ranges, *root).as_deref() == Some("RootView"))
+        if let Some(view) =
+            root.filter(|root| class_name(ranges, *root).as_deref() == Some("BrowserView"))
         {
-            let browser_view =
-                browser_view_below(ranges, root_view, offsets.children, start, budget);
+            let browser_view = Some(view);
+            let root_view = word(view + offsets.parent).unwrap_or(0);
             return Ok((
                 Found {
                     root_view,
@@ -335,37 +354,6 @@ pub(crate) fn find_cached(
     Ok((found, false))
 }
 
-/// The first view named `BrowserView` below `root`, through the view list at `children`.
-fn browser_view_below(
-    ranges: &Ranges,
-    root: usize,
-    children: usize,
-    start: Instant,
-    budget: Duration,
-) -> Option<usize> {
-    let root_view = root;
-    let mut browser_view = None;
-    let mut stack = vec![(root_view, 0)];
-    while let Some((view, depth)) = stack.pop() {
-        if start.elapsed() > budget {
-            break;
-        }
-        for child in children_of(view, children) {
-            if class_name(ranges, child).as_deref() == Some("BrowserView") {
-                browser_view = Some(child);
-                break;
-            }
-            if depth < 8 {
-                stack.push((child, depth + 1));
-            }
-        }
-        if browser_view.is_some() {
-            break;
-        }
-    }
-    browser_view
-}
-
 /// The views a `std::vector<View*>` at `view + field` holds.
 fn children_of(view: usize, field: usize) -> Vec<usize> {
     let (Some(begin), Some(end)) = (word(view + field), word(view + field + 8)) else {
@@ -375,24 +363,6 @@ fn children_of(view: usize, field: usize) -> Vec<usize> {
         return Vec::new();
     }
     (begin..end).step_by(8).filter_map(word).collect()
-}
-
-/// The field of `root` that is its view list, and the field of each listed view that points back
-/// to `root`, found together: a vector of views each of which names `root` at one same field.
-fn view_list(ranges: &Ranges, root: usize) -> Option<(usize, usize)> {
-    for field in (0..FIELDS).step_by(8) {
-        let views = children_of(root, field);
-        if views.is_empty() || !views.iter().all(|view| class_name(ranges, *view).is_some()) {
-            continue;
-        }
-        let back = (0..FIELDS)
-            .step_by(8)
-            .find(|offset| views.iter().all(|view| word(view + offset) == Some(root)));
-        if let Some(parent) = back {
-            return Some((field, parent));
-        }
-    }
-    None
 }
 
 #[cfg(test)]
