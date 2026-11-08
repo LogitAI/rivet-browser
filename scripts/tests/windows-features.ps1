@@ -1751,6 +1751,9 @@ function Invoke-Credentials($Name, $shots, [string]$Provider) {
     $tops = @(Get-MyTops $ctx)
     # Only now is the form sent, so the save offer is a window that was not there before. Sent while
     # the scene still settled, the offer was already among the windows taken as the scene's own.
+    # The browser offers to save a password only in an active window. On a test desktop of its own
+    # the runtime may activate the window, which reaches no person's screen or keyboard.
+    if ($env:RIVET_TEST_DESKTOP) { Send-Flag $ctx 'rivet-tab.txt' 'focuswindow' | Out-Null }
     $go = Invoke-Rivet $ctx $state @('nav', 'go', ($server.Url + '?send#submit'))
     if ($go.Code -ne 0) { return @('NOT_DRIVEN', $null, "the login page could not be opened to send the form: $($go.Text)") }
     # The form sends itself 1.5 s after load. The browser's save offer is a window of its own; it is
