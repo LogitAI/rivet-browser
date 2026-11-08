@@ -215,8 +215,8 @@ const MAX_NODES: usize = 4000;
 /// `budget`, then derives the view list and parent fields from the view that holds it.
 pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<Found, String> {
     let (browser_view, path, visited) = reach(ranges, handler, budget)?;
-    let (holder, children, parent, view) = parent_link(ranges, browser_view)
-        .ok_or("no view holds the BrowserView in a view list it points back from")?;
+    let (holder, children, parent, view) = own_view_list(ranges, browser_view)
+        .ok_or("no view part of the BrowserView lists views that name it as their parent")?;
     Ok(Found {
         root_view: holder,
         path,
@@ -281,38 +281,40 @@ pub(crate) fn reach(
     Ok((browser_view, path, visited))
 }
 
-/// How far around the object the walk reached its `views::View` part and parent field may lie. The
-/// object's metadata part, through which the walk named it, comes late among `View`'s bases, so the
-/// `View` part can begin before it.
-const AROUND: usize = 0x800;
-
-/// The view that holds the object at `object` in its view list, as (holder, view list field, parent
-/// field, view): a field near the object names a view, and one of that view's own fields lists an
-/// address near the object at or before that field. That address is the object's `views::View`
-/// part, and the parent field is counted from it.
-fn parent_link(ranges: &Ranges, object: usize) -> Option<(usize, usize, usize, usize)> {
-    let near = object.saturating_sub(AROUND)..object + AROUND;
-    for at in near.clone().step_by(8) {
-        let Some(holder) = word(at) else {
-            continue;
-        };
-        if near.contains(&holder)
-            || !is_object(ranges, holder)
-            || class_name_within(ranges, holder, 0x400).is_none()
-        {
-            continue;
-        }
-        for children in (0..FIELDS).step_by(8) {
-            let listed = children_of(holder, children)
-                .into_iter()
-                .find(|view| near.contains(view) && *view <= at);
-            if let Some(view) = listed {
-                return Some((holder, children, at - view, view));
+/// The BrowserView's `views::View` part and its member fields, found from its own view list. In
+/// `views::View` the parent pointer comes right before the list of children (`parent_`, then
+/// `children_`, a `std::vector` of views), and every child's parent field names the view. So the
+/// View part is the address near the object reached whose field `children` is a list of views
+/// each naming it at `children - 8`. Returns (parent view, view list field, parent field, View
+/// part).
+fn own_view_list(ranges: &Ranges, object: usize) -> Option<(usize, usize, usize, usize)> {
+    let (_, part) = name_and_part(ranges, object, 0x100)?;
+    let metadata = object + part;
+    for view in (metadata.saturating_sub(AROUND)..=metadata)
+        .rev()
+        .step_by(8)
+    {
+        for children in (8..FIELDS).step_by(8) {
+            let listed = children_of(view, children);
+            if listed.is_empty() || listed.len() > 64 {
+                continue;
+            }
+            let parent = children - 8;
+            if listed
+                .iter()
+                .all(|child| word(child + parent) == Some(view))
+            {
+                return Some((word(view + parent).unwrap_or(0), children, parent, view));
             }
         }
     }
     None
 }
+/// How far around the object the walk reached its `views::View` part and parent field may lie. The
+/// object's metadata part, through which the walk named it, comes late among `View`'s bases, so the
+/// `View` part can begin before it.
+const AROUND: usize = 0x800;
+
 /// A build's fingerprint from its headers: the link time stamp and the image size.
 pub(crate) fn fingerprint(headers: &[u8]) -> Option<(u32, u32)> {
     let u32_at = |at: usize| {
