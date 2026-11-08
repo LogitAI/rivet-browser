@@ -330,7 +330,20 @@ pub(crate) unsafe fn monitors_of(window: HWND) -> Option<(Monitor, Monitor)> {
             primary: info.dwFlags & 1 != 0,
         })
     }
-    let near = describe(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST))?;
+    // The monitor nearest the window's middle, as Chromium picks a window's display. Windows'
+    // nearest monitor to the whole window can be another one for a window off every monitor.
+    let mut rect: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
+    let monitor =
+        if windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(window, &mut rect) != 0 {
+            let middle = POINT {
+                x: rect.left + (rect.right - rect.left) / 2,
+                y: rect.top + (rect.bottom - rect.top) / 2,
+            };
+            MonitorFromPoint(middle, MONITOR_DEFAULTTONEAREST)
+        } else {
+            MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST)
+        };
+    let near = describe(monitor)?;
     let primary = describe(MonitorFromPoint(
         POINT { x: 0, y: 0 },
         MONITOR_DEFAULTTOPRIMARY,
