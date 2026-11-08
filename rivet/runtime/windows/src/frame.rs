@@ -163,7 +163,9 @@ const SETTINGS_PAD: f32 = 4.0;
 const FOOT_HEIGHT: f32 = 38.0;
 
 /// Finds the window's views by class metadata from the window's own user data, and traces them
-/// beside the browser view and parent field this build's row records. Returns whether it ran.
+/// beside the browser view and parent field this build's row records. The walk only reads memory,
+/// so it runs on a worker thread and never holds up the window; the offsets it derives are kept by
+/// build fingerprint, so its budget is paid once per build. Returns whether it started.
 unsafe fn trace_reflection(window: HWND) -> bool {
     use crate::chromium::reflect;
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
@@ -173,31 +175,44 @@ unsafe fn trace_reflection(window: HWND) -> bool {
     };
     let headers = std::slice::from_raw_parts(image.base as *const u8, 0x1000.min(image.size));
     let ranges = reflect::ranges_of(image.base, &reflect::sections(headers));
+    let Some(build) = reflect::fingerprint(headers) else {
+        crate::trace::trace("reflect: the browser module has no fingerprint");
+        return false;
+    };
     let handler = GetWindowLongPtrW(window, GWLP_USERDATA) as usize;
-    let started = std::time::Instant::now();
-    let found = reflect::find(&ranges, handler, std::time::Duration::from_millis(500));
-    let took = started.elapsed().as_millis();
+    // Read on the window's own thread, where the browser layout recorded it.
     let host = crate::hooks::page_area::laid_out_host(window);
-    match found {
-        Ok(found) => crate::trace::trace(&format!(
-            "reflect: root view by path {:x?}, view list at {:#x}, parent at {:#x} (row {:#x}), \
-             browser view {:x?} (row {:x?}), same {}, {} objects, {took} ms",
-            found.path,
-            found.children,
-            found.parent,
-            crate::chromium::view::View::PARENT,
-            found.browser_view,
-            host,
-            found.parent == crate::chromium::view::View::PARENT
-                && found.browser_view.is_some()
-                && found.browser_view == host,
-            found.visited,
-        )),
-        Err(error) => crate::trace::trace(&format!("reflect: {error}, {took} ms")),
-    }
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let found = reflect::find_cached(
+            &ranges,
+            handler,
+            std::time::Duration::from_millis(500),
+            build,
+        );
+        let took = started.elapsed().as_millis();
+        let parent_row = crate::chromium::view::View::PARENT;
+        match found {
+            Ok((found, cached)) => crate::trace::trace(&format!(
+                "reflect: root view by path {:x?}, view list at {:#x}, parent at {:#x} (row {:#x}), \
+                 browser view {:x?} (row {:x?}), same {}, cached {cached}, {} objects, {took} ms \
+                 on a worker thread",
+                found.path,
+                found.children,
+                found.parent,
+                parent_row,
+                found.browser_view,
+                host,
+                found.parent == parent_row
+                    && found.browser_view.is_some()
+                    && found.browser_view == host,
+                found.visited,
+            )),
+            Err(error) => crate::trace::trace(&format!("reflect: {error}, {took} ms")),
+        }
+    });
     true
 }
-
 /// The warning of this process when it runs from a held browser build. The clock is read once per
 /// process, and the time left is worked out anew for each paint because a window can stay open for days.
 fn held_warning() -> Option<String> {
