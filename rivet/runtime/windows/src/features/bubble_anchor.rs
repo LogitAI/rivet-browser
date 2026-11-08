@@ -235,6 +235,14 @@ unsafe extern "system" fn get_anchor_rect(
         return result;
     }
     if let Some((page, address, chip)) = targets(window) {
+        let original = *result;
+        let mut screen: RECT = std::mem::zeroed();
+        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(window, &mut screen);
+        crate::trace::trace(&format!(
+            "bubble anchor: original {original:?} address {address:?} chip {chip:?} window px {:?} layout dpi {}",
+            [screen.left, screen.top, screen.right, screen.bottom],
+            crate::frame::layout_dpi(window)
+        ));
         *result = choose(
             *result,
             page,
