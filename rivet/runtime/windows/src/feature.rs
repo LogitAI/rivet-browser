@@ -424,7 +424,12 @@ mod tests {
         );
         assert_eq!(
             names(&builds::WHALE),
-            ["frame_layout", "frame_colour", "tab_strip"]
+            [
+                "frame_layout",
+                "frame_colour",
+                "caption_layout",
+                "tab_strip"
+            ]
         );
         assert_eq!(names(&builds::SAMSUNG), ["frame_layout", "tab_strip"]);
     }

@@ -373,9 +373,9 @@ pub static WHALE: Build = Build {
         on_paint_slot: 89,
         provider_verified: true, // the tree walk is checked on 5.39.412.57; `toolbar.get_color` is not mapped, so no colour is created
         // `BrowserFrameViewWin::OnPaint` and `GetTopInset`, slots 89 and 127 of its vtable, found
-        // statically and unverified. whale.dll has no class name string, so the vtable was found by
-        // its other slots, matched one by one to Chrome 150.0.7871.187's from its public symbols.
-        // Both bodies keep Chromium's prologue and member reads; the top inset adds a check of its own.
+        // statically and unverified. The vtable was matched slot by slot to Chrome 150.0.7871.187's
+        // from its public symbols. Both bodies keep Chromium's prologue and member reads; the top
+        // inset adds a check of its own. Whale is Chromium 150.0.7871.252.
         on_paint: 0x0253_D0E0,
         on_paint_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
@@ -388,11 +388,49 @@ pub static WHALE: Build = Build {
         top_inset_slot: 127,
         top_inset: 0x0E7B_4500,
         frame_vtable: 0x0FB1_7440,
-        // Slot 74 of this caption vtable reads members Chromium's `WindowsCaptionButton` does not
-        // have, so the caption buttons' size is the browser's own and stays out.
+        // The caption button is Whale's own class on `views::ImageButton`; the container's button
+        // helper allocates it and its constructor writes this vtable. Slot 74 is still
+        // `View::CalculatePreferredSize` (the frame vtable's slot 74 is Chrome's), and Whale's
+        // override writes width and height to `out` as Chrome's does, which is all the size hook
+        // relies on. Its paint is `ImageButton::PaintButtonContents`, shared by about twenty
+        // classes, and the glyph colour is set in its own `OnThemeChanged`, so caption paint stays out.
         caption_vtable: 0xfb15d60,
         caption_size_slot: 74,
-        caption_size: ABSENT,
+        caption_size: 0x0E2E_F360,
+        // `BrowserFrameViewWin::Layout`, slot 23 as on Chrome 150: the only user of the trace name
+        // "BrowserFrameViewWin::Layout". It lays out the caption buttons (the only user of
+        // "BrowserFrameViewWin::LayoutCaptionButtons"), then the title bar and the client view.
+        layout_slot: 23,
+        layout: 0x0E7B_64B0,
+        layout_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x40, 0x48, 0x89, 0xCE],
+        // The frame view's constructor keeps the caption button container, whose metadata names
+        // "BrowserCaptionButtonContainer", at +0x428; LayoutCaptionButtons sizes [+0x428].
+        caption_container_offset: 0x428,
+        // `View::SetBoundsRect`: it holds the trace names "View::Layout(set_bounds)" and
+        // "View::Layout(bounds_changed)" and compares the bounds at +0x1C0.
+        set_bounds_rect: 0x08F7_C700,
+        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
+        // `BrowserView`'s view vtable: slot 23 is the only user of "BrowserView::Layout", and the
+        // `BrowserView` constructor stores it at +0x210, as `browser_window_in_view` says.
+        browser_view_view_vtable: 0x0FAB_7000,
+        // `View::LayoutImmediately`: the trace names "View::LayoutImmediately",
+        // "Views.LayoutCallDepth" and "Views.InvalidatesDuringLayout".
+        layout_immediately: 0x08F7_CD40,
+        layout_immediately_prologue: &[
+            0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE, 0x48,
+        ],
+        // Layer calls the caption layout uses, each the same body and member reads as Chrome 150's,
+        // and called from the same matched callers.
+        set_layer: 0x08F7_ECE0,
+        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
+        set_radius: 0x0907_5ED0,
+        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
+        set_masks: 0x0907_5BD0,
+        set_masks_prologue: &[0x48, 0x8B, 0x89, 0xC8, 0x01, 0x00, 0x00],
+        stack_at_top: 0x0907_72F0,
+        stack_at_top_prologue: &[0x4C, 0x8B, 0x41, 0x30, 0x48, 0x8B],
+        set_opaque: 0x0907_6120,
+        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
         frame_browser_window_offset: 0x338,
         browser_window_in_view: 0x210,
         view_bounds_offset: 0x1C0,
