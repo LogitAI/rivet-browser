@@ -105,6 +105,22 @@ const MONO_SIZE: f32 = 12.0;
 const MONO_ADVANCE: f32 = 6.6;
 /// The developer ground behind the address, a cool slate.
 const DEV_FIELD: u32 = 0x3d5a80;
+/// The developer row of the study's `.toolbar.dev`: its dark ground, its lower edge, the icons and
+/// the monospaced address on it.
+const DEV_GROUND: u32 = 0x2a2c31;
+const DEV_EDGE: u32 = 0x17181b;
+const DEV_ICON: u32 = 0xc4c7ce;
+const DEV_ADDRESS: u32 = 0xaeb2ba;
+
+/// The ground, lower edge and icon ink of the top row: dark while the page is in developer mode,
+/// as the browser's own row under the caption buttons and the developer buttons then is.
+pub(crate) fn row_colours(dev: bool) -> (u32, u32, u32) {
+    if dev {
+        (DEV_GROUND, DEV_EDGE, DEV_ICON)
+    } else {
+        (PAPER, HAIRLINE, SOFT_INK)
+    }
+}
 const FAVICON: Type = style("Manrope", 9.0, 700, 0.0);
 /// Interface icons come from the font Windows 11 draws its own caption buttons with.
 const ICONS: &str = "Segoe Fluent Icons";
@@ -1037,14 +1053,15 @@ impl Appbar {
         };
         let (w, h) = (width as f32 / scale, height as f32 / scale);
         let draw = || -> Result<()> {
+            let (ground, edge, icon_ink) = row_colours(bar.dev && !bar.pane);
             if bar.pane {
                 // Only the address of a pane's row: the row around it is drawn with the row.
                 canvas.fill(rect(0.0, 0.0, w, h - 1.0), PAPER)?;
             } else {
                 // The panel's rounded top corners, then a square lower half and the hairline.
-                canvas.fill_rounded(rect(0.0, 0.0, w, h), PANEL_RADIUS, rgba(PAPER, 1.0))?;
-                canvas.fill(rect(0.0, h / 2.0, w, h / 2.0), PAPER)?;
-                canvas.fill(rect(0.0, h - 1.0, w, 1.0), HAIRLINE)?;
+                canvas.fill_rounded(rect(0.0, 0.0, w, h), PANEL_RADIUS, rgba(ground, 1.0))?;
+                canvas.fill(rect(0.0, h / 2.0, w, h / 2.0), ground)?;
+                canvas.fill(rect(0.0, h - 1.0, w, 1.0), edge)?;
             }
             for (part, x, pw) in
                 crate::features::address_bar::parts_reserving(w, bar.pane, bar.reserve)
@@ -1058,12 +1075,19 @@ impl Appbar {
                         }
                         let (glyph, ink) = match part {
                             Part::Back => {
-                                ('\u{E72B}', if bar.can_back { SOFT_INK } else { 0xb9b6bb })
+                                ('\u{E72B}', if bar.can_back { icon_ink } else { 0xb9b6bb })
                             }
-                            Part::Forward => {
-                                ('\u{E72A}', if bar.can_forward { MUTED } else { 0xd3d1d6 })
-                            }
-                            _ => ('\u{E72C}', SOFT_INK),
+                            Part::Forward => (
+                                '\u{E72A}',
+                                if !bar.can_forward {
+                                    0xd3d1d6
+                                } else if bar.dev && !bar.pane {
+                                    icon_ink
+                                } else {
+                                    MUTED
+                                },
+                            ),
+                            _ => ('\u{E72C}', icon_ink),
                         };
                         canvas.icon(glyph, area, 16.0, ink)?;
                     }
@@ -1090,7 +1114,7 @@ impl Appbar {
                             CHIP + 4.0 + measure(&self.dwrite, &self.fonts, CHIP_TEXT, words)?
                         };
                         let chip = rect(x + 6.0, (h - 22.0) / 2.0, chip_w, 22.0);
-                        let ink = if insecure { 0xb3261e } else { SOFT_INK };
+                        let ink = if insecure { 0xb3261e } else { icon_ink };
                         if insecure && !bar.editing {
                             canvas.fill_rounded(chip, 6.0, rgba(0xb3261e, 0.08))?;
                         }
@@ -1112,7 +1136,11 @@ impl Appbar {
                         if !bar.editing && bar.dev {
                             // Developer mode: the whole address in a monospace system font.
                             let shown = crate::dev_mode::fit_address(&bar.url, room, MONO_ADVANCE);
-                            canvas.mono_text(rect(left, area.top, room, 28.0), &shown, SOFT_INK)?;
+                            canvas.mono_text(
+                                rect(left, area.top, room, 28.0),
+                                &shown,
+                                DEV_ADDRESS,
+                            )?;
                         } else if !bar.editing {
                             let title_w = if bar.title.is_empty() {
                                 0.0
@@ -2657,4 +2685,17 @@ pub(crate) fn make_fonts_known_to_gdi() {
             );
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fr11_a_page_in_developer_mode_has_the_dark_row_of_the_study() {
+        // `.toolbar.dev` of rivet-shell-demo.html: ground #2a2c31, lower edge #17181b, icons #c4c7ce.
+        assert_eq!(row_colours(true), (0x2a2c31, 0x17181b, 0xc4c7ce));
+        // Any other page keeps the paper row, where the dark caption glyphs show.
+        assert_eq!(row_colours(false), (PAPER, HAIRLINE, SOFT_INK));
+    }
 }
