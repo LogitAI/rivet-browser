@@ -1996,6 +1996,15 @@ function Invoke-TabMoves($Name, $shots) {
     $alive = @(Get-MyProcesses $ctx.ExeName $ctx.Profile | Where-Object { $_.CommandLine -notlike '*--type=*' }).Count -gt 0
     $last = Get-Capture $ctx (Join-Path $shots 'tab-moves-2-after.png')
     if (-not $alive) { return @('FAIL', $one.Path, 'the browser exited') }
+    # Whale draws its window shadow as a window of its own that frames the main window a few pixels
+    # out on every side. It is the browser's, not a window the tabs made.
+    $main = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$main) | Out-Null
+    $tops = @($tops | Where-Object {
+        if ($_ -eq $ctx.Hwnd) { return $true }
+        $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($_, [ref]$r) | Out-Null
+        $out = @(($main.L - $r.L), ($main.T - $r.T), ($r.Ri - $main.Ri), ($r.B - $main.B))
+        -not (@($out | Where-Object { $_ -lt 0 -or $_ -gt 16 }).Count -eq 0)
+      })
     if ($tops.Count -ne 1 -or $tops[0] -ne $ctx.Hwnd) { return @('FAIL', $last.Path, "the browser shows $($tops.Count) windows, not the app window alone") }
     $v = Test-OnePage $last $script:ColourA $script:ColourB
     if ($v.Verdict -ne 'PASS') { return @('FAIL', $last.Path, "after the tabs closed: $($v.Reason)") }
