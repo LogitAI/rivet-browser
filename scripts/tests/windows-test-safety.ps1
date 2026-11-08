@@ -236,12 +236,13 @@ function Get-RunLeftovers([string]$OutDir, [int[]]$Keep = @()) {
   $mine = $OutDir.TrimEnd('\')
   $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
   # The runner itself and the runners that started it name the folder too, and are not left over.
-  $keep = [System.Collections.Generic.HashSet[int]]::new()
-  foreach ($k in $Keep) { [void]$keep.Add($k) }
+  # Named apart from $Keep: PowerShell names ignore case, and the int[] parameter would take the set.
+  $kept = [System.Collections.Generic.HashSet[int]]::new()
+  foreach ($k in $Keep) { [void]$kept.Add($k) }
   $at = $PID
-  while ($at -and $keep.Add([int]$at)) { $at = ($all | Where-Object ProcessId -eq $at | Select-Object -First 1).ParentProcessId }
+  while ($at -and $kept.Add([int]$at)) { $at = ($all | Where-Object ProcessId -eq $at | Select-Object -First 1).ParentProcessId }
   @($all | Where-Object {
-      -not $keep.Contains([int]$_.ProcessId) -and (
+      -not $kept.Contains([int]$_.ProcessId) -and (
         ($script:StartedTestPids.ContainsKey([int]$_.ProcessId) -and [Math]::Abs(($script:StartedTestPids[[int]$_.ProcessId] - $_.CreationDate).TotalSeconds) -lt 1) -or
         ($_.CommandLine -and $_.CommandLine.IndexOf($mine, [StringComparison]::OrdinalIgnoreCase) -ge 0))
     })
