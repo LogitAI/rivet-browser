@@ -2145,6 +2145,10 @@ public static class FirstFrames{
    EnumWindows((h,l)=>{uint q;GetWindowThreadProcessId(h,out q);if(pids.Contains(q)&&IsWindowVisible(h)){var b=new StringBuilder(64);GetClassName(h,b,64);if(b.ToString()=="Chrome_WidgetWin_1")tops.Add(h);}return true;},IntPtr.Zero);
    foreach(var h in tops){
     R r; GetWindowRect(h,out r);
+    // Whale draws its window shadow as a window of its own that frames another of its windows a
+    // few pixels out on every side; it is not the browser window and paints black in a capture.
+    bool frames=false; foreach(var g in tops){ if(g==h) continue; R q; GetWindowRect(g,out q); int a=q.L-r.L,b=q.T-r.T,c=r.Ri-q.Ri,d=r.B-q.B; if(a>0&&b>0&&c>0&&d>0&&a<=16&&b<=16&&c<=16&&d<=16) frames=true; }
+    if(frames) continue;
     int w=r.Ri-r.L, ht=r.B-r.T;
     if(r.L<minX||w<=0||ht<=0) continue;
     var px=Capture(h,w,ht); if(px==null) continue;
