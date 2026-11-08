@@ -76,12 +76,14 @@ pub(crate) fn ranges_of(base: usize, list: &[([u8; 8], usize, usize)]) -> Ranges
     ranges
 }
 
-/// Where the code at `at` loads its result from: `lea rax, [rip+d]` within its first bytes, after
-/// following one `jmp rel32` at its start. `read` gives `length` bytes at an address.
+/// Where the code at `at` gets its result: the address of the first `lea rax, [rip+d]` or of the
+/// word the first `mov rax, [rip+d]` reads, whichever comes first, as (address, whether it is a
+/// word to read). `MetaData()` keeps its class's metadata in a static pointer it fills on first
+/// use, so it reads that pointer. `read` gives `length` bytes at an address.
 pub(crate) fn load_target(
     read: &dyn Fn(usize, usize) -> Option<Vec<u8>>,
     at: usize,
-) -> Option<usize> {
+) -> Option<(usize, bool)> {
     let rel =
         |bytes: &[u8], from: usize| i32::from_le_bytes(bytes[from..from + 4].try_into().unwrap());
     let mut code_at = at;
@@ -103,8 +105,13 @@ pub(crate) fn load_target(
     }
     let code = read(code_at, 128)?;
     (0..code.len() - 7)
-        .find(|&i| code[i] == 0x48 && code[i + 1] == 0x8D && code[i + 2] == 0x05)
-        .map(|i| (code_at as i64 + i as i64 + 7 + rel(&code, i + 3) as i64) as usize)
+        .find(|&i| {
+            code[i] == 0x48 && (code[i + 1] == 0x8D || code[i + 1] == 0x8B) && code[i + 2] == 0x05
+        })
+        .map(|i| {
+            let target = (code_at as i64 + i as i64 + 7 + rel(&code, i + 3) as i64) as usize;
+            (target, code[i + 1] == 0x8B)
+        })
 }
 
 /// Whether `text` is a class name as Chromium writes one.
@@ -146,10 +153,16 @@ pub(crate) fn class_name(ranges: &Ranges, view: usize) -> Option<String> {
         let Some(slot) = word(view + part).and_then(|table| word(table + 8)) else {
             continue;
         };
-        let Some(meta) = load_target(&bytes, slot) else {
+        let Some((target, is_word)) = load_target(&bytes, slot) else {
             continue;
         };
-        if !Ranges::has(ranges.data, meta) {
+        if !Ranges::has(ranges.data, target) {
+            continue;
+        }
+        let Some(meta) = (if is_word { word(target) } else { Some(target) }) else {
+            continue;
+        };
+        if meta == 0 || !readable(meta, 0x90) {
             continue;
         }
         // `type_name_` is a string view: a pointer into read-only data and a length.
@@ -431,17 +444,24 @@ mod tests {
                 code[4] = 0xE9;
                 code[5..9].copy_from_slice(&(0x1000i32 - 0x5009).to_le_bytes());
             } else if at == 0x3000 {
-                code[..3].copy_from_slice(&[0x48, 0x8D, 0x05]);
+                // mov rax, [rip-0x10]: MetaData() reading its static pointer.
+                code[..3].copy_from_slice(&[0x48, 0x8B, 0x05]);
                 code[3..7].copy_from_slice(&(-0x10i32).to_le_bytes());
             }
             code.truncate(length);
             Some(code)
         };
-        assert_eq!(load_target(&read, 0x1000), Some(0x2000 + 4 + 7 + 0x100));
-        assert_eq!(load_target(&read, 0x3000), Some(0x3000 + 7 - 0x10));
+        assert_eq!(
+            load_target(&read, 0x1000),
+            Some((0x2000 + 4 + 7 + 0x100, false))
+        );
+        assert_eq!(load_target(&read, 0x3000), Some((0x3000 + 7 - 0x10, true)));
         assert_eq!(load_target(&read, 0x4000), None);
         // A thunk: sub rcx, 0x10, then jmp to 0x1000, which jumps on to 0x2000.
-        assert_eq!(load_target(&read, 0x5000), Some(0x2000 + 4 + 7 + 0x100));
+        assert_eq!(
+            load_target(&read, 0x5000),
+            Some((0x2000 + 4 + 7 + 0x100, false))
+        );
     }
 
     #[test]
