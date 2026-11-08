@@ -159,7 +159,7 @@ pub(crate) unsafe fn page_info(window: HWND) -> bool {
     // highlight: an empty `std::optional`.
     let mut callback: usize = 0;
     const ANCHOR_LOCATION_BAR: i32 = 0;
-    crate::features::bubble_anchor::with_page_info(|| {
+    crate::features::bubble_anchor::with_page_info(window, || {
         at::<ShowPageInfo>(base, f.show_page_info)(contents, &mut callback, ANCHOR_LOCATION_BAR, 0)
     })
 }
