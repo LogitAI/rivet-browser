@@ -3938,7 +3938,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         {
             // The reveal came from the longest hide while the window still waited for the browser
             // to lay it out for Rivet's frame: the window showed before Rivet's look was in place.
-            if take_waiting(window) {
+            // The window keeps waiting, so the retries and then its own events still ask for it.
+            if is_waiting(window) {
                 crate::trace::trace(&format!(
                     "first look: warning, window {:#x} shown after the longest hide of {} ms \
                      without the browser's layout for Rivet's frame",
@@ -4385,6 +4386,22 @@ mod tests {
         assert!(!super::take_waiting(other));
         assert!(super::take_waiting(window));
         assert!(!super::take_waiting(window), "later layouts change nothing");
+    }
+
+    #[test]
+    fn fr2_the_longest_hide_leaves_the_window_waiting_for_its_layout() {
+        let window = 0x3000 as super::HWND;
+        super::await_layout(window);
+        // The reveal after the longest hide only reads the mark.
+        assert!(super::is_waiting(window));
+        assert!(super::is_waiting(window));
+        // The retry timer still asks again, and the layout that comes later completes the attach.
+        assert_eq!(
+            super::attach_retry(super::is_waiting(window), 3),
+            super::AttachRetry::AskAgain(4)
+        );
+        assert!(super::take_waiting(window));
+        assert!(!super::is_waiting(window));
     }
 
     /// Windows and the browser can disagree on a window's scale: while the window crosses monitors
