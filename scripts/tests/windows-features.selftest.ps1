@@ -318,5 +318,23 @@ if ($IsWindows) {
   else { Write-Host 'ok   nfr5_a_test_process_starts_without_an_output_file' }
 }
 
+# A run's Rivet folder sees the held browser copies through a junction, and removing the folder
+# never removes the copies.
+if ($IsWindows) {
+  $t = Join-Path $PSScriptRoot '..\..\.scratch\selftest-held'
+  Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force (Join-Path $t 'local\Rivet\browsers\chrome') | Out-Null
+  Set-Content (Join-Path $t 'local\Rivet\browsers\chrome\keep.txt') 'keep'
+  $saved = $env:LOCALAPPDATA; $env:LOCALAPPDATA = Join-Path $t 'local'
+  try {
+    Add-HeldBrowsers (Join-Path $t 'run')
+    $seen = Test-Path (Join-Path $t 'run\Rivet\browsers\chrome\keep.txt')
+    Remove-HeldBrowsers (Join-Path $t 'run'); Remove-Item -Recurse -Force (Join-Path $t 'run')
+    $kept = Test-Path (Join-Path $t 'local\Rivet\browsers\chrome\keep.txt')
+  } finally { $env:LOCALAPPDATA = $saved; Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue }
+  if (-not ($seen -and $kept)) { Write-Host "FAIL nfr5_a_run_sees_the_held_browsers_and_never_removes_them : seen $seen kept $kept"; $failures++ }
+  else { Write-Host 'ok   nfr5_a_run_sees_the_held_browsers_and_never_removes_them' }
+}
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'
