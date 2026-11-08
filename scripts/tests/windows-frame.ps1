@@ -23,7 +23,6 @@ public static class RivetFrameCheck {
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
     [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
-    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
     [DllImport("user32.dll")] static extern long GetWindowLongPtr(IntPtr hwnd, int index);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int w, int h, uint flags);
@@ -37,6 +36,7 @@ public static class RivetFrameCheck {
     [DllImport("kernel32.dll")] static extern bool VirtualFreeEx(IntPtr process, IntPtr address, IntPtr size, uint type);
     [DllImport("kernel32.dll")] static extern bool WriteProcessMemory(IntPtr process, IntPtr address, int[] data, IntPtr size, out IntPtr written);
     public static Rect WindowRect(long handle) { Rect r; GetWindowRect(new IntPtr(handle), out r); return r; }
+    public static uint ProcessOf(long handle) { uint pid; GetWindowThreadProcessId(new IntPtr(handle), out pid); return pid; }
     // WM_DPICHANGED carries a pointer to the suggested window rectangle, which the browser reads in
     // its own process, so the rectangle is written into that process for the one synchronous send.
     public static bool SimulateDpi(long handle, uint dpi, Rect suggested) {
@@ -60,9 +60,9 @@ public static class RivetFrameCheck {
         public long Browser; public uint Dpi; public bool RivetWindowExists, BrowserIsTopLevel, BrowserIsResizable;
         public int ClientLeft, ClientRight, ContentLeft, ContentRight, ExpectedSidebar;
     }
-    public static Observation Read(long handle) { return Read(handle, 0); }
-    // `dpiOverride` is the DPI a simulated WM_DPICHANGED told the browser, or zero.
-    public static Observation Read(long handle, uint dpiOverride) {
+    // `dpi` is the scale the runtime traced for the window, or the DPI a simulated WM_DPICHANGED
+    // told the browser.
+    public static Observation Read(long handle, uint dpi) {
         var prior=SetThreadDpiAwarenessContext(new IntPtr(-4));
         try {
             var browser=new IntPtr(handle);
@@ -77,7 +77,6 @@ public static class RivetFrameCheck {
             var origin=new Point(); ClientToScreen(browser,ref origin);
             var r=new Rect(); if(content!=IntPtr.Zero) GetWindowRect(content,out r);
             long style=GetWindowLongPtr(browser,-16);
-            uint dpi=dpiOverride!=0?dpiOverride:GetDpiForWindow(browser);
             return new Observation {
                 Browser=handle, Dpi=dpi, RivetWindowExists=rivet,
                 BrowserIsTopLevel=GetParent(browser)==IntPtr.Zero && (style&0x40000000)==0,
@@ -89,6 +88,22 @@ public static class RivetFrameCheck {
     }
 }
 '@
+# The scale the runtime traced for the window: the measurement uses the browser's own scale, never
+# this process's idea of the window's DPI. The runtime traces only when the session's profile has a
+# `rivet-debug` folder, which the profile is found from on the browser's command line.
+function Get-TracedDpi([long]$Handle) {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $([RivetFrameCheck]::ProcessOf($Handle))"
+    if (-not $process -or $process.CommandLine -notmatch '--user-data-dir=(?:"([^"]+)"|(\S+))') { throw 'FR-2: The browser window has no profile on its command line.' }
+    $profile = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+    $log = Join-Path $profile 'rivet-debug\rivet-vertical-tabs.log'
+    $hex = '{0:x}' -f $Handle
+    $lines = if (Test-Path -LiteralPath $log) { @(Get-Content -LiteralPath $log | Where-Object { $_ -match '^layout dpi: window 0x([0-9a-f]+) at (\d+)$' }) } else { @() }
+    $line = @($lines | Where-Object { $_ -match "^layout dpi: window 0x$hex at" }) | Select-Object -Last 1
+    if (-not $line) { $line = $lines | Select-Object -Last 1 }
+    if (-not $line -or $line -notmatch ' at (\d+)$') { throw "FR-2: The runtime traced no scale for the window; start the session with a rivet-debug folder in $profile." }
+    [uint32]$Matches[1]
+}
+
 # The checks of one observation. `Step` names what was just done to the window, for the message.
 function Test-Layout($Item, [string]$Step) {
     $at = if ($Step) { " ($Step)" } else { '' }
@@ -119,6 +134,7 @@ function Test-OnAMonitor($Rect) {
 # settles. The first look comes within a few frames of the step.
 function Test-Step([long]$Handle, [string]$Step, [uint32]$Dpi = 0) {
     Start-Sleep -Milliseconds 40
+    if (-not $Dpi) { $Dpi = Get-TracedDpi $Handle }
     $during = [RivetFrameCheck]::Read($Handle, $Dpi)
     Start-Sleep -Milliseconds 800
     $after = [RivetFrameCheck]::Read($Handle, $Dpi)
@@ -151,7 +167,7 @@ function Invoke-Exercise([long]$Handle) {
         # A monitor DPI change, simulated, since moving onto another monitor would show the window.
         # The browser lays itself out for the DPI it is told, so the check expects that DPI's sidebar
         # and gap. The window then gets its own DPI back.
-        $own = [RivetFrameCheck]::Read($Handle).Dpi
+        $own = Get-TracedDpi $Handle
         $other = if ($own -ge 144) { [uint32]96 } else { [uint32]144 }
         $now = [RivetFrameCheck]::WindowRect($Handle)
         $suggested = New-Object RivetFrameCheck+Rect
@@ -171,7 +187,7 @@ function Invoke-Exercise([long]$Handle) {
 $sessions = (Get-Content -LiteralPath $State | ConvertFrom-Json).sessions.PSObject.Properties.Value
 if (@($sessions).Count -eq 0) { throw 'FR-2: The state file has no Rivet session.' }
 foreach ($session in $sessions) {
-    $item = [RivetFrameCheck]::Read($session.window_handle)
+    $item = [RivetFrameCheck]::Read($session.window_handle, (Get-TracedDpi $session.window_handle))
     $item | ConvertTo-Json
     if ($InspectOnly) { continue }
     Test-Layout $item ''
