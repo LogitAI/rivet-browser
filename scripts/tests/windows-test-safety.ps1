@@ -91,12 +91,13 @@ function Update-HeldMirror {
   $mirror
 }
 
-# What a run must leave as it was in the person's held copies: each entry two levels down, with
-# its size and time. A run that changed any of it wrote to the person's folder.
+# What a run must leave as it was in the person's held copies: each entry two levels down, and each
+# file's size and time. A folder's own time is left out: Windows moves it a moment after a file in
+# it is written, which is no change by the run. A new folder or file still shows.
 function Get-HeldSnapshot {
   @(foreach ($source in Get-HeldSources) {
       Get-ChildItem -Force -Recurse -Depth 1 -LiteralPath $source -ErrorAction SilentlyContinue |
-        ForEach-Object { '{0}|{1}|{2}' -f $_.FullName, $(if ($_.PSIsContainer) { '' } else { $_.Length }), $_.LastWriteTimeUtc.Ticks }
+        ForEach-Object { if ($_.PSIsContainer) { $_.FullName } else { '{0}|{1}|{2}' -f $_.FullName, $_.Length, $_.LastWriteTimeUtc.Ticks } }
     }) | Sort-Object
 }
 # Removes the junctions Add-HeldBrowsers made in `$Root`, and only junctions, before the folder is
