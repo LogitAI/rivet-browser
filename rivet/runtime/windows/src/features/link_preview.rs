@@ -9,7 +9,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
 use crate::features::second_view::{self, Mode, PREVIEW_HEADER};
@@ -241,7 +240,7 @@ pub(crate) unsafe fn open_as_tab(window: HWND) -> bool {
 }
 
 fn scale(window: HWND) -> f32 {
-    unsafe { GetDpiForWindow(window).max(96) as f32 / 96.0 }
+    unsafe { crate::frame::layout_dpi(window) as f32 / 96.0 }
 }
 
 /// The header in client pixels as left, top, right and bottom, right above the floating page.

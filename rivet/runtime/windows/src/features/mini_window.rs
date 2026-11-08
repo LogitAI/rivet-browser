@@ -273,7 +273,7 @@ unsafe fn area(window: HWND) -> Option<[i32; 4]> {
 }
 
 unsafe fn scale_of(window: HWND) -> f32 {
-    windows_sys::Win32::UI::HiDpi::GetDpiForWindow(window).max(96) as f32 / 96.0
+    crate::frame::layout_dpi(window) as f32 / 96.0
 }
 
 unsafe fn client_origin(window: HWND) -> [i32; 2] {
@@ -932,7 +932,7 @@ unsafe fn title_of(mini: HWND) -> String {
 unsafe fn paint(mini: HWND) {
     let mut client: RECT = std::mem::zeroed();
     windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect(mini, &mut client);
-    let dpi = windows_sys::Win32::UI::HiDpi::GetDpiForWindow(mini).max(96);
+    let dpi = crate::frame::layout_dpi(mini);
     let key = Key {
         width: (client.right as f32 * 96.0 / dpi as f32).round() as i32,
         dpi,
