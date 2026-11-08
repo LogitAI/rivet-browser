@@ -47,22 +47,35 @@ function Get-RunRegistry { Join-Path $script:SafetyRepo '.scratch\runs' }
 # copies, through a junction rather than a copy of whole browsers.
 function Add-HeldBrowsers([string]$Root) {
   if (-not $env:LOCALAPPDATA) { return }
-  $held = Join-Path $env:LOCALAPPDATA 'Rivet\browsers'
-  $link = Join-Path $Root 'Rivet\browsers'
-  if ((Test-Path $held) -and -not (Test-Path $link)) {
-    New-Item -ItemType Directory -Force (Split-Path $link) | Out-Null
-    New-Item -ItemType Junction -Path $link -Target $held | Out-Null
+  # Rivet keeps them below cache\browsers. Copies an older build kept below Rivet\browsers are
+  # seen too, since Rivet leaves that folder in place while the new one exists.
+  $sources = @('Rivet\cache\browsers', 'Rivet\browsers') | ForEach-Object { Join-Path $env:LOCALAPPDATA $_ } | Where-Object { Test-Path $_ }
+  if (-not $sources) { return }
+  $dir = Join-Path $Root 'Rivet\cache\browsers'
+  if (Test-Path $dir) { return }
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  foreach ($source in $sources) {
+    foreach ($browser in Get-ChildItem -Directory -LiteralPath $source -ErrorAction SilentlyContinue) {
+      $link = Join-Path $dir $browser.Name
+      if (-not (Test-Path $link)) { New-Item -ItemType Junction -Path $link -Target $browser.FullName | Out-Null }
+    }
   }
 }
 
-# Removes the junction Add-HeldBrowsers made in `$Root`, and only the junction, before the folder
-# is removed, so no removal can reach the held browsers themselves.
+# Removes the junctions Add-HeldBrowsers made in `$Root`, and only junctions, before the folder is
+# removed, so no removal can reach the held browsers themselves. A run of an older harness linked
+# the whole folder, at either place.
 function Remove-HeldBrowsers([string]$Root) {
-  $link = Join-Path $Root 'Rivet\browsers'
-  $item = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
-  if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { [IO.Directory]::Delete($link, $false) }
+  $isLink = { param($path) $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue; $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+  foreach ($whole in 'Rivet\browsers', 'Rivet\cache\browsers') {
+    $path = Join-Path $Root $whole
+    if (& $isLink $path) { [IO.Directory]::Delete($path, $false) }
+  }
+  $dir = Join-Path $Root 'Rivet\cache\browsers'
+  foreach ($link in Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue) {
+    if (& $isLink $link.FullName) { [IO.Directory]::Delete($link.FullName, $false) }
+  }
 }
-
 # The runs registered and still running, each with its process id, start time, folder and whether
 # it must be alone. A record whose process is gone, or whose id another process took, is removed.
 function Get-ActiveRuns {

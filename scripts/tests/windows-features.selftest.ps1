@@ -333,7 +333,7 @@ if ($IsWindows) {
   $saved = $env:LOCALAPPDATA; $env:LOCALAPPDATA = Join-Path $t 'local'
   try {
     Add-HeldBrowsers (Join-Path $t 'run')
-    $seen = Test-Path (Join-Path $t 'run\Rivet\browsers\chrome\keep.txt')
+    $seen = Test-Path (Join-Path $t 'run\Rivet\cache\browsers\chrome\keep.txt')
     Remove-HeldBrowsers (Join-Path $t 'run'); Remove-Item -Recurse -Force (Join-Path $t 'run')
     $kept = Test-Path (Join-Path $t 'local\Rivet\browsers\chrome\keep.txt')
   } finally { $env:LOCALAPPDATA = $saved; Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue }
