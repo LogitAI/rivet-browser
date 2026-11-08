@@ -145,13 +145,34 @@ pub(crate) fn choose(
 
 /// Set while Rivet opens the page info bubble from its security chip.
 static PAGE_INFO: AtomicBool = AtomicBool::new(false);
+/// The window whose security chip opens the page info bubble, while it opens.
+static PAGE_INFO_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
-/// Runs `open` with the next bubble anchored at the security chip.
-pub(crate) fn with_page_info<R>(open: impl FnOnce() -> R) -> R {
+/// Runs `open` with the next bubble anchored at the security chip of `window`.
+pub(crate) fn with_page_info<R>(window: HWND, open: impl FnOnce() -> R) -> R {
+    PAGE_INFO_WINDOW.store(window as usize, Ordering::Release);
     PAGE_INFO.store(true, Ordering::Release);
     let result = open();
     PAGE_INFO.store(false, Ordering::Release);
+    PAGE_INFO_WINDOW.store(0, Ordering::Release);
     result
+}
+
+/// The Rivet window a bubble belongs to: the active window when it is a Rivet window, else the
+/// window whose security chip opened page info, else the only Rivet window of the thread. A bubble
+/// can open while its window is not active, as a permission request of a page in a window the
+/// person has not clicked yet does, and it must still open by that window's address row.
+pub(crate) fn bubble_window(active: usize, page_info: usize, windows: &[usize]) -> Option<usize> {
+    if active != 0 && windows.contains(&active) {
+        return Some(active);
+    }
+    if page_info != 0 && windows.contains(&page_info) {
+        return Some(page_info);
+    }
+    match windows {
+        [only] => Some(*only),
+        _ => None,
+    }
 }
 
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
@@ -197,9 +218,20 @@ unsafe extern "system" fn get_anchor_rect(
 ) -> *mut Rect {
     let original: GetAnchorRect = std::mem::transmute(ORIGINAL.load(Ordering::Acquire));
     let result = original(delegate, out);
-    // Bubbles are made on the browser's UI thread, where the window they belong to is active.
-    let window = GetActiveWindow();
-    if result.is_null() || window.is_null() || !crate::frame::rivet_windows().contains(&window) {
+    // Bubbles are made on the browser's UI thread, which holds the Rivet windows.
+    let windows: Vec<usize> = crate::frame::rivet_windows()
+        .into_iter()
+        .map(|window| window as usize)
+        .collect();
+    let Some(window) = bubble_window(
+        GetActiveWindow() as usize,
+        PAGE_INFO_WINDOW.load(Ordering::Acquire),
+        &windows,
+    ) else {
+        return result;
+    };
+    let window = window as HWND;
+    if result.is_null() {
         return result;
     }
     if let Some((page, address, chip)) = targets(window) {
@@ -279,8 +311,22 @@ mod tests {
     fn fr12_page_info_anchors_at_the_security_chip() {
         assert_eq!(choose([4863, 0, 0, 0], PAGE, ADDRESS, CHIP, true), CHIP);
         assert_eq!(choose([500, 400, 40, 20], PAGE, ADDRESS, CHIP, true), CHIP);
-        assert!(with_page_info(|| PAGE_INFO.load(Ordering::Acquire)));
+        assert!(with_page_info(std::ptr::null_mut(), || PAGE_INFO.load(Ordering::Acquire)));
         assert!(!PAGE_INFO.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn fr12_a_bubble_of_an_inactive_window_still_anchors_at_its_address_row() {
+        // The active window is Rivet's: its bubble goes there.
+        assert_eq!(bubble_window(7, 0, &[7, 9]), Some(7));
+        // No Rivet window is active, as when a page asks for a permission in the background.
+        assert_eq!(bubble_window(0, 0, &[9]), Some(9));
+        assert_eq!(bubble_window(3, 0, &[9]), Some(9));
+        // Page info of a chip names its window.
+        assert_eq!(bubble_window(0, 9, &[7, 9]), Some(9));
+        // With several windows and nothing to tell them apart, the browser's own place stays.
+        assert_eq!(bubble_window(0, 0, &[7, 9]), None);
+        assert_eq!(bubble_window(0, 0, &[]), None);
     }
 
     #[test]
