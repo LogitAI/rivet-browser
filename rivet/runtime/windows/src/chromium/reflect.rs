@@ -146,7 +146,13 @@ fn is_object(ranges: &Ranges, address: usize) -> bool {
 /// The class name of the view at `view`, read through the metadata its `MetaDataProvider` part
 /// names, which lies within the view's first 0x100 bytes.
 pub(crate) fn class_name(ranges: &Ranges, view: usize) -> Option<String> {
-    for part in (0..0x100).step_by(8) {
+    class_name_within(ranges, view, 0x100)
+}
+
+/// `class_name` for a pointer to the start of a `views::View`, whose `MetaDataProvider` part comes
+/// after seven other bases and their members, so it is looked for within `reach` bytes.
+fn class_name_within(ranges: &Ranges, view: usize, reach: usize) -> Option<String> {
+    for part in (0..reach).step_by(8) {
         if !is_object(ranges, view + part) {
             continue;
         }
@@ -276,7 +282,7 @@ fn parent_link(ranges: &Ranges, object: usize) -> Option<(usize, usize, usize, u
         };
         if near.contains(&holder)
             || !is_object(ranges, holder)
-            || class_name(ranges, holder).is_none()
+            || class_name_within(ranges, holder, 0x400).is_none()
         {
             continue;
         }
