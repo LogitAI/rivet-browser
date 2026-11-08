@@ -1698,7 +1698,9 @@ function New-LoginPages {
   $js = "<script>if(location.hash==='#submit'){setTimeout(function(){u.value='rivet-test-user';p.value='not-a-real-password-1';document.forms[0].requestSubmit()},1500)}</script>"
   [IO.File]::WriteAllText((Join-Path $pageDir 'login.html'), "<!doctype html><meta charset=utf-8><title>login</title>$style$form$js")
   $hexB = '#{0:X6}' -f $script:ColourB
-  [IO.File]::WriteAllText((Join-Path $pageDir 'done.html'), "<!doctype html><meta charset=utf-8><title>signed in</title><style>html,body{margin:0;height:100%;background:$hexB}</style>")
+  # The page after signing in holds a line of text. Chromium takes a page with an empty body for a
+  # redirect and does not report it, so the sign in never counted as done and no save was offered.
+  [IO.File]::WriteAllText((Join-Path $pageDir 'done.html'), "<!doctype html><meta charset=utf-8><title>signed in</title><style>html,body{margin:0;height:100%;background:$hexB}p{margin:0;color:$hexB}</style><p>Signed in.</p>")
 }
 
 # Serves the page folder on 127.0.0.1 from a runspace of this process, on a port of its own.
@@ -1766,17 +1768,16 @@ function Invoke-Credentials($Name, $shots, [string]$Provider) {
     # the runtime may activate the window, which reaches no person's screen or keyboard.
     if ($env:RIVET_TEST_DESKTOP) {
       # The browser saves what a person typed, so the fake account is typed into the focused form,
-      # as keys the focused window takes, and sent with Enter.
+      # as keys the focused window takes, and sent with Enter. A posted key down already becomes its
+      # character in the browser's message loop, so Tab and Enter get no second character.
       if (-not (Send-Flag $ctx 'rivet-tab.txt' 'focuswindow')) { return @('NOT_DRIVEN', $null, 'the window could not be focused on the test desktop') }
       Start-Sleep 1
       Send-Chars $ctx 'rivet-test-user'
       Send-Key $ctx 0x09
-      [FeatureWin]::PostMessage($ctx.Hwnd, 0x102, [IntPtr]9, [IntPtr]1) | Out-Null
       Start-Sleep -Milliseconds 300
       Send-Chars $ctx 'not-a-real-password-1'
       Start-Sleep -Milliseconds 300
       Send-Key $ctx 0x0D
-      [FeatureWin]::PostMessage($ctx.Hwnd, 0x102, [IntPtr]13, [IntPtr]1) | Out-Null
     } else {
       $go = Invoke-Rivet $ctx $state @('nav', 'go', ($server.Url + '?send#submit'))
       if ($go.Code -ne 0) { return @('NOT_DRIVEN', $null, "the login page could not be opened to send the form: $($go.Text)") }
@@ -1805,6 +1806,10 @@ function Invoke-Credentials($Name, $shots, [string]$Provider) {
     if (-not $bubble) { return @('FAIL', $sent.Path, 'the browser did not offer to save the fake account') }
     $capBubble = [pscustomobject]@{ Hwnd = $bubble }
     $offer = Get-Capture $capBubble (Join-Path $shots "$feature-2-offer.png")
+    # An offer shown without activation has no focused view, so Enter reaches no button. On a test
+    # desktop of its own the runtime focuses the offer first, which reaches no person's keyboard.
+    if ($env:RIVET_TEST_DESKTOP -and -not (Send-Flag $ctx 'rivet-tab.txt' 'focuswindow popup')) { return @('NOT_DRIVEN', $offer.Path, 'the save offer could not be focused on the test desktop') }
+    Start-Sleep -Milliseconds 500
     Send-Key $capBubble 0x0D
     Start-Sleep 2
     if (-not (Open-SecondPage $ctx $server.Url)) { return @('NOT_DRIVEN', $offer.Path, 'the form could not be opened again in a tab of the window') }
@@ -2113,7 +2118,7 @@ foreach ($n in $devNarrow, $devWide) {
 # A fake login form, focused on load. Typing that reaches it turns the page green, so a missing
 # bubble is told apart from typing that never arrived.
 [IO.File]::WriteAllText((Join-Path $siteDir 'login.html'), "<!doctype html><meta charset=utf-8><title>fake login</title><style>html,body{margin:0;height:100%;background:$hexA}input{display:block;width:400px;height:40px;margin:20px}</style><form action=done.html method=post><input id=u name=username autocomplete=username autofocus><input id=p name=password type=password autocomplete=current-password><button>Sign in</button></form><script>document.addEventListener('input',()=>{if(u.value&&p.value)document.documentElement.style.background='$hexC'})</script>")
-[IO.File]::WriteAllText((Join-Path $siteDir 'done.html'), "<!doctype html><meta charset=utf-8><title>signed in</title><style>html,body{margin:0;height:100%;background:$hexB}</style>")
+[IO.File]::WriteAllText((Join-Path $siteDir 'done.html'), "<!doctype html><meta charset=utf-8><title>signed in</title><style>html,body{margin:0;height:100%;background:$hexB}p{margin:0;color:$hexB}</style><p>Signed in.</p>")
 # A page that asks for the location as it loads, which makes the browser's permission bubble.
 [IO.File]::WriteAllText((Join-Path $siteDir 'geo.html'), "<!doctype html><meta charset=utf-8><title>location</title><style>html,body{margin:0;height:100%;background:$hexA}</style><script>navigator.geolocation.getCurrentPosition(()=>{},()=>{})</script>")
 # A page with a dark marker at half its width over its top 40 per cent, which moves when the page
