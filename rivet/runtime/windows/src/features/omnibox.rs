@@ -318,7 +318,7 @@ unsafe fn u16_text(value: *const u8) -> String {
 /// The browser's suggestions for `text`, history and typed addresses included, from the providers
 /// that answer at once. Suggestions that need the network are left out, so typing never waits.
 pub(crate) unsafe fn suggest(window: HWND, text: &str) -> Option<Vec<Suggestion>> {
-    suggest_with(window, text, false)
+    suggest_with(window, text, false, false, true)
 }
 
 /// The browser's suggestions for `text`, as [`suggest`], letting the browser complete the typed
@@ -328,27 +328,37 @@ pub(crate) unsafe fn suggest_with(
     window: HWND,
     text: &str,
     inline: bool,
+    asynchronous: bool,
+    start: bool,
 ) -> Option<Vec<Suggestion>> {
     let (f, base) = loaded()?;
     let profile = profile_of(f, base, window)?;
     let (controller, classifier) = autocomplete_for(f, base, profile);
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let string = borrowed_u16(&wide);
-    let mut input = Box::new(Raw::<0x800>([0; 0x800]));
-    let input = input.0.as_mut_ptr().cast::<c_void>();
-    at::<InputNew>(base, f.input_new)(
-        input,
-        &string,
-        PAGE_OTHER,
-        classifier as *const c_void,
-        false,
-        0,
-        false,
-    );
-    *input.cast::<u8>().add(f.input_prevent_inline) = u8::from(!inline);
-    *input.cast::<u8>().add(f.input_omit_asynchronous) = 1;
-    at::<Start>(base, f.start)(controller as *mut c_void, input);
-    at::<Construct>(base, f.input_drop)(input);
+    // Without `start` the result of the query last started is read again, as its asynchronous
+    // providers add to it, and nothing new is asked.
+    if start {
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let string = borrowed_u16(&wide);
+        let mut input = Box::new(Raw::<0x800>([0; 0x800]));
+        let input = input.0.as_mut_ptr().cast::<c_void>();
+        at::<InputNew>(base, f.input_new)(
+            input,
+            &string,
+            PAGE_OTHER,
+            classifier as *const c_void,
+            false,
+            0,
+            false,
+        );
+        *input.cast::<u8>().add(f.input_prevent_inline) = u8::from(!inline);
+        // The history providers' slower pass and the search engine's suggestions answer after Start
+        // returns. With `asynchronous` the browser runs them, as its own address bar does, and their
+        // matches reach the published result later, read again without `start`.
+        *input.cast::<u8>().add(f.input_omit_asynchronous) = u8::from(!asynchronous);
+        at::<Start>(base, f.start)(controller as *mut c_void, input);
+        at::<Construct>(base, f.input_drop)(input);
+    }
+
     // `AutocompleteResult` starts with its `std::vector<AutocompleteMatch>`.
     let result = (controller + f.controller_published_result) as *const usize;
     let count = match_count(*result, *result.add(1), f.match_size)?;
