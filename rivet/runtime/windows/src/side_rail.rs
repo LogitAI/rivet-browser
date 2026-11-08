@@ -186,10 +186,8 @@ fn open_button(geometry: PageGeometry) -> (f32, f32) {
 }
 
 fn in_hot_area(geometry: PageGeometry, x: f32, y: f32) -> bool {
-    x >= geometry.right as f32 - HOT_AREA
-        && x < geometry.right as f32
-        && y >= geometry.bottom as f32 - HOT_AREA
-        && y < geometry.bottom as f32
+    let [left, top, right, bottom] = open_zone_at(geometry.right as f32, geometry.bottom as f32);
+    (left..right).contains(&x) && (top..bottom).contains(&y)
 }
 
 fn on_open_button(geometry: PageGeometry, x: f32, y: f32) -> bool {
@@ -773,6 +771,22 @@ unsafe fn showing_mask(window: HWND, entries: &[panel::EntryKey]) -> u32 {
         .fold(0, |mask, (index, _)| mask | 1 << index)
 }
 
+/// The zone at the lower right corner `(right, bottom)` of a page area, in window DIPs as (left,
+/// top, right, bottom), in which the pointer shows the open button. Nothing else may cover it.
+pub(crate) fn open_zone_at(right: f32, bottom: f32) -> [f32; 4] {
+    [right - HOT_AREA, bottom - HOT_AREA, right, bottom]
+}
+
+/// The page area the Sidebar is placed by and its open button zone, both in window DIPs as (left,
+/// top, right, bottom).
+pub(crate) unsafe fn page_and_open_zone(window: HWND) -> Option<([f32; 4], [f32; 4])> {
+    let g = rail_geometry(window)?;
+    let (right, bottom) = (g.right as f32, g.bottom as f32);
+    Some((
+        [g.x as f32, g.top as f32, right, bottom],
+        open_zone_at(right, bottom),
+    ))
+}
 /// The page area the rail is placed by. Where the second view is recorded, it narrows the page for
 /// the rail itself, so the area comes from the page view and needs neither the browser's layout nor
 /// its side panel. The rail's visual then covers the strip the page left, so no old page pixels show.
