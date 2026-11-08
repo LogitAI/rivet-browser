@@ -250,9 +250,10 @@ pub(crate) struct View {
     pub zoomed: bool,
     /// Set while the address is edited: the field's pixels are drawn in place of the text.
     pub editing: bool,
-    /// The browser's suggestions for the text being edited, as contents and description, and the
+    /// The browser's suggestions for the text being edited, as contents, description and whether the
+    /// row is a search, and the
     /// one the arrow keys or the pointer picked.
-    pub suggestions: Vec<(String, String)>,
+    pub suggestions: Vec<(String, String, bool)>,
     pub selected: Option<usize>,
     /// Bumped whenever the field draws something new, so the appbar repaints.
     pub generation: u64,
@@ -618,7 +619,13 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
             suggestions: bar
                 .suggestions
                 .iter()
-                .map(|s| (s.contents.clone(), s.description.clone()))
+                .map(|s| {
+                    (
+                        s.contents.clone(),
+                        s.description.clone(),
+                        is_search(&s.contents, &s.description, &s.destination),
+                    )
+                })
                 .collect(),
             selected: bar.selected,
         }
@@ -755,6 +762,20 @@ unsafe fn go(window: HWND, text: &str) -> bool {
     };
     crate::trace::trace(&format!("address bar: open {text:?}: {opened}"));
     opened
+}
+
+/// Whether a suggestion searches for the text rather than opening a page. A page's row, whether
+/// typed or from history, opens an address its contents name, and the browser describes a search
+/// row, so a described row whose destination is not the address it shows is a search.
+pub(crate) fn is_search(contents: &str, description: &str, destination: &str) -> bool {
+    fn bare(address: &str) -> String {
+        let lower = address.trim().to_lowercase();
+        let rest = lower
+            .split_once("://")
+            .map_or(lower.as_str(), |(_, rest)| rest);
+        rest.strip_prefix("www.").unwrap_or(rest).to_string()
+    }
+    !description.is_empty() && !bare(destination).starts_with(&bare(contents))
 }
 
 /// The height of one suggestion row and the room around the list, in DIPs.
@@ -1442,6 +1463,38 @@ mod tests {
         assert!(!may_complete_inline("exa", (0, 3), false));
         // Positions are UTF-16 units, as the text engine counts them.
         assert!(may_complete_inline("검색", (2, 2), false));
+    }
+
+    #[test]
+    fn fr12_a_search_suggestion_shows_the_magnifier_and_a_page_the_globe() {
+        // What was typed, as the browser offers it first: no description.
+        assert!(!is_search(
+            "http://127.0.0.1:8080/suggest-a.",
+            "",
+            "http://127.0.0.1:8080/suggest-a."
+        ));
+        // A page from history: its title describes it and it opens the address it shows.
+        assert!(!is_search(
+            "127.0.0.1:8080/alpha.html",
+            "alpha",
+            "http://127.0.0.1:8080/alpha.html"
+        ));
+        assert!(!is_search(
+            "example.com",
+            "Example",
+            "https://www.example.com/"
+        ));
+        // A search on the default engine.
+        assert!(is_search(
+            "http://127.0.0.1:8080/suggest-a.",
+            "Google Search",
+            "https://www.google.com/search?q=http%3A%2F%2F127.0.0.1"
+        ));
+        assert!(is_search(
+            "rivet browser",
+            "Bing",
+            "https://www.bing.com/search?q=rivet+browser"
+        ));
     }
 
     #[test]
