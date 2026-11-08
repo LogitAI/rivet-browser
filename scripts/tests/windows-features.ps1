@@ -2048,7 +2048,14 @@ function Invoke-FirstFrame($Name, $shots) {
     $steady = Get-Capture $ctx (Join-Path $shots 'first-frame-settled.png')
     if (-not $steady) { return @('NOT_DRIVEN', $null, 'no capture') }
     if (-not (Test-Attached $ctx)) { return @('FAIL', $steady.Path, 'Rivet did not attach to the window') }
-    $caps = @($frames | ForEach-Object { [pscustomobject]@{ Pixels = $_[3]; Width = $_[1]; Height = $_[2]; Ms = $_[0] } })
+    # Only frames a person could see count: a frame the window composed while cloaked never shows.
+    $all = @($frames | ForEach-Object { [pscustomobject]@{ Pixels = $_[3]; Width = $_[1]; Height = $_[2]; Ms = $_[0]; Cloaked = [bool]$_[4] } })
+    $caps = @($all | Where-Object { -not $_.Cloaked })
+    $hidden = @($all | Where-Object Cloaked).Count
+    # The runtime warns when the window showed only because the longest hide ran out, before the
+    # browser laid it out for Rivet's frame. That reveal is never silent.
+    $early = @(Read-Log | Where-Object { $_ -match '^first look: warning' }) | Select-Object -First 1
+    if ($early) { return @('FAIL', $steady.Path, "$early; $hidden frames composed while cloaked") }
     if (-not $caps.Count) { return @('NOT_DRIVEN', $steady.Path, 'the watcher caught no frame of the window') }
     # The band right of the appbar, as high as the top row and a vendor title strip below it.
     $f = $ctx.Dpi / 96.0
@@ -2066,9 +2073,9 @@ function Invoke-FirstFrame($Name, $shots) {
       $bmp.UnlockBits($data)
       $path = Join-Path $shots "first-frame-bad-$($bad.Ms)ms.png"
       $bmp.Save($path); $bmp.Dispose()
-      return @('FAIL', $path, "$($v.Reason), $($bad.Ms) ms after the browser started")
+      return @('FAIL', $path, "$($v.Reason), $($bad.Ms) ms after the browser started, uncloaked; $hidden frames composed while cloaked not counted")
     }
-    @($v.Verdict, $steady.Path, $v.Reason)
+    @($v.Verdict, $steady.Path, "$($v.Reason); $hidden frames composed while cloaked not counted")
   } finally { $watch.Dispose(); Stop-Scene $ctx }
 }
 
@@ -2108,6 +2115,7 @@ public static class FirstFrames{
  }
  // Captures each new look of the visible browser windows of the given processes that sit at or
  // beyond `minX`, the test windows' off-screen place, until `ms` pass.
+ [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h,int a,out int v,int s);
  public static List<object[]> Watch(HashSet<uint> pids,int minX,int ms){
   SetThreadDpiAwarenessContext(new IntPtr(-4));
   var o=new List<object[]>(); var sw=Stopwatch.StartNew(); long last=0;
@@ -2119,8 +2127,10 @@ public static class FirstFrames{
     int w=r.Ri-r.L, ht=r.B-r.T;
     if(r.L<minX||w<=0||ht<=0) continue;
     var px=Capture(h,w,ht); if(px==null) continue;
-    long hash=w*31+ht; for(int i=0;i<px.Length;i+=97) hash=hash*1000003+px[i];
-    if(hash!=last){last=hash;o.Add(new object[]{sw.ElapsedMilliseconds,w,ht,px});}
+    // A cloaked window is composed off the screen: a person does not see that frame.
+    int cloaked=0; DwmGetWindowAttribute(h,14,out cloaked,4);
+    long hash=w*31+ht+(cloaked!=0?7:0); for(int i=0;i<px.Length;i+=97) hash=hash*1000003+px[i];
+    if(hash!=last){last=hash;o.Add(new object[]{sw.ElapsedMilliseconds,w,ht,px,cloaked!=0});}
    }
    Sleep(8);
   }
