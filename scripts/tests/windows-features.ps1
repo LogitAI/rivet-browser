@@ -548,6 +548,10 @@ function Invoke-TabMenu($ctx, [int]$Tab, $shotPath) {
 # The person's drag of a tab row onto the left edge of the page, with the same messages: the press
 # and the first moves arrive as non-client input, then the window captures the pointer.
 function Invoke-TabDrag($ctx, [int]$Tab, $shotPath) {
+  # A press posted before the browser's first layout reached Rivet is lost, and no drag starts. The
+  # runtime traces that layout as it hooks it; a browser without the hook goes on after the wait.
+  $null = Wait-Log 0 '^layout hook:' 10
+  Start-Sleep -Milliseconds 500
   $f = $ctx.Dpi / 96.0
   $x = [int](100 * $f); $y = [int](2 + (Get-TabRowY $Tab) * $f)
   $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
