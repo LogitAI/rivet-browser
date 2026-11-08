@@ -233,6 +233,16 @@ unsafe fn trace_reflection(window: HWND) -> bool {
     });
     true
 }
+/// How far above the page area's bottom the held build warning and its margin reach, in DIPs, or
+/// zero when this process shows no such warning.
+pub(crate) fn held_reserve() -> i32 {
+    if held_warning().is_some() {
+        crate::appbar::HELD_RESERVE
+    } else {
+        0
+    }
+}
+
 /// The warning of this process when it runs from a held browser build. The clock is read once per
 /// process, and the time left is worked out anew for each paint because a window can stay open for days.
 fn held_warning() -> Option<String> {
@@ -2396,6 +2406,13 @@ pub unsafe fn attach(window: HWND) -> bool {
     // DirectComposition targets and frame changes belong on the UI thread that owns the window.
     let posted = PostMessageW(window, attach_message(), 0, 0) != 0;
     if posted {
+        // The scale Rivet draws at from the start, before the browser's first layout records its
+        // own; a browser may lay out a window only once a second tab opens.
+        crate::trace::trace(&format!(
+            "layout dpi: window {:#x} at {}",
+            window as usize,
+            layout_dpi(window)
+        ));
         crate::features::control::serve(window);
     } else {
         crate::features::look::first_look(window, crate::features::look::FirstLook::AttachFailed);

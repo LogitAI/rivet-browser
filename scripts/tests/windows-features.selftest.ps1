@@ -186,6 +186,11 @@ Expect 'fr_link_preview_over_the_page_passes' (Test-FloatingPage $preview $B $A)
 Expect 'fr_link_preview_fails_beside_the_page' (Test-FloatingPage $two $B $A) 'FAIL'
 # A preview that fills the whole page area hides the page under it.
 Expect 'fr_link_preview_fails_when_no_page_shows_under_it' (Test-FloatingPage (Fill (New-Window) 160 60 890 540 $A) $B $A) 'FAIL'
+# A notice at the page bottom: a preview that ends above it passes, with the margin looked for
+# between them; one that reaches over it fails.
+$noticed = Fill (Fill (Fill (Fill (New-Window) 160 60 890 540 $B) 200 70 850 90 0xFBFAF7) 200 90 850 515 $A) 300 525 750 535 0xF5E6B8
+Expect 'fr10_link_preview_keeps_clear_of_a_notice_at_the_page_bottom' (Test-FloatingPage $noticed $B $A @(300, 525, 750, 535)) 'PASS'
+Expect 'fr10_link_preview_fails_over_a_notice_at_the_page_bottom' (Test-FloatingPage $noticed $B $A @(300, 505, 750, 535)) 'FAIL'
 # The page under the preview gone, with the window ground around it.
 Expect 'fr_link_preview_fails_on_the_window_ground' (Test-FloatingPage (Fill (New-Window) 200 90 850 515 $A) $B $A) 'FAIL'
 

@@ -111,8 +111,10 @@ function Test-Blank($Capture) {
 # A link preview: the `Floating` page shows solidly over the `Under` page, which still shows in a
 # margin to its left, to its right and below it. The preview covers most of the page, so the page
 # under it is looked for in those margins rather than as a page region of its own. Its header lies
-# above the floating page, so the top margin is not checked.
-function Test-FloatingPage($Capture, [int]$Under, [int]$Floating) {
+# above the floating page, so the top margin is not checked. `Avoid` is a notice Rivet shows over
+# the page bottom, as x0, y0, x1, y1: the preview must stay clear of it, and the margin below the
+# preview is looked for above it.
+function Test-FloatingPage($Capture, [int]$Under, [int]$Floating, $Avoid = $null) {
   if (Test-Blank $Capture) { return New-Verdict 'NOT_DRIVEN' 'the capture is blank' }
   $w = $Capture.Width; $h = $Capture.Height
   $window = $w * $h
@@ -124,6 +126,11 @@ function Test-FloatingPage($Capture, [int]$Under, [int]$Floating) {
     left = @(($f.X0 - $gap - $band), $f.Y0, ($f.X0 - $gap), $f.Y1)
     right = @(($f.X1 + $gap), $f.Y0, ($f.X1 + $gap + $band), $f.Y1)
     below = @($f.X0, ($f.Y1 + $gap), $f.X1, ($f.Y1 + $gap + $band))
+  }
+  if ($Avoid) {
+    $ax0, $ay0, $ax1, $ay1 = $Avoid
+    if ($f.Y1 -gt $ay0 -and $f.X0 -lt $ax1 -and $ax0 -lt $f.X1) { return New-Verdict 'FAIL' ('the preview reaches over the notice at the page bottom: it ends at {0}, the notice starts at {1}' -f $f.Y1, $ay0) }
+    $sides.below = @($f.X0, ($f.Y1 + $gap), $f.X1, [Math]::Min($f.Y1 + $gap + $band, $ay0))
   }
   foreach ($side in $sides.Keys) {
     $x0, $y0, $x1, $y1 = $sides[$side]
