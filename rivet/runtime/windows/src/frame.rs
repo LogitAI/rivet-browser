@@ -3849,6 +3849,12 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         // The top bar: `bar` starts editing the address, `bartext` traces what it holds,
                         // `barsecurity` the page's security level and `barinfo` opens the page info bubble.
                         Some("bar") => crate::features::address_bar::focus(window),
+                        // `activate`: a row that needs a focused window, on a test desktop only.
+                        Some("activate") => {
+                            let done = crate::offscreen::activate_on_test_desktop(window);
+                            crate::trace::trace(&format!("activate on the test desktop: {done}"));
+                            done
+                        }
                         // The command bar: `command` opens it, `commandtype TEXT` puts text in its
                         // field, `commandrun N` runs row N. The link preview: `preview N` shows tab N
                         // floating, `previewopen` opens it as a tab and `previewesc` dismisses it.

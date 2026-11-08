@@ -33,6 +33,112 @@ pub fn keep_offscreen() -> bool {
     keep_offscreen_value(std::env::var_os(KEEP_OFFSCREEN_VARIABLE).as_deref())
 }
 
+/// Names the test desktop a run lives on, set by the test runner that made it.
+pub const TEST_DESKTOP_VARIABLE: &str = "RIVET_TEST_DESKTOP";
+
+/// Whether a test window may be activated: only when the run says it lives on a test desktop of its
+/// own and the calling thread's desktop is, by name, not the desktop that has the keyboard and the
+/// screen. A desktop that cannot be named answers no, so activation stays blocked.
+pub fn activation_allowed_for(
+    test_desktop: Option<&std::ffi::OsStr>,
+    thread_desktop: Option<&str>,
+    input_desktop: Option<&str>,
+) -> bool {
+    let named = test_desktop.is_some_and(|value| !value.is_empty());
+    match (named, thread_desktop, input_desktop) {
+        (true, Some(own), Some(input)) => !own.is_empty() && !own.eq_ignore_ascii_case(input),
+        _ => false,
+    }
+}
+
+/// [`activation_allowed_for`] for this process and the calling thread.
+pub fn activation_allowed() -> bool {
+    #[cfg(windows)]
+    return unsafe {
+        use windows_sys::Win32::System::StationsAndDesktops::{
+            CloseDesktop, GetThreadDesktop, GetUserObjectInformationW, OpenInputDesktop,
+            DESKTOP_READOBJECTS, UOI_NAME,
+        };
+        use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+        unsafe fn name(object: *mut core::ffi::c_void) -> Option<String> {
+            if object.is_null() {
+                return None;
+            }
+            let mut buffer = [0u16; 256];
+            let mut needed = 0u32;
+            let ok = GetUserObjectInformationW(
+                object,
+                UOI_NAME,
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * 2) as u32,
+                &mut needed,
+            );
+            if ok == 0 {
+                return None;
+            }
+            let end = buffer
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(buffer.len());
+            Some(String::from_utf16_lossy(&buffer[..end]))
+        }
+        let own = name(GetThreadDesktop(GetCurrentThreadId()) as _);
+        let input_handle = OpenInputDesktop(0, 0, DESKTOP_READOBJECTS);
+        let input = name(input_handle as _);
+        if !input_handle.is_null() {
+            CloseDesktop(input_handle);
+        }
+        activation_allowed_for(
+            std::env::var_os(TEST_DESKTOP_VARIABLE).as_deref(),
+            own.as_deref(),
+            input.as_deref(),
+        )
+    };
+    #[cfg(not(windows))]
+    false
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use super::activation_allowed_for;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn nfr5_a_window_is_activated_only_on_a_test_desktop_that_is_not_the_input_desktop() {
+        let named = Some(OsStr::new("WinSta0\\rivet-test-7"));
+        // A run on its own desktop, which is not the one with the keyboard and the screen.
+        assert!(activation_allowed_for(
+            named,
+            Some("rivet-test-7"),
+            Some("Default")
+        ));
+        // The run's thread is on the person's desktop after all: blocked.
+        assert!(!activation_allowed_for(
+            named,
+            Some("Default"),
+            Some("Default")
+        ));
+        assert!(!activation_allowed_for(
+            named,
+            Some("default"),
+            Some("Default")
+        ));
+        // No test desktop named, or a desktop that cannot be named: blocked.
+        assert!(!activation_allowed_for(
+            None,
+            Some("rivet-test-7"),
+            Some("Default")
+        ));
+        assert!(!activation_allowed_for(
+            Some(OsStr::new("")),
+            Some("rivet-test-7"),
+            Some("Default")
+        ));
+        assert!(!activation_allowed_for(named, None, Some("Default")));
+        assert!(!activation_allowed_for(named, Some("rivet-test-7"), None));
+    }
+}
+
 /// What decides whether a press may take the mouse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaptureCheck {

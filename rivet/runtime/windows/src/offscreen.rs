@@ -234,10 +234,34 @@ unsafe fn keep_place(window: HWND, place: *mut WINDOWPOS) {
     (*place).y = kept.y;
 }
 
+thread_local! {
+    /// The windows a row asked to activate, on a test desktop of their own.
+    static ALLOWED: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Activates `window` for a row that needs a focused window, such as a password save offer or
+/// typed text, when the run lives on a test desktop of its own that is not the input desktop.
+/// Activation there reaches no person's screen or keyboard. Anywhere else it stays blocked and
+/// nothing happens. Returns whether the window was activated.
+pub(crate) unsafe fn activate_on_test_desktop(window: HWND) -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow;
+    if !focus::activation_allowed() {
+        return false;
+    }
+    ALLOWED.with(|allowed| {
+        let mut allowed = allowed.borrow_mut();
+        if !allowed.contains(&(window as usize)) {
+            allowed.push(window as usize);
+        }
+    });
+    !SetActiveWindow(window).is_null()
+        || windows_sys::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow() == window
+}
+
 /// Before a window is made: a top-level one starts off every monitor. Before a window is
 /// activated: it is not, so no test window ever takes the foreground or the keyboard.
 unsafe extern "system" fn cbt_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code == HCBT_ACTIVATE as i32 {
+    if code == HCBT_ACTIVATE as i32 && !ALLOWED.with(|allowed| allowed.borrow().contains(&wparam)) {
         return 1;
     }
     if code == HCBT_CREATEWND as i32 && lparam != 0 {
