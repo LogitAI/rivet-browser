@@ -675,3 +675,36 @@ Whale 5.39.412.57은 Chromium 150.0.7871.252다. 상단 줄 아래 페이지 위
 고리를 따라가고, 끝이 메타데이터 이름 `RootView`인 view일 때만 받아들이는 방법이 남는다. 후보에 가상 함수를 부르기
 전에 vtable이 모듈의 읽기 전용 데이터에 있고 칸이 코드 구역을 가리키는지 확인해야 한다. 찾은 위치는 Chrome, Edge,
 Brave, Samsung의 기존 행과 같아야 쓸 수 있다.
+
+## 2026-11-09: 메타데이터로 view 찾기, 읽기 전용 시험 결과
+
+`rivet` 런타임에 디버그 명령 `reflect`를 두고 다섯 브라우저에서 읽기만 하는 걸음을 시험했다. 브라우저 함수는
+부르지 않았고 작업 스레드에서 500 ms 안에 끝냈다. 기록은 `.scratch/reflect1`부터 `.scratch/reflect9`, `.scratch/post58`에
+있다.
+
+### 된 것
+
+- 클래스 이름 읽기: `MetaDataProvider` 부분의 vtable 두 번째 칸(`GetClassMetaData`)을 부르지 않고 해석한다. 칸은
+  `sub rcx, n` 뒤 `jmp`인 조정 thunk이고, 끝의 `MetaData()`는 정적 포인터를 `mov rax, [rip+d]`로 읽는다
+  (M150 `metadata_macros_internal.h`의 `BEGIN_METADATA_INTERNAL`). 그 포인터가 가리키는 힙의 `ClassMetaData`에서
+  `type_name_` 문자열을 읽는다. 다섯 브라우저 모두 `BrowserView`, `View`, `FocusRing` 같은 이름을 읽었다.
+- `GWLP_USERDATA`의 `HWNDMessageHandler`에서 포인터 필드를 따라가 `BrowserView`에 닿는다. 다섯 브라우저 모두
+  170에서 520개 객체 안에서 닿았다(한 번은 Brave가 시간 안에 못 닿았다).
+- `BrowserView`의 `View` 부분 안에서 `MetaDataProvider` 위치: Chrome과 Brave 840(0x348), Samsung 824(0x338),
+  Whale 248(0xF8).
+
+### 확인한 행 값과의 비교
+
+- view.h(M150)의 멤버 순서는 `widget_`, `parent_`, `children_`(view의 `std::vector`), 그다음 `bounds_` 앞의 몇 필드다.
+  자식마다 `parent_`가 그 view를 가리킨다는 점으로 자기 자식 목록을 찾는 방법을 시험했다.
+- Samsung 30.0.4.29와 Whale 5.39.412.57: 이 방법이 행이 아는 browser view와 같은 주소를 찾았다. 자식 목록은
+  +0x198, `parent_`는 +0x190이다. 공통 상수 `View::PARENT`(0x198)는 이 두 빌드에서는 `children_`의 시작이다.
+- Chrome 157, Brave 157, Edge 157: 같은 방법으로 자식 목록을 찾지 못했다. 행의 +0x198이 가리키는 객체는 어느
+  부분도 view 클래스 이름으로 읽히지 않고, 그 객체의 필드 +0x338과 +0x358이 browser view를 가리킨다.
+  +0x198은 이 빌드들에서 `parent_`가 아닐 수 있다.
+
+### 결론
+
+메타데이터로 이름을 읽고 `BrowserView`에 닿는 데까지는 빌드 값 없이 된다. Chrome, Brave, Edge에서 행과 같은 값을
+내는 부모와 자식 목록 규칙은 아직 없다. Whale 상단 줄, Sidebar 열기 단추, 전체화면 Sidebar, 두 번째 페이지 키 입력은
+페이지 영역 배치 hook이 없어 생기는 알려진 공백으로 남긴다.
