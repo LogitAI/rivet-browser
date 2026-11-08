@@ -152,6 +152,11 @@ pub(crate) fn class_name(ranges: &Ranges, view: usize) -> Option<String> {
 /// `class_name` for a pointer to the start of a `views::View`, whose `MetaDataProvider` part comes
 /// after seven other bases and their members, so it is looked for within `reach` bytes.
 fn class_name_within(ranges: &Ranges, view: usize, reach: usize) -> Option<String> {
+    name_and_part(ranges, view, reach).map(|(name, _)| name)
+}
+
+/// `class_name_within` with the offset of the `MetaDataProvider` part it was read through.
+fn name_and_part(ranges: &Ranges, view: usize, reach: usize) -> Option<(String, usize)> {
     for part in (0..reach).step_by(8) {
         if !is_object(ranges, view + part) {
             continue;
@@ -180,7 +185,7 @@ fn class_name_within(ranges: &Ranges, view: usize, reach: usize) -> Option<Strin
                 continue;
             }
             if let Some(name) = bytes(text, length).filter(|name| is_class_name(name)) {
-                return String::from_utf8(name).ok();
+                return String::from_utf8(name).ok().map(|name| (name, part));
             }
         }
     }
@@ -209,6 +214,27 @@ const MAX_NODES: usize = 4000;
 /// Follows pointer fields from the window's `HWNDMessageHandler` to its `BrowserView` within
 /// `budget`, then derives the view list and parent fields from the view that holds it.
 pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<Found, String> {
+    let (browser_view, path, visited) = reach(ranges, handler, budget)?;
+    let (holder, children, parent, view) = parent_link(ranges, browser_view)
+        .ok_or("no view holds the BrowserView in a view list it points back from")?;
+    Ok(Found {
+        root_view: holder,
+        path,
+        children,
+        parent,
+        browser_view: Some(view),
+        view_part: view as isize - browser_view as isize,
+        visited,
+    })
+}
+
+/// The object named `BrowserView` that pointer fields lead to from the handler within `budget`,
+/// with the path of fields and how many objects were visited.
+pub(crate) fn reach(
+    ranges: &Ranges,
+    handler: usize,
+    budget: Duration,
+) -> Result<(usize, Vec<usize>, usize), String> {
     let start = Instant::now();
     let mut seen = HashSet::new();
     let mut queue = VecDeque::from([(handler, Vec::new())]);
@@ -252,17 +278,7 @@ pub(crate) fn find(ranges: &Ranges, handler: usize, budget: Duration) -> Result<
     }
     let (browser_view, path) =
         root.ok_or_else(|| format!("no BrowserView reached from the window; names met {names:?}"))?;
-    let (holder, children, parent, view) = parent_link(ranges, browser_view)
-        .ok_or("no view holds the BrowserView in a view list it points back from")?;
-    Ok(Found {
-        root_view: holder,
-        path,
-        children,
-        parent,
-        browser_view: Some(view),
-        view_part: view as isize - browser_view as isize,
-        visited,
-    })
+    Ok((browser_view, path, visited))
 }
 
 /// How far around the object the walk reached its `views::View` part and parent field may lie. The
@@ -390,6 +406,40 @@ fn children_of(view: usize, field: usize) -> Vec<usize> {
     (begin..end).step_by(8).filter_map(word).collect()
 }
 
+/// What memory shows around a browser view this build's row already knows, read only, so the walk
+/// can be designed from facts: the view's name and the offset of its `MetaDataProvider` part, the
+/// holder its `parent` field names, and every list in the holder that holds the view, as (field,
+/// begin, end, count, index).
+pub(crate) fn facts(ranges: &Ranges, view: usize, parent: usize, reached: Option<usize>) -> String {
+    let own = name_and_part(ranges, view, 0x800);
+    let holder = word(view + parent);
+    let holder_named = holder.and_then(|holder| name_and_part(ranges, holder, 0x800));
+    let mut lists = Vec::new();
+    let mut direct = Vec::new();
+    if let Some(holder) = holder {
+        for field in (0..FIELDS).step_by(8) {
+            let (Some(begin), Some(end)) = (word(holder + field), word(holder + field + 8)) else {
+                break;
+            };
+            if begin == view {
+                direct.push(field);
+            }
+            if begin == 0 || end <= begin || (end - begin) % 8 != 0 || (end - begin) / 8 > 256 {
+                continue;
+            }
+            let items: Vec<usize> = (begin..end).step_by(8).filter_map(word).collect();
+            if let Some(index) = items.iter().position(|item| *item == view) {
+                lists.push((field, begin, end, items.len(), index));
+            }
+        }
+    }
+    format!(
+        "facts: browser view part {view:#x} named {own:?}, reached {:?} bytes away, holder {holder:x?} \
+         named {holder_named:?}, holder fields naming the view {direct:x?}, holder lists of it \
+         (field, begin, end, count, index) {lists:x?}",
+        reached.map(|reached| reached as isize - view as isize)
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;

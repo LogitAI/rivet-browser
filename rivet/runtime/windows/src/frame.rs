@@ -211,6 +211,13 @@ unsafe fn trace_reflection(window: HWND) -> bool {
             )),
             Err(error) => crate::trace::trace(&format!("reflect: {error}, {took} ms")),
         }
+        // Where the row knows the browser view, what memory shows around it, for designing the walk.
+        if let Some(view) = host {
+            let reached = reflect::reach(&ranges, handler, std::time::Duration::from_millis(500))
+                .ok()
+                .map(|(object, _, _)| object);
+            crate::trace::trace(&reflect::facts(&ranges, view, parent_row, reached));
+        }
     });
     true
 }
