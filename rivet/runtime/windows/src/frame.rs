@@ -316,6 +316,13 @@ unsafe fn on_attach_layout_timer(window: HWND) {
                 window as usize
             ));
             relayout(window);
+            // Temporary probe: whether the window Rivet's subclass is on still exists.
+            crate::trace::trace(&format!(
+                "attach probe: after try {tries}, window {:#x} IsWindow {} subclassed {}",
+                window as usize,
+                windows_sys::Win32::UI::WindowsAndMessaging::IsWindow(window) != 0,
+                attached(window)
+            ));
         }
         AttachRetry::GiveUp => {
             KillTimer(window, ATTACH_LAYOUT_TIMER);
@@ -4312,7 +4319,11 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             await_layout(window);
             // The browser may not lay the window out for Rivet's frame, as when it was minimized at
             // the attach; it is asked again until it does.
-            SetTimer(window, ATTACH_LAYOUT_TIMER, ATTACH_LAYOUT_RETRY_MS, None);
+            // Temporary probe: RIVET_PROBE_NO_ATTACH_RETRY turns the timed retry off, to measure
+            // whether it causes Whale windows to stop laying out. Removed with the fix.
+            if std::env::var_os("RIVET_PROBE_NO_ATTACH_RETRY").is_none() {
+                SetTimer(window, ATTACH_LAYOUT_TIMER, ATTACH_LAYOUT_RETRY_MS, None);
+            }
             crate::features::tab_list::connect_command_bar();
             create_appbar(window);
             crate::features::window_corners::keep_round(window);
