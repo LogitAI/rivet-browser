@@ -440,11 +440,10 @@ pub(crate) fn in_a_line(rects: &[Rect]) -> bool {
 /// The right edge of the window's client area in device-independent pixels.
 pub(crate) unsafe fn client_right(window: HWND) -> i32 {
     use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
-    let dpi = GetDpiForWindow(window).max(96) as i32;
+    let dpi = crate::frame::layout_dpi(window) as i32;
     client.right * 96 / dpi
 }
 

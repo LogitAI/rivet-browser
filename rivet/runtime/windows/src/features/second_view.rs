@@ -1675,10 +1675,10 @@ unsafe fn window_origin(view: usize) -> [i32; 2] {
     [x, y]
 }
 
-/// The DIPs per pixel of a window.
+/// The pixels per DIP of a window, at the scale the browser laid it out. Windows can report another
+/// DPI for the window, as it does while the window crosses monitors of different DPIs.
 unsafe fn scale_of(window: HWND) -> f32 {
-    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-    GetDpiForWindow(window).max(96) as f32 / 96.0
+    crate::frame::layout_dpi(window) as f32 / 96.0
 }
 
 /// The dividers of the window's split in window DIPs.

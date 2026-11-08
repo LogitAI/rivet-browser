@@ -4051,6 +4051,41 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 
 #[cfg(test)]
 mod tests {
+    /// Windows and the browser can disagree on a window's scale: while the window crosses monitors
+    /// of different DPIs, or when it lies off every monitor. Rivet's bar, rows, second page view and
+    /// hit areas sit on the browser's layout, so every conversion between pixels and DIPs takes the
+    /// scale the browser laid the window out at, never the DPI Windows reports.
+    #[test]
+    fn fr2_rivet_converts_pixels_at_the_browsers_layout_scale() {
+        fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    sources(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        sources(&root, &mut files);
+        let mut readers = Vec::new();
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let calls = text
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .filter(|line| line.contains("GetDpiForWindow("))
+                .count();
+            if calls > 0 {
+                readers.push(file.strip_prefix(&root).unwrap().display().to_string());
+            }
+        }
+        // `frame::dpi` reads the window's DPI once, for a window the browser has not laid out yet.
+        assert_eq!(readers, ["frame.rs"]);
+    }
+
     #[test]
     fn idle_timer_looks_for_no_debug_files_without_a_debug_folder() {
         use std::path::{Path, PathBuf};
