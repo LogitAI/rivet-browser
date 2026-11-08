@@ -167,6 +167,21 @@ mod tests {
     }
 
     #[test]
+    fn fr4_a_frame_reports_the_scale_it_is_laid_out_at() {
+        let bytes = decode_hex(include_str!("../vectors/frame-layout-dpi-v1.hex"));
+        let response = ControlResponse::decode(bytes.as_slice()).unwrap();
+        match &response.result {
+            Some(control_response::Result::Frame(frame)) => {
+                assert_eq!((frame.width, frame.height), (2, 1));
+                assert_eq!(frame.bgra, [1, 2, 3, 255, 4, 5, 6, 255]);
+                assert_eq!(frame.layout_dpi, 120);
+            }
+            other => panic!("expected a frame, got {other:?}"),
+        }
+        assert_eq!(encode(&response), bytes);
+    }
+
+    #[test]
     fn fr5_a_needs_visible_failure_matches_the_checked_in_vector() {
         let bytes = decode_hex(include_str!("../vectors/needs-visible-v1.hex"));
         let response = ControlResponse::decode(bytes.as_slice()).unwrap();
