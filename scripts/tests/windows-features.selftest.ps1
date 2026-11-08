@@ -228,6 +228,11 @@ Expect 'fr10_open_button_hidden_faint_then_solid_passes' (Test-OpenButtonFade $a
 Expect 'fr10_open_button_that_never_appears_fails' (Test-OpenButtonFade $away $away $over $A $corner) 'FAIL'
 Expect 'fr10_open_button_solid_near_the_corner_fails' (Test-OpenButtonFade $away $over $over $A $corner) 'FAIL'
 Expect 'fr10_open_button_shown_with_the_pointer_away_fails' (Test-OpenButtonFade $over $near $over $A $corner) 'FAIL'
+# The study's look on a bright page: near the corner a light ground at 60%, under the pointer a 6%
+# dark ground with dark ink. The light ground changes the page more, and the check still passes.
+$nearLight = Fill (Fill (New-Window) 160 60 890 540 $A) 856 504 886 534 (Mix 0xFFFFFF $A 0.24)
+$overDark = Fill (Fill (Fill (New-Window) 160 60 890 540 $A) 856 504 886 534 (Mix 0x1F2024 $A 0.06)) 866 514 876 524 0x1F2024
+Expect 'fr10_open_button_of_the_study_on_a_bright_page_passes' (Test-OpenButtonFade $away $nearLight $overDark $A $corner) 'PASS'
 
 function New-Row([int]$Ground, [int]$Buttons) {
   $c = Fill (Fill (New-Window) 160 64 890 540 $A) 160 20 890 64 $Ground
