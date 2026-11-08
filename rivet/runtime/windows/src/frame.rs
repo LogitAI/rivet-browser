@@ -2995,6 +2995,10 @@ fn reserved_width(window: HWND, bounds: frame_layout::Rect) -> Option<i32> {
             let changed = LAYOUT_DPI
                 .with(|layouts| layouts.borrow_mut().insert(window as isize, dpi) != Some(dpi));
             if changed {
+                crate::trace::trace(&format!(
+                    "layout dpi: window {:#x} at {dpi}",
+                    window as usize
+                ));
                 update_appbar(window);
             }
         }
