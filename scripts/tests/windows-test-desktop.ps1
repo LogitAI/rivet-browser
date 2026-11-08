@@ -18,6 +18,13 @@
 #
 # RIVET_TEST_SAME_DESKTOP=1 skips the desktop, for a person who wants to watch a run.
 
+if (-not ('RivetTestDpi' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;using System.Runtime.InteropServices;
+public static class RivetTestDpi{ [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c); }
+'@
+}
+
 if (-not ('RivetTestDesktop' -as [type])) {
   Add-Type -TypeDefinition @'
 using System;using System.Runtime.InteropServices;
@@ -65,6 +72,21 @@ public static class RivetTestDesktop{
    RC r;GetWindowRect(h,out r);long a=(long)(r.R-r.L)*(r.B-r.T);
    if(GetPropW(h,"Rivet.OriginalWindowProc")!=IntPtr.Zero)a+=1L<<40;
    if(a>area){area=a;best=h;}return true;},IntPtr.Zero);
+  return best;
+ }
+ public delegate bool EM(IntPtr m,IntPtr dc,IntPtr r,IntPtr l);
+ [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr dc,IntPtr clip,EM f,IntPtr l);
+ [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr m,int type,out uint x,out uint y);
+ [StructLayout(LayoutKind.Sequential)] struct MI{public int cb;public int L,T,R,B,WL,WT,WR,WB;public uint flags;}
+ [DllImport("user32.dll")] static extern bool GetMonitorInfoW(IntPtr m,ref MI info);
+ // The work area of the monitor with the lowest DPI as "left,top,dpi", in physical pixels: the
+ // nearest this machine has to the 96 DPI monitor a person most often uses. Ties go to the
+ // largest monitor.
+ public static string LowestDpiMonitor(){
+  string best=null;uint bestDpi=uint.MaxValue;long bestArea=0;
+  EnumDisplayMonitors(IntPtr.Zero,IntPtr.Zero,(m,dc,r,l)=>{uint x,y;if(GetDpiForMonitor(m,0,out x,out y)!=0)return true;
+   var i=new MI();i.cb=Marshal.SizeOf(typeof(MI));if(!GetMonitorInfoW(m,ref i))return true;long a=(long)(i.WR-i.WL)*(i.WB-i.WT);
+   if(x<bestDpi||(x==bestDpi&&a>bestArea)){bestDpi=x;bestArea=a;best=i.WL+","+i.WT+","+x;}return true;},IntPtr.Zero);
   return best;
  }
  // GENERIC_ALL on a new desktop of the calling process's window station.
@@ -131,6 +153,25 @@ function Invoke-OnOwnDesktop([string]$Script, $Bound) {
 
 # The browser frame window of the processes `$ProcessId`, or [IntPtr]::Zero while they have none.
 function Get-BrowserWindow([int[]]$ProcessId) { [RivetTestDesktop]::BrowserWindow($ProcessId) }
+
+# Where a test window sits on a test desktop: "x,y,dpi" inside the lowest DPI monitor's work area.
+# The caller's thread must be per-monitor DPI aware, as the runners are, to read physical pixels.
+function Get-TestPlace {
+  $prior = [RivetTestDpi]::SetThreadDpiAwarenessContext([IntPtr]-4)
+  try {
+    $m = [RivetTestDesktop]::LowestDpiMonitor()
+    if (-not $m) { return '40,40,96' }
+    $x, $y, $dpi = $m -split ','
+    '{0},{1},{2}' -f ([int]$x + 40), ([int]$y + 40), $dpi
+  } finally { [void][RivetTestDpi]::SetThreadDpiAwarenessContext($prior) }
+}
+
+# The place a runner parks a test window at: on a test desktop inside a monitor of that desktop,
+# else off every monitor of the person's desktop.
+function Get-ParkPlace {
+  if ($env:RIVET_TEST_PLACE) { $x, $y, $null = $env:RIVET_TEST_PLACE -split ','; return @([int]$x, [int]$y) }
+  @(9000, 1000)
+}
 
 # Starts `$File` with `$Arguments` on the person's own desktop, for the guard of a run that is on a
 # test desktop. The result has Id, HasExited, ExitCode and WaitForExit(milliseconds).
