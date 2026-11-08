@@ -2654,25 +2654,25 @@ foreach ($name in $Browsers) {
         'view-click' { Invoke-ViewInput $name $shots 'view-click' 'none' }
         'view-click-other' { @('NOT_DRIVEN', $null, 'a page of another window needs a second browser window, which opens a normal window that may show on screen and take the keyboard') }
         'view-keys' { Invoke-ViewInput $name $shots 'view-keys' 'keys' }
-        'view-ime' { Invoke-ViewInput $name $shots 'view-ime' 'ime' }
+        'view-ime' { if ($env:RIVET_TEST_DESKTOP) { @('NOT_DRIVEN', $null, 'the input method composes only on the desktop that has the keyboard, and a test desktop never has it') } else { Invoke-ViewInput $name $shots 'view-ime' 'ime' } }
         'tab-moves' { Invoke-TabMoves $name $shots }
         'first-frame' { Invoke-FirstFrame $name $shots }
         'fullscreen-sidebar' { Invoke-FullscreenSidebar $name $shots }
-        'taskbar-identity' { Invoke-TaskbarIdentity $name $shots }
+        'taskbar-identity' { if ($env:RIVET_TEST_DESKTOP) { @('NOT_DRIVEN', $null, 'a test desktop has no taskbar to read the window icon from') } else { Invoke-TaskbarIdentity $name $shots } }
         'taskbar-relaunch' { Invoke-TaskbarRelaunch $name $shots }
         'sidebar-scale-monitor' { @('NOT_DRIVEN', $null, 'a move to a monitor of another scale needs the window on a real monitor, which the off-screen rule forbids; the scale of the current monitor is checked by windows-frame.ps1') }
         'split-panel-look' { Invoke-SplitPanelLook $name $shots }
         'sidebar-floats' { Invoke-SidebarFloats $name $shots }
         'sidebar-open-button' { Invoke-SidebarOpenButton $name $shots }
         'dev-row' { Invoke-DevRow $name $shots }
-        'address-editing' { Invoke-AddressEditing $name $shots }
+        'address-editing' { if ($env:RIVET_TEST_DESKTOP) { @('NOT_DRIVEN', $null, 'the input method composes only on the desktop that has the keyboard, and a test desktop never has it') } else { Invoke-AddressEditing $name $shots } }
         'security-chip' { Invoke-SecurityChip $name $shots }
         'permission-bubble' { Invoke-PermissionBubble $name $shots }
         'password-bubble' { Invoke-PasswordBubble $name $shots }
         'typing-keeps-active' { Invoke-TypingKeepsActive $name $shots }
         'cli-control' { Invoke-CliControl $name $shots }
-        'cli-input' { Invoke-CliInput $name $shots }
-        'cli-hidden' { Invoke-CliHidden $name $shots }
+        'cli-input' { if ($env:RIVET_TEST_DESKTOP) { @('NOT_DRIVEN', $null, 'a page takes typed text only in an active window, and no test window is ever activated') } else { Invoke-CliInput $name $shots } }
+        'cli-hidden' { if ($env:RIVET_TEST_DESKTOP) { @('NOT_DRIVEN', $null, 'the window manager reports no cloak for windows of a desktop it does not show') } else { Invoke-CliHidden $name $shots } }
       }
       $verdict, $evidence, $reason = $result
       Add-Row $name $version $feature $verdict $evidence $reason
