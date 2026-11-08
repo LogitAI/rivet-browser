@@ -3818,6 +3818,16 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
             if crate::features::look::on_timer(window, wparam) =>
         {
+            // The reveal came from the longest hide while the window still waited for the browser
+            // to lay it out for Rivet's frame: the window showed before Rivet's look was in place.
+            if take_waiting(window) {
+                crate::trace::trace(&format!(
+                    "first look: warning, window {:#x} shown after the longest hide of {} ms \
+                     without the browser's layout for Rivet's frame",
+                    window as usize,
+                    crate::features::look::LONGEST_HIDE_MS
+                ));
+            }
             0
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam == OPEN_LATER_TIMER => {
