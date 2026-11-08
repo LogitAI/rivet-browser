@@ -195,7 +195,7 @@ unsafe fn trace_reflection(window: HWND) -> bool {
         match found {
             Ok((found, cached)) => crate::trace::trace(&format!(
                 "reflect: browser view by path {:x?}, view list at {:#x}, parent at {:#x} (row {:#x}), \
-                 browser view {:x?} (row {:x?}, view part +{:#x}), same {}, cached {cached}, \
+                 browser view {:x?} (row {:x?}, view part {} bytes), same {}, cached {cached}, \
                  {} objects, {took} ms on a worker thread",
                 found.path,
                 found.children,
