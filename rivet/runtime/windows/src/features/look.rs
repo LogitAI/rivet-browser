@@ -62,7 +62,10 @@ pub(crate) fn reveal_in(moment: FirstLook) -> Option<u32> {
 /// Moves a window's first look on. `Attached` runs on the thread that attached the window, every
 /// other moment on the window's UI thread.
 pub(crate) unsafe fn first_look(window: HWND, moment: FirstLook) {
-    if let Some(hidden) = cloak_at(moment) {
+    // Temporary probe: RIVET_PROBE_NO_CLOAK keeps the window uncloaked, to measure whether the
+    // cloak stops some windows from laying out. Removed with the fix.
+    let probe_no_cloak = std::env::var_os("RIVET_PROBE_NO_CLOAK").is_some();
+    if let Some(hidden) = cloak_at(moment).filter(|hidden| !(probe_no_cloak && *hidden)) {
         let value: i32 = i32::from(hidden);
         DwmSetWindowAttribute(
             window,
