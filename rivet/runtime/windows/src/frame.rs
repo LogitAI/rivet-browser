@@ -3849,8 +3849,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         // The top bar: `bar` starts editing the address, `bartext` traces what it holds,
                         // `barsecurity` the page's security level and `barinfo` opens the page info bubble.
                         Some("bar") => crate::features::address_bar::focus(window),
-                        // `activate`: a row that needs a focused window, on a test desktop only.
-                        Some("activate") => {
+                        // `focuswindow`: a row that needs a focused window, on a test desktop only.
+                        Some("focuswindow") => {
                             let done = crate::offscreen::activate_on_test_desktop(window);
                             crate::trace::trace(&format!("activate on the test desktop: {done}"));
                             done
