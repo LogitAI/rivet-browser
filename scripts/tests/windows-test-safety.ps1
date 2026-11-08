@@ -42,6 +42,27 @@ function Get-RunRegistry { Join-Path $script:SafetyRepo '.scratch\runs' }
 
 . (Join-Path $PSScriptRoot 'windows-test-desktop.ps1')
 
+# The held copies of earlier browser builds are Rivet's own. An installed Rivet opens a browser
+# whose new build has no row yet from its held copy, so a run's Rivet folder `$Root` sees the same
+# copies, through a junction rather than a copy of whole browsers.
+function Add-HeldBrowsers([string]$Root) {
+  if (-not $env:LOCALAPPDATA) { return }
+  $held = Join-Path $env:LOCALAPPDATA 'Rivet\browsers'
+  $link = Join-Path $Root 'Rivet\browsers'
+  if ((Test-Path $held) -and -not (Test-Path $link)) {
+    New-Item -ItemType Directory -Force (Split-Path $link) | Out-Null
+    New-Item -ItemType Junction -Path $link -Target $held | Out-Null
+  }
+}
+
+# Removes the junction Add-HeldBrowsers made in `$Root`, and only the junction, before the folder
+# is removed, so no removal can reach the held browsers themselves.
+function Remove-HeldBrowsers([string]$Root) {
+  $link = Join-Path $Root 'Rivet\browsers'
+  $item = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+  if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { [IO.Directory]::Delete($link, $false) }
+}
+
 # The runs registered and still running, each with its process id, start time, folder and whether
 # it must be alone. A record whose process is gone, or whose id another process took, is removed.
 function Get-ActiveRuns {
@@ -77,7 +98,17 @@ function Start-RunSafety {
     # When the run cannot be alone, it starts without those rows instead of not at all.
     [switch]$DropAloneRows
   )
-  $env:RIVET_KEEP_OFFSCREEN = '1'
+  # On a test desktop of its own nothing can reach the person's screen, so the browser runs as an
+  # installed one does: its windows sit on a monitor of that desktop and take its foreground. The
+  # window then has the DPI of that monitor in Windows and in Chromium alike. Off every monitor,
+  # Windows gives it the primary monitor's DPI while Chromium scales for the nearest monitor, and
+  # every row would measure a window the person never sees.
+  if ($env:RIVET_TEST_DESKTOP) {
+    Remove-Item Env:\RIVET_KEEP_OFFSCREEN -ErrorAction SilentlyContinue
+    $env:RIVET_TEST_PLACE = Get-TestPlace
+  } else {
+    $env:RIVET_KEEP_OFFSCREEN = '1'
+  }
   $dataRoot = Join-Path $OutDir 'rivet-data'
   New-Item -ItemType Directory -Force $dataRoot | Out-Null
   $env:RIVET_DATA_ROOT = $dataRoot
@@ -89,15 +120,7 @@ function Start-RunSafety {
       New-Item -ItemType Directory -Force $copy | Out-Null
       Copy-Item $table (Join-Path $copy 'table.bin') -Force
     }
-    # The held copies of earlier browser builds are Rivet's own too. An installed Rivet opens a
-    # browser whose new build has no row yet from its held copy, so the run sees the same copies,
-    # through a junction rather than a copy of whole browsers.
-    $held = Join-Path $env:LOCALAPPDATA 'Rivet\browsers'
-    $link = Join-Path $dataRoot 'Rivet\browsers'
-    if ((Test-Path $held) -and -not (Test-Path $link)) {
-      New-Item -ItemType Directory -Force (Split-Path $link) | Out-Null
-      New-Item -ItemType Junction -Path $link -Target $held | Out-Null
-    }
+    Add-HeldBrowsers $dataRoot
   }
 
   # The registry is read and written under one lock, so two runs starting together see each other.
