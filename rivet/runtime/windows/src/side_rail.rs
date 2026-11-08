@@ -1100,7 +1100,11 @@ fn target_at(rail: &Rail, unfolded: bool, x: f32, y: f32) -> Option<Target> {
 unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
     crate::features::activity::count(crate::features::activity::Counter::RailTick);
     let mut pointer = SysPoint { x: 0, y: 0 };
-    if GetCursorPos(&mut pointer) == 0 || IsWindowVisible(window) == 0 || IsIconic(window) != 0 {
+    // A pointer held by the test command needs no real one. Windows refuses the real pointer to a
+    // process whose desktop is not the one shown, as a test desktop is.
+    let held = FORCED_POINTER.with(|forced| forced.get()).is_some();
+    let no_pointer = GetCursorPos(&mut pointer) == 0 && !held;
+    if no_pointer || IsWindowVisible(window) == 0 || IsIconic(window) != 0 {
         stop(window);
         return;
     }
