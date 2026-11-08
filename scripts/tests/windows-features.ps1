@@ -1432,11 +1432,11 @@ function Wait-Log([int]$Skip, [string]$Pattern, [int]$Seconds = 30) {
 function Invoke-AddressSuggest($Name, $shots) {
   $dir = Join-Path $pageDir 'suggest'
   New-Item -ItemType Directory -Force $dir | Out-Null
-  foreach ($p in @(@('suggest-a', $script:ColourA), @('suggest-b', $script:ColourB))) {
+  foreach ($p in @(@('alpha', $script:ColourA), @('beta', $script:ColourB))) {
     [IO.File]::WriteAllText((Join-Path $dir "$($p[0]).html"), ("<!doctype html><meta charset=utf-8><title>$($p[0])</title><style>html,body{margin:0;height:100%;background:#" + ('{0:X6}' -f $p[1]) + "}</style>"))
   }
   $site = Start-LocalSite $dir
-  $sa = "$($site.Base)/suggest-a.html"; $sb = "$($site.Base)/suggest-b.html"
+  $sa = "$($site.Base)/alpha.html"; $sb = "$($site.Base)/beta.html"
   # page-a is the first page, as a person would have visited it a while ago. The browser takes some
   # seconds to index a visit, so a page visited just before is not suggested yet.
   $ctx, $state = Start-Scene $Name 'address-suggest' $sa
@@ -1458,9 +1458,11 @@ function Invoke-AddressSuggest($Name, $shots) {
     $b = Get-Capture $ctx (Join-Path $shots 'address-suggest-2-page-b.png')
     $onB = Test-OnePage $b $script:ColourB $script:ColourA
     if ($onB.Verdict -ne 'PASS') { return @('NOT_DRIVEN', $b.Path, "page-b did not open from the bar: $($onB.Reason)") }
-    # Type page-a's address without its last four letters.
-    $prefix = $sa.Substring(0, $sa.Length - 4)
-    $rest = $sa.Substring($sa.Length - 4)
+    # Type page-a's address up to the middle of its name.
+    # The prefix ends inside a word, as a person types it: the history providers match whole
+    # words of the address and its title, and no other page starts with it.
+    $prefix = $sa.Substring(0, $sa.Length - 7)
+    $rest = $sa.Substring($sa.Length - 7)
     $before = @(Read-Log).Count
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $b.Path, 'the runtime did not take the bar command') }
     Send-Chars $ctx $prefix

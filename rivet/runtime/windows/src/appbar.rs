@@ -1202,7 +1202,9 @@ impl Appbar {
                     )?;
                     canvas.fill_rounded(list, 10.0, rgba(WHITE, 1.0))?;
                     canvas.ring(list, 10.0, rgba(INK, 0.08))?;
-                    for (index, (contents, description)) in bar.suggestions.iter().enumerate() {
+                    for (index, (contents, description, search)) in
+                        bar.suggestions.iter().enumerate()
+                    {
                         let row = rect(
                             left + 4.0,
                             list.top + SUGGESTION_PAD + index as f32 * SUGGESTION_ROW,
@@ -1213,11 +1215,7 @@ impl Appbar {
                             canvas.fill_rounded(row, 7.0, rgba(INK, 0.06))?;
                         }
                         // A page the browser knows has a globe, a search a magnifier.
-                        let glyph = if contents.contains("://") || description.is_empty() {
-                            '\u{E774}'
-                        } else {
-                            '\u{E721}'
-                        };
+                        let glyph = if *search { '\u{E721}' } else { '\u{E774}' };
                         canvas.icon(
                             glyph,
                             rect(row.left + 4.0, row.top, 24.0, SUGGESTION_ROW),
