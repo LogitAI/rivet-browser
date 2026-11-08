@@ -260,7 +260,14 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
 # report yet, the window's own DPI.
 function Get-LayoutDpi($ctx) {
   $hex = '{0:x}' -f $ctx.Hwnd.ToInt64()
-  $line = @(Read-Log | Where-Object { $_ -match "^layout dpi: window 0x$hex at (\d+)$" }) | Select-Object -Last 1
+  # The runtime traces the scale it lays the window out at once it attached. Read before that, the
+  # window DPI can differ from it, so the trace is waited for a moment before falling back.
+  $line = $null
+  foreach ($i in 1..20) {
+    $line = @(Read-Log | Where-Object { $_ -match "^layout dpi: window 0x$hex at (\d+)$" }) | Select-Object -Last 1
+    if ($line) { break }
+    Start-Sleep -Milliseconds 250
+  }
   if ($line -and $line -match ' at (\d+)$') { return [int]$Matches[1] }
   [FeatureWin]::GetDpiForWindow($ctx.Hwnd)
 }
