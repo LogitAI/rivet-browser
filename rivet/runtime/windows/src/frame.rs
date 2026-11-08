@@ -3853,14 +3853,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         // `focuswindow popup` focuses the window's top owned window instead, such as
                         // the browser's password save offer, so its default button takes Enter.
                         Some("focuswindow") => {
-                            let target = if words.next() == Some("popup") {
-                                crate::offscreen::owned_popup(window)
-                            } else {
-                                Some(window)
-                            };
-                            let done = target.is_some_and(|target| {
-                                crate::offscreen::activate_on_test_desktop(target)
-                            });
+                            let popup = words.next() == Some("popup");
+                            let done = crate::offscreen::focus_for_row(window, popup);
                             crate::trace::trace(&format!("activate on the test desktop: {done}"));
                             done
                         }
