@@ -2796,11 +2796,20 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             if let Err(error) = appbar.update_dev(bar.as_ref(), dpi) {
                 log(&format!("rivet: could not draw the developer bar: {error}"));
             }
-            if let Err(error) = appbar.update_held(
-                held_warning().as_deref(),
-                (client.right, client.bottom),
-                dpi,
-            ) {
+            // The warning keeps clear of the corner where the Sidebar's open button shows, which is
+            // the lower right corner of the page area, or of the window when no page area is known.
+            let per_dip = dpi as f32 / 96.0;
+            let (page, open_zone) =
+                crate::side_rail::page_and_open_zone(window).unwrap_or_else(|| {
+                    let (w, h) = (
+                        client.right as f32 / per_dip,
+                        client.bottom as f32 / per_dip,
+                    );
+                    ([0.0, 0.0, w, h], crate::side_rail::open_zone_at(w, h))
+                });
+            if let Err(error) =
+                appbar.update_held(held_warning().as_deref(), page, Some(open_zone), dpi)
+            {
                 log(&format!(
                     "rivet: could not draw the held build warning: {error}"
                 ));

@@ -225,6 +225,34 @@ fn pane_row_ground(
 /// How much of the row above its lower edge is kept from the browser's own toolbar line.
 const TOOLBAR_LINE: f32 = 2.0;
 
+/// The held build warning is 28 DIPs tall and at most 660 wide, 8 from the page's edges.
+const HELD_HEIGHT: f32 = 28.0;
+const HELD_WIDTH: f32 = 660.0;
+const HELD_MARGIN: f32 = 8.0;
+
+/// Where the held build warning goes, as (left, top, width) in window DIPs: centred at the bottom of
+/// `page` (left, top, right, bottom), and kept left of the open button zone `open_zone` by the same
+/// margin, so the warning never covers the corner where the Sidebar's open button shows. `None`
+/// when no room is left.
+fn held_place(page: [f32; 4], open_zone: Option<[f32; 4]>) -> Option<[f32; 3]> {
+    let [page_left, _, page_right, page_bottom] = page;
+    let top = page_bottom - HELD_MARGIN - HELD_HEIGHT;
+    let low = page_left + HELD_MARGIN;
+    let mut high = page_right - HELD_MARGIN;
+    if let Some([zone_left, zone_top, _, zone_bottom]) = open_zone {
+        if zone_top < page_bottom - HELD_MARGIN && zone_bottom > top {
+            high = high.min(zone_left - HELD_MARGIN);
+        }
+    }
+    let width = HELD_WIDTH.min(high - low);
+    if width <= 0.0 {
+        return None;
+    }
+    let centre = (page_left + page_right) / 2.0;
+    let left = (centre - width / 2.0).clamp(low, high - width);
+    Some([left, top, width])
+}
+
 /// The geometry the shown surface was painted for. The visual keeps the surface alive.
 struct Painted {
     width: i32,
@@ -946,32 +974,31 @@ impl Appbar {
         self.device.Commit()
     }
 
-    /// Shows why this window's browser is older than the installed one, over the window's lower right
-    /// corner. Pointer input still reaches the page below, since the visual takes none.
+    /// Shows why this window's browser is older than the installed one, at the bottom centre of the
+    /// page area `page` (left, top, right, bottom in window DIPs), clear of the Sidebar's open button
+    /// zone `open_zone` at the page's lower right corner. Pointer input still reaches the page below,
+    /// since the visual takes none.
     pub(crate) unsafe fn update_held(
         &mut self,
         warning: Option<&str>,
-        client: (i32, i32),
+        page: [f32; 4],
+        open_zone: Option<[f32; 4]>,
         dpi: u32,
     ) -> Result<()> {
         let Some(warning) = warning else {
             return Ok(());
         };
-        const HEIGHT: f32 = 28.0;
-        const WIDTH: f32 = 660.0;
-        const MARGIN: f32 = 8.0;
         let scale = dpi as f32 / 96.0;
-        let width = (WIDTH * scale)
-            .min(client.0 as f32 - 2.0 * MARGIN * scale)
-            .round() as i32;
-        let height = (HEIGHT * scale).round() as i32;
+        let Some([left, top, room]) = held_place(page, open_zone) else {
+            return Ok(());
+        };
+        let width = (room * scale).round() as i32;
+        let height = (HELD_HEIGHT * scale).round() as i32;
         if width <= 0 {
             return Ok(());
         }
-        self.held
-            .SetOffsetX2(client.0 as f32 - width as f32 - (MARGIN * scale).round())?;
-        self.held
-            .SetOffsetY2(client.1 as f32 - height as f32 - (MARGIN * scale).round())?;
+        self.held.SetOffsetX2((left * scale).round())?;
+        self.held.SetOffsetY2((top * scale).round())?;
         let key = (warning.to_owned(), width, dpi);
         if self.held_painted.as_ref() == Some(&key) {
             return self.device.Commit();
@@ -997,11 +1024,11 @@ impl Appbar {
         };
         let w = width as f32 / scale;
         let result = canvas
-            .fill_rounded(rect(0.0, 0.0, w, HEIGHT), 8.0, rgba(HELD_GROUND, 1.0))
+            .fill_rounded(rect(0.0, 0.0, w, HELD_HEIGHT), 8.0, rgba(HELD_GROUND, 1.0))
             .and_then(|()| {
                 canvas.text(
                     HELD_TEXT,
-                    rect(12.0, 0.0, w - 24.0, HEIGHT),
+                    rect(12.0, 0.0, w - 24.0, HELD_HEIGHT),
                     warning,
                     HELD_INK,
                     false,
@@ -2768,5 +2795,31 @@ mod tests {
                 assert!(!covered(&ground, left + room / 2.0, height / 2.0));
             }
         }
+    }
+
+    #[test]
+    fn fr10_the_held_build_warning_sits_at_the_bottom_centre_clear_of_the_open_button() {
+        let zone = |page: [f32; 4]| crate::side_rail::open_zone_at(page[2], page[3]);
+        let overlaps =
+            |a: [f32; 4], b: [f32; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+        for page in [
+            [336.0, 56.0, 1600.0, 1000.0],
+            [336.0, 56.0, 1000.0, 800.0],
+            [0.0, 0.0, 700.0, 400.0],
+        ] {
+            let [left, top, width] = held_place(page, Some(zone(page))).unwrap();
+            let warning = [left, top, left + width, top + HELD_HEIGHT];
+            assert!(!overlaps(warning, zone(page)), "{page:?} {warning:?}");
+            assert!(left >= page[0] + HELD_MARGIN && top + HELD_HEIGHT == page[3] - HELD_MARGIN);
+        }
+        // A wide page has the warning centred.
+        let page = [336.0, 56.0, 1600.0, 1000.0];
+        let [left, _, width] = held_place(page, Some(zone(page))).unwrap();
+        assert!(((left + width / 2.0) - (page[0] + page[2]) / 2.0).abs() < 0.5);
+        // No room, no warning.
+        assert_eq!(
+            held_place([0.0, 0.0, 80.0, 100.0], Some(zone([0.0, 0.0, 80.0, 100.0]))),
+            None
+        );
     }
 }
