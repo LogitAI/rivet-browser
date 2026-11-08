@@ -2042,6 +2042,25 @@ unsafe fn relayout(window: HWND) {
         update_appbar(window);
         return;
     }
+    // A frame change only marks the browser's views for a layout on its next compositor frame,
+    // and a cloaked or off-screen window may draw none. A size change lays the root view out at
+    // once in `views::Widget::OnNativeWidgetSizeChanged`, so a window that still waits is resized
+    // by one pixel and back, which no one sees while it is cloaked.
+    if asks_by_size(
+        is_waiting(window),
+        IsIconic(window) != 0,
+        IsZoomed(window) != 0,
+    ) {
+        crate::trace::trace("attach: asked with a size change, which the browser lays out at once");
+        let mut rect: RECT = std::mem::zeroed();
+        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(window, &mut rect);
+        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+        let flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
+        SetWindowPos(window, std::ptr::null_mut(), 0, 0, width, height - 1, flags);
+        SetWindowPos(window, std::ptr::null_mut(), 0, 0, width, height, flags);
+        update_appbar(window);
+        return;
+    }
     if is_waiting(window) {
         crate::trace::trace(
             "attach: asked for a frame change, as the frame view's layout is not recorded",
@@ -2057,6 +2076,12 @@ unsafe fn relayout(window: HWND) {
         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
     );
     update_appbar(window);
+}
+
+/// Whether the browser is asked for its layout by a size change: only for a window that still
+/// waits for it and has a size of its own, neither minimized nor maximized.
+fn asks_by_size(waiting: bool, minimized: bool, maximized: bool) -> bool {
+    waiting && !minimized && !maximized
 }
 
 /// Hides the docked appbar so the page takes its width, or docks it again.
@@ -2521,6 +2546,10 @@ pub unsafe fn attach(window: HWND) -> bool {
     let key = wide(ORIGINAL_PROC);
     if !GetPropW(window, key.as_ptr()).is_null() {
         return true;
+    }
+    // The trace starts here, so what the attach and the window's first layouts did is kept.
+    if let Some(path) = trace_file("rivet-vertical-tabs.log") {
+        crate::trace::set_trace(path);
     }
     // Record the browser procedure before ours can receive a message. The browser UI thread may
     // dispatch between these calls, so the record is refreshed with the exact replaced value.
@@ -3217,12 +3246,18 @@ pub(crate) unsafe fn layout_dpi(window: HWND) -> u32 {
 fn reserved_width(window: HWND, bounds: frame_layout::Rect) -> Option<i32> {
     unsafe {
         if !attached(window) || !framed(window) {
-            if is_waiting(window) {
-                crate::trace::trace(&format!(
-                    "attach: layout of window {:#x} not for Rivet's frame: {}",
-                    window as usize,
-                    window_state(window)
-                ));
+            // A layout of a window Rivet subclassed but has not finished attaching is one the
+            // window then still needs; the trace shows whether it came too early.
+            let subclassed = !GetPropW(window, wide(ORIGINAL_PROC).as_ptr()).is_null();
+            if is_waiting(window) || subclassed {
+                crate::trace::trace_changed(
+                    "layout not for Rivet's frame",
+                    &format!(
+                        "attach: layout of window {:#x} not for Rivet's frame: {}",
+                        window as usize,
+                        window_state(window)
+                    ),
+                );
             }
             return None;
         }
@@ -4432,6 +4467,16 @@ mod tests {
         assert!(!super::take_waiting(other));
         assert!(super::take_waiting(window));
         assert!(!super::take_waiting(window), "later layouts change nothing");
+    }
+
+    #[test]
+    fn fr2_a_window_that_still_waits_is_asked_by_a_size_change() {
+        use super::asks_by_size;
+        assert!(asks_by_size(true, false, false));
+        // Minimized and maximized windows keep their size; a laid out window is not asked.
+        assert!(!asks_by_size(true, true, false));
+        assert!(!asks_by_size(true, false, true));
+        assert!(!asks_by_size(false, false, false));
     }
 
     #[test]
