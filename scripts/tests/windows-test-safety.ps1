@@ -195,19 +195,20 @@ public static class RivetTestStart{
  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
  // Starts `app` with the whole command line `line`: STARTF_USESHOWWINDOW (1) with
  // SW_SHOWNOACTIVATE (4), so its first window shows without activation. Standard output goes to
- // `output` when one is given; no other handle is inherited.
+ // `output` when one is given; PowerShell passes a missing one as an empty string. No other handle
+ // is inherited.
  public static RivetTestProcess Start(string app,string line,string output){
   var si=new SI();si.cb=Marshal.SizeOf(typeof(SI));si.flags=1;si.show=4;
   FileStream file=null;
   try{
-   if(output!=null){
+   if(!string.IsNullOrEmpty(output)){
     file=new FileStream(output,FileMode.Create,FileAccess.Write,FileShare.ReadWrite|FileShare.Delete);
     IntPtr h=file.SafeFileHandle.DangerousGetHandle();
     if(!SetHandleInformation(h,1,1))throw new System.ComponentModel.Win32Exception();
     si.flags|=0x100;si.output=h; // STARTF_USESTDHANDLES
    }
    PI pi;
-   if(!CreateProcessW(app,new System.Text.StringBuilder(line),IntPtr.Zero,IntPtr.Zero,output!=null,0,IntPtr.Zero,null,ref si,out pi))throw new System.ComponentModel.Win32Exception();
+   if(!CreateProcessW(app,new System.Text.StringBuilder(line),IntPtr.Zero,IntPtr.Zero,!string.IsNullOrEmpty(output),0,IntPtr.Zero,null,ref si,out pi))throw new System.ComponentModel.Win32Exception();
    CloseHandle(pi.thread);
    return new RivetTestProcess(pi.process,pi.id);
   }finally{if(file!=null)file.Dispose();}
