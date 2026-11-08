@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$State, [switch]$InspectOnly, [switch]$Exercise)
+param([Parameter(Mandatory = $true)][string]$State, [switch]$InspectOnly, [switch]$Exercise, [string]$Rivet = (Join-Path $PSScriptRoot '..\..\rivet\target\debug\rivet.exe'))
 # -Exercise also moves, resizes, minimises and restores each session window and simulates a monitor
 # DPI change, and checks the layout right after each step and once it settles. It acts only on a
 # window that lies wholly off every monitor, and never activates a window or moves the cursor.
@@ -23,7 +23,6 @@ public static class RivetFrameCheck {
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
     [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
-    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
     [DllImport("user32.dll")] static extern long GetWindowLongPtr(IntPtr hwnd, int index);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int w, int h, uint flags);
@@ -60,9 +59,9 @@ public static class RivetFrameCheck {
         public long Browser; public uint Dpi; public bool RivetWindowExists, BrowserIsTopLevel, BrowserIsResizable;
         public int ClientLeft, ClientRight, ContentLeft, ContentRight, ExpectedSidebar;
     }
-    public static Observation Read(long handle) { return Read(handle, 0); }
-    // `dpiOverride` is the DPI a simulated WM_DPICHANGED told the browser, or zero.
-    public static Observation Read(long handle, uint dpiOverride) {
+    // `dpi` is the scale Rivet reports the window laid out at, or the DPI a simulated
+    // WM_DPICHANGED told the browser.
+    public static Observation Read(long handle, uint dpi) {
         var prior=SetThreadDpiAwarenessContext(new IntPtr(-4));
         try {
             var browser=new IntPtr(handle);
@@ -77,7 +76,6 @@ public static class RivetFrameCheck {
             var origin=new Point(); ClientToScreen(browser,ref origin);
             var r=new Rect(); if(content!=IntPtr.Zero) GetWindowRect(content,out r);
             long style=GetWindowLongPtr(browser,-16);
-            uint dpi=dpiOverride!=0?dpiOverride:GetDpiForWindow(browser);
             return new Observation {
                 Browser=handle, Dpi=dpi, RivetWindowExists=rivet,
                 BrowserIsTopLevel=GetParent(browser)==IntPtr.Zero && (style&0x40000000)==0,
@@ -89,6 +87,16 @@ public static class RivetFrameCheck {
     }
 }
 '@
+# The scale the browser lays the session's window out at, as Rivet reports it with a capture.
+# This process's own idea of the window's DPI can differ from the browser's.
+function Get-LayoutScale([string]$Id) {
+    $capture = Join-Path ([IO.Path]::GetDirectoryName((Resolve-Path -LiteralPath $State))) "frame-$Id.bmp"
+    $read = & $Rivet read frame --out $capture --id $Id --state $State --json | ConvertFrom-Json
+    Remove-Item -LiteralPath $capture -ErrorAction SilentlyContinue
+    if (-not $read.ok -or -not $read.layout_dpi) { throw 'FR-2: Rivet did not report the window''s layout scale.' }
+    [uint32]$read.layout_dpi
+}
+
 # The checks of one observation. `Step` names what was just done to the window, for the message.
 function Test-Layout($Item, [string]$Step) {
     $at = if ($Step) { " ($Step)" } else { '' }
@@ -118,6 +126,7 @@ function Test-OnAMonitor($Rect) {
 # Checks the layout right after a step, while the browser may still be laying out, and again once it
 # settles. The first look comes within a few frames of the step.
 function Test-Step([long]$Handle, [string]$Step, [uint32]$Dpi = 0) {
+    if (-not $Dpi) { $Dpi = Get-LayoutScale $script:SessionId }
     Start-Sleep -Milliseconds 40
     $during = [RivetFrameCheck]::Read($Handle, $Dpi)
     Start-Sleep -Milliseconds 800
@@ -151,7 +160,7 @@ function Invoke-Exercise([long]$Handle) {
         # A monitor DPI change, simulated, since moving onto another monitor would show the window.
         # The browser lays itself out for the DPI it is told, so the check expects that DPI's sidebar
         # and gap. The window then gets its own DPI back.
-        $own = [RivetFrameCheck]::Read($Handle).Dpi
+        $own = Get-LayoutScale $script:SessionId
         $other = if ($own -ge 144) { [uint32]96 } else { [uint32]144 }
         $now = [RivetFrameCheck]::WindowRect($Handle)
         $suggested = New-Object RivetFrameCheck+Rect
@@ -171,7 +180,8 @@ function Invoke-Exercise([long]$Handle) {
 $sessions = (Get-Content -LiteralPath $State | ConvertFrom-Json).sessions.PSObject.Properties.Value
 if (@($sessions).Count -eq 0) { throw 'FR-2: The state file has no Rivet session.' }
 foreach ($session in $sessions) {
-    $item = [RivetFrameCheck]::Read($session.window_handle)
+    $script:SessionId = $session.id
+    $item = [RivetFrameCheck]::Read($session.window_handle, (Get-LayoutScale $session.id))
     $item | ConvertTo-Json
     if ($InspectOnly) { continue }
     Test-Layout $item ''

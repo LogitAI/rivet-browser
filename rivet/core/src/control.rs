@@ -406,6 +406,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 bgra: vec![0, 0, 0, 255],
+                layout_dpi: 96,
             })
         }
         fn workspaces(&mut self) -> Result<Vec<Workspace>, Failure> {
