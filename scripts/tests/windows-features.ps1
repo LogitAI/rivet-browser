@@ -76,6 +76,7 @@ public static class FeatureWin{
  [DllImport("user32.dll")] public static extern bool EnumWindows(EW f,IntPtr l);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h,uint c);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,StringBuilder s,int n);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr GetProp(IntPtr h,string n);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern uint RegisterWindowMessage(string n);
@@ -337,7 +338,10 @@ function Get-MyTops($ctx) {
 # that tab. The browser's single-instance hand-off is never used: it can open a normal window on
 # screen that takes the keyboard. Any window other than the off-screen app window fails the step, and
 # such a window is moved off-screen without activation and closed at once.
-function Open-SecondPage($ctx, [string]$Url) {
+# With `-AllowOwned`, windows the app window owns, such as the browser's own suggestion list for a
+# form it fills, may show; any other new window still fails it.
+function Open-SecondPage($ctx, [string]$Url, [switch]$AllowOwned) {
+  $isNew = { param($h) $h -ne $ctx.Hwnd -and $before -notcontains $h -and -not ($AllowOwned -and [FeatureWin]::GetWindow($h, 4) -eq $ctx.Hwnd) }
   $before = Get-MyTops $ctx
   $flag = Join-Path $flagDir 'rivet-tab.txt'
   # The tab opens on the page at once. The browser's own new tab page is never shown first,
@@ -347,7 +351,7 @@ function Open-SecondPage($ctx, [string]$Url) {
   $extra = @()
   foreach ($i in 1..200) {
     Start-Sleep -Milliseconds 50
-    $extra = @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ })
+    $extra = @(Get-MyTops $ctx | Where-Object { & $isNew $_ })
     if ($extra.Count -gt 0) { break }
   }
   if ($extra.Count -gt 0) {
@@ -360,7 +364,7 @@ function Open-SecondPage($ctx, [string]$Url) {
   }
   if (Test-Path $flag) { Remove-Item $flag -ErrorAction SilentlyContinue; return $false }
   Start-Sleep 4
-  if (@(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ }).Count -gt 0) { return $false }
+  if (@(Get-MyTops $ctx | Where-Object { & $isNew $_ }).Count -gt 0) { return $false }
   # The page must be a tab of the app window itself.
   (Send-Flag $ctx 'rivet-tab.txt' 'list') -and ((Get-TabUrls) -contains $Url)
 }
@@ -1812,7 +1816,8 @@ function Invoke-Credentials($Name, $shots, [string]$Provider) {
     Start-Sleep -Milliseconds 500
     Send-Key $capBubble 0x0D
     Start-Sleep 2
-    if (-not (Open-SecondPage $ctx $server.Url)) { return @('NOT_DRIVEN', $offer.Path, 'the form could not be opened again in a tab of the window') }
+    # The browser may show its own list of saved accounts over the field it fills, a window it owns.
+    if (-not (Open-SecondPage $ctx $server.Url -AllowOwned)) { return @('NOT_DRIVEN', $offer.Path, 'the form could not be opened again in a tab of the window') }
     Start-Sleep 3
     $filled = Get-Capture $ctx (Join-Path $shots "$feature-3-filled.png")
     $v = Test-OnePage $filled $script:ColourC $script:ColourA
