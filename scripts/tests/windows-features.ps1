@@ -1968,7 +1968,12 @@ function Invoke-FirstFrame($Name, $shots) {
     if (-not $caps.Count) { return @('NOT_DRIVEN', $steady.Path, 'the watcher caught no frame of the window') }
     # The band right of the appbar, as high as the top row and a vendor title strip below it.
     $f = $ctx.Dpi / 96.0
-    $v = Test-FirstFrames $caps $steady ([int](268 * $f)) ([int](668 * $f)) ([int](60 * $f))
+    # The band ends where the address text starts: the page's title replaces its file name there
+    # as the page loads, which is the page, not the frame.
+    $right = 668
+    $anc = Get-BarAnchors $ctx
+    if ($anc -and $anc.Chip[2] -gt 0) { $right = [Math]::Min($right, [int]($anc.Chip[0] + $anc.Chip[2] + 2)) }
+    $v = Test-FirstFrames $caps $steady ([int](268 * $f)) ([int]($right * $f)) ([int](60 * $f))
     if ($v.Verdict -eq 'FAIL' -and $v.Reason -match '^frame (\d+)') {
       $bad = $caps[[int]$Matches[1] - 1]
       $bmp = New-Object Drawing.Bitmap $bad.Width, $bad.Height, ([Drawing.Imaging.PixelFormat]::Format32bppArgb)
