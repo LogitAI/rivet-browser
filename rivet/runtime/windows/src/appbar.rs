@@ -229,6 +229,9 @@ const TOOLBAR_LINE: f32 = 2.0;
 const HELD_HEIGHT: f32 = 28.0;
 const HELD_WIDTH: f32 = 660.0;
 const HELD_MARGIN: f32 = 8.0;
+/// How far above the page area's bottom the warning reaches with a margin above it, in DIPs.
+/// Rivet's surfaces that float over the page bottom keep clear of it while the warning shows.
+pub(crate) const HELD_RESERVE: i32 = (HELD_MARGIN + HELD_HEIGHT + HELD_MARGIN) as i32;
 
 /// Where the held build warning goes, as (left, top, width) in window DIPs: centred at the bottom of
 /// `page` (left, top, right, bottom), and kept left of the open button zone `open_zone` by the same
@@ -999,6 +1002,16 @@ impl Appbar {
         }
         self.held.SetOffsetX2((left * scale).round())?;
         self.held.SetOffsetY2((top * scale).round())?;
+        crate::trace::trace_changed(
+            "held warning",
+            &format!(
+                "held warning at {} {} {} {}",
+                (left * scale).round(),
+                (top * scale).round(),
+                width,
+                height
+            ),
+        );
         let key = (warning.to_owned(), width, dpi);
         if self.held_painted.as_ref() == Some(&key) {
             return self.device.Commit();

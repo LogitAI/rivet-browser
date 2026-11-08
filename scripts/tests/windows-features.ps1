@@ -1413,7 +1413,15 @@ function Invoke-LinkPreview($Name, $shots) {
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'preview 0')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the preview command') }
     Start-Sleep 3
     $shown = Get-Capture $ctx (Join-Path $shots 'link-preview-2-shown.png')
-    $v = Test-FloatingPage $shown $script:ColourB $script:ColourA
+    # A held build's warning sits at the page bottom; the margin below the preview is the page
+    # down to the warning, which the runtime traces in client pixels.
+    $avoid = $null
+    $held = @(Read-Log | Where-Object { $_ -match '^held warning at (-?\d+) (-?\d+) (\d+) (\d+)$' }) | Select-Object -Last 1
+    if ($held -and $held -match '^held warning at (-?\d+) (-?\d+) (\d+) (\d+)$') {
+      $co = Get-ClientOffset $ctx
+      $avoid = @(($co.X + [int]$Matches[1]), ($co.Y + [int]$Matches[2]), ($co.X + [int]$Matches[1] + [int]$Matches[3]), ($co.Y + [int]$Matches[2] + [int]$Matches[4]))
+    }
+    $v = Test-FloatingPage $shown $script:ColourB $script:ColourA $avoid
     if ($v.Verdict -ne 'PASS') { return @($v.Verdict, $shown.Path, $v.Reason) }
     if (-not (Test-ViewOwns $opens 'Floating')) { return @('FAIL', $shown.Path, 'the preview page is not in the second page view') }
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'previewesc')) { return @('NOT_DRIVEN', $shown.Path, 'the runtime did not take the dismiss command') }

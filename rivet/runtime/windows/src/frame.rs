@@ -221,6 +221,16 @@ unsafe fn trace_reflection(window: HWND) -> bool {
     });
     true
 }
+/// How far above the page area's bottom the held build warning and its margin reach, in DIPs, or
+/// zero when this process shows no such warning.
+pub(crate) fn held_reserve() -> i32 {
+    if held_warning().is_some() {
+        crate::appbar::HELD_RESERVE
+    } else {
+        0
+    }
+}
+
 /// The warning of this process when it runs from a held browser build. The clock is read once per
 /// process, and the time left is worked out anew for each paint because a window can stay open for days.
 fn held_warning() -> Option<String> {
