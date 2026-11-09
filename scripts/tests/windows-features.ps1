@@ -2503,10 +2503,11 @@ function Invoke-FullscreenSidebar($Name, $shots) {
     $style = [SurfaceWin]::GetLong($ctx.Hwnd, -16)
     $bare = [IntPtr]([int64]$style -band (-bnot [int64]0x40000))
     [SurfaceWin]::SetLong($ctx.Hwnd, -16, $bare) | Out-Null
-    # One pixel wider than the parked window and back, which a runner's small display leaves alone.
+    # One pixel narrower than the parked window and back. A wider window can be held at the most
+    # Windows allows, which on a runner's small display is the parked width, so nothing would move.
     $pr = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$pr) | Out-Null
     $pw = $pr.Ri - $pr.L; $ph = $pr.B - $pr.T
-    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, $pw + 1, $ph, 0x36) | Out-Null
+    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, $pw - 1, $ph, 0x36) | Out-Null
     Start-Sleep 4
     $full = Get-Capture $ctx (Join-Path $shots 'fullscreen-sidebar-2-full.png')
     [SurfaceWin]::SetLong($ctx.Hwnd, -16, $style) | Out-Null
