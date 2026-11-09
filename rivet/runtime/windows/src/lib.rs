@@ -305,7 +305,7 @@ pub fn compiled_rows() -> Vec<serde_json::Value> {
             // The parts a built-in row keeps in lists of their own go into the row, so the
             // generator ports them with every other address and a table row carries them.
             let mut row = build.to_row();
-            row["page_tools"] = builds::page_tool_rows::page_tools_for(*build)
+            row["page_tools"] = builds::page_tool_rows::page_tools_for(build)
                 .copied()
                 .to_row();
             row["bubble_anchor"] = builds::bubble_anchor_of(build).to_row();
