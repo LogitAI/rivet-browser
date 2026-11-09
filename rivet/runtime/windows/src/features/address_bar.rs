@@ -281,6 +281,8 @@ struct Bar {
     refresh_step: Option<usize>,
     /// Whether the query being re-read may complete inline.
     refresh_inline: bool,
+    /// The caret the input method's windows were last placed at, in client pixels.
+    placed: Option<[i32; 4]>,
 }
 
 thread_local! {
@@ -309,6 +311,7 @@ fn with_bar<R>(window: HWND, work: impl FnOnce(&mut Bar) -> R) -> R {
             deleting: false,
             refresh_step: None,
             refresh_inline: false,
+            placed: None,
         });
         work(bar)
     })
@@ -737,6 +740,7 @@ unsafe fn begin(window: HWND, bar: &mut Bar) {
     bar.queried = url.clone();
     bar.original = url;
     bar.editing = true;
+    bar.placed = None;
     bar.generation += 1;
 }
 
@@ -775,6 +779,7 @@ unsafe fn end(bar: &mut Bar) {
     bar.queried.clear();
     bar.inline.clear();
     bar.deleting = false;
+    bar.placed = None;
     bar.generation += 1;
 }
 
@@ -895,6 +900,32 @@ pub(crate) fn completed(typed: &str, inline: &str) -> (String, usize, usize) {
     )
 }
 
+/// Whether the field's `text` asks the browser again: only while editing, and only when it is
+/// neither the text last asked for nor that text with the browser's own inline completion, which
+/// Rivet set itself.
+pub(crate) fn needs_query(editing: bool, text: &str, queried: &str, inline: &str) -> bool {
+    editing && text != queried && (inline.is_empty() || text.strip_prefix(queried) != Some(inline))
+}
+
+/// What a typing message can change on screen: the bar's drawing and its caret.
+fn bar_state(window: HWND) -> (u64, Option<[i32; 4]>) {
+    with_bar(window, |bar| {
+        (
+            bar.generation,
+            bar.field
+                .as_ref()
+                .and_then(|field| field.caret())
+                .map(|r| [r.left, r.top, r.right, r.bottom]),
+        )
+    })
+}
+
+/// Whether the input method's windows go to `caret` again. Placing them makes the input method
+/// notify the window, so they are placed only when the caret moved.
+pub(crate) fn place_again(placed: Option<[i32; 4]>, caret: [i32; 4]) -> bool {
+    placed != Some(caret)
+}
+
 /// What one message of typing cost Rivet on the browser's UI thread, in microseconds, and how many
 /// queries it started. The trace shows one line per key, so a slow key names the step that took the
 /// time.
@@ -949,10 +980,7 @@ unsafe fn refresh_suggestions(window: HWND) -> KeyWork {
             bar.inline.clear();
             bar.generation += 1;
         }
-        if !bar.editing
-            || text == bar.queried
-            || (!bar.inline.is_empty() && text == format!("{}{}", bar.queried, bar.inline))
-        {
+        if !needs_query(bar.editing, &text, &bar.queried, &bar.inline) {
             return None;
         }
         Some((
@@ -1136,7 +1164,7 @@ pub(crate) unsafe fn message(
                     crate::trace::trace(&format!(
                         "address bar: suggestions for {text:?} later: {shown}"
                     ));
-                    crate::frame::update_appbar(window);
+                    crate::frame::update_top_bar(window);
                 }
                 if crate::trace::tracing() {
                     crate::trace::trace(&format!(
@@ -1359,12 +1387,15 @@ pub(crate) unsafe fn message(
                 with_bar(window, |bar| {
                     bar.deleting = matches!(wparam as u16, 0x08 | 0x2E)
                 });
+                let before = bar_state(window);
                 let clock = std::time::Instant::now();
                 let used = forward(window, message, wparam, lparam);
                 let forward_us = micros_since(clock);
                 let mut work = refresh_suggestions(window);
                 let drawing = std::time::Instant::now();
-                crate::frame::update_appbar(window);
+                if bar_state(window) != before {
+                    crate::frame::update_top_bar(window);
+                }
                 work.forward_us = forward_us;
                 work.draw_us = micros_since(drawing);
                 trace_key(message, wparam, work);
@@ -1376,12 +1407,15 @@ pub(crate) unsafe fn message(
                 return Some(0);
             }
             with_bar(window, |bar| bar.deleting = wparam == 0x08);
+            let before = bar_state(window);
             let clock = std::time::Instant::now();
             let used = forward(window, message, wparam, lparam);
             let forward_us = micros_since(clock);
             let mut work = refresh_suggestions(window);
             let drawing = std::time::Instant::now();
-            crate::frame::update_appbar(window);
+            if bar_state(window) != before {
+                crate::frame::update_top_bar(window);
+            }
             work.forward_us = forward_us;
             work.draw_us = micros_since(drawing);
             trace_key(message, wparam, work);
@@ -1395,6 +1429,7 @@ pub(crate) unsafe fn message(
         | WM_IME_CHAR
         | WM_IME_REQUEST
         | WM_INPUTLANGCHANGE => {
+            let before = bar_state(window);
             let clock = std::time::Instant::now();
             let used = forward(window, message, wparam, lparam);
             let forward_us = micros_since(clock);
@@ -1403,7 +1438,9 @@ pub(crate) unsafe fn message(
                 work = refresh_suggestions(window);
             }
             let drawing = std::time::Instant::now();
-            crate::frame::update_appbar(window);
+            if bar_state(window) != before {
+                crate::frame::update_top_bar(window);
+            }
             work.forward_us = forward_us;
             work.draw_us = micros_since(drawing);
             trace_key(message, wparam, work);
@@ -1454,12 +1491,20 @@ unsafe fn forward(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) ->
         if field.take_changed() {
             bar.generation += 1;
         }
-        Some((used, field.caret()))
+        // Placing the windows makes the input method send notices of its own, which need no placing.
+        let placing = !matches!(message, WM_IME_NOTIFY | WM_IME_SETCONTEXT | WM_IME_REQUEST);
+        let caret = field.caret().filter(|caret| {
+            if !placing {
+                return false;
+            }
+            let at = [caret.left, caret.top, caret.right, caret.bottom];
+            let again = place_again(bar.placed, at);
+            bar.placed = Some(at);
+            again
+        });
+        Some((used, caret))
     })?;
-    // Placing the windows makes the input method send notices of its own, which need no placing.
-    if let Some(caret) =
-        caret.filter(|_| !matches!(message, WM_IME_NOTIFY | WM_IME_SETCONTEXT | WM_IME_REQUEST))
-    {
+    if let Some(caret) = caret {
         let placing = std::time::Instant::now();
         place_input_method(window, caret);
         let placed_us = micros_since(placing);
@@ -1642,7 +1687,7 @@ unsafe fn redraw(window: HWND, redraw: Redraw) {
     match redraw {
         Redraw::Nothing => {}
         Redraw::Caret => crate::frame::update_address_caret(window),
-        Redraw::Bar => crate::frame::update_appbar(window),
+        Redraw::Bar => crate::frame::update_top_bar(window),
     }
 }
 
@@ -1661,6 +1706,32 @@ pub(crate) fn caret(window: HWND) -> Option<RECT> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nfr2_one_key_asks_the_browser_once_and_rivets_own_completion_never() {
+        // A key down and up leave the text alone, so only the character asks.
+        let mut starts = 0;
+        let (mut queried, inline) = ("exa".to_string(), String::new());
+        for text in ["exa", "exam", "exam"] {
+            if needs_query(true, text, &queried, &inline) {
+                starts += 1;
+                queried = text.to_string();
+            }
+        }
+        assert_eq!(starts, 1);
+        // The browser's completion that Rivet set after the typed text asks nothing again.
+        assert!(!needs_query(true, "example.com", "exa", "mple.com"));
+        assert!(needs_query(true, "examp", "exa", "mple.com"));
+        assert!(!needs_query(false, "examp", "exa", ""));
+        assert!(!needs_query(true, "exa", "exa", "mple.com"));
+    }
+
+    #[test]
+    fn nfr2_the_input_method_is_placed_only_when_the_caret_moved() {
+        assert!(place_again(None, [10, 4, 11, 20]));
+        assert!(!place_again(Some([10, 4, 11, 20]), [10, 4, 11, 20]));
+        assert!(place_again(Some([10, 4, 11, 20]), [18, 4, 19, 20]));
+    }
 
     #[test]
     fn nfr2_a_keys_work_is_traced_step_by_step() {
