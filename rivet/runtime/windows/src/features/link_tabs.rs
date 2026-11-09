@@ -150,7 +150,7 @@ pub(crate) unsafe fn tick(window: HWND) {
                 let why = match crate::features::tabs::base() {
                     None => "the browser module is not recorded".to_owned(),
                     Some(base) if crate::features::tabs::browser(base, other as HWND).is_none() => {
-                        "the window has no browser object".to_owned()
+                        crate::frame::browser_lookup_step(other as HWND).to_owned()
                     }
                     Some(base)
                         if crate::features::tabs::tab_model(base, other as HWND).is_none() =>
