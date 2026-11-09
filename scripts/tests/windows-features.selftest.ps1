@@ -377,5 +377,23 @@ foreach ($case in @(@($true, '', $true), @($true, 'WinSta0\rivet-test-1', $false
 if ($breach) { Write-Host "FAIL nfr5_only_the_persons_desktop_has_visible_monitors : $breach cases"; $failures++ }
 else { Write-Host 'ok   nfr5_only_the_persons_desktop_has_visible_monitors' }
 
+# A parked window counts at its nearest monitor's scale only.
+$park = 0
+foreach ($case in @(
+    # Opened on a 200 percent primary, parked nearest a 125 percent monitor.
+    @(@(192, 120), 120, $true),
+    # One monitor at 200 percent: the window dropped to the system scale.
+    @(@(192, 96), 192, $false),
+    # Parked nearest a 125 percent monitor but left at the scale it opened at.
+    @(@(192), 120, $false),
+    @(@(120), 120, $true),
+    # No scale traced, or no monitor read: the scene's own checks say so.
+    @(@(), 120, $true),
+    @(@(192, 96), 0, $true))) {
+  if ([bool](-not (Get-ParkScaleError $case[0] $case[1])) -ne $case[2]) { $park++ }
+}
+if ($park) { Write-Host "FAIL nfr5_a_parked_window_counts_at_its_nearest_monitors_scale_only : $park cases"; $failures++ }
+else { Write-Host 'ok   nfr5_a_parked_window_counts_at_its_nearest_monitors_scale_only' }
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'

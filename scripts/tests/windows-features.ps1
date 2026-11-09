@@ -76,6 +76,10 @@ public static class FeatureWin{
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+ [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h,uint f);
+ [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr m,int type,out uint x,out uint y);
+ // The effective DPI of the monitor nearest the window, or 0 when it cannot be read.
+ public static int NearestMonitorDpi(IntPtr h){uint x,y;return GetDpiForMonitor(MonitorFromWindow(h,2),0,out x,out y)==0?(int)x:0;}
  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h,uint c);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,StringBuilder s,int n);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr GetProp(IntPtr h,string n);
@@ -300,13 +304,12 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
-  # The window must keep the scale it was first laid out at: a park that moves it to another scale
-  # would run every row at a scale no person's window has there.
+  # The parked window must settle at the scale of the monitor it is nearest, as a person's window
+  # there has; Get-ParkScaleError says why another scale does not count.
   $hex = '{0:x}' -f $ctx.Hwnd.ToInt64()
   $scales = @(Read-Log | Where-Object { $_ -match "^layout dpi: window 0x$hex at (\d+)$" } | ForEach-Object { [int]($_ -replace '.* at ', '') })
-  if ($scales.Count -ge 2 -and $scales[0] -ne $scales[-1] -and -not $ctx.Error) {
-    $ctx.Error = "the window's scale changed after it was parked: $($scales[0]) then $($scales[-1])"
-  }
+  $parkScale = Get-ParkScaleError $scales ([FeatureWin]::NearestMonitorDpi($ctx.Hwnd))
+  if ($parkScale -and -not $ctx.Error) { $ctx.Error = $parkScale }
   if ($dpi) { $ctx.Dpi = $dpi } elseif (-not $ctx.Error) { $ctx.Error = 'the runtime traced no scale for the window' }
   # Every scene checks that the attach finished: the browser laid the window out for Rivet's frame.
   if (-not $ctx.Error) {
