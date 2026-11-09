@@ -303,7 +303,7 @@ if ($IsWindows) {
 }
 
 # No runner starts a browser through Start-Process: its -WindowStyle Hidden hands the browser SW_HIDE,
-# which Chromium shows as SW_SHOWNORMAL and then activates.
+# which Chromium shows as SW_SHOWNORMAL and then activates. The spike scripts exist only on develop.
 $scripts = @(Get-ChildItem (Join-Path $PSScriptRoot '*.ps1')) + @(Get-ChildItem (Join-Path $PSScriptRoot 'appspike\*.ps1'))
 $direct = @($scripts | Select-String -Pattern 'Start-Process\s+-FilePath\s+\$(ExePath|ctx\.ExePath|exe|browser|Browser)\b' | ForEach-Object { "$($_.Filename):$($_.LineNumber)" })
 if ($direct.Count) { Write-Host "FAIL nfr5_runners_start_browsers_without_activation : $($direct -join ', ')"; $failures++ }
