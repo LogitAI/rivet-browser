@@ -1588,3 +1588,30 @@ fn nfr6_recipes_read_every_row_value_they_cover_again_from_its_own_module() {
         assert!(derived.read.len() >= 7, "{name}: {:?}", derived.read);
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn nfr6_the_generator_sees_what_a_built_in_row_has_written_by_hand() {
+    let rows = crate::compiled_rows();
+    let chrome = rows
+        .iter()
+        .find(|row| {
+            row["build"]["browser"] == "Google Chrome"
+                && row["build"]["version"] == serde_json::json!([157, 0, 8103, 38])
+        })
+        .expect("Chrome 157.0.8103.38 is built in");
+    let parts: Vec<&str> = chrome["hand_only"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|part| part.as_str())
+        .collect();
+    assert_eq!(
+        parts,
+        [
+            "address bar functions and the app window layout",
+            "page tools",
+            "the bubble anchor"
+        ]
+    );
+}

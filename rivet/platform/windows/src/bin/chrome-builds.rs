@@ -178,7 +178,7 @@ fn port(
             },
         )
         .collect();
-    let (row, report) = row_port::port_row(
+    let (row, mut report) = row_port::port_row(
         &prior,
         &named,
         &NewBuild {
@@ -188,6 +188,7 @@ fn port(
             private: &private,
         },
     );
+    report.review.extend(row_port::hand_only_review(&prior));
     let text = |value: &dyn erased::Json| value.pretty();
     std::fs::write(row_path, text(&row)).map_err(|error| error.to_string())?;
     std::fs::write(report_path, text(&report)).map_err(|error| error.to_string())?;
