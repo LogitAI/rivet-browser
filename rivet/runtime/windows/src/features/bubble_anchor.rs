@@ -351,6 +351,12 @@ pub(crate) fn install() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    const PAGE: Rect = [100, 144, 1200, 800];
+    const ADDRESS: Rect = [300, 108, 600, 28];
+    const CHIP: Rect = [310, 108, 22, 28];
+
     #[test]
     fn fr12_a_chip_over_another_monitor_is_converted_on_the_windows_display() {
         use crate::os::win32::Monitor;
