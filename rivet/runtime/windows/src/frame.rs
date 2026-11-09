@@ -2029,6 +2029,11 @@ unsafe fn relayout(window: HWND) {
     // The frame view lays out again on request, which also works for a maximized window.
     crate::features::vertical_tabs::invalidate_strip(window);
     if frame_layout::relayout(window) {
+        // The frame view lays its client view out again only when the client view's bounds
+        // change, and a new appbar width can leave them as they were while the page area must
+        // move. The browser view lays its page area out again here, as on Brave and Whale it
+        // otherwise waits for the next input.
+        crate::hooks::page_area::relayout(window);
         if is_waiting(window) {
             crate::trace::trace("attach: asked the frame view to lay out again");
         }
