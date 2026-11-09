@@ -251,6 +251,14 @@ pub(crate) fn at_origin(origin: (i32, i32), [x, y, w, h]: [f32; 4]) -> Rect {
     ]
 }
 
+/// The page, address and chip a bubble anchors to: where Chromium puts them when the row lets
+/// Rivet ask it, else where the window's monitor says they are. Chromium places its own bubbles
+/// from the same answer, so a window whose scale differs from its monitor's still gets its bubble
+/// by its address row.
+pub(crate) fn placed(chromium: Option<[Rect; 3]>, monitor: [Rect; 3]) -> [Rect; 3] {
+    chromium.unwrap_or(monitor)
+}
+
 /// The largest distance in DIPs between the same edge of two lists of rects.
 pub(crate) fn largest_difference(one: &[Rect], other: &[Rect]) -> i32 {
     one.iter()
@@ -333,7 +341,7 @@ unsafe extern "system" fn get_anchor_rect(
         ));
         // Where Chromium itself puts the same rows, beside the place derived from the monitor.
         let view = crate::features::frame_layout::frame_view(window).unwrap_or(0);
-        if let Some(origin) = crate::chromium::screen::origin(view) {
+        let own = crate::chromium::screen::origin(view).map(|origin| {
             let own = client.map(|rect| at_origin(origin, rect));
             let off = largest_difference(&own, &[page, address, chip]);
             crate::trace::trace(&format!(
@@ -343,7 +351,9 @@ unsafe extern "system" fn get_anchor_rect(
                 own[2],
                 off <= 1
             ));
-        }
+            own
+        });
+        let [page, address, chip] = placed(own, [page, address, chip]);
         *result = choose(
             *result,
             page,
@@ -449,6 +459,13 @@ mod tests {
             largest_difference(&[ADDRESS, chip], &[ADDRESS, [8977, 16, 22, 28]]),
             441
         );
+        // Chromium's place wins where the row lets Rivet ask; the monitor's stays otherwise, as for
+        // the built-in rows, Whale and Samsung Internet.
+        let monitor = [PAGE, ADDRESS, [8977, 16, 22, 28]];
+        let own = [PAGE, ADDRESS, chip];
+        assert_eq!(placed(Some(own), monitor), own);
+        assert_eq!(placed(None, monitor), monitor);
+        assert_eq!(choose([0, 0, 0, 0], PAGE, own[1], own[2], true), chip);
     }
 
     #[test]
