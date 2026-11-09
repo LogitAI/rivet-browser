@@ -218,17 +218,21 @@ function Start-Scene($Name, $Feature, $Url) {
   return $ctx, $state
 }
 
-# Whether the scene's window is at the off-screen park, 9000,1000 at 1800x1067.
+# Whether the scene's window is at the off-screen park, 9000,1000 at the park size.
 # On a CI runner Windows clamps a window to the runner's small display, so there the park holds
-# when the window is at its place and keeps one size; everywhere else it must also be 1800x1067.
+# when the window is at its place and keeps one size; everywhere else it must also be the park size.
 # The pixel rows read the window's own client size, so they follow the size it kept.
 $script:OnRunner = [bool]$env:GITHUB_ACTIONS
+# The park's size in pixels. RIVET_TEST_PARK_SIZE ("2880x1800") sets another, so a run at a higher
+# scale can keep the window as wide in DIPs as a run at a lower one.
+$script:ParkW = 1800; $script:ParkH = 1067
+if ($env:RIVET_TEST_PARK_SIZE -match '^(\d+)x(\d+)$') { $script:ParkW = [int]$Matches[1]; $script:ParkH = [int]$Matches[2] }
 $script:ParkedSize = $null
 function Test-Parked($ctx) {
   $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
   $size = '{0}x{1}' -f ($r.Ri - $r.L), ($r.B - $r.T)
   $placed = $r.L -eq 9000 -and $r.T -eq 1000
-  if (-not $script:OnRunner) { return $placed -and $size -eq '1800x1067' }
+  if (-not $script:OnRunner) { return $placed -and $size -eq ('{0}x{1}' -f $script:ParkW, $script:ParkH) }
   if (-not $placed) { return $false }
   $stable = $script:ParkedSize -eq $size
   $script:ParkedSize = $size
@@ -272,12 +276,12 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   $held = 0
   foreach ($try in 1..60) {
     if (Test-Parked $ctx) { $held++; if ($held -ge 6) { break } }
-    else { $held = 0; [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, 1800, 1067, 0x14) | Out-Null }
+    else { $held = 0; [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, $script:ParkW, $script:ParkH, 0x14) | Out-Null }
     Start-Sleep -Milliseconds 250
   }
   if ($held -lt 6 -and -not $ctx.Error) {
     $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
-    $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not 9000,1000 1800x1067"
+    $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not 9000,1000 $($script:ParkW)x$($script:ParkH)"
   }  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
