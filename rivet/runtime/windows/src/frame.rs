@@ -3125,12 +3125,14 @@ pub(crate) unsafe fn update_top_bar(window: HWND) {
     if crate::features::address_bar::busy() {
         return;
     }
+    let mut laps = Laps::start();
     let dpi = layout_dpi(window);
     let top_bar = if framed(window) {
         crate::features::address_bar::view(window)
     } else {
         None
     };
+    laps.mark("view");
     APPBARS.with(|appbars| {
         if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
             if let Err(error) = appbar.update_address(window as isize, top_bar.as_ref(), dpi) {
@@ -3138,6 +3140,10 @@ pub(crate) unsafe fn update_top_bar(window: HWND) {
             }
         }
     });
+    laps.mark("paint");
+    if laps.total_us() >= SLOW_UPDATE_US && crate::trace::tracing() {
+        crate::trace::trace(&laps.line().replacen("appbar:", "top bar:", 1));
+    }
 }
 
 /// The steps of one surface update and how long each took, in microseconds.

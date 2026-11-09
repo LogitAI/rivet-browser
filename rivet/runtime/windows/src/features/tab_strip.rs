@@ -147,6 +147,11 @@ const BOUNDS: usize = 0x1C0;
 /// A word of memory that may not belong to a view, read so that a wrong guess cannot fault.
 unsafe fn read(address: usize, bytes: usize, out: *mut u8) -> bool {
     use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+    // Memory known readable is copied in place, without a system call for every word.
+    if address > 0x10000 && crate::chromium::memory::readable(address, bytes) {
+        std::ptr::copy_nonoverlapping(address as *const u8, out, bytes);
+        return true;
+    }
     address > 0x10000
         && ReadProcessMemory(
             windows_sys::Win32::System::Threading::GetCurrentProcess(),
