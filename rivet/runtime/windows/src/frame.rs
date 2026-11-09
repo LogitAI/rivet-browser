@@ -3460,7 +3460,17 @@ fn panel_moved(window: HWND) {
                 }
             }
         });
+        // The top bar is the panel's first row, so it moves with the panel. It is painted after
+        // this layout, never inside it, and until then its old place would show where the bar no
+        // longer takes clicks, as after the appbar folds.
+        PostMessageW(window, bar_moved_message(), 0, 0);
     }
+}
+
+const BAR_MOVED_MESSAGE: &str = "Rivet.BarMoved";
+
+fn bar_moved_message() -> u32 {
+    unsafe { RegisterWindowMessageW(wide(BAR_MOVED_MESSAGE).as_ptr()) }
 }
 
 /// The thickness of the visible window border along the top edge. A maximized window has none.
@@ -3589,6 +3599,11 @@ unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
         && row_hit(window, point).is_none()
         && crate::dev_bar::hit(window, point).is_none()
     {
+        // The bar's controls are Rivet's, at the places it painted them, whatever the browser's
+        // own hit test would say of its title bar there.
+        if crate::features::address_bar::part_at(window, point).is_some() {
+            return StripHit::Client;
+        }
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(window, &mut client);
         // The panel starts one gap below the client area's top edge, so the row is measured from it.
@@ -3765,6 +3780,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
     }
     if message == toggle_message() && attached(window) {
         toggle_appbar(window);
+        return 0;
+    }
+    if message == bar_moved_message() && attached(window) {
+        update_top_bar(window);
         return 0;
     }
     // Rivet's top bar takes the pointer over it and, while its address is edited, the keyboard and
@@ -4145,6 +4164,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             StripHit::Top => HTTOP as LRESULT,
             StripHit::TopLeft => HTTOPLEFT as LRESULT,
             StripHit::Appbar | StripHit::Resizer => APPBAR_HIT as LRESULT,
+            StripHit::Client => 1, // HTCLIENT
             StripHit::Minimize => HTMINBUTTON as LRESULT,
             StripHit::Maximize => HTMAXBUTTON as LRESULT,
             StripHit::Close => HTCLOSE as LRESULT,

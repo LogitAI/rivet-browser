@@ -692,14 +692,22 @@ pub(crate) unsafe fn with_field_pixels<R>(
     })
 }
 
-unsafe fn part_at(window: HWND, point: POINT) -> Option<Part> {
+/// The control of the top bar under a client pixel. The window's hit test asks it too, so the bar
+/// takes the clicks of its controls wherever the browser would put its own title bar.
+pub(crate) unsafe fn part_at(window: HWND, point: POINT) -> Option<Part> {
     let [x, y, width] = place(window)?;
     let f = factor(window);
     let (px, py) = (point.x as f32 / f - x, point.y as f32 / f - y);
+    part_in(width, in_pane(window), dev_reserve(window), px, py)
+}
+
+/// The control of a bar `width` DIPs wide at `px`, `py` DIPs from its top left corner, from the
+/// same places the bar is painted at.
+pub(crate) fn part_in(width: f32, pane: bool, reserve: f32, px: f32, py: f32) -> Option<Part> {
     if py < 0.0 || py >= ROW_HEIGHT as f32 {
         return None;
     }
-    let parts = parts_reserving(width, in_pane(window), dev_reserve(window));
+    let parts = parts_reserving(width, pane, reserve);
     // The chip lies inside the address, so it is looked for first.
     parts
         .iter()
@@ -1708,6 +1716,27 @@ pub(crate) fn caret(window: HWND) -> Option<RECT> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_each_control_answers_where_it_is_painted_shown_and_folded() {
+        // A bar beside the shown appbar and the wider bar of a folded one, as the browser lays
+        // the panel out for each.
+        for width in [1156.0, 1422.0] {
+            for (part, at, w) in parts_reserving(width, false, 0.0) {
+                if part == Part::Chip {
+                    continue;
+                }
+                let middle = at + w / 2.0;
+                assert_eq!(
+                    part_in(width, false, 0.0, middle, ROW_HEIGHT as f32 / 2.0),
+                    Some(part),
+                    "{part:?} of a {width} DIP bar"
+                );
+            }
+            assert_eq!(part_in(width, false, 0.0, 10.0, -1.0), None);
+            assert_eq!(part_in(width, false, 0.0, 10.0, ROW_HEIGHT as f32), None);
+        }
+    }
 
     #[test]
     fn nfr2_one_key_asks_the_browser_once_and_rivets_own_completion_never() {
