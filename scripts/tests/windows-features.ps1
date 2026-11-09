@@ -3051,6 +3051,92 @@ function Invoke-AddressTyping($Name, $shots) {
   } finally { Stop-Scene $ctx }
 }
 
+# FR-12: the top bar's controls answer where they are drawn, with the appbar shown and folded.
+# The runtime traces where it painted each control in client pixels. Each control's middle must
+# hold what was drawn there, the window's hit test must give it to the control (the client area for
+# the bar, the caption codes for the window buttons), and a click there must reach it. Window
+# buttons are only hit-tested, never clicked.
+function Get-PaintedBar {
+  $line = @(Read-Log | Where-Object { $_ -match '^address bar: painted at ' }) | Select-Object -Last 1
+  if (-not $line -or $line -notmatch 'painted at (-?\d+) (-?\d+) (\d+)x(\d+) px: (.*)$') { return $null }
+  $bar = [pscustomobject]@{ Line = $line; X = [int]$Matches[1]; Y = [int]$Matches[2]; W = [int]$Matches[3]; H = [int]$Matches[4]; Parts = @{} }
+  foreach ($m in [regex]::Matches($Matches[5], '(\w+) (-?\d+) (-?\d+)')) { $bar.Parts[$m.Groups[1].Value] = @([int]$m.Groups[2].Value, [int]$m.Groups[3].Value) }
+  $bar
+}
+
+# How many pixels of a capture between columns X0 and X1 and rows Y0 and Y1 are dark, as a glyph's ink is.
+function Get-InkCount($Capture, [int]$X0, [int]$X1, [int]$Y0, [int]$Y1) {
+  $n = 0
+  for ($y = [Math]::Max(0, $Y0); $y -lt [Math]::Min($Capture.Height, $Y1); $y++) {
+    for ($x = [Math]::Max(0, $X0); $x -lt [Math]::Min($Capture.Width, $X1); $x++) {
+      $p = $Capture.Pixels[$y * $Capture.Width + $x]
+      if (((($p -shr 16) -band 255) + (($p -shr 8) -band 255) + ($p -band 255)) -lt 330) { $n++ }
+    }
+  }
+  $n
+}
+
+# What is wrong with the bar's controls of the window as it is now, as a list; empty when nothing is.
+function Test-BarControls($ctx, [string]$Stage, $Capture) {
+  $bar = Get-PaintedBar
+  if (-not $bar) { return @("$Stage`: the runtime traced no painted bar") }
+  $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
+  $o = New-Object FeatureWin+P; $o.X = 0; $o.Y = 0
+  [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$o) | Out-Null
+  $dx = $o.X - $r.L; $dy = $o.Y - $r.T
+  $cy = $bar.Y + [int]($bar.H / 2)
+  $codes = @{ Minimize = 8; Maximize = 9; Close = 20 }
+  $bad = @()
+  foreach ($name in 'Back', 'Forward', 'Reload', 'Address', 'Minimize', 'Maximize', 'Close') {
+    $p = $bar.Parts[$name]
+    if (-not $p) { $bad += "$Stage`: $name was not painted"; continue }
+    $cx = [int](($p[0] + $p[1]) / 2)
+    $want = if ($codes.ContainsKey($name)) { $codes[$name] } else { 1 }
+    $hit = Get-HitTest $ctx ($cx + $dx) ($cy + $dy)
+    if ($hit -ne $want) { $bad += "$Stage`: $name painted at $($p[0])-$($p[1]) hits $hit at its middle, not $want"; continue }
+    if ($name -in 'Back', 'Reload', 'Close') {
+      $ink = Get-InkCount $Capture ($p[0] + $dx) ($p[1] + $dx) ($bar.Y + $dy) ($bar.Y + $bar.H + $dy)
+      if ($ink -lt 4) { $bad += "$Stage`: nothing is drawn where $name was painted ($($p[0])-$($p[1]))"; continue }
+    }
+    if ($codes.ContainsKey($name)) { continue }
+    $before = @(Read-Log).Count
+    Send-ClientMouse $ctx 0x201 $cx $cy 1
+    Start-Sleep -Milliseconds 120
+    Send-ClientMouse $ctx 0x202 $cx $cy
+    $answer = if ($name -eq 'Address') { '^address bar: editing begins' } else { "^address bar: act $name$" }
+    if (-not (Wait-Log $before $answer 5)) { $bad += "$Stage`: a click on the middle of $name did not reach it" }
+    if ($name -eq 'Address') { foreach ($i in 1..3) { Send-Key $ctx 0x1B; Start-Sleep -Milliseconds 300 } }
+    Start-Sleep -Milliseconds 600
+  }
+  $bad
+}
+
+function Invoke-BarFolded($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'bar-folded' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    $one = Get-Capture $ctx (Join-Path $shots 'bar-folded-1-open.png')
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
+    $notes = @()
+    $open = @(Test-BarControls $ctx 'shown' $one)
+    $notes += (Get-PaintedBar).Line -replace '^address bar: ', 'shown: '
+    Send-RivetMessage $ctx 'Rivet.ToggleAppbar'
+    Start-Sleep 4
+    $folded = Get-Capture $ctx (Join-Path $shots 'bar-folded-2-folded.png')
+    $fold = @(Test-BarControls $ctx 'folded' $folded)
+    $notes += (Get-PaintedBar).Line -replace '^address bar: ', 'folded: '
+    Send-RivetMessage $ctx 'Rivet.ToggleAppbar'
+    Start-Sleep 4
+    $back = Get-Capture $ctx (Join-Path $shots 'bar-folded-3-shown.png')
+    $again = @(Test-BarControls $ctx 'shown again' $back)
+    $bad = @($open + $fold + $again)
+    if ($bad.Count) { return @('FAIL', $folded.Path, (($bad -join '; ') + '. ' + ($notes -join '; '))) }
+    @('PASS', $folded.Path, 'back, forward, reload, the address and the window buttons answer where they are drawn, shown, folded and shown again. ' + ($notes -join '; '))
+  } finally { Stop-Scene $ctx }
+}
+
 # --- Run safety -----------------------------------------------------------------------------
 # Every row runs under RIVET_KEEP_OFFSCREEN with its Rivet files in this run's folder, and the
 # visible guard stops the run when a test window shows on a monitor, takes the foreground or holds
@@ -3103,6 +3189,7 @@ foreach ($name in $Browsers) {
         'split-grid-3' { Invoke-SplitGrid $name $shots 'split-grid-3' }
         'split-grid-4' { Invoke-SplitGrid $name $shots 'split-grid-4' }
         'bar-layout' { Invoke-BarLayout $name $shots }
+        'bar-folded' { Invoke-BarFolded $name $shots }
         'mini-pop-out' { Invoke-Mini $name $shots 'pop-out' }
         'mini-move' { Invoke-Mini $name $shots 'move' }
         'mini-return' { Invoke-Mini $name $shots 'return' }
