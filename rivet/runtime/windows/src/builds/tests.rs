@@ -111,7 +111,8 @@ fn nfr3_chrome_156_frame_paint_prologues_match_the_installed_build() {
 
 #[test]
 fn nfr6_the_launcher_opens_exactly_the_complete_rows() {
-    use rivet_platform_windows::hold::{module_of, table_versions, VERIFIED};
+    use rivet_platform_windows::hold::{module_of, table_versions, verified};
+    let verified = verified();
     // Chrome 150 only keeps the frame hooks, so a window of it would not have Rivet's top row.
     let complete: Vec<_> = all()
         .iter()
@@ -119,7 +120,7 @@ fn nfr6_the_launcher_opens_exactly_the_complete_rows() {
         .collect();
     assert_eq!(
         complete.len(),
-        VERIFIED.len(),
+        verified.len(),
         "the launcher's list and the table differ"
     );
     for build in complete {
@@ -132,7 +133,7 @@ fn nfr6_the_launcher_opens_exactly_the_complete_rows() {
             other => panic!("no launcher name for {other:?}"),
         };
         assert!(
-            VERIFIED.contains(&(executable, build.version)),
+            verified.contains(&(executable, build.version)),
             "{executable} {:?}",
             build.version
         );
