@@ -22,7 +22,9 @@ param(
   # A browser build outside its usual folder, such as one a row job downloaded. Needs one -Browsers.
   [string]$Executable,
   # The run stops before a row when the output drive has less free space than this.
-  [double]$MinFreeGigabytes = 20
+  [double]$MinFreeGigabytes = 20,
+  # Builds and runs the optimised build, as the installer ships it, for timing rows.
+  [switch]$Release
 )
 $ErrorActionPreference = 'Continue'
 # The whole run, its build and every browser, runs on a desktop of its own.
@@ -34,7 +36,7 @@ $Browsers = @($Browsers | ForEach-Object { $_ -split ',' })
 $Features = @($Features | ForEach-Object { $_ -split ',' })
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $root = Join-Path $repo 'rivet'
-$debug = Join-Path $root 'target\debug'
+$debug = Join-Path $root $(if ($Release) { 'target\release' } else { 'target\debug' })
 
 # Debug switches and the trace of one launch live in its own test profile, `rivet-debug`, which only
 # that browser process reads. Tests of other checkouts on this machine never take its commands.
@@ -177,7 +179,7 @@ if ($NoBuild) {
   [IO.File]::WriteAllText($f, $orig.Replace($marker, "$push $marker"))
   Push-Location $root
   try {
-    $output = & $cargo build -q 2>&1
+    $output = if ($Release) { & $cargo build -q --release 2>&1 } else { & $cargo build -q 2>&1 }
     $code = $LASTEXITCODE
     if ($code -ne 0) { $output | Select-Object -Last 40 | ForEach-Object { Write-Host $_ } }
   } finally { Pop-Location; [IO.File]::WriteAllText($f, $orig) }
