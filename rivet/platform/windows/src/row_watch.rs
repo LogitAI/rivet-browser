@@ -216,6 +216,7 @@ pub const FEATURES: &[&str] = &[
     "split-grid-3",
     "split-grid-4",
     "bar-layout",
+    "bar-folded",
     "mini-pop-out",
     "mini-move",
     "mini-return",
