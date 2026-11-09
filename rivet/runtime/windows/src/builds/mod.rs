@@ -930,9 +930,27 @@ pub fn get() -> &'static Build {
 /// The rows that came as data with this binary, which needed no code change to add.
 pub const CHECKED_IN: &str = include_str!("../../rows/table.json");
 
+/// How many optional parts a row has: the app window and the address bar functions.
+fn parts(build: &Build) -> usize {
+    usize::from(build.app_window.is_some()) + usize::from(build.omnibox.is_some())
+}
+
 /// The rows in the order they are tried: a signed row first, since it can replace one that shipped.
+/// A signed row with fewer parts than the row that shipped for the same build never replaces it,
+/// so a table made by an older generator cannot turn features off.
 pub fn in_order(signed: Vec<&'static Build>, compiled: &[&'static Build]) -> Vec<&'static Build> {
-    signed.into_iter().chain(compiled.iter().copied()).collect()
+    signed
+        .into_iter()
+        .filter(|row| {
+            !compiled.iter().any(|known| {
+                known.browser == row.browser
+                    && known.module == row.module
+                    && known.version == row.version
+                    && parts(row) < parts(known)
+            })
+        })
+        .chain(compiled.iter().copied())
+        .collect()
 }
 
 struct Loaded {

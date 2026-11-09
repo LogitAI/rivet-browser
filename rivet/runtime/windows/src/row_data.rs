@@ -350,6 +350,33 @@ mod tests {
     }
 
     #[test]
+    fn nfr6_a_signed_row_with_fewer_parts_never_replaces_the_shipped_row() {
+        let shipped = &builds::CHROME_157_38;
+        assert!(shipped.omnibox.is_some());
+        // A row of the same build from an older generator, without the address bar functions.
+        let mut older = shipped.to_row();
+        older.as_object_mut().unwrap().remove("omnibox");
+        let older: &'static builds::Build =
+            Box::leak(Box::new(builds::Build::from_row(&older).unwrap()));
+        assert!(older.omnibox.is_none());
+        let order = builds::in_order(vec![older], builds::compiled());
+        assert!(!order.iter().any(|row| std::ptr::eq(*row, older)));
+        let first = order
+            .iter()
+            .find(|row| row.browser == shipped.browser && row.version == shipped.version)
+            .unwrap();
+        assert!(first.omnibox.is_some());
+        // A signed row with as many parts still comes first.
+        let same: &'static builds::Build = Box::leak(Box::new(
+            builds::Build::from_row(&shipped.to_row()).unwrap(),
+        ));
+        assert!(std::ptr::eq(
+            builds::in_order(vec![same], builds::compiled())[0],
+            same
+        ));
+    }
+
+    #[test]
     fn nfr6_the_checked_in_table_is_valid_and_every_row_reads() {
         let table = signed_table::parse(builds::CHECKED_IN.as_bytes()).unwrap();
         assert!(table_rows(&table).refused.is_empty());
