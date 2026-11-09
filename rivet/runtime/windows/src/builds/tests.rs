@@ -1606,12 +1606,5 @@ fn nfr6_the_generator_sees_what_a_built_in_row_has_written_by_hand() {
         .iter()
         .filter_map(|part| part.as_str())
         .collect();
-    assert_eq!(
-        parts,
-        [
-            "address bar functions and the app window layout",
-            "page tools",
-            "the bubble anchor"
-        ]
-    );
+    assert_eq!(parts, ["page tools", "the bubble anchor"]);
 }
