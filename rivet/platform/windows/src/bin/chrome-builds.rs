@@ -713,8 +713,12 @@ fn gate(results: &Path, browser: &str) -> Result<(), String> {
     // PowerShell writes UTF-8 with a byte order mark.
     let results: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .map_err(|error| format!("the feature results are not JSON: {error}"))?;
-    row_watch::publish_gate(&results, browser)
-        .map_err(|reasons| format!("{browser} is not supported: {}", reasons.join("; ")))
+    let notes = row_watch::publish_gate(&results, browser)
+        .map_err(|reasons| format!("{browser} is not supported: {}", reasons.join("; ")))?;
+    for note in notes {
+        println!("note: {note}");
+    }
+    Ok(())
 }
 
 /// Adds the function fingerprints of a verified row, read from its own module, so a runtime can
