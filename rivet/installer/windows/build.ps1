@@ -70,6 +70,13 @@ Copy-Item (Join-Path $installer "setup-ui\assets\logo.ico") (Join-Path $stage "r
 Copy-Item (Join-Path $repository "LICENSE") (Join-Path $stage "LICENSE")
 Copy-Item (Join-Path $rivet "runtime\windows\fonts\OFL-*.txt") $stage
 
+# A binary built for the feature tests starts browsers with sync and sign-in off. It never ships.
+. (Join-Path $installer "test-flags.ps1")
+$tainted = @(Get-TestFlagBinaries @(Get-ChildItem $stage -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' } | ForEach-Object FullName))
+if ($tainted.Count -gt 0) {
+    throw "built with the feature tests' browser switches, which turn sync and sign-in off: $($tainted -join ', '). Build again without them."
+}
+
 # Authenticode: with RIVET_CODE_SIGN_CERT (a certificate thumbprint in the build account's store),
 # every program file, the package and setup.exe are signed, so Windows can tell a changed file.
 # RIVET_TIMESTAMP_URL is the RFC 3161 timestamp service of the certificate's issuer. The timestamp

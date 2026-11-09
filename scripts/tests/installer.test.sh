@@ -43,3 +43,23 @@ for needle in 'release-sign $Version $manifest $setup $msi' 'release-check $mani
     fi
 done
 echo "ok    fr8 a release is signed and hash-checked when it is built"
+
+# NFR-5: a package is never made from a binary built with the feature tests' switches, which start
+# the browser with sync and sign-in off.
+if ! grep -qF 'Get-TestFlagBinaries' "$build"; then
+    echo "nfr5: build.ps1 does not refuse binaries built with test switches" >&2
+    exit 1
+fi
+if command -v pwsh >/dev/null 2>&1; then
+    probe="$repo_root/rivet/target/installer-test-flags"
+    rm -rf "$probe" && mkdir -p "$probe"
+    printf 'MZ ... arguments --no-first-run --lang=en-US ...' >"$probe/clean.exe"
+    printf 'MZ ... --disable-sync --disable-features=msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion,Translate ...' >"$probe/tainted.exe"
+    found="$(pwsh -NoProfile -Command ". '$repo_root/rivet/installer/windows/test-flags.ps1'; Get-TestFlagBinaries @('$probe/clean.exe', '$probe/tainted.exe') | ForEach-Object { Split-Path -Leaf \$_ }")"
+    rm -rf "$probe"
+    if [ "$found" != "tainted.exe" ]; then
+        echo "nfr5: the test switch check found '$found', not only tainted.exe" >&2
+        exit 1
+    fi
+fi
+echo "ok    nfr5 a package never carries a binary built with the feature tests' switches"
