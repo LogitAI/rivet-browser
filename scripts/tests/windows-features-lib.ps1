@@ -497,3 +497,15 @@ function Test-FirstFrames($Frames, $Steady, [int]$X0, [int]$X1, [int]$Y1) {
 function Test-VisibleBreach([bool]$OnMonitor, [string]$TestDesktop) {
   $OnMonitor -and -not $TestDesktop
 }
+
+# Why a parked window's scale does not count, or $null when it does. `Scales` are the layout DPIs
+# the runtime traced for the window, first to last, and `MonitorDpi` is the DPI of the monitor the
+# park is nearest. A window opened on one monitor and parked nearest another of another scale
+# rightly takes that monitor's scale. Any other scale, such as the system scale a window level with
+# a monitor's band can drop to, would run every row at a scale no person's window has there.
+function Get-ParkScaleError([int[]]$Scales, [int]$MonitorDpi) {
+  if (-not $Scales -or $Scales.Count -eq 0 -or $MonitorDpi -le 0) { return $null }
+  $settled = $Scales[-1]
+  if ($settled -eq $MonitorDpi) { return $null }
+  "the parked window settled at scale $settled (first $($Scales[0])), not at its nearest monitor's $MonitorDpi"
+}
