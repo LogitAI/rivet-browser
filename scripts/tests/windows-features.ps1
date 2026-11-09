@@ -227,11 +227,15 @@ $script:OnRunner = [bool]$env:GITHUB_ACTIONS
 # The park's size in pixels. RIVET_TEST_PARK_SIZE ("2880x1800") sets another, so a run at a higher
 # scale can keep the window as wide in DIPs as a run at a lower one.
 $script:ParkW = 1800; $script:ParkH = 1067
-# The park's top is level with the primary monitor's top, right of every monitor: a bubble the browser
-# fits onto a display then stays by the window's row, which a park below every monitor's band
-# could not show.
-Add-Type -AssemblyName System.Windows.Forms
-$script:ParkY = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Y
+# The park's top is at 1000. Level with a monitor's band, a window can drop to the system scale instead
+# of its monitor's, as on a single 200 percent monitor. A CI runner's system and monitor scale are the
+# same, so there the park sits level with the primary monitor, where a bubble the browser fits onto
+# the display stays by the window's row.
+$script:ParkY = 1000
+if ($script:OnRunner) {
+  Add-Type -AssemblyName System.Windows.Forms
+  $script:ParkY = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Y
+}
 if ($env:RIVET_TEST_PARK_SIZE -match '^(\d+)x(\d+)$') { $script:ParkW = [int]$Matches[1]; $script:ParkH = [int]$Matches[2] }
 $script:ParkedSize = $null
 function Test-Parked($ctx) {
@@ -292,9 +296,17 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
     $alive = @(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count
     $dumps = @(Get-ChildItem (Join-Path $ctx.Profile 'Crashpad\reports') -Filter *.dmp -ErrorAction SilentlyContinue).Count
     $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not 9000,$($script:ParkY) $($script:ParkW)x$($script:ParkH); window alive $([FeatureWin]::IsWindow($ctx.Hwnd)), $alive browser processes, $dumps crash reports"
-  }  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
+  }
+  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
+  # The window must keep the scale it was first laid out at: a park that moves it to another scale
+  # would run every row at a scale no person's window has there.
+  $hex = '{0:x}' -f $ctx.Hwnd.ToInt64()
+  $scales = @(Read-Log | Where-Object { $_ -match "^layout dpi: window 0x$hex at (\d+)$" } | ForEach-Object { [int]($_ -replace '.* at ', '') })
+  if ($scales.Count -ge 2 -and $scales[0] -ne $scales[-1] -and -not $ctx.Error) {
+    $ctx.Error = "the window's scale changed after it was parked: $($scales[0]) then $($scales[-1])"
+  }
   if ($dpi) { $ctx.Dpi = $dpi } elseif (-not $ctx.Error) { $ctx.Error = 'the runtime traced no scale for the window' }
   # Every scene checks that the attach finished: the browser laid the window out for Rivet's frame.
   if (-not $ctx.Error) {
