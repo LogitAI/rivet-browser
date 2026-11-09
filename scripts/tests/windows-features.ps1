@@ -2365,7 +2365,9 @@ function Test-BubbleNearBar($ctx, $Bubble, $Anchors) {
     # instead, and the bubble's top by the row.
     $chosen = Get-ChosenAnchor
     if (-not $chosen) { return New-Verdict 'FAIL' 'the runtime traced no anchor for the bubble' }
-    $mx = ($w.L + $w.Ri) / 2; $my = ($w.T + $w.B) / 2
+    # The anchor is converted at the display nearest the window's client origin, as Chromium
+    # converts a screen point; the window's middle can be on another monitor.
+    $mx = $o.ScreenX; $my = $o.ScreenY
     $near = $mons | Sort-Object { [Math]::Max(0, [Math]::Max($_.Rect[0] - $mx, $mx - $_.Rect[2])) + [Math]::Max(0, [Math]::Max($_.Rect[1] - $my, $my - $_.Rect[3])) } | Select-Object -First 1
     $primary = $mons | Where-Object { $_.Primary } | Select-Object -First 1
     $target = if ($Bubble.PageInfo) { $Anchors.Chip } else { $Anchors.Address }

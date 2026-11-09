@@ -217,7 +217,7 @@ unsafe fn to_screen(window: HWND, [x, y, w, h]: [f32; 4]) -> Rect {
     let factor = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
     let mut origin = POINT { x: 0, y: 0 };
     ClientToScreen(window, &mut origin);
-    let (ox, oy) = match crate::os::win32::monitors_of(window) {
+    let (ox, oy) = match crate::os::win32::monitors_at(origin.x, origin.y) {
         Some((near, primary)) => to_dips(
             (origin.x as f32, origin.y as f32),
             (near.rect, factor),
