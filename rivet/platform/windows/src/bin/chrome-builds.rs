@@ -83,7 +83,10 @@ fn main() -> ExitCode {
         ["table-sign", table, signed, published] => {
             table_sign(Path::new(table), Path::new(signed), Some(Path::new(published)))
         }
-        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> <module> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file]".into()),
+        ["table-withdraw", published, signed, builds @ ..] if !builds.is_empty() => {
+            table_withdraw(Path::new(published), Path::new(signed), builds)
+        }
+        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> <module> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -300,6 +303,37 @@ fn table_sign(table: &Path, signed: &Path, published: Option<&Path>) -> Result<(
         "sequence {}, {} rows",
         merged["sequence"],
         merged["rows"].as_array().map_or(0, Vec::len)
+    );
+    Ok(())
+}
+
+/// Signs the published table again without the rows of `builds`, each `browser@version`.
+fn table_withdraw(published: &Path, signed: &Path, builds: &[&str]) -> Result<(), String> {
+    let private = std::env::var("RIVET_TABLE_SIGNING_KEY")
+        .map_err(|_| "RIVET_TABLE_SIGNING_KEY is not set")?;
+    let public =
+        std::env::var("RIVET_TABLE_PUBLIC_KEY").map_err(|_| "RIVET_TABLE_PUBLIC_KEY is not set")?;
+    let table = signed_table::parse(signed_table::open(&public, &read(published)?)?)?;
+    let pairs = builds
+        .iter()
+        .map(|build| {
+            build
+                .split_once('@')
+                .ok_or(format!("{build} is not browser@version"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    let table = signed_table::withdraw_rows(&table, &pairs, now)?;
+    let payload = serde_json::to_vec(&table).map_err(|error| error.to_string())?;
+    std::fs::write(signed, signed_table::sign(&private, &payload)?)
+        .map_err(|error| error.to_string())?;
+    println!(
+        "sequence {}, {} rows",
+        table["sequence"],
+        table["rows"].as_array().map_or(0, Vec::len)
     );
     Ok(())
 }

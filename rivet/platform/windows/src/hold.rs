@@ -644,7 +644,6 @@ mod tests {
     fn nfr6_a_row_recorded_in_the_checked_in_table_needs_no_hand_edit() {
         let all = verified();
         // Rows the table job recorded, read from the checked-in table.
-        assert!(all.contains(&("chrome.exe", [157, 0, 8103, 39])));
         assert!(all.contains(&("msedge.exe", [156, 0, 4314, 58])));
         // Hand rows stay, and no build is listed twice.
         assert!(all.contains(&("chrome.exe", [157, 0, 8103, 38])));

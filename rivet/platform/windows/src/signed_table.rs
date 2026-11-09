@@ -155,6 +155,35 @@ pub fn read_store(store: &Path, public_key: &str) -> Result<Option<Value>, Strin
 }
 
 /// Puts a generated row into a table's rows, replacing one of the same browser and version.
+/// The published table without the rows of `builds`, each a browser and its version as the row's
+/// frame names them, under a newer sequence so every Rivet that applied the published one takes
+/// it. Signing merges rows into the published table and never drops one, so a row that turned out
+/// to lack what its features need is taken back this way. Fails when a build has no row.
+pub fn withdraw_rows(
+    published: &Value,
+    builds: &[(&str, &str)],
+    now: u64,
+) -> Result<Value, String> {
+    let mut table = published.clone();
+    let rows = table["rows"]
+        .as_array_mut()
+        .ok_or("the table has no rows")?;
+    for (browser, version) in builds {
+        let before = rows.len();
+        rows.retain(|row| {
+            !(row["frame"]["browser"] == *browser && row["frame"]["version"] == *version)
+        });
+        if rows.len() == before {
+            return Err(format!(
+                "the published table has no row for {browser} {version}"
+            ));
+        }
+    }
+    let after = published["sequence"].as_u64().unwrap_or(0) + 1;
+    table["sequence"] = now.max(after).into();
+    Ok(table)
+}
+
 pub fn upsert_row(table: &mut Value, row: Value) -> Result<(), String> {
     let identity = |row: &Value| {
         (
@@ -564,6 +593,36 @@ mod http {
 mod tests {
     use super::*;
 
+    #[test]
+    fn nfr6_a_withdrawn_row_leaves_the_table_under_a_newer_sequence() {
+        let published = serde_json::json!({
+            "schema": 1,
+            "sequence": 100,
+            "symbols": {},
+            "rows": [
+                { "frame": { "browser": "Google Chrome", "version": "157.0.8103.38" } },
+                { "frame": { "browser": "Google Chrome", "version": "157.0.8103.39" } },
+                { "frame": { "browser": "Microsoft Edge", "version": "156.0.4314.58" } }
+            ]
+        });
+        let table = withdraw_rows(&published, &[("Google Chrome", "157.0.8103.39")], 50).unwrap();
+        let left: Vec<_> = table["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["frame"]["version"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(left, ["157.0.8103.38", "156.0.4314.58"]);
+        // Newer than the published table, so a Rivet that applied it takes this one.
+        assert_eq!(table["sequence"], 101);
+        assert_eq!(
+            withdraw_rows(&published, &[("Google Chrome", "157.0.8103.39")], 500).unwrap()
+                ["sequence"],
+            500
+        );
+        // A build with no row is an error, never a silent no-op.
+        assert!(withdraw_rows(&published, &[("Brave", "1.2.3.4")], 50).is_err());
+    }
     fn folder(name: &str) -> rivet_core::paths::TestDir {
         rivet_core::paths::TestDir::new(&format!("rivet-table-{name}"))
     }
