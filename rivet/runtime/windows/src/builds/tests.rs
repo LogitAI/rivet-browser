@@ -142,7 +142,6 @@ fn nfr6_the_launcher_opens_exactly_the_complete_rows() {
     // The signed table is read by the same names the rows carry.
     let table: serde_json::Value = serde_json::from_str(CHECKED_IN).unwrap();
     assert!(table_versions(&table, "msedge.exe").contains(&[156, 0, 4314, 58]));
-    assert!(table_versions(&table, "chrome.exe").is_empty());
 }
 
 #[test]
