@@ -219,9 +219,20 @@ function Start-Scene($Name, $Feature, $Url) {
 }
 
 # Whether the scene's window is at the off-screen park, 9000,1000 at 1800x1067.
+# On a CI runner Windows clamps a window to the runner's small display, so there the park holds
+# when the window is at its place and keeps one size; everywhere else it must also be 1800x1067.
+# The pixel rows read the window's own client size, so they follow the size it kept.
+$script:OnRunner = [bool]$env:GITHUB_ACTIONS
+$script:ParkedSize = $null
 function Test-Parked($ctx) {
   $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
-  $r.L -eq 9000 -and $r.T -eq 1000 -and ($r.Ri - $r.L) -eq 1800 -and ($r.B - $r.T) -eq 1067
+  $size = '{0}x{1}' -f ($r.Ri - $r.L), ($r.B - $r.T)
+  $placed = $r.L -eq 9000 -and $r.T -eq 1000
+  if (-not $script:OnRunner) { return $placed -and $size -eq '1800x1067' }
+  if (-not $placed) { return $false }
+  $stable = $script:ParkedSize -eq $size
+  $script:ParkedSize = $size
+  $stable
 }
 
 function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
