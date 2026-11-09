@@ -396,8 +396,13 @@ function Get-AttachFailure($ctx) {
 # Stops the scene's browser, keeps its trace under the run's `traces` folder and deletes its test
 # profile, so a long run does not fill the disk. Captures are kept where they were written.
 function Stop-Scene($ctx) {
-  Stop-Mine $ctx.ExeName $ctx.Profile
-  for ($i = 0; $i -lt 20 -and @(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count -gt 0; $i++) { Start-Sleep -Milliseconds 250 }
+  # A browser can start one more process of the profile while it is being stopped, as a launcher
+  # handing on a link does, so the stop is repeated until none is left.
+  for ($i = 0; $i -lt 20; $i++) {
+    Stop-Mine $ctx.ExeName $ctx.Profile
+    Start-Sleep -Milliseconds 250
+    if (@(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count -eq 0) { break }
+  }
   if (-not $ctx.Profile -or -not (Test-Path $ctx.Profile)) { return }
   $traces = Join-Path $OutDir 'traces'
   $debugDir = Join-Path $ctx.Profile 'rivet-debug'
