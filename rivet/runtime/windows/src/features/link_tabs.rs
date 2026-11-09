@@ -15,7 +15,13 @@ thread_local! {
     /// The browser windows of this process seen so far. `None` until the first look, so windows
     /// that were there before any Rivet window are left alone.
     static KNOWN: RefCell<Option<HashSet<isize>>> = const { RefCell::new(None) };
+    /// When each new window without a tab was first seen, so it is looked at again only for a while.
+    static EMPTY_SINCE: RefCell<std::collections::HashMap<isize, std::time::Instant>> =
+        RefCell::new(std::collections::HashMap::new());
 }
+
+/// How long a new window may show no tab before it is left alone.
+pub const EMPTY_WINDOW_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Whether a window that just appeared holds pages that belong in a Rivet window. Developer tools
 /// keep their own window, and so does a window Rivet asked for as a Mini Window.
@@ -24,6 +30,37 @@ pub fn takes_window(urls: &[String]) -> bool {
         && urls.iter().all(|url| {
             !url.starts_with("devtools://") && !crate::features::mini_window::is_marker_url(url)
         })
+}
+
+/// What becomes of a window that appeared.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Fate {
+    /// Its tabs move into the Rivet window.
+    Take,
+    /// It keeps its own tabs: a Mini Window, developer tools, or a window another Rivet window
+    /// is in front of.
+    Leave,
+    /// It shows no tab yet, as a window the browser has only begun to fill. It is looked at again
+    /// on the next tick instead of being taken for a window that holds nothing.
+    Retry,
+    /// It showed no tab for longer than `EMPTY_WINDOW_WAIT`, and is left alone from now on.
+    GiveUp,
+}
+
+/// The fate of a window that appeared, from its tabs' addresses, whether Rivet asked for it as a
+/// Mini Window and whether the Rivet window is in front of the others.
+pub fn fate(urls: &[String], mini: bool, front: bool, empty_for: std::time::Duration) -> Fate {
+    if mini || !front {
+        Fate::Leave
+    } else if urls.is_empty() && empty_for >= EMPTY_WINDOW_WAIT {
+        Fate::GiveUp
+    } else if urls.is_empty() {
+        Fate::Retry
+    } else if takes_window(urls) {
+        Fate::Take
+    } else {
+        Fate::Leave
+    }
 }
 
 /// The windows that appeared since `known`, and the new set of known windows.
@@ -65,11 +102,47 @@ pub(crate) unsafe fn tick(window: HWND) {
             .map(|tab| tab.saved.url)
             .collect();
         // A window Rivet asked the browser for as a Mini Window is not a link's.
-        if crate::features::mini_window::holds_mini_request(other as HWND, &urls)
-            || !front
-            || !takes_window(&urls)
-        {
-            continue;
+        let mini = crate::features::mini_window::holds_mini_request(other as HWND, &urls);
+        let empty_for = if urls.is_empty() {
+            EMPTY_SINCE.with(|since| {
+                since
+                    .borrow_mut()
+                    .entry(other)
+                    .or_insert_with(std::time::Instant::now)
+                    .elapsed()
+            })
+        } else {
+            EMPTY_SINCE.with(|since| since.borrow_mut().remove(&other));
+            std::time::Duration::ZERO
+        };
+        let decided = fate(&urls, mini, front, empty_for);
+        crate::trace::trace(&format!(
+            "link tabs: window {other:#x} appeared with {} tabs (Mini Window {mini}, Rivet window in front {front}): {decided:?}",
+            urls.len()
+        ));
+        match decided {
+            Fate::Take => {}
+            Fate::Leave => continue,
+            Fate::GiveUp => {
+                EMPTY_SINCE.with(|since| since.borrow_mut().remove(&other));
+                crate::trace::trace(&format!(
+                    "link tabs: window {other:#x} showed no tab for {} s; left alone",
+                    EMPTY_WINDOW_WAIT.as_secs()
+                ));
+                continue;
+            }
+            Fate::Retry => {
+                // Forgotten, so the next tick sees it as new again.
+                KNOWN.with(|known| {
+                    if let Some(seen) = known.borrow_mut().as_mut() {
+                        seen.remove(&other);
+                    }
+                });
+                crate::trace::trace(&format!(
+                    "link tabs: window {other:#x} shows no tab yet; looked at again"
+                ));
+                continue;
+            }
         }
         let moved = move_all(window, other as HWND);
         crate::trace::trace(&format!(
@@ -144,6 +217,30 @@ unsafe fn move_all(window: HWND, from: HWND) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr3_a_new_window_without_tabs_yet_is_looked_at_again() {
+        use std::time::Duration;
+        const ZERO: Duration = Duration::ZERO;
+        // A window that stays empty past the wait is left alone.
+        assert_eq!(fate(&[], false, true, EMPTY_WINDOW_WAIT), Fate::GiveUp);
+        assert_eq!(fate(&[], false, true, Duration::from_secs(4)), Fate::Retry);
+        let link = vec!["https://example.com/".to_owned()];
+        assert_eq!(fate(&link, false, true, ZERO), Fate::Take);
+        // The browser has not put the link's tab in the window yet.
+        assert_eq!(fate(&[], false, true, ZERO), Fate::Retry);
+        assert_eq!(fate(&link, true, true, ZERO), Fate::Leave);
+        assert_eq!(fate(&link, false, false, ZERO), Fate::Leave);
+        assert_eq!(
+            fate(
+                &["devtools://devtools/bundled/inspector.html".to_owned()],
+                false,
+                true,
+                ZERO
+            ),
+            Fate::Leave
+        );
+    }
 
     #[test]
     fn fr3_a_window_a_link_opened_is_taken_but_developer_tools_are_not() {
