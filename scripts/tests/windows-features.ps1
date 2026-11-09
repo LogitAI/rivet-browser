@@ -218,6 +218,12 @@ function Start-Scene($Name, $Feature, $Url) {
   return $ctx, $state
 }
 
+# Whether the scene's window is at the off-screen park, 9000,1000 at 1800x1067.
+function Test-Parked($ctx) {
+  $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
+  $r.L -eq 9000 -and $r.T -eq 1000 -and ($r.Ri - $r.L) -eq 1800 -and ($r.B - $r.T) -eq 1067
+}
+
 function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   if ($Seed) { & $Seed }
   $session = $null; $raw = ''
@@ -250,12 +256,15 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   # Park off-screen without activating, as the installed build's window would sit on the owner's monitor.
   # The runtime restores a test window that started minimized; a restore after the park puts the
   # window back at its first place and size, so the park is repeated until it holds.
-  foreach ($try in 1..20) {
-    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, 1800, 1067, 0x14) | Out-Null
+  # A browser can also put the window back at its start position later, so the park counts only once
+  # it has held for a second and a half.
+  $held = 0
+  foreach ($try in 1..60) {
+    if (Test-Parked $ctx) { $held++; if ($held -ge 6) { break } }
+    else { $held = 0; [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, 1800, 1067, 0x14) | Out-Null }
     Start-Sleep -Milliseconds 250
-    $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
-    if ($r.L -eq 9000 -and $r.T -eq 1000 -and ($r.Ri - $r.L) -eq 1800 -and ($r.B - $r.T) -eq 1067) { break }
-  }  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
+  }
+  if ($held -lt 6 -and -not $ctx.Error) { $ctx.Error = 'the window did not stay at its off-screen park' }  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
   if ($dpi) { $ctx.Dpi = $dpi } elseif (-not $ctx.Error) { $ctx.Error = 'the runtime traced no scale for the window' }
@@ -2361,6 +2370,8 @@ function Get-ChosenAnchor {
 }
 
 function Test-BubbleNearBar($ctx, $Bubble, $Anchors) {
+  # A window that left its park can reach over two monitors' bands, where its display is ambiguous.
+  if (-not (Test-Parked $ctx)) { return New-Verdict 'NOT_DRIVEN' 'the window left its off-screen park before the bubble was judged' }
   $o = Get-ClientOffset $ctx; $s = $Anchors.Dpi / 96.0
   $w = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$w) | Out-Null
   $mons = @([BubbleScreen]::Monitors())
