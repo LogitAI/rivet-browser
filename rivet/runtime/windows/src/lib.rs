@@ -189,6 +189,9 @@ enum StripHit {
     Resizer,
     /// Belongs to the appbar's own content.
     Appbar,
+    /// A control of Rivet's top bar, which takes its clicks in the client area.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Client,
     /// The caption buttons, which Windows needs by name for Snap Layouts.
     #[cfg_attr(not(windows), allow(dead_code))]
     Minimize,
