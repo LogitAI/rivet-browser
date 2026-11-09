@@ -192,6 +192,46 @@ fn name_and_part(ranges: &Ranges, view: usize, reach: usize) -> Option<(String, 
     None
 }
 
+/// The class names of the objects within `depth` pointer fields of `start`, in the order found,
+/// at most `limit` of them and within `budget`. Reads only; it tells what kind of window a
+/// handler belongs to when it is not a browser view's.
+pub(crate) fn names_near(
+    ranges: &Ranges,
+    start: usize,
+    depth: usize,
+    limit: usize,
+    budget: Duration,
+) -> Vec<String> {
+    let began = Instant::now();
+    let mut names: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut queue = VecDeque::from([(start, 0usize)]);
+    while let Some((object, level)) = queue.pop_front() {
+        if names.len() >= limit || began.elapsed() > budget || seen.len() > MAX_NODES {
+            break;
+        }
+        if !seen.insert(object) {
+            continue;
+        }
+        if let Some((name, _)) = name_and_part(ranges, object, 0x800) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        if level >= depth {
+            continue;
+        }
+        for field in (0..0x400).step_by(8) {
+            let Some(target) = word(object + field) else {
+                break;
+            };
+            if target != object && is_object(ranges, target) {
+                queue.push_back((target, level + 1));
+            }
+        }
+    }
+    names
+}
 /// What the walk found, with the offsets it derived.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Found {

@@ -2426,6 +2426,40 @@ pub(crate) fn rivet_windows() -> Vec<HWND> {
     })
 }
 
+/// Traces what kind of window `window` is, read only on a worker thread: its title, rect and the
+/// class names near its `HWNDMessageHandler`. For a new window that holds a page but is not a
+/// browser view's.
+pub(crate) unsafe fn trace_window_kind(window: HWND, why: &'static str) {
+    use crate::chromium::reflect;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GWLP_USERDATA,
+    };
+    let Some(image) = crate::chromium::image::recorded() else {
+        return;
+    };
+    let mut title = [0u16; 128];
+    let length = GetWindowTextW(window, title.as_mut_ptr(), title.len() as i32).max(0) as usize;
+    let title = String::from_utf16_lossy(&title[..length]);
+    let mut rect: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut rect);
+    let headers = std::slice::from_raw_parts(image.base as *const u8, 0x1000.min(image.size));
+    let ranges = reflect::ranges_of(image.base, &reflect::sections(headers));
+    let handler = GetWindowLongPtrW(window, GWLP_USERDATA) as usize;
+    let window = window as usize;
+    std::thread::spawn(move || {
+        let names = reflect::names_near(
+            &ranges,
+            handler,
+            2,
+            24,
+            std::time::Duration::from_millis(300),
+        );
+        crate::trace::trace(&format!(
+            "window kind: {window:#x} ({why}) title {title:?} rect [{}, {}, {}, {}] classes {names:?}",
+            rect.left, rect.top, rect.right, rect.bottom
+        ));
+    });
+}
 /// Which step of finding a window's browser finds nothing, for the trace: Chromium's
 /// `views::HWNDMessageHandler` window to its aura window, that window to its `BrowserView`, and the
 /// view to its `Browser`.
