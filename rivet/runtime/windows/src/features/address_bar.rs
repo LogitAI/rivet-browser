@@ -283,6 +283,8 @@ struct Bar {
     refresh_inline: bool,
     /// The caret the input method's windows were last placed at, in client pixels.
     placed: Option<[i32; 4]>,
+    /// The bar's place, left, top and width in DIPs, when it was last drawn.
+    drawn_at: Option<[f32; 3]>,
 }
 
 thread_local! {
@@ -312,6 +314,7 @@ fn with_bar<R>(window: HWND, work: impl FnOnce(&mut Bar) -> R) -> R {
             refresh_step: None,
             refresh_inline: false,
             placed: None,
+            drawn_at: None,
         });
         work(bar)
     })
@@ -607,6 +610,7 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
         if bar.field.as_ref().is_some_and(|field| field.take_changed()) {
             bar.generation += 1;
         }
+        bar.drawn_at = Some([x, y, width]);
         View {
             dev,
             url: url.clone(),
@@ -696,9 +700,19 @@ pub(crate) unsafe fn with_field_pixels<R>(
 /// takes the clicks of its controls wherever the browser would put its own title bar.
 pub(crate) unsafe fn part_at(window: HWND, point: POINT) -> Option<Part> {
     let [x, y, width] = place(window)?;
+    // The bar takes clicks where it is now. When it was drawn elsewhere, as when the browser moved
+    // its panel without a repaint after, it is drawn again here before the click can come.
+    if !busy() && needs_redraw_at(with_bar(window, |bar| bar.drawn_at), [x, y, width]) {
+        crate::frame::request_bar_paint(window);
+    }
     let f = factor(window);
     let (px, py) = (point.x as f32 / f - x, point.y as f32 / f - y);
     part_in(width, in_pane(window), dev_reserve(window), px, py)
+}
+
+/// Whether a bar drawn at `drawn` must be drawn again to show at `now`, its place for clicks.
+pub(crate) fn needs_redraw_at(drawn: Option<[f32; 3]>, now: [f32; 3]) -> bool {
+    drawn.is_some_and(|drawn| drawn != now)
 }
 
 /// The control of a bar `width` DIPs wide at `px`, `py` DIPs from its top left corner, from the
@@ -1755,6 +1769,18 @@ mod tests {
         assert!(needs_query(true, "examp", "exa", "mple.com"));
         assert!(!needs_query(false, "examp", "exa", ""));
         assert!(!needs_query(true, "exa", "exa", "mple.com"));
+    }
+
+    #[test]
+    fn fr12_a_bar_drawn_where_it_no_longer_takes_clicks_is_drawn_again() {
+        // Shown beside the appbar, then folded: the panel moved left and grew.
+        let shown = [276.0, 8.0, 1156.0];
+        let folded = [8.0, 8.0, 1424.0];
+        assert!(needs_redraw_at(Some(shown), folded));
+        assert!(needs_redraw_at(Some(folded), shown));
+        assert!(!needs_redraw_at(Some(folded), folded));
+        // A bar never drawn yet is drawn with the window's first paint.
+        assert!(!needs_redraw_at(None, folded));
     }
 
     #[test]
