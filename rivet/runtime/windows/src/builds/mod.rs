@@ -933,6 +933,15 @@ pub fn get() -> &'static Build {
     current().expect("a recorded build is loaded before its table is read")
 }
 
+/// The `GetAnchorRect` of a build and its first bytes: the row's own when it carries them, else
+/// the built-in list's.
+pub fn bubble_anchor_of(build: &Build) -> Option<(usize, &'static [u8])> {
+    build.bubble_anchor.or_else(|| {
+        crate::features::bubble_anchor::row_for(build.browser, build.version)
+            .map(|row| (row.get_anchor_rect, row.prologue))
+    })
+}
+
 /// The rows that came as data with this binary, which needed no code change to add.
 pub const CHECKED_IN: &str = include_str!("../../rows/table.json");
 

@@ -1617,7 +1617,7 @@ fn nfr6_a_table_row_carries_the_page_tools_and_bubble_anchor_of_its_prior_row() 
             .update_target_url
     );
     assert_eq!(
-        crate::features::bubble_anchor::anchor_of(build),
-        crate::features::bubble_anchor::anchor_of(&CHROME_157_38)
+        crate::builds::bubble_anchor_of(build),
+        crate::builds::bubble_anchor_of(&CHROME_157_38)
     );
 }

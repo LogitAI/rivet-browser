@@ -106,14 +106,6 @@ pub(crate) const ROWS: &[AnchorRow] = &[
 ];
 
 /// The row of a build, by its browser name and version.
-/// The `GetAnchorRect` of a build and its first bytes: the row's own when it carries them, else
-/// the built-in list's.
-pub(crate) fn anchor_of(build: &crate::builds::Build) -> Option<(usize, &'static [u8])> {
-    build.bubble_anchor.or_else(|| {
-        row_for(build.browser, build.version).map(|row| (row.get_anchor_rect, row.prologue))
-    })
-}
-
 pub(crate) fn row_for(browser: &str, version: [u16; 4]) -> Option<&'static AnchorRow> {
     ROWS.iter()
         .find(|row| row.browser == browser && row.version == version)
@@ -327,16 +319,14 @@ unsafe extern "system" fn get_anchor_rect(
 
 /// Wraps the build's `GetAnchorRect`. A build without a row, or whose bytes differ, is left alone.
 pub(crate) fn install() {
-    let Some(build) = crate::builds::current() else {
-        return;
-    };
-    let Some((get_anchor_rect, prologue)) = anchor_of(build) else {
+    let Some((at, prologue)) = crate::builds::current().and_then(crate::builds::bubble_anchor_of)
+    else {
         return;
     };
     let Some(image) = crate::chromium::image::recorded() else {
         return;
     };
-    if unsafe { image.bytes(get_anchor_rect, prologue.len()) } != Some(prologue) {
+    if unsafe { image.bytes(at, prologue.len()) } != Some(prologue) {
         crate::trace::trace("bubble anchor: GetAnchorRect is not the recorded one");
         return;
     }
@@ -347,7 +337,7 @@ pub(crate) fn install() {
         crate::targets::transaction(|| {
             crate::targets::detour(
                 image.base,
-                get_anchor_rect,
+                at,
                 prologue,
                 get_anchor_rect as *const () as usize,
                 &ORIGINAL,

@@ -308,7 +308,7 @@ pub fn compiled_rows() -> Vec<serde_json::Value> {
             row["page_tools"] = builds::page_tool_rows::page_tools_for(*build)
                 .copied()
                 .to_row();
-            row["bubble_anchor"] = features::bubble_anchor::anchor_of(build).to_row();
+            row["bubble_anchor"] = builds::bubble_anchor_of(build).to_row();
             serde_json::json!({ "frame": frame, "build": row })
         })
         .collect()
