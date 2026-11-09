@@ -738,6 +738,7 @@ unsafe fn begin(window: HWND, bar: &mut Bar) {
     bar.original = url;
     bar.editing = true;
     bar.generation += 1;
+    crate::trace::trace("address bar: editing begins");
 }
 
 /// The timer that re-reads the browser's result while a query's slower providers answer. It runs
@@ -1501,6 +1502,7 @@ unsafe fn place_input_method(window: HWND, caret: RECT) {
 }
 
 unsafe fn act(window: HWND, part: Part) {
+    crate::trace::trace(&format!("address bar: act {part:?}"));
     let command: isize = match part {
         Part::Back => 1,
         Part::Forward => 2,
