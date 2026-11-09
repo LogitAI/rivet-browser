@@ -26,8 +26,10 @@ const HOLD_GRANTS: [&str; 2] = ["*S-1-15-2-1:(OI)(CI)(RX)", "*S-1-15-2-2:(OI)(CI
 
 /// The builds with a complete and checked table row. The runtime's tests compare this list with its
 /// table, so the launcher and the runtime cannot disagree.
-pub const VERIFIED: [(&str, Version); 11] = [
+pub const VERIFIED: [(&str, Version); 13] = [
+    ("chrome.exe", [157, 0, 8103, 39]),
     ("chrome.exe", [157, 0, 8103, 38]),
+    ("chrome.exe", [156, 0, 8078, 82]),
     ("chrome.exe", [156, 0, 8078, 80]),
     ("chrome.exe", [156, 0, 8078, 74]),
     ("chrome.exe", [156, 0, 8078, 48]),
