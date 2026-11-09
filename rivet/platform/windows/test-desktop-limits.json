@@ -9,5 +9,6 @@
   { "feature": "sidebar-scale-monitor", "reason": "a move to a monitor of another scale needs the window on a real monitor, which the off-screen rule forbids" },
   { "feature": "password-bubble", "reason": "typing posted to a window that is never active does not reach the page form" },
   { "feature": "cli-input", "reason": "a page takes typed text only in an active window, and no test window is ever activated" },
-  { "feature": "cli-hidden", "reason": "the window manager reports no cloak for windows of a desktop it does not show" }
+  { "feature": "cli-hidden", "reason": "the window manager reports no cloak for windows of a desktop it does not show" },
+  { "feature": "credentials-browser", "browsers": ["brave"], "reason": "Brave fills a saved password only after the username is typed (its wait_for_username), and typing posted to a window that is never active does not reach the form" }
 ]
