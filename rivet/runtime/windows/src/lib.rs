@@ -308,13 +308,12 @@ pub fn compiled_rows() -> Vec<serde_json::Value> {
 }
 
 /// The parts of a built-in row that a person wrote and a table row cannot carry yet: a row made
-/// from it without them would open Rivet's frame with those features off.
+/// from it without them would open Rivet's frame with those features off. They are the ones the
+/// runtime looks up by browser and version rather than reading from the row; the address bar
+/// functions travel in the row itself.
 #[cfg(windows)]
 fn hand_only(build: &builds::Build) -> Vec<&'static str> {
     let mut parts = Vec::new();
-    if build.omnibox.is_some() {
-        parts.push("address bar functions and the app window layout");
-    }
     if builds::page_tool_rows::page_tools_for(build).is_some() {
         parts.push("page tools");
     }
