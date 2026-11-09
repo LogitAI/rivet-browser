@@ -212,27 +212,42 @@ pub(crate) fn to_dips(
     (ox + (x - l as f32) / scale, oy + (y - t as f32) / scale)
 }
 
-/// Client DIPs of `window` as screen DIPs.
-unsafe fn to_screen(window: HWND, [x, y, w, h]: [f32; 4]) -> Rect {
-    let factor = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
-    let mut origin = POINT { x: 0, y: 0 };
-    ClientToScreen(window, &mut origin);
-    let (ox, oy) = match crate::os::win32::monitors_at(origin.x, origin.y) {
-        Some((near, primary)) => to_dips(
-            (origin.x as f32, origin.y as f32),
-            (near.rect, factor),
-            (primary.rect, primary.scale),
-        ),
-        None => (origin.x as f32 / factor, origin.y as f32 / factor),
+/// A rect in client DIPs of a window whose client origin is at `origin` pixels and whose layout
+/// scale is `factor`, as screen DIPs. Chromium maps each screen point with the display nearest that
+/// point (`display::win::ScreenWin::ScreenToDIPPoint` and `DIPToScreenPoint`), so the rect's own
+/// top left pixel picks the monitor, given by `monitor_at`: a window over two monitors can have its
+/// client origin on one and its chip on the other.
+fn client_to_screen_dips(
+    origin: (i32, i32),
+    factor: f32,
+    [x, y, w, h]: [f32; 4],
+    monitor_at: impl Fn(i32, i32) -> Option<(crate::os::win32::Monitor, crate::os::win32::Monitor)>,
+) -> Rect {
+    let px = origin.0 as f32 + x * factor;
+    let py = origin.1 as f32 + y * factor;
+    let (sx, sy) = match monitor_at(px.round() as i32, py.round() as i32) {
+        Some((near, primary)) => {
+            to_dips((px, py), (near.rect, factor), (primary.rect, primary.scale))
+        }
+        None => (px / factor, py / factor),
     };
     [
-        (ox + x).round() as i32,
-        (oy + y).round() as i32,
+        sx.round() as i32,
+        sy.round() as i32,
         w.round() as i32,
         h.round() as i32,
     ]
 }
 
+/// Client DIPs of `window` as screen DIPs.
+unsafe fn to_screen(window: HWND, rect: [f32; 4]) -> Rect {
+    let factor = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
+    let mut origin = POINT { x: 0, y: 0 };
+    ClientToScreen(window, &mut origin);
+    client_to_screen_dips((origin.x, origin.y), factor, rect, |x, y| unsafe {
+        crate::os::win32::monitors_at(x, y)
+    })
+}
 /// The page area, the address and the chip of a Rivet window, in screen DIPs.
 unsafe fn targets(window: HWND) -> Option<(Rect, Rect, Rect)> {
     let (address, chip) = crate::features::address_bar::anchors(window)?;
@@ -332,6 +347,44 @@ pub(crate) fn install() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fr7_a_chip_on_another_monitor_than_the_window_origin_is_converted_on_its_own() {
+        use crate::os::win32::Monitor;
+        // A primary at 100 percent and two monitors at 125 percent stacked against its right edge,
+        // as on the test machine.
+        let primary = Monitor {
+            rect: [0, 0, 1440, 900],
+            scale: 1.0,
+            primary: true,
+        };
+        let upper = Monitor {
+            rect: [1440, -716, 4000, 724],
+            scale: 1.25,
+            primary: false,
+        };
+        let lower = Monitor {
+            rect: [1440, 725, 4000, 2165],
+            scale: 1.25,
+            primary: false,
+        };
+        let monitor_at = |_x: i32, y: i32| Some((if y < 725 { upper } else { lower }, primary));
+        // The client origin is on the upper monitor; the chip 16 DIPs lower is on the lower one.
+        let chip =
+            super::client_to_screen_dips((1500, 710), 1.25, [6.0, 16.0, 22.0, 28.0], monitor_at);
+        let (x, y) = super::to_dips(
+            (1500.0 + 7.5, 710.0 + 20.0),
+            (lower.rect, 1.25),
+            (primary.rect, primary.scale),
+        );
+        assert_eq!(chip, [x.round() as i32, y.round() as i32, 22, 28]);
+        // Converting at the origin's monitor would land elsewhere.
+        let (ux, uy) = super::to_dips(
+            (1500.0, 710.0),
+            (upper.rect, 1.25),
+            (primary.rect, primary.scale),
+        );
+        assert_ne!(chip[1], (uy + 16.0).round() as i32, "{ux}");
+    }
     use super::*;
 
     const PAGE: Rect = [100, 144, 1200, 800];
