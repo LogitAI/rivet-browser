@@ -304,12 +304,13 @@ pub(crate) struct Monitor {
     pub primary: bool,
 }
 
-/// The monitor nearest to the screen point `x`, `y`, and the primary monitor.
-pub(crate) unsafe fn monitors_at(x: i32, y: i32) -> Option<(Monitor, Monitor)> {
+/// The window's display, its nearest monitor as `display::win::ScreenWin` picks it with
+/// `MonitorFromWindow`, and the primary monitor.
+pub(crate) unsafe fn monitors_of(window: HWND) -> Option<(Monitor, Monitor)> {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromPoint, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-        MONITOR_DEFAULTTOPRIMARY,
+        GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HMONITOR, MONITORINFO,
+        MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
     };
     use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
     unsafe fn describe(monitor: HMONITOR) -> Option<Monitor> {
@@ -330,11 +331,7 @@ pub(crate) unsafe fn monitors_at(x: i32, y: i32) -> Option<(Monitor, Monitor)> {
             primary: info.dwFlags & 1 != 0,
         })
     }
-    // The monitor nearest the point, as `display::win::ScreenWin::ScreenToDIPPoint` and
-    // `DIPToScreenPoint` pick the display for a point. A point converted this way comes back to
-    // the same pixels in Chromium, which the window's own monitor does not promise when the window
-    // reaches over more than one monitor.
-    let near = describe(MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST))?;
+    let near = describe(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST))?;
     let primary = describe(MonitorFromPoint(
         POINT { x: 0, y: 0 },
         MONITOR_DEFAULTTOPRIMARY,

@@ -212,27 +212,46 @@ pub(crate) fn to_dips(
     (ox + (x - l as f32) / scale, oy + (y - t as f32) / scale)
 }
 
-/// Client DIPs of `window` as screen DIPs.
-unsafe fn to_screen(window: HWND, [x, y, w, h]: [f32; 4]) -> Rect {
-    let factor = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
-    let mut origin = POINT { x: 0, y: 0 };
-    ClientToScreen(window, &mut origin);
-    let (ox, oy) = match crate::os::win32::monitors_at(origin.x, origin.y) {
-        Some((near, primary)) => to_dips(
-            (origin.x as f32, origin.y as f32),
-            (near.rect, factor),
-            (primary.rect, primary.scale),
-        ),
-        None => (origin.x as f32 / factor, origin.y as f32 / factor),
+/// A rect in client DIPs of a window whose client origin is at `origin` pixels and whose layout
+/// scale is `factor`, as screen DIPs on `monitors`, the window's display and the primary. Chromium
+/// puts every view of a window into screen DIPs with that one display:
+/// `display::win::ScreenWin::ScreenToDIPRect` takes the window's nearest monitor
+/// (`GetScreenWinDisplayNearestHWND`), so the chip lands where the browser's own views do even when
+/// it sits over another monitor than the client origin.
+fn client_to_screen_dips(
+    origin: (i32, i32),
+    factor: f32,
+    [x, y, w, h]: [f32; 4],
+    monitors: Option<(crate::os::win32::Monitor, crate::os::win32::Monitor)>,
+) -> Rect {
+    let px = origin.0 as f32 + x * factor;
+    let py = origin.1 as f32 + y * factor;
+    let (sx, sy) = match monitors {
+        Some((near, primary)) => {
+            to_dips((px, py), (near.rect, factor), (primary.rect, primary.scale))
+        }
+        None => (px / factor, py / factor),
     };
     [
-        (ox + x).round() as i32,
-        (oy + y).round() as i32,
+        sx.round() as i32,
+        sy.round() as i32,
         w.round() as i32,
         h.round() as i32,
     ]
 }
 
+/// Client DIPs of `window` as screen DIPs.
+unsafe fn to_screen(window: HWND, rect: [f32; 4]) -> Rect {
+    let factor = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
+    let mut origin = POINT { x: 0, y: 0 };
+    ClientToScreen(window, &mut origin);
+    client_to_screen_dips(
+        (origin.x, origin.y),
+        factor,
+        rect,
+        crate::os::win32::monitors_of(window),
+    )
+}
 /// The page area, the address and the chip of a Rivet window, in screen DIPs.
 unsafe fn targets(window: HWND) -> Option<(Rect, Rect, Rect)> {
     let (address, chip) = crate::features::address_bar::anchors(window)?;
@@ -338,6 +357,40 @@ mod tests {
     const ADDRESS: Rect = [300, 108, 600, 28];
     const CHIP: Rect = [310, 108, 22, 28];
 
+    #[test]
+    fn fr12_a_chip_over_another_monitor_is_converted_on_the_windows_display() {
+        use crate::os::win32::Monitor;
+        // A primary at 100 percent and two monitors at 125 percent stacked against its right edge,
+        // as on the test machine.
+        let primary = Monitor {
+            rect: [0, 0, 1440, 900],
+            scale: 1.0,
+            primary: true,
+        };
+        let upper = Monitor {
+            rect: [1440, -716, 4000, 724],
+            scale: 1.25,
+            primary: false,
+        };
+        // The window's display is the upper monitor; its chip 16 DIPs below the client origin
+        // reaches over the lower one, and still lands where the browser's own views would.
+        let chip = super::client_to_screen_dips(
+            (1500, 710),
+            1.25,
+            [6.0, 16.0, 22.0, 28.0],
+            Some((upper, primary)),
+        );
+        let (ox, oy) = super::to_dips((1500.0, 710.0), (upper.rect, 1.25), (primary.rect, 1.0));
+        assert_eq!(
+            chip,
+            [
+                (ox + 6.0).round() as i32,
+                (oy + 16.0).round() as i32,
+                22,
+                28
+            ]
+        );
+    }
     #[test]
     fn fr12_bubble_at_the_monitor_edge_moves_to_the_address_bar() {
         // Brave's save bubble was seen at x=4863, past the window.

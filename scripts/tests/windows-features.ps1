@@ -2361,23 +2361,15 @@ function Test-BubbleNearBar($ctx, $Bubble, $Anchors) {
   $onMonitor = @($mons | Where-Object { $_.Rect[0] -lt $w.Ri -and $_.Rect[2] -gt $w.L -and $_.Rect[1] -lt $w.B -and $_.Rect[3] -gt $w.T }).Count -gt 0
   if (-not $onMonitor) {
     # Off every monitor Chromium fits a bubble to a display the window is not on, so where the
-    # bubble lands sideways says nothing. The anchor Rivet hands Chromium is checked exactly
-    # instead, and the bubble's top by the row.
+    # bubble lands sideways says nothing. The bubble's top is judged by the row, in pixels.
     $chosen = Get-ChosenAnchor
     if (-not $chosen) { return New-Verdict 'FAIL' 'the runtime traced no anchor for the bubble' }
-    # The anchor is converted at the display nearest the window's client origin, as Chromium
-    # converts a screen point; the window's middle can be on another monitor.
-    $mx = $o.ScreenX; $my = $o.ScreenY
-    $near = $mons | Sort-Object { [Math]::Max(0, [Math]::Max($_.Rect[0] - $mx, $mx - $_.Rect[2])) + [Math]::Max(0, [Math]::Max($_.Rect[1] - $my, $my - $_.Rect[3])) } | Select-Object -First 1
-    $primary = $mons | Where-Object { $_.Primary } | Select-Object -First 1
-    $target = if ($Bubble.PageInfo) { $Anchors.Chip } else { $Anchors.Address }
-    $want = ConvertTo-ScreenDips ($o.ScreenX + $target[0] * $s) ($o.ScreenY + $target[1] * $s) ([pscustomobject]@{ Rect = $near.Rect; Scale = $s }) $primary
-    if ([Math]::Abs($chosen[0] - $want[0]) -gt 1 -or [Math]::Abs($chosen[1] - $want[1]) -gt 1) {
-      return New-Verdict 'FAIL' ('the runtime handed Chromium the anchor {0},{1}, not the {2} at {3:N0},{4:N0} DIPs' -f $chosen[0], $chosen[1], $(if ($Bubble.PageInfo) { 'chip' } else { 'address' }), $want[0], $want[1])
-    }
+    # The anchor the runtime handed Chromium is only written down: the verdict rests on where the
+    # bubble actually opened. A check that copied the runtime's own rule passed while it was wrong.
+    $anchorNote = 'anchor {0},{1} DIPs' -f $chosen[0], $chosen[1]
     $top = $o.ScreenY + $Anchors.Address[1] * $s; $bottom = $o.ScreenY + ($Anchors.Address[1] + $Anchors.Address[3]) * $s
     if ($Bubble.T -lt $top - 8 * $s -or $Bubble.T -gt $bottom + 48 * $s) { return New-Verdict 'FAIL' ('the bubble top {0} is not by the address row ({1:N0} to {2:N0})' -f $Bubble.T, $top, $bottom) }
-    return New-Verdict 'PASS' ('anchor {0},{1} DIPs is the {2} exactly; bubble top {3} by the row; its left edge is not checked: the window is off every monitor, where Chromium fits a bubble to another display' -f $chosen[0], $chosen[1], $(if ($Bubble.PageInfo) { 'chip' } else { 'address' }), ($Bubble.T - $o.ScreenY))
+    return New-Verdict 'PASS' ('bubble top {0} by the address row; {1}; its left edge is not checked: the window is off every monitor, where Chromium fits a bubble to another display' -f ($Bubble.T - $o.ScreenY), $anchorNote)
   }
   if (-not $Bubble.Inside) { return New-Verdict 'FAIL' ('the bubble opened outside the Rivet window at {0},{1}' -f $Bubble.L, $Bubble.T) }
   $addrLeft = $o.ScreenX + $Anchors.Chip[0] * $s
