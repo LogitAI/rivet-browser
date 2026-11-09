@@ -2070,7 +2070,13 @@ function Invoke-FirstFrame($Name, $shots) {
     if (-not $steady) { return @('NOT_DRIVEN', $null, 'no capture') }
     if (-not (Test-Attached $ctx)) { return @('FAIL', $steady.Path, (Get-AttachFailure $ctx)) }
     # Only frames a person could see count: a frame the window composed while cloaked never shows.
-    $all = @($frames | ForEach-Object { [pscustomobject]@{ Pixels = $_[3]; Width = $_[1]; Height = $_[2]; Ms = $_[0]; Cloaked = [bool]$_[4] } })
+    $all = @($frames | ForEach-Object { [pscustomobject]@{ Pixels = $_[3]; Width = $_[1]; Height = $_[2]; Ms = $_[0]; Cloaked = [bool]$_[4]; Hwnd = [long]$_[5]; Left = $_[6]; Top = $_[7]; Class = $_[8] } })
+    # Every frame the watcher took is written down, so each blank or differing frame can be put on
+    # a window: its handle and class, rect, whether it was cloaked and whether it is the main window.
+    $frameLog = Join-Path $shots 'first-frame-frames.txt'
+    $all | ForEach-Object {
+      '{0,6} ms window {1:x} {2} rect [{3}, {4}, {5}x{6}] cloaked {7} {8} main {9}' -f $_.Ms, $_.Hwnd, $_.Class, $_.Left, $_.Top, $_.Width, $_.Height, $_.Cloaked, $(if (Test-Blank $_) { 'blank' } else { 'painted' }), ($_.Hwnd -eq $ctx.Hwnd.ToInt64())
+    } | Set-Content $frameLog
     $caps = @($all | Where-Object { -not $_.Cloaked })
     $hidden = @($all | Where-Object Cloaked).Count
     # The runtime warns when the window showed only because the longest hide ran out, before the
@@ -2155,7 +2161,7 @@ public static class FirstFrames{
     // A cloaked window is composed off the screen: a person does not see that frame.
     int cloaked=0; DwmGetWindowAttribute(h,14,out cloaked,4);
     long hash=w*31+ht+(cloaked!=0?7:0); for(int i=0;i<px.Length;i+=97) hash=hash*1000003+px[i];
-    if(hash!=last){last=hash;o.Add(new object[]{sw.ElapsedMilliseconds,w,ht,px,cloaked!=0});}
+    if(hash!=last){last=hash;o.Add(new object[]{sw.ElapsedMilliseconds,w,ht,px,cloaked!=0,h.ToInt64(),r.L,r.T,"Chrome_WidgetWin_1"});}
    }
    Sleep(8);
   }
