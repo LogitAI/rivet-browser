@@ -16,7 +16,7 @@
 # rows run only when no other run is active (windows-test-safety.ps1).
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest', 'appbar-width', 'appbar-peek', 'open-link-running', 'open-link-start', 'credentials-browser', 'credentials-system', 'view-click', 'view-click-other', 'view-keys', 'view-ime', 'tab-moves', 'first-frame', 'fullscreen-sidebar', 'taskbar-identity', 'taskbar-relaunch', 'sidebar-scale-monitor', 'split-panel-look', 'sidebar-floats', 'sidebar-open-button', 'dev-row', 'address-editing', 'security-chip', 'permission-bubble', 'password-bubble', 'typing-keeps-active', 'cli-control', 'cli-input', 'cli-hidden'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'bar-folded', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest', 'appbar-width', 'appbar-peek', 'open-link-running', 'open-link-start', 'credentials-browser', 'credentials-system', 'view-click', 'view-click-other', 'view-keys', 'view-ime', 'tab-moves', 'first-frame', 'fullscreen-sidebar', 'taskbar-identity', 'taskbar-relaunch', 'sidebar-scale-monitor', 'split-panel-look', 'sidebar-floats', 'sidebar-open-button', 'dev-row', 'address-editing', 'security-chip', 'permission-bubble', 'password-bubble', 'typing-keeps-active', 'cli-control', 'cli-input', 'cli-hidden'),
   [string]$OutDir,
   [switch]$NoBuild,
   # A browser build outside its usual folder, such as one a row job downloaded. Needs one -Browsers.
@@ -3132,8 +3132,10 @@ function Invoke-BarFolded($Name, $shots) {
     $back = Get-Capture $ctx (Join-Path $shots 'bar-folded-3-shown.png')
     $again = @(Test-BarControls $ctx 'shown again' $back)
     $bad = @($open + $fold + $again)
-    if ($bad.Count) { return @('FAIL', $folded.Path, (($bad -join '; ') + '. ' + ($notes -join '; '))) }
-    @('PASS', $folded.Path, 'back, forward, reload, the address and the window buttons answer where they are drawn, shown, folded and shown again. ' + ($notes -join '; '))
+    $painted = [string]::Join('; ', [string[]]$notes)
+    if ($bad.Count) { return @('FAIL', $folded.Path, ([string]::Join('; ', [string[]]$bad) + '. ' + $painted)) }
+    $reason = 'back, forward, reload, the address and the window buttons answer where they are drawn, shown, folded and shown again. ' + $painted
+    @('PASS', $folded.Path, $reason)
   } finally { Stop-Scene $ctx }
 }
 
