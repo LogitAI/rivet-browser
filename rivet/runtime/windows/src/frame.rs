@@ -2028,11 +2028,6 @@ unsafe fn sync_strip(window: HWND) {
 unsafe fn relayout(window: HWND) {
     // The frame view lays out again on request, which also works for a maximized window.
     crate::features::vertical_tabs::invalidate_strip(window);
-    // The frame view lays its client view out again only when the client view's bounds change,
-    // and a new appbar width can leave them as they were while the page area must move. The
-    // browser view lays its page area out again here, whether or not the frame view's own layout
-    // is recorded, as on Brave and Whale the page otherwise waits for the next input.
-    crate::hooks::page_area::relayout(window);
     if frame_layout::relayout(window) {
         if is_waiting(window) {
             crate::trace::trace("attach: asked the frame view to lay out again");
@@ -2146,14 +2141,80 @@ unsafe fn nudge(window: HWND, why: &str) -> bool {
 /// Hides the docked appbar so the page takes its width, or docks it again.
 unsafe fn toggle_appbar(window: HWND) {
     close_menu(window);
+    let before = frame_layout::panel_bounds(window).map(|panel| panel.x);
     edit_layout(window, |layout| layout.toggle());
     crate::trace::trace(&format!("appbar: hidden {}", layout_of(window).collapsed));
     sync_strip(window);
     SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
     KillTimer(window, PEEK_TIMER);
     relayout(window);
+    let after = frame_layout::panel_bounds(window).map(|panel| panel.x);
+    if needs_size_nudge(before, after, sizing_state(window)) {
+        nudge_size(window, before, after);
+    }
     // The panel moves with the appbar, and the top bar with it.
     request_bar_paint(window);
+}
+
+/// Whether a fold or show must be laid out by a size change: the browser laid the window out
+/// again, yet its page panel did not move, as Brave and Whale keep the client area they laid out
+/// until the window's size changes. Only a window of its own size is resized: never a minimized,
+/// maximized, snapped or fullscreen one.
+fn needs_size_nudge(before: Option<i32>, after: Option<i32>, state: NudgeState) -> bool {
+    before.is_some()
+        && before == after
+        && !state.minimized
+        && !state.maximized
+        && !state.snapped
+        && !state.fullscreen
+}
+
+/// The window's size state, for a size change after a fold or show.
+unsafe fn sizing_state(window: HWND) -> NudgeState {
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowArranged;
+    NudgeState {
+        minimized: IsIconic(window) != 0,
+        maximized: IsZoomed(window) != 0,
+        snapped: IsWindowArranged(window) != 0,
+        fullscreen: GetWindowLongPtrW(window, GWL_STYLE) as u32 & WS_THICKFRAME == 0,
+        ..NudgeState::default()
+    }
+}
+
+/// Shrinks the window by one pixel without drawing and puts its exact rect back, which lays the
+/// browser's root view out at once, and traces what happened.
+unsafe fn nudge_size(window: HWND, before: Option<i32>, after: Option<i32>) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, SWP_NOREDRAW};
+    let mut rect: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut rect);
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    SetWindowPos(
+        window,
+        std::ptr::null_mut(),
+        0,
+        0,
+        width,
+        height - 1,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW,
+    );
+    SetWindowPos(
+        window,
+        std::ptr::null_mut(),
+        rect.left,
+        rect.top,
+        width,
+        height,
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
+    let mut now: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut now);
+    let restored = (now.left, now.top, now.right, now.bottom)
+        == (rect.left, rect.top, rect.right, rect.bottom);
+    crate::trace::trace(&format!(
+        "appbar: the panel stayed at {before:?} after {after:?}, so window {:#x} was resized by one pixel and back, rect restored {restored}, panel now at {:?}",
+        window as usize,
+        frame_layout::panel_bounds(window).map(|panel| panel.x)
+    ));
 }
 
 /// Shows or puts away the floating appbar of a hidden one, sliding it.
@@ -4707,6 +4768,43 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ => call_browser(window, message, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod nudge_tests {
+    use super::*;
+
+    #[test]
+    fn fr2_a_fold_resizes_the_window_only_when_its_panel_did_not_move() {
+        let normal = NudgeState::default();
+        // The relayout moved the panel: nothing more.
+        assert!(!needs_size_nudge(Some(268), Some(8), normal));
+        // The panel stayed where it was: a size change lays it out.
+        assert!(needs_size_nudge(Some(268), Some(268), normal));
+        // No panel known yet: the window's own first layout comes.
+        assert!(!needs_size_nudge(None, None, normal));
+        // Never a window without a size of its own.
+        for state in [
+            NudgeState {
+                minimized: true,
+                ..normal
+            },
+            NudgeState {
+                maximized: true,
+                ..normal
+            },
+            NudgeState {
+                snapped: true,
+                ..normal
+            },
+            NudgeState {
+                fullscreen: true,
+                ..normal
+            },
+        ] {
+            assert!(!needs_size_nudge(Some(268), Some(268), state));
+        }
     }
 }
 

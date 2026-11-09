@@ -279,14 +279,6 @@ pub(crate) unsafe fn relayout(window: HWND) {
     }) {
         let layout: unsafe extern "system" fn(*mut c_void) =
             std::mem::transmute(base + row().layout_immediately);
-        // The browser view sits in the client view, below the non-client view that gives the
-        // client view its bounds. That view is laid out first, so a new appbar width reaches the
-        // page even where the frame view's own layout is not recorded, as on Whale.
-        if let Some(non_client) = crate::chromium::view::parent_of(host)
-            .and_then(|client| crate::chromium::view::parent_of(client))
-        {
-            layout(non_client as *mut c_void);
-        }
         layout(host as *mut c_void);
     }
 }
