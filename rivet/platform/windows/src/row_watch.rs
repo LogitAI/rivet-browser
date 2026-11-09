@@ -265,13 +265,22 @@ pub const FEATURES: &[&str] = &[
 /// still reported as not driven and never count as passed.
 const TEST_DESKTOP_LIMITS: &str = include_str!("../test-desktop-limits.json");
 
-/// The features of `TEST_DESKTOP_LIMITS` and their reasons.
-pub fn test_desktop_limits() -> Vec<(String, String)> {
+/// The features of `TEST_DESKTOP_LIMITS` that apply to `browser`, with their reasons. A limit with
+/// a `browsers` list applies only to those browsers, matched as a word of the browser's name.
+pub fn test_desktop_limits(browser: &str) -> Vec<(String, String)> {
+    let browser = browser.to_ascii_lowercase();
     let limits: Value = serde_json::from_str(TEST_DESKTOP_LIMITS).unwrap_or_default();
     limits
         .as_array()
         .map_or(&[][..], Vec::as_slice)
         .iter()
+        .filter(|limit| match limit["browsers"].as_array() {
+            None => true,
+            Some(only) => only
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|name| browser.split_whitespace().any(|word| word == name)),
+        })
         .filter_map(|limit| {
             Some((
                 limit["feature"].as_str()?.to_owned(),
@@ -312,7 +321,7 @@ pub fn publish_gate(results: &Value, browser: &str) -> Result<Vec<String>, Vec<S
                 .push(row["result"].as_str().unwrap_or("NOT_DRIVEN"));
         }
     }
-    let limits = test_desktop_limits();
+    let limits = test_desktop_limits(&browser);
     let mut reasons = Vec::new();
     let mut notes = Vec::new();
     for feature in FEATURES {
@@ -542,7 +551,7 @@ mod tests {
 
     /// The rows of a run on a test desktop: every feature passes but the listed limits.
     fn test_desktop_run(browser: &str) -> Vec<(&str, &'static str, &'static str)> {
-        let limits = test_desktop_limits();
+        let limits = test_desktop_limits(browser);
         FEATURES
             .iter()
             .map(|feature| {
@@ -558,7 +567,7 @@ mod tests {
 
     #[test]
     fn nfr3_the_test_desktop_limits_are_the_eleven_known_features_with_reasons() {
-        let limits = test_desktop_limits();
+        let limits = test_desktop_limits("google chrome");
         let names: Vec<&str> = limits.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
             names,
@@ -608,6 +617,28 @@ mod tests {
         let reasons = publish_gate(&results(&rows), "edge").unwrap_err();
         assert_eq!(reasons.len(), 1);
         assert!(reasons[0].starts_with("view-ime: FAIL"));
+    }
+
+    #[test]
+    fn nfr3_brave_alone_may_leave_credentials_browser_not_driven() {
+        let brave = test_desktop_limits("brave");
+        assert_eq!(brave.len(), 12);
+        assert!(brave
+            .iter()
+            .any(|(name, why)| name == "credentials-browser" && why.contains("wait_for_username")));
+        let notes = publish_gate(&results(&test_desktop_run("brave")), "brave").unwrap();
+        assert_eq!(notes.len(), 12);
+        // Any other browser that leaves it not driven is blocked.
+        let mut rows = test_desktop_run("google chrome");
+        let at = rows
+            .iter()
+            .position(|row| row.1 == "credentials-browser")
+            .unwrap();
+        rows[at].2 = "NOT_DRIVEN";
+        assert_eq!(
+            publish_gate(&results(&rows), "google chrome"),
+            Err(vec!["credentials-browser: NOT_DRIVEN".to_owned()])
+        );
     }
 
     #[test]
