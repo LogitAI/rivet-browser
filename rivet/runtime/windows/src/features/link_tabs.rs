@@ -85,7 +85,10 @@ pub fn appeared(known: &HashSet<isize>, now: &[isize], rivet: &[isize]) -> Vec<i
 /// Looks for new browser windows of this process and moves their tabs into `window`, the Rivet
 /// window that is now in front of the others of this process.
 pub(crate) unsafe fn tick(window: HWND) {
-    crate::frame::trace_browser_windows_if_changed();
+    // The window census costs a pass over every window each tick, so only a debug build keeps it.
+    if cfg!(debug_assertions) {
+        crate::frame::trace_browser_windows_if_changed();
+    }
     let rivet: Vec<isize> = crate::frame::rivet_windows()
         .into_iter()
         .map(|window| window as isize)
@@ -166,8 +169,8 @@ pub(crate) unsafe fn tick(window: HWND) {
                         Some(titles) => format!("{} tabs, but a tab has no page", titles.len()),
                     },
                 };
-                // Once per window: what kind of window holds no browser.
-                if empty_for < std::time::Duration::from_millis(100) {
+                // Once per window, in a debug build only: what kind of window holds no browser.
+                if cfg!(debug_assertions) && empty_for < std::time::Duration::from_millis(100) {
                     crate::frame::trace_window_kind(other as HWND, "no tab yet");
                 }
                 crate::trace::trace(&format!(
