@@ -273,7 +273,10 @@ unsafe fn to_screen(window: HWND, rect: [f32; 4]) -> Rect {
     )
 }
 /// The page area, the address and the chip of a Rivet window, in its client DIPs and in screen DIPs.
-unsafe fn targets(window: HWND) -> Option<([[f32; 4]; 3], (Rect, Rect, Rect))> {
+type Targets = ([[f32; 4]; 3], (Rect, Rect, Rect));
+
+/// The `Targets` of a Rivet window.
+unsafe fn targets(window: HWND) -> Option<Targets> {
     let (address, chip) = crate::features::address_bar::anchors(window)?;
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
