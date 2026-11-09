@@ -29,6 +29,9 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # A pull request this workflow opens with its own token starts no other workflow, except one it
+  # dispatches; it dispatches the test workflow on its branch, so the pull request has its checks.
+  actions: write
 
 concurrency:
   group: browser-rows
@@ -286,6 +289,7 @@ jobs:
           $report = Get-Content -Raw "$temp/report.json" | ConvertFrom-Json
           $body = "The generator could not vouch for this row, so it was not published.`n`n" + (($report.review | ForEach-Object { "- $_" }) -join "`n")
           gh pr create --draft --base develop --head $branch --title "Feat: Propose a row for ${{ matrix.build.browser }} ${{ matrix.build.version }}" --body $body
+          gh workflow run test.yml --ref $branch
 
   publish:
     name: Publish the signed table
@@ -360,3 +364,4 @@ jobs:
           git commit -m "Feat: Record rows published by the table job"
           git push -u origin $branch
           gh pr create --base develop --head $branch --title "Feat: Record rows published by the table job" --body "These rows are already published in the signed table and passed the row proof in run $env:GITHUB_RUN_ID. Merging adds them to the table compiled into the next Rivet."
+          gh workflow run test.yml --ref $branch
