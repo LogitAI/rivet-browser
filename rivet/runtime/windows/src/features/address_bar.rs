@@ -895,9 +895,52 @@ pub(crate) fn completed(typed: &str, inline: &str) -> (String, usize, usize) {
     )
 }
 
+/// What one message of typing cost Rivet on the browser's UI thread, in microseconds, and how many
+/// queries it started. The trace shows one line per key, so a slow key names the step that took the
+/// time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct KeyWork {
+    pub starts: u32,
+    pub forward_us: u64,
+    pub query_us: u64,
+    pub inline_us: u64,
+    pub draw_us: u64,
+}
+
+impl KeyWork {
+    pub(crate) fn total_us(&self) -> u64 {
+        self.forward_us + self.query_us + self.inline_us + self.draw_us
+    }
+
+    pub(crate) fn line(&self, message: u32, key: usize) -> String {
+        format!(
+            "address bar: key {message:#x} {key:#x} took {} us: forward {} query {} inline {} draw {} starts {}",
+            self.total_us(),
+            self.forward_us,
+            self.query_us,
+            self.inline_us,
+            self.draw_us,
+            self.starts
+        )
+    }
+}
+
+/// Microseconds since `start`.
+fn micros_since(start: std::time::Instant) -> u64 {
+    start.elapsed().as_micros() as u64
+}
+
+/// Writes the work of one key to the trace, when the trace is on.
+fn trace_key(message: u32, key: usize, work: KeyWork) {
+    if crate::trace::tracing() {
+        crate::trace::trace(&work.line(message, key));
+    }
+}
+
 /// Asks the browser for suggestions when the text changed since it last asked. The browser answers
 /// at once, so nothing waits or polls: the list is drawn again only when the text changed.
-unsafe fn refresh_suggestions(window: HWND) {
+unsafe fn refresh_suggestions(window: HWND) -> KeyWork {
+    let mut work = KeyWork::default();
     let Some((text, inline)) = with_bar(window, |bar| {
         let field = bar.field.as_ref()?;
         let text = field.text();
@@ -917,14 +960,17 @@ unsafe fn refresh_suggestions(window: HWND) {
             may_complete_inline(&text, selection(field), bar.deleting),
         ))
     }) else {
-        return;
+        return work;
     };
     let inline = inline && !composing(window);
+    let asked = std::time::Instant::now();
     let found = if text.trim().is_empty() {
         Some(Vec::new())
     } else {
+        work.starts += 1;
         crate::features::omnibox::suggest_with(window, &text, inline, true, true)
     };
+    work.query_us = micros_since(asked);
     // Each key starts the re-reads over; the last key's query is the one that answers.
     let first = next_refresh(0, true);
     with_bar(window, |bar| {
@@ -950,10 +996,12 @@ unsafe fn refresh_suggestions(window: HWND) {
             .unwrap_or_default();
         if !bar.inline.is_empty() {
             if let Some(field) = bar.field.as_ref() {
+                let completing = std::time::Instant::now();
                 let (full, start, end) = completed(&text, &bar.inline);
                 field.set_text(&full);
                 field.send(EM_SETSEL, start, end as isize);
                 field.take_changed();
+                work.inline_us = micros_since(completing);
             }
         }
         bar.queried = text.clone();
@@ -966,6 +1014,7 @@ unsafe fn refresh_suggestions(window: HWND) {
         format!("{rows:?} inline {:?}", bar.inline)
     });
     crate::trace::trace(&format!("address bar: suggestions for {text:?}: {shown}"));
+    work
 }
 
 /// Opens a suggestion as the browser's dropdown does.
@@ -1037,8 +1086,10 @@ pub(crate) unsafe fn message(
                     with_bar(window, |bar| bar.refresh_step = None);
                     return Some(0);
                 };
+                let read = std::time::Instant::now();
                 let found =
                     crate::features::omnibox::suggest_with(window, &text, inline, true, false);
+                let read_us = micros_since(read);
                 let changed = with_bar(window, |bar| {
                     let Some(mut found) = found else {
                         return false;
@@ -1072,6 +1123,7 @@ pub(crate) unsafe fn message(
                     bar.generation += 1;
                     true
                 });
+                let drawing = std::time::Instant::now();
                 if changed {
                     let shown = with_bar(window, |bar| {
                         let rows: Vec<&str> = bar
@@ -1085,6 +1137,13 @@ pub(crate) unsafe fn message(
                         "address bar: suggestions for {text:?} later: {shown}"
                     ));
                     crate::frame::update_appbar(window);
+                }
+                if crate::trace::tracing() {
+                    crate::trace::trace(&format!(
+                        "address bar: refresh {step} took {} us: read {read_us} draw {} changed {changed}",
+                        micros_since(read),
+                        micros_since(drawing)
+                    ));
                 }
                 let editing = with_bar(window, |bar| bar.editing);
                 match next_refresh(step + 1, editing) {
@@ -1300,9 +1359,15 @@ pub(crate) unsafe fn message(
                 with_bar(window, |bar| {
                     bar.deleting = matches!(wparam as u16, 0x08 | 0x2E)
                 });
+                let clock = std::time::Instant::now();
                 let used = forward(window, message, wparam, lparam);
-                refresh_suggestions(window);
+                let forward_us = micros_since(clock);
+                let mut work = refresh_suggestions(window);
+                let drawing = std::time::Instant::now();
                 crate::frame::update_appbar(window);
+                work.forward_us = forward_us;
+                work.draw_us = micros_since(drawing);
+                trace_key(message, wparam, work);
                 used.or(Some(0))
             }
         },
@@ -1311,9 +1376,15 @@ pub(crate) unsafe fn message(
                 return Some(0);
             }
             with_bar(window, |bar| bar.deleting = wparam == 0x08);
+            let clock = std::time::Instant::now();
             let used = forward(window, message, wparam, lparam);
-            refresh_suggestions(window);
+            let forward_us = micros_since(clock);
+            let mut work = refresh_suggestions(window);
+            let drawing = std::time::Instant::now();
             crate::frame::update_appbar(window);
+            work.forward_us = forward_us;
+            work.draw_us = micros_since(drawing);
+            trace_key(message, wparam, work);
             used.or(Some(0))
         }
         WM_KEYUP
@@ -1324,11 +1395,18 @@ pub(crate) unsafe fn message(
         | WM_IME_CHAR
         | WM_IME_REQUEST
         | WM_INPUTLANGCHANGE => {
+            let clock = std::time::Instant::now();
             let used = forward(window, message, wparam, lparam);
+            let forward_us = micros_since(clock);
+            let mut work = KeyWork::default();
             if matches!(message, WM_IME_COMPOSITION | WM_IME_ENDCOMPOSITION) {
-                refresh_suggestions(window);
+                work = refresh_suggestions(window);
             }
+            let drawing = std::time::Instant::now();
             crate::frame::update_appbar(window);
+            work.forward_us = forward_us;
+            work.draw_us = micros_since(drawing);
+            trace_key(message, wparam, work);
             if message == WM_INPUTLANGCHANGE {
                 None
             } else {
@@ -1569,6 +1647,24 @@ pub(crate) fn caret(window: HWND) -> Option<RECT> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nfr2_a_keys_work_is_traced_step_by_step() {
+        let work = KeyWork {
+            starts: 1,
+            forward_us: 20,
+            query_us: 4000,
+            inline_us: 80,
+            draw_us: 1000,
+        };
+        assert_eq!(work.total_us(), 5100);
+        // windows-features.ps1 reads this line back, so its shape is part of the test contract.
+        assert_eq!(
+            work.line(0x102, 0x61),
+            "address bar: key 0x102 0x61 took 5100 us: forward 20 query 4000 inline 80 draw 1000 starts 1"
+        );
+        assert_eq!(KeyWork::default().total_us(), 0);
+    }
 
     #[test]
     fn fr12_late_suggestions_are_read_a_few_times_after_a_key_and_never_at_idle() {

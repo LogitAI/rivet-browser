@@ -395,5 +395,15 @@ foreach ($case in @(
 if ($park) { Write-Host "FAIL nfr5_a_parked_window_counts_at_its_nearest_monitors_scale_only : $park cases"; $failures++ }
 else { Write-Host 'ok   nfr5_a_parked_window_counts_at_its_nearest_monitors_scale_only' }
 
+# A key's work is summed over its messages, and other lines do not count.
+$kw = Get-KeyWork @(
+  'address bar: key 0x100 0x41 took 900 us: forward 10 query 0 inline 0 draw 890 starts 0',
+  'address bar: suggestions for "a": [] inline ""',
+  'address bar: key 0x102 0x61 took 5100 us: forward 20 query 4000 inline 80 draw 1000 starts 1',
+  'address bar: key 0x101 0x41 took 700 us: forward 5 query 0 inline 0 draw 695 starts 0')
+if ($kw.Total -ne 6700 -or $kw.Query -ne 4000 -or $kw.Draw -ne 2585 -or $kw.Starts -ne 1 -or $kw.Messages -ne 3 -or (Get-Percentile @(5, 1, 9, 3) 0.5) -ne 5) {
+  Write-Host "FAIL nfr2_a_keys_work_is_read_from_its_trace_lines : $($kw | ConvertTo-Json -Compress)"; $failures++
+} else { Write-Host 'ok   nfr2_a_keys_work_is_read_from_its_trace_lines' }
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'
