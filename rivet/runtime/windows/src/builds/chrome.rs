@@ -50,6 +50,8 @@ const DEV_CHROME_156_74: DevMode = DevMode {
 
 pub static CHROME: Build = Build {
     omnibox: None,
+    page_tools: None,
+    bubble_anchor: None,
     app_window: None,
     browser: "Google Chrome",
     module: "chrome.dll",
@@ -387,6 +389,8 @@ pub static CHROME: Build = Build {
 /// Google Chrome 156.0.8078.74, filled from that build's own public symbols and instruction bytes.
 pub static CHROME_156_74: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_CHROME_156_74),
+    page_tools: None,
+    bubble_anchor: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x001BE6D0),
         feature_impl_prologue: &[
@@ -804,6 +808,8 @@ const DEV_CHROME_156_80: DevMode = DevMode {
 /// does not open it.
 pub static CHROME_156_80: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_CHROME_156_80),
+    page_tools: None,
+    bubble_anchor: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x001E54E0),
         feature_impl_prologue: &[
@@ -1249,6 +1255,8 @@ const DEV_CHROME_157_38: DevMode = DevMode {
 /// unverified: no window of this build has been driven yet.
 pub static CHROME_157_38: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_CHROME_157_38),
+    page_tools: None,
+    bubble_anchor: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x0012D300),
         feature_impl_prologue: &[
@@ -1651,6 +1659,8 @@ pub static CHROME_157_38: Build = Build {
 /// build's symbols; every other feature stays off until its addresses are verified.
 pub static CHROME_150: Build = Build {
     omnibox: None,
+    page_tools: None,
+    bubble_anchor: None,
     app_window: None,
     browser: "Google Chrome",
     module: "chrome.dll",

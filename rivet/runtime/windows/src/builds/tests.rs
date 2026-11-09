@@ -1591,7 +1591,10 @@ fn nfr6_recipes_read_every_row_value_they_cover_again_from_its_own_module() {
 
 #[cfg(windows)]
 #[test]
-fn nfr6_the_generator_sees_what_a_built_in_row_has_written_by_hand() {
+fn nfr6_a_table_row_carries_the_page_tools_and_bubble_anchor_of_its_prior_row() {
+    use crate::row_data::RowValue;
+    // The generator ports every part of the built-in row it is given, so the parts kept in lists
+    // of their own must be in that row.
     let rows = crate::compiled_rows();
     let chrome = rows
         .iter()
@@ -1600,11 +1603,21 @@ fn nfr6_the_generator_sees_what_a_built_in_row_has_written_by_hand() {
                 && row["build"]["version"] == serde_json::json!([157, 0, 8103, 38])
         })
         .expect("Chrome 157.0.8103.38 is built in");
-    let parts: Vec<&str> = chrome["hand_only"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|part| part.as_str())
-        .collect();
-    assert_eq!(parts, ["page tools", "the bubble anchor"]);
+    assert!(chrome["build"]["page_tools"].is_object());
+    assert!(chrome["build"]["bubble_anchor"].is_array());
+    // A table row with those parts gives a build that has them, with no list entry for it.
+    let mut row = chrome["build"].clone();
+    row["version"] = serde_json::json!([157, 0, 8103, 99]);
+    let build: &'static Build = Box::leak(Box::new(Build::from_row(&row).unwrap()));
+    let tools = crate::builds::page_tool_rows::page_tools_for(build).expect("the row's page tools");
+    assert_eq!(
+        tools.update_target_url,
+        crate::builds::page_tool_rows::page_tools_for(&CHROME_157_38)
+            .unwrap()
+            .update_target_url
+    );
+    assert_eq!(
+        crate::builds::bubble_anchor_of(build),
+        crate::builds::bubble_anchor_of(&CHROME_157_38)
+    );
 }
