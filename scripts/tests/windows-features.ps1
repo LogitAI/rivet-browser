@@ -248,8 +248,14 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   if ($ctx.Hwnd -eq [IntPtr]::Zero) { $ctx.Error = 'the browser opened no window'; return }
   if (-not $attached) { $ctx.Error = 'attach-failed' }
   # Park off-screen without activating, as the installed build's window would sit on the owner's monitor.
-  [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, 1800, 1067, 0x14) | Out-Null
-  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
+  # The runtime restores a test window that started minimized; a restore after the park puts the
+  # window back at its first place and size, so the park is repeated until it holds.
+  foreach ($try in 1..20) {
+    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, 1800, 1067, 0x14) | Out-Null
+    Start-Sleep -Milliseconds 250
+    $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
+    if ($r.L -eq 9000 -and $r.T -eq 1000 -and ($r.Ri - $r.L) -eq 1800 -and ($r.B - $r.T) -eq 1067) { break }
+  }  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
   if ($dpi) { $ctx.Dpi = $dpi } elseif (-not $ctx.Error) { $ctx.Error = 'the runtime traced no scale for the window' }
