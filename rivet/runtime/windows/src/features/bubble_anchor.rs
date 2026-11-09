@@ -348,7 +348,7 @@ pub(crate) fn install() {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn fr7_a_chip_on_another_monitor_than_the_window_origin_is_converted_on_its_own() {
+    fn fr12_a_chip_on_another_monitor_than_the_window_origin_is_converted_on_its_own() {
         use crate::os::win32::Monitor;
         // A primary at 100 percent and two monitors at 125 percent stacked against its right edge,
         // as on the test machine.
