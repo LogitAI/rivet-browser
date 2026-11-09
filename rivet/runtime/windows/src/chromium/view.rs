@@ -39,6 +39,20 @@ impl View {
     }
 }
 
+/// The parent of a live view of the loaded build, when its parent pointer holds a view of the
+/// browser module: an object whose first word points into the module. `None` for a root, an
+/// unreadable place or a build that records no bounds offset.
+pub(crate) unsafe fn parent_of(view: usize) -> Option<usize> {
+    let offset = View::parent_offset(crate::builds::get().layout.view_bounds_offset)?;
+    if !crate::chromium::memory::readable(view.checked_add(offset)?, 8) {
+        return None;
+    }
+    let parent = View::at(view).parent_address(offset);
+    let image = crate::chromium::image::recorded()?;
+    let table = crate::chromium::memory::read_word(parent)?;
+    (table > image.base && table < image.base + image.size).then_some(parent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
