@@ -126,7 +126,8 @@ function Test-PanelFloats($Before, $After, [int]$Page, [int]$Panel, [double]$Sca
   if (Test-Blank $After) { return New-Verdict 'NOT_DRIVEN' 'the capture is blank' }
   $p0 = Get-PageRegion $Before $Page
   if ($p0.Width -lt 200) { return New-Verdict 'NOT_DRIVEN' 'the page was not shown before the panel opened' }
-  # The marker covers the top 40 per cent of the page, so its columns still count as the page.
+  # The marker covers the top 40 per cent of the page at a quarter of its width, left of a 360 DIP
+  # docked page on any page wider than 480 DIPs; its columns still count as the page.
   $y = [int]($p0.Y0 + ($p0.Y1 - $p0.Y0) * 0.2)
   $m0 = Get-MarkerColumn $Before $y $p0.X0 $p0.X1
   if ($m0 -lt 0) { return New-Verdict 'NOT_DRIVEN' "the page's marker was not found before the panel opened" }
