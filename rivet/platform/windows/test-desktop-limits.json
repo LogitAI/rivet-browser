@@ -1,0 +1,14 @@
+[
+  { "feature": "split-shortcut", "reason": "the shortcut hook reads the real key state with GetKeyState, which posted keys do not change" },
+  { "feature": "split-maximised", "reason": "a maximised window moves onto a visible monitor, which the off-screen rule forbids" },
+  { "feature": "credentials-system", "reason": "the Windows passkey save needs Windows Hello, which a test desktop cannot answer" },
+  { "feature": "view-click-other", "reason": "a page of another window needs a second browser window, which opens a normal window that may show on screen" },
+  { "feature": "view-ime", "reason": "the input method composes only on the desktop that has the keyboard, and a test desktop never has it" },
+  { "feature": "address-editing", "reason": "the input method composes only on the desktop that has the keyboard, and a test desktop never has it" },
+  { "feature": "taskbar-identity", "reason": "a test desktop has no taskbar to read the window icon from" },
+  { "feature": "sidebar-scale-monitor", "reason": "a move to a monitor of another scale needs the window on a real monitor, which the off-screen rule forbids" },
+  { "feature": "password-bubble", "reason": "typing posted to a window that is never active does not reach the page form" },
+  { "feature": "cli-input", "reason": "a page takes typed text only in an active window, and no test window is ever activated" },
+  { "feature": "cli-hidden", "reason": "the window manager reports no cloak for windows of a desktop it does not show" },
+  { "feature": "credentials-browser", "browsers": ["brave"], "reason": "Brave fills a saved password only after the username is typed (its wait_for_username), and typing posted to a window that is never active does not reach the form" }
+]

@@ -13,7 +13,9 @@ use rivet_platform_windows::textservices::{Field, TIMER_BASE, TIMER_LAST};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::UI::Input::Ime::{ImmAssociateContextEx, IACE_DEFAULT};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, PostMessageW};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetClientRect, KillTimer, PostMessageW, SetTimer,
+};
 
 use crate::features::split::{CAPTION_ROOM, ROW_HEIGHT, TOGGLE_ROOM};
 
@@ -141,13 +143,15 @@ impl Security {
     }
 
     /// The chip for Chromium's `security_state::SecurityLevel`: 3 and 4 are secure, 1 and 5 warn.
-    /// Level 0 says nothing about the connection, so the address tells a local or internal page.
+    /// Level 0 says nothing about the connection yet: Chromium reports it for an https page while the
+    /// page is still loading, before the certificate is known. The chip stays neutral then rather
+    /// than warning, and the address tells a local, internal or plain http page.
     pub(crate) fn from_level(level: Option<i32>, url: &str) -> Self {
         match level {
             Some(3 | 4) => Security::Secure,
             Some(1 | 5) => Security::NotSecure,
             Some(_) => match Self::of(url) {
-                Security::Secure => Security::NotSecure,
+                Security::Secure => Security::Internal,
                 other => other,
             },
             None => Self::of(url),
@@ -248,9 +252,10 @@ pub(crate) struct View {
     pub zoomed: bool,
     /// Set while the address is edited: the field's pixels are drawn in place of the text.
     pub editing: bool,
-    /// The browser's suggestions for the text being edited, as contents and description, and the
+    /// The browser's suggestions for the text being edited, as contents, description and whether the
+    /// row is a search, and the
     /// one the arrow keys or the pointer picked.
-    pub suggestions: Vec<(String, String)>,
+    pub suggestions: Vec<(String, String, bool)>,
     pub selected: Option<usize>,
     /// Bumped whenever the field draws something new, so the appbar repaints.
     pub generation: u64,
@@ -266,8 +271,16 @@ struct Bar {
     generation: u64,
     suggestions: Vec<crate::features::omnibox::Suggestion>,
     selected: Option<usize>,
-    /// The text the suggestions are for.
+    /// The text the suggestions are for, as typed: without the inline completion.
     queried: String,
+    /// The browser's inline completion shown selected after the typed text, or empty.
+    inline: String,
+    /// Whether the last key deleted text. The browser completes nothing inline then.
+    deleting: bool,
+    /// The next re-read of the browser's result after a query, while one is due.
+    refresh_step: Option<usize>,
+    /// Whether the query being re-read may complete inline.
+    refresh_inline: bool,
 }
 
 thread_local! {
@@ -292,6 +305,10 @@ fn with_bar<R>(window: HWND, work: impl FnOnce(&mut Bar) -> R) -> R {
             suggestions: Vec::new(),
             selected: None,
             queried: String::new(),
+            inline: String::new(),
+            deleting: false,
+            refresh_step: None,
+            refresh_inline: false,
         });
         work(bar)
     })
@@ -581,32 +598,45 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
     let dev = crate::features::dev_page::window_in_dev_mode(window);
     let reserve = dev_reserve(window);
     let security = Security::from_level(crate::features::omnibox::security_level(window), &url);
-    Some(with_bar(window, |bar| View {
-        dev,
-        url: url.clone(),
-        reserve: if pane { 0.0 } else { reserve },
-        pane,
-        x: x * f,
-        y: y * f,
-        width: width * f,
-        height: ROW_HEIGHT as f32 * f,
-        toggle,
-        title,
-        rest,
-        security,
-        hover: bar.hover,
-        can_back: true,
-        can_forward: true,
-        caption_hover: crate::frame::caption_hover(window),
-        zoomed: windows_sys::Win32::UI::WindowsAndMessaging::IsZoomed(window) != 0,
-        editing: bar.editing,
-        generation: bar.generation,
-        suggestions: bar
-            .suggestions
-            .iter()
-            .map(|s| (s.contents.clone(), s.description.clone()))
-            .collect(),
-        selected: bar.selected,
+    Some(with_bar(window, |bar| {
+        // The field tells when its text or selection changed. A change made without a key, such as
+        // a select all, counts too. The top bar is painted again only when the field draws anew.
+        if bar.field.as_ref().is_some_and(|field| field.take_changed()) {
+            bar.generation += 1;
+        }
+        View {
+            dev,
+            url: url.clone(),
+            reserve: if pane { 0.0 } else { reserve },
+            pane,
+            x: x * f,
+            y: y * f,
+            width: width * f,
+            height: ROW_HEIGHT as f32 * f,
+            toggle,
+            title,
+            rest,
+            security,
+            hover: bar.hover,
+            can_back: true,
+            can_forward: true,
+            caption_hover: crate::frame::caption_hover(window),
+            zoomed: windows_sys::Win32::UI::WindowsAndMessaging::IsZoomed(window) != 0,
+            editing: bar.editing,
+            generation: bar.generation,
+            suggestions: bar
+                .suggestions
+                .iter()
+                .map(|s| {
+                    (
+                        s.contents.clone(),
+                        s.description.clone(),
+                        is_search(&s.contents, &s.description, &s.destination),
+                    )
+                })
+                .collect(),
+            selected: bar.selected,
+        }
     }))
 }
 
@@ -710,7 +740,32 @@ unsafe fn begin(window: HWND, bar: &mut Bar) {
     bar.generation += 1;
 }
 
+/// The timer that re-reads the browser's result while a query's slower providers answer. It runs
+/// only after a key changed the text, is replaced by the next key and is stopped when editing ends.
+const REFRESH_TIMER: usize = 0x5281;
+/// When the result is read again after a query, in milliseconds from the previous read. The
+/// history providers' slower pass and the search engine answer within these.
+pub(crate) const REFRESH_DELAYS_MS: [u32; 3] = [100, 200, 500];
+
+/// What the re-read timer does after read `step`: wait the next delay, or stop for good. It stops
+/// when editing ended or the last step was read.
+pub(crate) fn next_refresh(step: usize, editing: bool) -> Option<u32> {
+    if !editing {
+        return None;
+    }
+    REFRESH_DELAYS_MS.get(step).copied()
+}
+
+/// Whether a re-read changed what the list shows, so that only a change redraws it.
+pub(crate) fn result_changed(
+    before: &[crate::features::omnibox::Suggestion],
+    after: &[crate::features::omnibox::Suggestion],
+) -> bool {
+    before != after
+}
+
 unsafe fn end(bar: &mut Bar) {
+    bar.refresh_step = None;
     if let Some(field) = bar.field.as_ref() {
         field.send(0x0008, 0, 0); // WM_KILLFOCUS
     }
@@ -718,6 +773,8 @@ unsafe fn end(bar: &mut Bar) {
     bar.suggestions.clear();
     bar.selected = None;
     bar.queried.clear();
+    bar.inline.clear();
+    bar.deleting = false;
     bar.generation += 1;
 }
 
@@ -738,6 +795,20 @@ unsafe fn go(window: HWND, text: &str) -> bool {
     };
     crate::trace::trace(&format!("address bar: open {text:?}: {opened}"));
     opened
+}
+
+/// Whether a suggestion searches for the text rather than opening a page. A page's row, whether
+/// typed or from history, opens an address its contents name, and the browser describes a search
+/// row, so a described row whose destination is not the address it shows is a search.
+pub(crate) fn is_search(contents: &str, description: &str, destination: &str) -> bool {
+    fn bare(address: &str) -> String {
+        let lower = address.trim().to_lowercase();
+        let rest = lower
+            .split_once("://")
+            .map_or(lower.as_str(), |(_, rest)| rest);
+        rest.strip_prefix("www.").unwrap_or(rest).to_string()
+    }
+    !description.is_empty() && !bare(destination).starts_with(&bare(contents))
 }
 
 /// The height of one suggestion row and the room around the list, in DIPs.
@@ -778,26 +849,123 @@ unsafe fn row_at(window: HWND, point: POINT) -> Option<usize> {
     (index < count).then_some(index)
 }
 
-/// Asks the browser for suggestions when the text changed since it last asked.
+const EM_GETSEL: u32 = 0x00B0;
+const EM_SETSEL: u32 = 0x00B1;
+
+/// The field's selection as start and end in UTF-16 units.
+fn selection(field: &Field) -> (usize, usize) {
+    let (mut start, mut end) = (0u32, 0u32);
+    field.send(
+        EM_GETSEL,
+        &mut start as *mut u32 as usize,
+        &mut end as *mut u32 as isize,
+    );
+    (start as usize, end as usize)
+}
+
+/// Whether the input method holds an open composition in the window.
+unsafe fn composing(window: HWND) -> bool {
+    use windows_sys::Win32::UI::Input::Ime::{
+        ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext, GCS_COMPSTR,
+    };
+    let context = ImmGetContext(window);
+    if context as isize == 0 {
+        return false;
+    }
+    let length = ImmGetCompositionStringW(context, GCS_COMPSTR, std::ptr::null_mut(), 0);
+    ImmReleaseContext(window, context);
+    length > 0
+}
+
+/// Whether the browser may complete `text` inline: the caret sits at its end with nothing
+/// selected and the last key added text, as in the browser's own address bar.
+pub(crate) fn may_complete_inline(text: &str, selection: (usize, usize), deleting: bool) -> bool {
+    let length = text.encode_utf16().count();
+    !deleting && selection == (length, length)
+}
+
+/// The field's text with the browser's completion after the typed text, and the completion's
+/// start and end in UTF-16 units, selected so the next key replaces it.
+pub(crate) fn completed(typed: &str, inline: &str) -> (String, usize, usize) {
+    let start = typed.encode_utf16().count();
+    (
+        format!("{typed}{inline}"),
+        start,
+        start + inline.encode_utf16().count(),
+    )
+}
+
+/// Asks the browser for suggestions when the text changed since it last asked. The browser answers
+/// at once, so nothing waits or polls: the list is drawn again only when the text changed.
 unsafe fn refresh_suggestions(window: HWND) {
-    let Some(text) = with_bar(window, |bar| {
-        let text = bar.field.as_ref()?.text();
-        (bar.editing && text != bar.queried).then_some(text)
+    let Some((text, inline)) = with_bar(window, |bar| {
+        let field = bar.field.as_ref()?;
+        let text = field.text();
+        // Deleting the selected completion leaves the typed text, which needs no new query.
+        if text == bar.queried && !bar.inline.is_empty() {
+            bar.inline.clear();
+            bar.generation += 1;
+        }
+        if !bar.editing
+            || text == bar.queried
+            || (!bar.inline.is_empty() && text == format!("{}{}", bar.queried, bar.inline))
+        {
+            return None;
+        }
+        Some((
+            text.clone(),
+            may_complete_inline(&text, selection(field), bar.deleting),
+        ))
     }) else {
         return;
     };
+    let inline = inline && !composing(window);
     let found = if text.trim().is_empty() {
         Some(Vec::new())
     } else {
-        crate::features::omnibox::suggest(window, &text)
+        crate::features::omnibox::suggest_with(window, &text, inline, true, true)
     };
+    // Each key starts the re-reads over; the last key's query is the one that answers.
+    let first = next_refresh(0, true);
     with_bar(window, |bar| {
-        bar.queried = text;
+        bar.refresh_step = first.map(|_| 0);
+        bar.refresh_inline = inline;
+    });
+    match first {
+        Some(delay) if !text.trim().is_empty() => {
+            SetTimer(window, REFRESH_TIMER, delay, None);
+        }
+        _ => {
+            KillTimer(window, REFRESH_TIMER);
+        }
+    }
+    let shown = with_bar(window, |bar| {
         bar.suggestions = found.unwrap_or_default();
         bar.suggestions.truncate(SUGGESTIONS_SHOWN);
         bar.selected = None;
+        bar.inline = bar
+            .suggestions
+            .first()
+            .map(|first| first.inline.clone())
+            .unwrap_or_default();
+        if !bar.inline.is_empty() {
+            if let Some(field) = bar.field.as_ref() {
+                let (full, start, end) = completed(&text, &bar.inline);
+                field.set_text(&full);
+                field.send(EM_SETSEL, start, end as isize);
+                field.take_changed();
+            }
+        }
+        bar.queried = text.clone();
         bar.generation += 1;
+        let rows: Vec<&str> = bar
+            .suggestions
+            .iter()
+            .map(|s| s.destination.as_str())
+            .collect();
+        format!("{rows:?} inline {:?}", bar.inline)
     });
+    crate::trace::trace(&format!("address bar: suggestions for {text:?}: {shown}"));
 }
 
 /// Opens a suggestion as the browser's dropdown does.
@@ -852,6 +1020,84 @@ pub(crate) unsafe fn message(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> Option<LRESULT> {
+    // The re-read timer is the bar's own, so it is stopped here whatever else happens.
+    if message == WM_TIMER && wparam == REFRESH_TIMER {
+        if busy() {
+            KillTimer(window, REFRESH_TIMER);
+        } else {
+            // Reads the browser's result again while its slower providers answer, and redraws
+            // the list only when it changed. Stops after the last step or once editing ended.
+            {
+                KillTimer(window, REFRESH_TIMER);
+                let Some((step, text, inline)) = with_bar(window, |bar| {
+                    let step = bar.refresh_step?;
+                    bar.editing
+                        .then(|| (step, bar.queried.clone(), bar.refresh_inline))
+                }) else {
+                    with_bar(window, |bar| bar.refresh_step = None);
+                    return Some(0);
+                };
+                let found =
+                    crate::features::omnibox::suggest_with(window, &text, inline, true, false);
+                let changed = with_bar(window, |bar| {
+                    let Some(mut found) = found else {
+                        return false;
+                    };
+                    found.truncate(SUGGESTIONS_SHOWN);
+                    if !result_changed(&bar.suggestions, &found) {
+                        return false;
+                    }
+                    bar.suggestions = found;
+                    bar.selected = None;
+                    // A completion that arrived late is shown only while the field still holds the typed text
+                    // alone, with the caret at its end.
+                    let late = bar
+                        .suggestions
+                        .first()
+                        .map(|first| first.inline.clone())
+                        .unwrap_or_default();
+                    if bar.inline.is_empty() && !late.is_empty() {
+                        if let Some(field) = bar.field.as_ref() {
+                            if field.text() == text
+                                && may_complete_inline(&text, selection(field), bar.deleting)
+                            {
+                                let (full, start, end) = completed(&text, &late);
+                                field.set_text(&full);
+                                field.send(EM_SETSEL, start, end as isize);
+                                field.take_changed();
+                                bar.inline = late;
+                            }
+                        }
+                    }
+                    bar.generation += 1;
+                    true
+                });
+                if changed {
+                    let shown = with_bar(window, |bar| {
+                        let rows: Vec<&str> = bar
+                            .suggestions
+                            .iter()
+                            .map(|s| s.destination.as_str())
+                            .collect();
+                        format!("{rows:?} inline {:?}", bar.inline)
+                    });
+                    crate::trace::trace(&format!(
+                        "address bar: suggestions for {text:?} later: {shown}"
+                    ));
+                    crate::frame::update_appbar(window);
+                }
+                let editing = with_bar(window, |bar| bar.editing);
+                match next_refresh(step + 1, editing) {
+                    Some(delay) => {
+                        with_bar(window, |bar| bar.refresh_step = Some(step + 1));
+                        SetTimer(window, REFRESH_TIMER, delay, None);
+                    }
+                    None => with_bar(window, |bar| bar.refresh_step = None),
+                }
+            }
+        }
+        return Some(0);
+    }
     // The text engine and the input method send the window messages while the bar is busy with one,
     // such as a change of capture. Those are the browser's to handle.
     if !shown_in(window) || busy() {
@@ -879,19 +1125,25 @@ pub(crate) unsafe fn message(
         WM_MOUSEMOVE => {
             let point = point_of(lparam);
             let now = part_at(window, point);
-            let changed = with_bar(window, |bar| {
+            let (hover_changed, content_changed) = with_bar(window, |bar| {
                 let changed = bar.hover != now;
                 bar.hover = now;
+                let mut drawn = false;
                 if bar.editing && ((wparam & 1) != 0 || now == Some(Part::Address)) {
                     if let Some(field) = bar.field.as_ref() {
                         field.send(message, wparam, lparam);
+                        drawn = field.take_changed();
                     }
                 }
-                changed
+                if drawn {
+                    bar.generation += 1;
+                }
+                (changed, drawn)
             });
-            if changed || editing {
-                crate::frame::update_appbar(window);
-            }
+            redraw(
+                window,
+                redraw_after(editing, hover_changed, content_changed),
+            );
             if now.is_some() || (editing && (wparam & 1) != 0) {
                 Some(0)
             } else {
@@ -952,7 +1204,11 @@ pub(crate) unsafe fn message(
         }
         _ if !editing => None,
         WM_KEYDOWN => match wparam as u16 {
-            0x0D if with_bar(window, |bar| bar.selected.is_some()) => {
+            // Enter opens the picked suggestion, or the default one while its completion shows.
+            0x0D if with_bar(window, |bar| {
+                bar.selected.is_some() || (!bar.inline.is_empty() && !bar.suggestions.is_empty())
+            }) =>
+            {
                 let index = with_bar(window, |bar| bar.selected.unwrap_or(0));
                 open_suggestion(window, index);
                 Some(0)
@@ -963,12 +1219,24 @@ pub(crate) unsafe fn message(
                 with_bar(window, |bar| {
                     let count = bar.suggestions.len();
                     if count > 0 {
-                        bar.selected = Some(match (bar.selected, down) {
+                        let at = match (bar.selected, down) {
                             (None, true) => 0,
                             (None, false) => count - 1,
                             (Some(at), true) => (at + 1) % count,
                             (Some(at), false) => (at + count - 1) % count,
-                        });
+                        };
+                        bar.selected = Some(at);
+                        // The field shows the picked match as the browser's dropdown does, and
+                        // typing goes on from it.
+                        let fill = bar.suggestions[at].fill.clone();
+                        if let (false, Some(field)) = (fill.is_empty(), bar.field.as_ref()) {
+                            field.set_text(&fill);
+                            let end = fill.encode_utf16().count();
+                            field.send(EM_SETSEL, end, end as isize);
+                            field.take_changed();
+                            bar.queried = fill;
+                            bar.inline.clear();
+                        }
                         bar.generation += 1;
                     }
                 });
@@ -990,8 +1258,21 @@ pub(crate) unsafe fn message(
                 Some(0)
             }
             0x1B => {
-                // Escape puts the page's address back, and a second one leaves the field.
+                // Escape first closes the suggestions and drops the inline completion, then puts
+                // the page's address back, and a last one leaves the field.
                 with_bar(window, |bar| {
+                    if !bar.suggestions.is_empty() {
+                        if let (false, Some(field)) = (bar.inline.is_empty(), bar.field.as_ref()) {
+                            field.set_text(&bar.queried);
+                            let end = bar.queried.encode_utf16().count();
+                            field.send(EM_SETSEL, end, end as isize);
+                        }
+                        bar.inline.clear();
+                        bar.suggestions.clear();
+                        bar.selected = None;
+                        bar.generation += 1;
+                        return;
+                    }
                     let field = bar.field.as_ref();
                     let now = field.map(|field| field.text()).unwrap_or_default();
                     if now != bar.original {
@@ -1016,6 +1297,9 @@ pub(crate) unsafe fn message(
                     crate::frame::update_appbar(window);
                     return Some(0);
                 }
+                with_bar(window, |bar| {
+                    bar.deleting = matches!(wparam as u16, 0x08 | 0x2E)
+                });
                 let used = forward(window, message, wparam, lparam);
                 refresh_suggestions(window);
                 crate::frame::update_appbar(window);
@@ -1026,6 +1310,7 @@ pub(crate) unsafe fn message(
             if matches!(wparam, 0x0d | 0x1b | 0x09 | 0x0a) {
                 return Some(0);
             }
+            with_bar(window, |bar| bar.deleting = wparam == 0x08);
             let used = forward(window, message, wparam, lparam);
             refresh_suggestions(window);
             crate::frame::update_appbar(window);
@@ -1055,8 +1340,11 @@ pub(crate) unsafe fn message(
             None
         }
         WM_TIMER if (TIMER_BASE..=TIMER_LAST).contains(&wparam) => {
+            // Most of the field's timers blink the caret, which moves only the caret's own visual.
+            let before = with_bar(window, |bar| bar.generation);
             forward(window, message, wparam - TIMER_BASE, 0);
-            crate::frame::update_appbar(window);
+            let after = with_bar(window, |bar| bar.generation);
+            redraw(window, redraw_after(editing, false, before != after));
             Some(0)
         }
         WM_KILLFOCUS => {
@@ -1207,9 +1495,185 @@ pub(crate) unsafe fn finish_composition_for_test(window: HWND) -> bool {
     done != 0
 }
 
+/// The text engine message an edit command of a test stands for: the one the engine runs for the
+/// keyboard shortcut. A test cannot hold Ctrl down without taking the focus.
+pub(crate) fn edit_message(word: &str) -> Option<(u32, usize, isize)> {
+    match word {
+        "cut" => Some((0x0300, 0, 0)),
+        "copy" => Some((0x0301, 0, 0)),
+        "paste" => Some((0x0302, 0, 0)),
+        "undo" => Some((0x00C7, 0, 0)),
+        "selectall" => Some((0x00B1, 0, -1)),
+        _ => None,
+    }
+}
+
+/// Runs an edit command on the field being edited, for tests, and traces its text afterwards.
+pub(crate) unsafe fn edit_for_test(window: HWND, word: &str) -> bool {
+    let Some((message, wparam, lparam)) = edit_message(word) else {
+        return false;
+    };
+    let editing = with_bar(window, |bar| bar.editing && bar.field.is_some());
+    if !editing {
+        return false;
+    }
+    let used = forward(window, message, wparam, lparam).is_some();
+    crate::trace::trace(&format!(
+        "address bar edit {word}: {used} text {:?}",
+        text(window)
+    ));
+    crate::frame::update_appbar(window);
+    used
+}
+
+/// What a message to the bar needs drawn again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Redraw {
+    Nothing,
+    /// Only the caret moved or blinked: its own small visual is placed or hidden.
+    Caret,
+    /// The bar looks different: hover, text or selection.
+    Bar,
+}
+
+fn redraw_after(editing: bool, hover_changed: bool, content_changed: bool) -> Redraw {
+    if hover_changed || content_changed {
+        Redraw::Bar
+    } else if editing {
+        Redraw::Caret
+    } else {
+        Redraw::Nothing
+    }
+}
+
+unsafe fn redraw(window: HWND, redraw: Redraw) {
+    match redraw {
+        Redraw::Nothing => {}
+        Redraw::Caret => crate::frame::update_address_caret(window),
+        Redraw::Bar => crate::frame::update_appbar(window),
+    }
+}
+
+/// The field's caret in client pixels while the address is edited and the caret is shown.
+pub(crate) fn caret(window: HWND) -> Option<RECT> {
+    if busy() {
+        return None;
+    }
+    with_bar(window, |bar| {
+        bar.editing
+            .then(|| bar.field.as_ref().and_then(|field| field.caret()))
+            .flatten()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_late_suggestions_are_read_a_few_times_after_a_key_and_never_at_idle() {
+        // After a key: three reads, at 100, then 200, then 500 ms, then nothing more.
+        assert_eq!(next_refresh(0, true), Some(100));
+        assert_eq!(next_refresh(1, true), Some(200));
+        assert_eq!(next_refresh(2, true), Some(500));
+        assert_eq!(next_refresh(3, true), None);
+        // Editing ended: nothing is read again, whatever step was due.
+        assert_eq!(next_refresh(0, false), None);
+        assert_eq!(next_refresh(1, false), None);
+    }
+
+    #[test]
+    fn fr12_a_late_read_redraws_only_when_the_result_changed() {
+        use crate::features::omnibox::Suggestion;
+        let one = |destination: &str| Suggestion {
+            contents: destination.into(),
+            description: String::new(),
+            destination: destination.into(),
+            fill: destination.into(),
+            inline: String::new(),
+        };
+        let typed = vec![one("http://127.0.0.1/alp")];
+        let later = vec![
+            one("http://127.0.0.1/alpha.html"),
+            one("http://127.0.0.1/alp"),
+        ];
+        assert!(!result_changed(&typed, &typed.clone()));
+        assert!(result_changed(&typed, &later));
+    }
+
+    #[test]
+    fn fr12_edit_commands_are_the_text_engines_own_clipboard_and_undo_messages() {
+        assert_eq!(edit_message("copy"), Some((0x0301, 0, 0)));
+        assert_eq!(edit_message("cut"), Some((0x0300, 0, 0)));
+        assert_eq!(edit_message("paste"), Some((0x0302, 0, 0)));
+        assert_eq!(edit_message("undo"), Some((0x00C7, 0, 0)));
+        assert_eq!(edit_message("selectall"), Some((0x00B1, 0, -1)));
+        assert_eq!(edit_message("bold"), None);
+    }
+
+    #[test]
+    fn fr12_inline_completion_is_asked_only_while_typing_at_the_end() {
+        assert!(may_complete_inline("exa", (3, 3), false));
+        assert!(!may_complete_inline("exa", (3, 3), true));
+        assert!(!may_complete_inline("exa", (1, 1), false));
+        assert!(!may_complete_inline("exa", (0, 3), false));
+        // Positions are UTF-16 units, as the text engine counts them.
+        assert!(may_complete_inline("검색", (2, 2), false));
+    }
+
+    #[test]
+    fn fr12_a_search_suggestion_shows_the_magnifier_and_a_page_the_globe() {
+        // What was typed, as the browser offers it first: no description.
+        assert!(!is_search(
+            "http://127.0.0.1:8080/suggest-a.",
+            "",
+            "http://127.0.0.1:8080/suggest-a."
+        ));
+        // A page from history: its title describes it and it opens the address it shows.
+        assert!(!is_search(
+            "127.0.0.1:8080/alpha.html",
+            "alpha",
+            "http://127.0.0.1:8080/alpha.html"
+        ));
+        assert!(!is_search(
+            "example.com",
+            "Example",
+            "https://www.example.com/"
+        ));
+        // A search on the default engine.
+        assert!(is_search(
+            "http://127.0.0.1:8080/suggest-a.",
+            "Google Search",
+            "https://www.google.com/search?q=http%3A%2F%2F127.0.0.1"
+        ));
+        assert!(is_search(
+            "rivet browser",
+            "Bing",
+            "https://www.bing.com/search?q=rivet+browser"
+        ));
+    }
+
+    #[test]
+    fn fr12_inline_completion_is_selected_after_the_typed_text() {
+        assert_eq!(
+            completed("exa", "mple.com"),
+            ("example.com".to_string(), 3, 11)
+        );
+        assert_eq!(completed("검", "색어"), ("검색어".to_string(), 1, 3));
+    }
+
+    #[test]
+    fn idle_caret_blink_redraws_only_the_caret() {
+        assert_eq!(redraw_after(true, false, false), Redraw::Caret);
+        assert_eq!(redraw_after(true, false, true), Redraw::Bar);
+        assert_eq!(redraw_after(true, true, false), Redraw::Bar);
+    }
+
+    #[test]
+    fn idle_pointer_moving_over_a_resting_bar_redraws_nothing() {
+        assert_eq!(redraw_after(false, false, false), Redraw::Nothing);
+        assert_eq!(redraw_after(false, true, false), Redraw::Bar);
+    }
 
     #[test]
     fn fr12_a_bar_right_above_the_page_moves_below_the_address_bar_with_it() {
@@ -1409,8 +1873,13 @@ mod tests {
             Security::from_level(Some(5), "https://a.test/"),
             Security::NotSecure
         );
+        // While an https page loads Chromium has no level yet; the chip must not say Not secure.
         assert_eq!(
             Security::from_level(Some(0), "https://a.test/"),
+            Security::Internal
+        );
+        assert_eq!(
+            Security::from_level(Some(0), "http://a.test/"),
             Security::NotSecure
         );
         assert_eq!(

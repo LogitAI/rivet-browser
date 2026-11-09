@@ -1427,9 +1427,21 @@ unsafe extern "system" fn window_proc(
 /// Where to put the window when a test asks for a place, as `x,y`. Such a window opens without
 /// taking the focus.
 fn requested_position() -> Option<(i32, i32)> {
-    let value = std::env::var("RIVET_SETUP_POSITION").ok()?;
-    let (x, y) = value.split_once(',')?;
-    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+    let value = std::env::var("RIVET_SETUP_POSITION").ok();
+    let parsed = value.as_deref().and_then(|value| {
+        let (x, y) = value.split_once(',')?;
+        Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+    });
+    // A test run that names no place still keeps the window right of every monitor.
+    parsed.or_else(|| {
+        rivet_platform_windows::focus::keep_offscreen().then(|| {
+            let screen = unsafe { rivet_platform_windows::focus::screen_bounds() };
+            (
+                screen[2] + rivet_platform_windows::focus::OFFSCREEN_MARGIN,
+                screen[1],
+            )
+        })
+    })
 }
 
 /// Shows the setup window over the browsers it found and returns when it closes.
@@ -1546,7 +1558,8 @@ fn show(model: Model) -> Result<(), String> {
             SWP_NOZORDER | SWP_NOACTIVATE,
         );
         SetTimer(window, CARET_TIMER, 530, None);
-        if requested_position().is_some() {
+        // A placed window is a test's: it shows without taking the foreground or the keyboard.
+        if requested_position().is_some() || rivet_platform_windows::focus::keep_offscreen() {
             ShowWindow(window, SW_SHOWNOACTIVATE);
         } else {
             ShowWindow(window, SW_SHOW);

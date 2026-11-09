@@ -12,7 +12,10 @@ use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rivet_core::session::{SessionRecord, SessionRegistry};
-use rivet_core::{build_launch_plan, profile_allows_rivet, DisplayMode, LaunchRequest};
+use rivet_core::{
+    build_controlled_launch_plan, build_launch_plan, profile_allows_rivet,
+    without_window_placement, DisplayMode, LaunchRequest,
+};
 use rivet_platform_windows::hold::{self, Launch};
 use rivet_platform_windows::signed_table;
 use rivet_platform_windows::{
@@ -35,9 +38,13 @@ Usage:
   rivet link-rules list | set <pattern> <space>|mini-window|current-space | remove <pattern>
       | route <address> [--rules <path>] [--json]
   rivet hold refresh --browser <path> [--hold <path>]
-
+{control}
 The browser executable is always explicit in this first release. Rivet does not guess a browser
 path or open a remote debugging port.\n";
+
+fn usage() -> String {
+    USAGE.replace("{control}", rivet_cli::control::USAGE)
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct StartOptions {
@@ -72,7 +79,7 @@ fn main() {
     let result = run(env::args().skip(1));
     if let Err(error) = result {
         eprintln!("rivet: {error}");
-        eprintln!("{USAGE}");
+        eprintln!("{}", usage());
         std::process::exit(2);
     }
 }
@@ -90,6 +97,28 @@ fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
         let path = links::rules_path(options.rules)?;
         println!("{}", links::run_rules_at(&path, options.request)?);
         return Ok(());
+    }
+    if arguments
+        .first()
+        .is_some_and(|word| rivet_cli::control::GROUPS.contains(&word.as_str()))
+    {
+        let options = rivet_cli::control::parse(&arguments)?;
+        let json = options.json;
+        match run_control(options) {
+            Ok(text) => {
+                println!("{text}");
+                return Ok(());
+            }
+            // A command the browser refused is reported alone, without the usage text.
+            Err(text) => {
+                if json {
+                    println!("{text}");
+                } else {
+                    eprintln!("rivet: {text}");
+                }
+                std::process::exit(1);
+            }
+        }
     }
     match arguments.get(0..2) {
         Some(command) if command == ["session", "start"] => run_start(parse_start(arguments)?),
@@ -304,12 +333,28 @@ fn run_start(options: StartOptions) -> Result<(), String> {
             return Err("a held browser build needs a Rivet profile".to_owned());
         }
     }
-    let mut plan = build_launch_plan(&request).map_err(|error| error.to_string())?;
+    let runtime = resolve_runtime(options.runtime.as_deref());
+    // With the runtime a hidden session is a cloaked app window it can control and later show.
+    let mut plan = if runtime.is_some() {
+        build_controlled_launch_plan(&request)
+    } else {
+        build_launch_plan(&request)
+    }
+    .map_err(|error| error.to_string())?;
+    // A test run's window keeps the default show state, so its first show takes the start command
+    // and never the foreground. It shows minimized and the runtime brings it back off every
+    // monitor as it attaches.
+    if rivet_platform_windows::focus::keep_offscreen() {
+        plan.arguments = without_window_placement(std::mem::take(&mut plan.arguments));
+    }
+    let app_window = plan
+        .arguments
+        .iter()
+        .any(|argument| argument.starts_with("--app="));
     plan.program = resolve_browser_executable(&plan.program);
     if let (Launch::Installed { keep: true }, Some(root)) = (&launch, &held_root) {
         keep_build_in_background(&options.browser, root);
     }
-    let runtime = resolve_runtime(options.runtime.as_deref());
     if runtime.is_some() && !profile_allows_rivet(request.user_data_dir.as_deref()) {
         return Err(
             "Rivet runs only on a profile of its own, so that it never enters your own browser; pass --user-data-dir with a folder outside the browser's User Data"
@@ -327,16 +372,24 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         }
     }
     let launch_started = launch_clock();
-    let existing_windows = if runtime.is_some() && plan.display == DisplayMode::Visible {
+    let existing_windows = if runtime.is_some() && app_window {
         browser_windows(&plan.program).map_err(|error| error.to_string())?
     } else {
         Vec::new()
     };
-    let child = Command::new(&plan.program)
-        .args(&plan.arguments)
-        .spawn()
-        .map_err(|error| format!("could not start {}: {error}", plan.program.display()))?;
-    let task_id = child.id();
+    let mut environment = Vec::new();
+    if app_window && plan.display == DisplayMode::Hidden {
+        // The runtime reads this as it attaches and cloaks the window before it is ever shown.
+        environment.push((rivet_protocol::window::HIDDEN_START_VARIABLE, "1"));
+    }
+    // Under a test run the browser's first window shows without taking the foreground.
+    let task_id = rivet_platform_windows::start::spawn_browser(
+        &plan.program,
+        &plan.arguments,
+        &environment,
+        0,
+    )
+    .map_err(|error| format!("could not start {}: {error}", plan.program.display()))?;
     // Spike: load the runtime before the browser builds its first window, so window feature
     // answers are in place when the window is made.
     if std::env::var_os("RIVET_SPIKE_EARLY").is_some() {
@@ -345,7 +398,7 @@ fn run_start(options: StartOptions) -> Result<(), String> {
         }
     }
 
-    let window = if plan.display == DisplayMode::Visible {
+    let window = if app_window {
         // Rivet enters only what this launch started. Anything else may be the person's own browser.
         let ours = |process: u32| {
             runtime.is_none() || process_was_launched(process, task_id, launch_started)
@@ -374,8 +427,42 @@ fn run_start(options: StartOptions) -> Result<(), String> {
     }
 
     let session_id = window
-        .map(|window| record_session(&options, &plan.program, &request.url, window))
+        .map(|window| {
+            record_session(
+                &options,
+                &plan.program,
+                &request.url,
+                plan.display.as_str(),
+                window,
+            )
+        })
         .transpose()?;
+
+    // A browser that was already running took the window from this launch without the variable,
+    // so the session is hidden over the control channel too.
+    if let (Some(window), Some(id), DisplayMode::Hidden) = (window, &session_id, plan.display) {
+        if runtime.is_some() {
+            let mut hide = rivet_protocol::generated::SetVisibility::default();
+            hide.set_visibility(rivet_protocol::Visibility::Hidden);
+            let request = rivet_protocol::ControlRequest {
+                command: Some(rivet_protocol::control_request::Command::SetVisibility(
+                    hide,
+                )),
+                ..Default::default()
+            };
+            let session = SessionRecord {
+                id: id.clone(),
+                browser: plan.program.clone(),
+                window_handle: window.handle,
+                process_id: window.process_id,
+                url: String::new(),
+                display: "hidden".into(),
+            };
+            if let Err(error) = send_control(&session, &request) {
+                eprintln!("rivet: the hidden window may show: {error}");
+            }
+        }
+    }
 
     if options.json {
         println!(
@@ -561,6 +648,7 @@ fn record_session(
     options: &StartOptions,
     browser: &std::path::Path,
     url: &str,
+    display: &str,
     window: BrowserWindow,
 ) -> Result<String, String> {
     let state = state_path(options.state.as_deref())?;
@@ -577,6 +665,7 @@ fn record_session(
             window_handle: window.handle,
             process_id: window.process_id,
             url: url.to_owned(),
+            display: display.to_owned(),
         })
         .map_err(|error| error.to_string())?;
     registry.save(&state).map_err(|error| error.to_string())?;
@@ -681,6 +770,56 @@ fn run_open(options: links::OpenOptions) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+/// The session a control command names, or the only one there is.
+fn control_session(
+    id: Option<&str>,
+    state: Option<&std::path::Path>,
+) -> Result<SessionRecord, String> {
+    let registry = SessionRegistry::load(&state_path(state)?).map_err(|error| error.to_string())?;
+    let mut sessions = registry.list();
+    match id {
+        Some(id) => sessions
+            .find(|session| session.id == id)
+            .cloned()
+            .ok_or_else(|| format!("Rivet session {id:?} does not exist")),
+        None => match (sessions.next(), sessions.next()) {
+            (Some(only), None) => Ok(only.clone()),
+            (None, _) => {
+                Err("there is no Rivet session; start one with `rivet session start`".into())
+            }
+            _ => Err("there is more than one Rivet session; pass --id <session>".into()),
+        },
+    }
+}
+
+/// Sends one control command to its session's window and returns what to print.
+fn send_control(
+    session: &SessionRecord,
+    request: &rivet_protocol::ControlRequest,
+) -> Result<rivet_protocol::ControlResponse, String> {
+    let window = BrowserWindow {
+        handle: session.window_handle,
+        process_id: session.process_id,
+    };
+    if !browser_windows(&session.browser)
+        .map_err(|error| error.to_string())?
+        .contains(&window)
+    {
+        return Err(format!(
+            "the window of Rivet session {} is gone; close the session",
+            session.id
+        ));
+    }
+    let mut pipe = rivet_platform_windows::control::connect(window, Duration::from_secs(10))?;
+    rivet_protocol::channel::call(&mut pipe, request).map_err(|error| error.to_string())
+}
+
+fn run_control(options: rivet_cli::control::ControlOptions) -> Result<String, String> {
+    let session = control_session(options.id.as_deref(), options.state.as_deref())?;
+    let response = send_control(&session, &options.request)?;
+    rivet_cli::control::render(&response, options.json, options.out.as_deref())
+}
+
 fn run_close(options: CloseOptions) -> Result<(), String> {
     let state = state_path(options.state.as_deref())?;
     let mut registry = SessionRegistry::load(&state).map_err(|error| error.to_string())?;
@@ -718,7 +857,7 @@ fn state_path(override_path: Option<&std::path::Path>) -> Result<PathBuf, String
 /// Moves files older builds left elsewhere into the layout and removes what is past its limit.
 /// A move that fails because a file is open is tried again on the next start.
 fn tidy_files() {
-    let Some(local) = rivet_core::paths::local_app_data() else {
+    let Some(local) = rivet_core::paths::data_home() else {
         return;
     };
     rivet_core::paths::migrate(&local);
@@ -769,7 +908,7 @@ fn keep_build_in_background(browser: &std::path::Path, root: &std::path::Path) {
     let Ok(rivet) = env::current_exe() else {
         return;
     };
-    let _ = Command::new(rivet)
+    let _ = rivet_platform_windows::background::hidden(&mut Command::new(rivet))
         .args(["hold", "refresh", "--browser"])
         .arg(browser)
         .arg("--hold")

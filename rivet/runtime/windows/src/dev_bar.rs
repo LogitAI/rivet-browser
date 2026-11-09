@@ -9,7 +9,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
-use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, PostMessageW, WM_COMMAND};
 
 use crate::dev_mode::{self, Action};
@@ -62,11 +61,11 @@ unsafe fn place(window: HWND) -> Option<Placement> {
 unsafe fn client_width(window: HWND) -> f32 {
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
-    client.right as f32 * 96.0 / GetDpiForWindow(window).max(96) as f32
+    client.right as f32 * 96.0 / crate::frame::layout_dpi(window) as f32
 }
 
 fn scale(window: HWND) -> f32 {
-    unsafe { GetDpiForWindow(window).max(96) as f32 / 96.0 }
+    unsafe { crate::frame::layout_dpi(window) as f32 / 96.0 }
 }
 
 /// What to draw of the bar of `window`.

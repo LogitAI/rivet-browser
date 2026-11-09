@@ -1,11 +1,14 @@
 //! One module per user-visible feature of a Rivet window.
 
+pub(crate) mod activity;
 pub(crate) mod address_bar;
 pub(crate) mod app_window;
 pub(crate) mod bubble_anchor;
 pub(crate) mod command_bar;
+pub(crate) mod control;
 pub(crate) mod dev_page;
 pub(crate) mod dev_tools;
+pub(crate) mod field_caret;
 pub(crate) mod frame_layout;
 pub(crate) mod link_preview;
 pub(crate) mod link_rules;
@@ -27,5 +30,7 @@ pub(crate) mod split_grid;
 pub(crate) mod tab_list;
 pub(crate) mod tab_strip;
 pub(crate) mod tabs;
+pub(crate) mod tick_gate;
 pub(crate) mod vertical_tabs;
 pub(crate) mod widgets;
+pub(crate) mod window_corners;

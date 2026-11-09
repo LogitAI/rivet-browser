@@ -59,6 +59,8 @@ mod palette {
 }
 use palette::*;
 
+/// The top bar's caret on a visual of its own.
+pub(crate) mod caret;
 /// The link rules panel, drawn with the appbar's canvas.
 mod link_rules;
 /// The command bar and the link preview, drawn with the appbar's canvas.
@@ -103,6 +105,28 @@ const MONO_SIZE: f32 = 12.0;
 const MONO_ADVANCE: f32 = 6.6;
 /// The developer ground behind the address, a cool slate.
 const DEV_FIELD: u32 = 0x3d5a80;
+/// The developer row of the study's `.toolbar.dev`: its dark ground, its lower edge, the icons and
+/// the monospaced address on it.
+const DEV_GROUND: u32 = 0x2a2c31;
+const DEV_EDGE: u32 = 0x17181b;
+const DEV_ICON: u32 = 0xc4c7ce;
+const DEV_ADDRESS: u32 = 0xaeb2ba;
+
+/// Whether a window's own top row is dark: in developer mode, and not a split pane's row, which is
+/// drawn with the pane.
+pub(crate) fn row_is_dark(dev: bool, pane: bool) -> bool {
+    dev && !pane
+}
+
+/// The ground, lower edge and icon ink of the top row: dark while the page is in developer mode,
+/// as the browser's own row under the caption buttons and the developer buttons then is.
+pub(crate) fn row_colours(dev: bool) -> (u32, u32, u32) {
+    if dev {
+        (DEV_GROUND, DEV_EDGE, DEV_ICON)
+    } else {
+        (PAPER, HAIRLINE, SOFT_INK)
+    }
+}
 const FAVICON: Type = style("Manrope", 9.0, 700, 0.0);
 /// Interface icons come from the font Windows 11 draws its own caption buttons with.
 const ICONS: &str = "Segoe Fluent Icons";
@@ -163,6 +187,75 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> D2D_RECT_F {
     }
 }
 
+/// The ground of a page's row from `x` for `width`, `height` tall from `y`, as rectangles and their
+/// colours. `hole` is the browser's own address as (left from `x`, width), which shows through.
+///
+/// The ground is one run of paper to the right end, caption buttons included. Two fills that meet
+/// at a fractional pixel each cover that pixel only in part, so the browser's own frame showed
+/// through between them as a thin line. The band just above the lower edge is also covered under
+/// the hole, where the browser draws the line under its own toolbar.
+fn pane_row_ground(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    hole: Option<(f32, f32)>,
+) -> Vec<(D2D_RECT_F, u32)> {
+    let edge = rect(x, y + height - 1.0, width, 1.0);
+    let Some((left, room)) = hole else {
+        return vec![(rect(x, y, width, height), PAPER), (edge, HAIRLINE)];
+    };
+    let after = left + room;
+    vec![
+        (rect(x, y, left, height), PAPER),
+        (rect(x + after, y, width - after, height), PAPER),
+        (
+            rect(
+                x + left,
+                y + height - 1.0 - TOOLBAR_LINE,
+                room,
+                TOOLBAR_LINE,
+            ),
+            PAPER,
+        ),
+        (edge, HAIRLINE),
+    ]
+}
+
+/// How much of the row above its lower edge is kept from the browser's own toolbar line.
+const TOOLBAR_LINE: f32 = 2.0;
+
+/// The held build warning is 28 DIPs tall and at most 660 wide, 8 from the page's edges.
+const HELD_HEIGHT: f32 = 28.0;
+const HELD_WIDTH: f32 = 660.0;
+const HELD_MARGIN: f32 = 8.0;
+/// How far above the page area's bottom the warning reaches with a margin above it, in DIPs.
+/// Rivet's surfaces that float over the page bottom keep clear of it while the warning shows.
+pub(crate) const HELD_RESERVE: i32 = (HELD_MARGIN + HELD_HEIGHT + HELD_MARGIN) as i32;
+
+/// Where the held build warning goes, as (left, top, width) in window DIPs: centred at the bottom of
+/// `page` (left, top, right, bottom), and kept left of the open button zone `open_zone` by the same
+/// margin, so the warning never covers the corner where the Sidebar's open button shows. `None`
+/// when no room is left.
+fn held_place(page: [f32; 4], open_zone: Option<[f32; 4]>) -> Option<[f32; 3]> {
+    let [page_left, _, page_right, page_bottom] = page;
+    let top = page_bottom - HELD_MARGIN - HELD_HEIGHT;
+    let low = page_left + HELD_MARGIN;
+    let mut high = page_right - HELD_MARGIN;
+    if let Some([zone_left, zone_top, _, zone_bottom]) = open_zone {
+        if zone_top < page_bottom - HELD_MARGIN && zone_bottom > top {
+            high = high.min(zone_left - HELD_MARGIN);
+        }
+    }
+    let width = HELD_WIDTH.min(high - low);
+    if width <= 0.0 {
+        return None;
+    }
+    let centre = (page_left + page_right) / 2.0;
+    let left = (centre - width / 2.0).clamp(low, high - width);
+    Some([left, top, width])
+}
+
 /// The geometry the shown surface was painted for. The visual keeps the surface alive.
 struct Painted {
     width: i32,
@@ -213,12 +306,20 @@ pub struct Appbar {
     /// The top bar of a window with a single page, and what it was last painted for.
     address: IDCompositionVisual2,
     address_painted: Option<(crate::features::address_bar::View, u32)>,
+    /// The top bar's caret, inside the top bar's visual.
+    address_caret: caret::AddressCaret,
+    /// The top bar's surface and its size in pixels, drawn over again while the size stays.
+    address_surface: Option<(IDCompositionSurface, u32, u32)>,
     /// The command bar over the page, and what it was last painted for.
     command: IDCompositionVisual2,
     command_painted: Option<(crate::features::command_bar::View, u32)>,
+    /// The command bar's caret, inside the command bar's visual.
+    command_caret: caret::AddressCaret,
     /// The Rivet settings card over the page, and what it was last painted for.
     settings: IDCompositionVisual2,
     settings_painted: Option<(crate::features::settings::View, u32)>,
+    /// The settings card's caret, inside the card's visual.
+    settings_caret: caret::AddressCaret,
     /// The header and shadow of a link preview, and what they were last painted for.
     preview: IDCompositionVisual2,
     preview_painted: Option<(crate::features::link_preview::View, u32)>,
@@ -388,6 +489,7 @@ impl Appbar {
         // The top bar lies under the toggle and the floating appbar, like the browser row it replaces.
         let address = device.CreateVisual()?;
         root.AddVisual(&address, true, &ground)?;
+        let address_caret = caret::AddressCaret::new(&device, &address)?;
         // The link preview and the command bar lie over everything else of the window.
         let preview = device.CreateVisual()?;
         root.AddVisual(&preview, true, None::<&IDCompositionVisual>)?;
@@ -395,6 +497,8 @@ impl Appbar {
         root.AddVisual(&command, true, None::<&IDCompositionVisual>)?;
         let settings = device.CreateVisual()?;
         root.AddVisual(&settings, true, None::<&IDCompositionVisual>)?;
+        let command_caret = caret::AddressCaret::new(&device, &command)?;
+        let settings_caret = caret::AddressCaret::new(&device, &settings)?;
         let rules = device.CreateVisual()?;
         root.AddVisual(&rules, true, None::<&IDCompositionVisual>)?;
         target.SetRoot(&root)?;
@@ -431,10 +535,14 @@ impl Appbar {
             held_painted: None,
             address,
             address_painted: None,
+            address_caret,
+            address_surface: None,
             command,
             command_painted: None,
+            command_caret,
             settings,
             settings_painted: None,
+            settings_caret,
             preview,
             preview_painted: None,
             rules,
@@ -869,32 +977,41 @@ impl Appbar {
         self.device.Commit()
     }
 
-    /// Shows why this window's browser is older than the installed one, over the window's lower right
-    /// corner. Pointer input still reaches the page below, since the visual takes none.
+    /// Shows why this window's browser is older than the installed one, at the bottom centre of the
+    /// page area `page` (left, top, right, bottom in window DIPs), clear of the Sidebar's open button
+    /// zone `open_zone` at the page's lower right corner. Pointer input still reaches the page below,
+    /// since the visual takes none.
     pub(crate) unsafe fn update_held(
         &mut self,
         warning: Option<&str>,
-        client: (i32, i32),
+        page: [f32; 4],
+        open_zone: Option<[f32; 4]>,
         dpi: u32,
     ) -> Result<()> {
         let Some(warning) = warning else {
             return Ok(());
         };
-        const HEIGHT: f32 = 28.0;
-        const WIDTH: f32 = 660.0;
-        const MARGIN: f32 = 8.0;
         let scale = dpi as f32 / 96.0;
-        let width = (WIDTH * scale)
-            .min(client.0 as f32 - 2.0 * MARGIN * scale)
-            .round() as i32;
-        let height = (HEIGHT * scale).round() as i32;
+        let Some([left, top, room]) = held_place(page, open_zone) else {
+            return Ok(());
+        };
+        let width = (room * scale).round() as i32;
+        let height = (HELD_HEIGHT * scale).round() as i32;
         if width <= 0 {
             return Ok(());
         }
-        self.held
-            .SetOffsetX2(client.0 as f32 - width as f32 - (MARGIN * scale).round())?;
-        self.held
-            .SetOffsetY2(client.1 as f32 - height as f32 - (MARGIN * scale).round())?;
+        self.held.SetOffsetX2((left * scale).round())?;
+        self.held.SetOffsetY2((top * scale).round())?;
+        crate::trace::trace_changed(
+            "held warning",
+            &format!(
+                "held warning at {} {} {} {}",
+                (left * scale).round(),
+                (top * scale).round(),
+                width,
+                height
+            ),
+        );
         let key = (warning.to_owned(), width, dpi);
         if self.held_painted.as_ref() == Some(&key) {
             return self.device.Commit();
@@ -920,11 +1037,11 @@ impl Appbar {
         };
         let w = width as f32 / scale;
         let result = canvas
-            .fill_rounded(rect(0.0, 0.0, w, HEIGHT), 8.0, rgba(HELD_GROUND, 1.0))
+            .fill_rounded(rect(0.0, 0.0, w, HELD_HEIGHT), 8.0, rgba(HELD_GROUND, 1.0))
             .and_then(|()| {
                 canvas.text(
                     HELD_TEXT,
-                    rect(12.0, 0.0, w - 24.0, HEIGHT),
+                    rect(12.0, 0.0, w - 24.0, HELD_HEIGHT),
                     warning,
                     HELD_INK,
                     false,
@@ -949,6 +1066,8 @@ impl Appbar {
         use crate::features::address_bar::{Part, Security, CHIP, FIELD_GROUND};
         let Some(bar) = bar else {
             if self.address_painted.take().is_some() {
+                self.hide_address_caret()?;
+                self.address_surface = None;
                 self.address.SetContent(None)?;
                 return self.device.Commit();
             }
@@ -956,10 +1075,20 @@ impl Appbar {
         };
         self.address.SetOffsetX2(bar.x.round())?;
         self.address.SetOffsetY2(bar.y.round())?;
-        // An edited field draws something new on every key, so only a bar at rest is kept.
-        if !bar.editing && self.address_painted.as_ref() == Some(&(bar.clone(), dpi)) {
+        // The caret is a visual of its own, so a blink or a caret move paints nothing here. The
+        // field's text and selection count in the view's generation.
+        self.address_caret
+            .set_origin((bar.x.round(), bar.y.round()));
+        let caret = if bar.editing {
+            crate::features::address_bar::caret(window as _)
+        } else {
+            None
+        };
+        self.place_address_caret(caret, dpi, false)?;
+        if !caret::address_needs_paint(self.address_painted.as_ref(), bar, dpi) {
             return self.device.Commit();
         }
+        crate::features::activity::count(crate::features::activity::Counter::AddressPaint);
         let (width, height) = (bar.width.round() as i32, bar.height.round() as i32);
         if width <= 0 || height <= 0 {
             return Ok(());
@@ -973,12 +1102,26 @@ impl Appbar {
             0.0
         };
         let total = height + ((list_h + 8.0) * scale).ceil() as i32 * (list_h > 0.0) as i32;
-        let surface = self.device.CreateSurface(
-            width as u32,
-            total as u32,
-            DXGI_FORMAT_B8G8R8A8_UNORM,
-            DXGI_ALPHA_MODE_PREMULTIPLIED,
-        )?;
+        // The surface is kept while the bar keeps its size, and drawn over again in place.
+        let reused = self
+            .address_surface
+            .as_ref()
+            .filter(|(_, w, h)| (*w, *h) == (width as u32, total as u32))
+            .map(|(surface, _, _)| surface.clone());
+        let fresh = reused.is_none();
+        let surface = match reused {
+            Some(surface) => surface,
+            None => {
+                let surface = self.device.CreateSurface(
+                    width as u32,
+                    total as u32,
+                    DXGI_FORMAT_B8G8R8A8_UNORM,
+                    DXGI_ALPHA_MODE_PREMULTIPLIED,
+                )?;
+                self.address_surface = Some((surface.clone(), width as u32, total as u32));
+                surface
+            }
+        };
         let mut offset = POINT::default();
         let context: ID2D1DeviceContext = surface.BeginDraw(None, &mut offset)?;
         context.SetDpi(dpi as f32, dpi as f32);
@@ -994,14 +1137,16 @@ impl Appbar {
         };
         let (w, h) = (width as f32 / scale, height as f32 / scale);
         let draw = || -> Result<()> {
+            let dark = row_is_dark(bar.dev, bar.pane);
+            let (ground, edge, icon_ink) = row_colours(dark);
             if bar.pane {
                 // Only the address of a pane's row: the row around it is drawn with the row.
                 canvas.fill(rect(0.0, 0.0, w, h - 1.0), PAPER)?;
             } else {
                 // The panel's rounded top corners, then a square lower half and the hairline.
-                canvas.fill_rounded(rect(0.0, 0.0, w, h), PANEL_RADIUS, rgba(PAPER, 1.0))?;
-                canvas.fill(rect(0.0, h / 2.0, w, h / 2.0), PAPER)?;
-                canvas.fill(rect(0.0, h - 1.0, w, 1.0), HAIRLINE)?;
+                canvas.fill_rounded(rect(0.0, 0.0, w, h), PANEL_RADIUS, rgba(ground, 1.0))?;
+                canvas.fill(rect(0.0, h / 2.0, w, h / 2.0), ground)?;
+                canvas.fill(rect(0.0, h - 1.0, w, 1.0), edge)?;
             }
             for (part, x, pw) in
                 crate::features::address_bar::parts_reserving(w, bar.pane, bar.reserve)
@@ -1015,12 +1160,19 @@ impl Appbar {
                         }
                         let (glyph, ink) = match part {
                             Part::Back => {
-                                ('\u{E72B}', if bar.can_back { SOFT_INK } else { 0xb9b6bb })
+                                ('\u{E72B}', if bar.can_back { icon_ink } else { 0xb9b6bb })
                             }
-                            Part::Forward => {
-                                ('\u{E72A}', if bar.can_forward { MUTED } else { 0xd3d1d6 })
-                            }
-                            _ => ('\u{E72C}', SOFT_INK),
+                            Part::Forward => (
+                                '\u{E72A}',
+                                if !bar.can_forward {
+                                    0xd3d1d6
+                                } else if dark {
+                                    icon_ink
+                                } else {
+                                    MUTED
+                                },
+                            ),
+                            _ => ('\u{E72C}', icon_ink),
                         };
                         canvas.icon(glyph, area, 16.0, ink)?;
                     }
@@ -1047,7 +1199,7 @@ impl Appbar {
                             CHIP + 4.0 + measure(&self.dwrite, &self.fonts, CHIP_TEXT, words)?
                         };
                         let chip = rect(x + 6.0, (h - 22.0) / 2.0, chip_w, 22.0);
-                        let ink = if insecure { 0xb3261e } else { SOFT_INK };
+                        let ink = if insecure { 0xb3261e } else { icon_ink };
                         if insecure && !bar.editing {
                             canvas.fill_rounded(chip, 6.0, rgba(0xb3261e, 0.08))?;
                         }
@@ -1069,7 +1221,11 @@ impl Appbar {
                         if !bar.editing && bar.dev {
                             // Developer mode: the whole address in a monospace system font.
                             let shown = crate::dev_mode::fit_address(&bar.url, room, MONO_ADVANCE);
-                            canvas.mono_text(rect(left, area.top, room, 28.0), &shown, SOFT_INK)?;
+                            canvas.mono_text(
+                                rect(left, area.top, room, 28.0),
+                                &shown,
+                                DEV_ADDRESS,
+                            )?;
                         } else if !bar.editing {
                             let title_w = if bar.title.is_empty() {
                                 0.0
@@ -1115,7 +1271,9 @@ impl Appbar {
                 }
             }
             if !bar.pane {
-                canvas.caption_buttons(w, 0.0, h, bar.caption_hover, bar.zoomed, self.dark_row)?;
+                // The glyphs follow the ground drawn under them in this same paint, so they never stay
+                // white on a light row after the page leaves developer mode.
+                canvas.caption_buttons(w, 0.0, h, bar.caption_hover, bar.zoomed, dark)?;
             }
             if list_h > 0.0 {
                 if let Some((left, lw)) = crate::features::address_bar::dropdown_of(w, bar.pane) {
@@ -1131,7 +1289,9 @@ impl Appbar {
                     )?;
                     canvas.fill_rounded(list, 10.0, rgba(WHITE, 1.0))?;
                     canvas.ring(list, 10.0, rgba(INK, 0.08))?;
-                    for (index, (contents, description)) in bar.suggestions.iter().enumerate() {
+                    for (index, (contents, description, search)) in
+                        bar.suggestions.iter().enumerate()
+                    {
                         let row = rect(
                             left + 4.0,
                             list.top + SUGGESTION_PAD + index as f32 * SUGGESTION_ROW,
@@ -1142,11 +1302,7 @@ impl Appbar {
                             canvas.fill_rounded(row, 7.0, rgba(INK, 0.06))?;
                         }
                         // A page the browser knows has a globe, a search a magnifier.
-                        let glyph = if contents.contains("://") || description.is_empty() {
-                            '\u{E774}'
-                        } else {
-                            '\u{E721}'
-                        };
+                        let glyph = if *search { '\u{E721}' } else { '\u{E774}' };
                         canvas.icon(
                             glyph,
                             rect(row.left + 4.0, row.top, 24.0, SUGGESTION_ROW),
@@ -1181,7 +1337,7 @@ impl Appbar {
             }
             if bar.editing {
                 let origin = (bar.x, bar.y);
-                crate::features::address_bar::with_field_pixels(window as _, |place, bytes, pw, ph, caret| -> Result<()> {
+                crate::features::address_bar::with_field_pixels(window as _, |place, bytes, pw, ph, _caret| -> Result<()> {
                     let properties = windows::Win32::Graphics::Direct2D::D2D1_BITMAP_PROPERTIES1 {
                         pixelFormat: windows::Win32::Graphics::Direct2D::Common::D2D1_PIXEL_FORMAT {
                             format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -1204,11 +1360,6 @@ impl Appbar {
                         None,
                         None,
                     );
-                    if let Some(caret) = caret {
-                        let x = (caret.left as f32 - origin.0) / scale;
-                        let y = (caret.top as f32 - origin.1) / scale;
-                        canvas.fill(rect(x, y, 1.2, (caret.bottom - caret.top) as f32 / scale), INK)?;
-                    }
                     Ok(())
                 })
                 .unwrap_or(Ok(()))?;
@@ -1218,7 +1369,9 @@ impl Appbar {
         let result = draw();
         surface.EndDraw()?;
         result?;
-        self.address.SetContent(&surface)?;
+        if fresh {
+            self.address.SetContent(&surface)?;
+        }
         self.address_painted = Some((bar.clone(), dpi));
         self.device.Commit()
     }
@@ -2267,7 +2420,6 @@ impl Canvas<'_> {
         let (ox, oy) = (row.reach_left / scale, row.y / scale);
         let w = row.width / scale;
         let h = vh - oy;
-        let clip_w = vw - ox;
         self.fill(rect(0.0, oy, ox, h), PAPER)?;
         self.fill(
             rect(vw - row.reach_right / scale, oy, row.reach_right / scale, h),
@@ -2280,22 +2432,11 @@ impl Canvas<'_> {
             .iter()
             .find(|b| b.0 == RowButton::Address && row.editable)
             .map(|b| (b.1, b.2));
-        match hole {
-            Some((left, width)) => {
-                self.fill(rect(ox, oy, left, h), PAPER)?;
-                let after = left + width;
-                self.fill(rect(ox + after, oy, clip_w - after, h), PAPER)?;
-                self.fill(rect(ox, oy + h - 1.0, clip_w, 1.0), HAIRLINE)?;
-            }
-            None => {
-                self.fill(rect(ox, oy, clip_w, h), PAPER)?;
-                self.fill(rect(ox, oy + h - 1.0, clip_w, 1.0), HAIRLINE)?;
-            }
+        for (area, colour) in pane_row_ground(ox, oy, full - ox, h, hole) {
+            self.fill(area, colour)?;
         }
         if caption > 0.0 {
             // Rivet draws the caption buttons on the row of the page at the window's top right.
-            self.fill(rect(vw, oy, full - vw, h), PAPER)?;
-            self.fill(rect(vw, oy + h - 1.0, full - vw, 1.0), HAIRLINE)?;
             // The window buttons fade with the rest of a row whose page is not focused.
             self.with_opacity(crate::features::split::row_ink_opacity(row.active), || {
                 self.caption_buttons(full, oy, h, row.caption_hover, row.zoomed, false)
@@ -2617,4 +2758,81 @@ pub(crate) fn make_fonts_known_to_gdi() {
             );
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fr11_a_page_in_developer_mode_has_the_dark_row_of_the_study() {
+        // `.toolbar.dev` of rivet-shell-demo.html: ground #2a2c31, lower edge #17181b, icons #c4c7ce.
+        assert_eq!(row_colours(true), (0x2a2c31, 0x17181b, 0xc4c7ce));
+        // Any other page keeps the paper row, where the dark caption glyphs show.
+        assert_eq!(row_colours(false), (PAPER, HAIRLINE, SOFT_INK));
+    }
+
+    #[test]
+    fn fr11_the_caption_glyphs_follow_the_row_they_are_drawn_on() {
+        // The row and its caption glyphs take one answer, so leaving developer mode turns both light.
+        assert!(row_is_dark(true, false));
+        assert!(!row_is_dark(false, false));
+        assert!(!row_is_dark(true, true));
+    }
+
+    #[test]
+    fn fr9_a_page_row_ground_has_no_seam_where_the_browser_shows_through() {
+        // A right page at 1.125 scale: the caption buttons start at a fractional pixel.
+        let (x, y, width, height) = (0.0, 0.0, 636.0, 57.0);
+        let covered = |ground: &[(D2D_RECT_F, u32)], px: f32, py: f32| {
+            ground
+                .iter()
+                .any(|(r, _)| r.left <= px && px < r.right && r.top <= py && py < r.bottom)
+        };
+        for hole in [None, Some((140.0, 276.0))] {
+            let ground = pane_row_ground(x, y, width, height, hole);
+            // One run of paper reaches the right end, so nothing meets where the caption begins.
+            let runs: Vec<_> = ground
+                .iter()
+                .filter(|(r, c)| *c == PAPER && (r.right - (x + width)).abs() < 0.01)
+                .collect();
+            assert_eq!(runs.len(), 1, "{hole:?}");
+            assert!(runs[0].0.left <= 498.0 - 1.0);
+            // The lower band is covered across the whole row, hole included.
+            for px in [10.0, 200.0, 400.0, 600.0] {
+                assert!(covered(&ground, px, height - 2.5), "{hole:?} at {px}");
+                assert!(covered(&ground, px, height - 0.5), "{hole:?} at {px}");
+            }
+            // The browser's own address still shows through the middle of the hole.
+            if let Some((left, room)) = hole {
+                assert!(!covered(&ground, left + room / 2.0, height / 2.0));
+            }
+        }
+    }
+
+    #[test]
+    fn fr10_the_held_build_warning_sits_at_the_bottom_centre_clear_of_the_open_button() {
+        let zone = |page: [f32; 4]| crate::side_rail::open_zone_at(page[2], page[3]);
+        let overlaps =
+            |a: [f32; 4], b: [f32; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+        for page in [
+            [336.0, 56.0, 1600.0, 1000.0],
+            [336.0, 56.0, 1000.0, 800.0],
+            [0.0, 0.0, 700.0, 400.0],
+        ] {
+            let [left, top, width] = held_place(page, Some(zone(page))).unwrap();
+            let warning = [left, top, left + width, top + HELD_HEIGHT];
+            assert!(!overlaps(warning, zone(page)), "{page:?} {warning:?}");
+            assert!(left >= page[0] + HELD_MARGIN && top + HELD_HEIGHT == page[3] - HELD_MARGIN);
+        }
+        // A wide page has the warning centred.
+        let page = [336.0, 56.0, 1600.0, 1000.0];
+        let [left, _, width] = held_place(page, Some(zone(page))).unwrap();
+        assert!(((left + width / 2.0) - (page[0] + page[2]) / 2.0).abs() < 0.5);
+        // No room, no warning.
+        assert_eq!(
+            held_place([0.0, 0.0, 80.0, 100.0], Some(zone([0.0, 0.0, 80.0, 100.0]))),
+            None
+        );
+    }
 }

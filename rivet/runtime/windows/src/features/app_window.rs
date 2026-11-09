@@ -16,8 +16,24 @@ pub(crate) fn recorded(name: &str) -> Option<usize> {
 }
 
 /// A value named in the test profile's `rivet-spike.txt`.
+///
+/// The addresses there are unchecked and belong to one build, so only the profile's own debug
+/// folder may hold them. A file left in the shared folder would hand them to every browser Rivet
+/// opens, on any build, and a wrong address crashes the browser. The file is read once per process
+/// because the layout asks for these values many times a second.
 fn switched(name: &str) -> Option<usize> {
-    let text = std::fs::read_to_string(crate::frame::debug_switch("rivet-spike.txt")?).ok()?;
+    static TEXT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let text = TEXT.get_or_init(|| spike_text(crate::frame::own_debug_directory().as_deref()));
+    spike_value(text.as_deref()?, name)
+}
+
+/// The text of `rivet-spike.txt` in a profile's own debug folder.
+fn spike_text(own: Option<&std::path::Path>) -> Option<String> {
+    std::fs::read_to_string(own?.join("rivet-spike.txt")).ok()
+}
+
+/// The value of `name` in the text of a spike file: `name 0xRVA` per line.
+fn spike_value(text: &str, name: &str) -> Option<usize> {
     text.lines().find_map(|line| {
         let mut words = line.split_whitespace();
         (words.next()? == name)
@@ -201,40 +217,8 @@ pub(crate) unsafe fn move_tab_in(window: HWND) -> bool {
         if count < 1 {
             continue;
         }
-        if let (Some(detach), Some(insert), Some(target)) = (
-            recorded("detach"),
-            recorded("insert"),
-            crate::features::tabs::tab_model(base, window),
-        ) {
-            // The tab model of the other window gives the tab up, and the app window's model takes it.
-            type Detach = unsafe extern "system" fn(*mut c_void, *mut usize, i32) -> *mut usize;
-            type Insert = unsafe extern "system" fn(
-                *mut c_void,
-                i32,
-                *mut usize,
-                i32,
-                *const [u64; 8],
-                *const [u64; 16],
-            ) -> i32;
-            let mut tab: usize = 0;
-            crate::features::tabs::function::<Detach>(base, detach)(model, &mut tab, count - 1);
-            crate::trace::trace(&format!("app window move: detached {tab:#x}"));
-            let none = [0u64; 8];
-            // A build whose insert takes one more optional after the group reads this empty one.
-            let no_more = [0u64; 16];
-            // At the end of the strip, active: `ADD_ACTIVE | ADD_FORCE_INDEX`.
-            let own = crate::features::tabs::function::<
-                unsafe extern "system" fn(*mut c_void) -> i32,
-            >(base, crate::builds::get().tabs.tab_count)(target);
-            let at = crate::features::tabs::function::<Insert>(base, insert)(
-                target,
-                own,
-                &mut tab,
-                1 | 4,
-                &none,
-                &no_more,
-            );
-            crate::trace::trace(&format!("app window move: inserted at {at}"));
+        if can_move_tabs() {
+            move_tab(other, (count - 1) as usize, window, true);
         } else {
             let indices: [i32; 2] = [count - 1, 0];
             let vector: [usize; 3] = [
@@ -253,6 +237,89 @@ pub(crate) unsafe fn move_tab_in(window: HWND) -> bool {
         break;
     }
     moved
+}
+
+/// `TabStripModel::DetachTabAtForInsertion` and `TabStripModel::InsertDetachedTabAt`.
+type Detach = unsafe extern "system" fn(*mut c_void, *mut usize, i32) -> *mut usize;
+type Insert = unsafe extern "system" fn(
+    *mut c_void,
+    i32,
+    *mut usize,
+    i32,
+    *const [u64; 8],
+    *const [u64; 16],
+) -> i32;
+
+/// Whether this build can move a tab from one window's tab strip model to another's.
+pub(crate) fn can_move_tabs() -> bool {
+    recorded("detach").is_some() && recorded("insert").is_some()
+}
+
+/// Moves tab `index` of window `from` to the end of window `to`'s own tab strip with Chromium's
+/// own detach and insert, so the page keeps its history, its state and its profile. `active` makes
+/// it the tab `to` shows. A window whose last tab leaves is closed by the browser itself.
+pub(crate) unsafe fn move_tab(from: HWND, index: usize, to: HWND, active: bool) -> bool {
+    let Some(base) = crate::features::tabs::base() else {
+        return false;
+    };
+    let (Some(detach), Some(insert)) = (recorded("detach"), recorded("insert")) else {
+        return false;
+    };
+    let (Some(source), Some(target)) = (
+        crate::features::tabs::tab_model(base, from),
+        crate::features::tabs::tab_model(base, to),
+    ) else {
+        return false;
+    };
+    let count = |model| {
+        crate::features::tabs::function::<unsafe extern "system" fn(*mut c_void) -> i32>(
+            base,
+            crate::builds::get().tabs.tab_count,
+        )(model)
+    };
+    if index as i32 >= count(source) {
+        return false;
+    }
+    // The tab model of `from` gives the tab up, and the model of `to` takes it.
+    let mut tab: usize = 0;
+    crate::features::tabs::function::<Detach>(base, detach)(source, &mut tab, index as i32);
+    crate::trace::trace(&format!("app window move: detached {tab:#x}"));
+    if tab == 0 {
+        return false;
+    }
+    let none = [0u64; 8];
+    // A build whose insert takes one more optional after the group reads this empty one.
+    let no_more = [0u64; 16];
+    // At the end of the strip: `ADD_FORCE_INDEX`, with `ADD_ACTIVE` when it is to be shown.
+    let flags = if active { 1 | 4 } else { 4 };
+    let at = crate::features::tabs::function::<Insert>(base, insert)(
+        target,
+        count(target),
+        &mut tab,
+        flags,
+        &none,
+        &no_more,
+    );
+    crate::trace::trace(&format!("app window move: inserted at {at}"));
+    true
+}
+
+pub(crate) use crate::browsers::chromium::commands::move_command;
+
+/// Moves the active tab of `window` into a new browser window with the browser's own command
+/// `command`, as its tab menu does, and returns the top-level windows the browser made while it ran
+/// it.
+pub(crate) unsafe fn move_active_tab_to_new_window(window: HWND, command: usize) -> Vec<HWND> {
+    let created = crate::os::win32::send_command_collecting_windows(window, command);
+    crate::trace::trace(&format!(
+        "app window: move command {command} made windows {created:?}"
+    ));
+    created
+}
+
+/// The window among `created` that the browser made for the moved tab: the first that `holds` it.
+pub(crate) fn window_made_for(created: &[HWND], holds: impl Fn(HWND) -> bool) -> Option<HWND> {
+    created.iter().copied().find(|window| holds(*window))
 }
 
 /// Offsets of the browser object that hold the browser type of an app window (`TYPE_APP`, 2).
@@ -632,10 +699,45 @@ pub(crate) fn install_features() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn fr9_the_mini_window_is_the_window_the_browser_created_for_the_tab() {
+        let tooltip = 0x10 as HWND;
+        let mini = 0x20 as HWND;
+        let later = 0x30 as HWND;
+        // Of the windows made during the command, the one that holds the moved tab is taken, never
+        // a window that only happened to exist.
+        assert_eq!(
+            window_made_for(&[tooltip, mini, later], |window| window == mini),
+            Some(mini)
+        );
+        assert_eq!(window_made_for(&[tooltip], |window| window == mini), None);
+        assert_eq!(window_made_for(&[], |_| true), None);
+    }
+
     const CHROMIUM: Features = Features {
         title_bar: FEATURE_TITLEBAR,
         tab_strip: FEATURE_TABSTRIP,
     };
+
+    #[test]
+    fn nfr3_unchecked_spike_addresses_apply_only_from_the_profiles_own_debug_folder() {
+        let shared = rivet_core::paths::TestDir::new("spike-shared");
+        std::fs::write(shared.join("rivet-spike.txt"), "ctx 06AC7B40\n").unwrap();
+        // A browser started without its own `rivet-debug` folder never reads a spike file, so the
+        // shared folder's file cannot reach it.
+        assert_eq!(spike_text(None), None);
+        let own = rivet_core::paths::TestDir::new("spike-own");
+        assert_eq!(spike_text(Some(own.path())), None);
+        std::fs::write(
+            own.join("rivet-spike.txt"),
+            "new 06F4DE00\nctx 0x06AC7B40\n",
+        )
+        .unwrap();
+        let text = spike_text(Some(own.path())).expect("the own file is read");
+        assert_eq!(spike_value(&text, "ctx"), Some(0x06AC_7B40));
+        assert_eq!(spike_value(&text, "new"), Some(0x06F4_DE00));
+        assert_eq!(spike_value(&text, "size"), None);
+    }
 
     #[test]
     fn app_window_new_tabs_stay_in_the_app_window_without_a_drawn_tab_strip() {

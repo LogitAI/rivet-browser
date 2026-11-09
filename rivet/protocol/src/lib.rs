@@ -10,9 +10,14 @@ pub mod generated {
     include!(concat!(env!("OUT_DIR"), "/rivet.control.v1.rs"));
 }
 
+pub mod channel;
 pub mod window;
 
-pub use generated::{Hello, HelloAccepted, HelloRejected, ProtocolVersion};
+pub use generated::{
+    control_request, control_response, ControlFailure, ControlRequest, ControlResponse,
+    DisplayPolicy, FailureKind, Frame, Hello, HelloAccepted, HelloRejected, NavStep, Page,
+    PageTarget, ProtocolVersion, ReadField, Visibility, Workspace,
+};
 
 /// The protocol major version. A different major version is never accepted.
 pub const PROTOCOL_MAJOR: u32 = 1;
@@ -144,5 +149,51 @@ mod tests {
                 received_minor: 1
             })
         );
+    }
+
+    #[test]
+    fn fr5_a_hidden_navigation_request_matches_the_checked_in_vector() {
+        let bytes = decode_hex(include_str!("../vectors/navigate-hidden-v1.hex"));
+        let request = ControlRequest::decode(bytes.as_slice()).unwrap();
+        assert_eq!(request.display(), DisplayPolicy::Hidden);
+        match &request.command {
+            Some(control_request::Command::Navigate(navigate)) => {
+                assert_eq!(navigate.url, "https://a.test/");
+                assert_eq!(navigate.page, None);
+            }
+            other => panic!("expected a navigation, got {other:?}"),
+        }
+        assert_eq!(encode(&request), bytes);
+    }
+
+    #[test]
+    fn fr4_a_frame_reports_the_scale_it_is_laid_out_at() {
+        let bytes = decode_hex(include_str!("../vectors/frame-layout-dpi-v1.hex"));
+        let response = ControlResponse::decode(bytes.as_slice()).unwrap();
+        match &response.result {
+            Some(control_response::Result::Frame(frame)) => {
+                assert_eq!((frame.width, frame.height), (2, 1));
+                assert_eq!(frame.bgra, [1, 2, 3, 255, 4, 5, 6, 255]);
+                assert_eq!(frame.layout_dpi, 120);
+            }
+            other => panic!("expected a frame, got {other:?}"),
+        }
+        assert_eq!(encode(&response), bytes);
+    }
+
+    #[test]
+    fn fr5_a_needs_visible_failure_matches_the_checked_in_vector() {
+        let bytes = decode_hex(include_str!("../vectors/needs-visible-v1.hex"));
+        let response = ControlResponse::decode(bytes.as_slice()).unwrap();
+        assert_eq!(response.visibility(), Visibility::Hidden);
+        assert!(!response.promoted);
+        match &response.result {
+            Some(control_response::Result::Failure(failure)) => {
+                assert_eq!(failure.kind(), FailureKind::NeedsVisible);
+                assert_eq!(failure.reason, "hidden");
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+        assert_eq!(encode(&response), bytes);
     }
 }

@@ -11,6 +11,7 @@ use super::Build;
 /// detour.
 pub type Function = (usize, &'static [u8]);
 
+crate::row_data::row_struct! {
 #[derive(Debug, Clone, Copy)]
 pub struct PageTools {
     /// `DevToolsWindow::ToggleDevToolsWindow(WebContents*, Profile*, bool force_open,
@@ -29,6 +30,7 @@ pub struct PageTools {
     /// link under the pointer, which the browser shows in its status bubble. The prologue ends on an
     /// instruction boundary and holds no address relative to itself.
     pub update_target_url: Function,
+}
 }
 
 /// `DevToolsToggleAction::Show`, the same in every build here.
@@ -64,6 +66,24 @@ pub const BRAVE_63: PageTools = PageTools {
     browser_context: (0x06AC_7B40, BROWSER_CONTEXT),
     profile_from_context: (0x0613_B670, PROFILE_FROM_CONTEXT),
     update_target_url: (0x02E8_6660, TARGET_URL_156),
+};
+
+/// Google Chrome 157.0.8103.38.
+pub const CHROME_157_38: PageTools = PageTools {
+    toggle_devtools: (0x0BE6_3C80, TOGGLE_156),
+    show_action: (0x0600_BE20, SHOW),
+    browser_context: (0x0586_00A0, BROWSER_CONTEXT),
+    profile_from_context: (0x04FC_8630, PROFILE_FROM_CONTEXT),
+    update_target_url: (0x031D_7670, TARGET_URL_156),
+};
+
+/// Brave 157.1.99.55 (Chromium 157.0.8103.39).
+pub const BRAVE_157_55: PageTools = PageTools {
+    toggle_devtools: (0x0D2A_FCC0, TOGGLE_156),
+    show_action: (0x075A_2E50, SHOW),
+    browser_context: (0x06DB_DCA0, BROWSER_CONTEXT),
+    profile_from_context: (0x0658_9680, PROFILE_FROM_CONTEXT),
+    update_target_url: (0x030A_9EF0, TARGET_URL_156),
 };
 
 /// Microsoft Edge 156.0.4314.50, from Microsoft's public symbols. Only Chromium's functions.
@@ -154,10 +174,15 @@ pub const SAMSUNG_29: PageTools = PageTools {
 
 /// The functions recorded for `build`, by its browser and version. Whale and Samsung Internet were
 /// found by shape, not from symbols.
-pub fn page_tools_for(build: &Build) -> Option<&'static PageTools> {
-    const ROWS: [(&str, [u16; 4], &PageTools); 6] = [
+pub fn page_tools_for(build: &'static Build) -> Option<&'static PageTools> {
+    if let Some(tools) = build.page_tools.as_ref() {
+        return Some(tools);
+    }
+    const ROWS: [(&str, [u16; 4], &PageTools); 8] = [
         ("Google Chrome", [156, 0, 8078, 80], &CHROME_156_80),
         ("Brave", [156, 1, 98, 63], &BRAVE_63),
+        ("Google Chrome", [157, 0, 8103, 38], &CHROME_157_38),
+        ("Brave", [157, 1, 99, 55], &BRAVE_157_55),
         ("Microsoft Edge", [156, 0, 4314, 50], &EDGE_156_50),
         ("Microsoft Edge", [156, 0, 4314, 58], &EDGE_156_58),
         ("Naver Whale", [5, 39, 412, 57], &WHALE_57),
@@ -212,6 +237,14 @@ mod tests {
             (
                 r"C:\Program Files\BraveSoftware\Brave-Browser\Application\156.1.98.63\chrome.dll",
                 &BRAVE_63,
+            ),
+            (
+                r"C:\Program Files\Google\Chrome\Application\157.0.8103.38\chrome.dll",
+                &CHROME_157_38,
+            ),
+            (
+                r"C:\Program Files\BraveSoftware\Brave-Browser\Application\157.1.99.55\chrome.dll",
+                &BRAVE_157_55,
             ),
             (
                 r"C:\Program Files (x86)\Microsoft\Edge\Application\156.0.4314.50\msedge.dll",

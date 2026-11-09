@@ -406,6 +406,18 @@ unsafe fn field_rect(window: HWND, rows: usize) -> Option<RECT> {
     })
 }
 
+/// The field's caret in client pixels while the bar is open and the caret is shown.
+pub(crate) fn caret(window: HWND) -> Option<RECT> {
+    if busy() {
+        return None;
+    }
+    with_bar(window, |bar| {
+        bar.open
+            .then(|| bar.field.as_ref().and_then(|field| field.caret()))
+            .flatten()
+    })
+}
+
 /// Lets the appbar draw the field's pixels at their place, in client pixels.
 pub(crate) unsafe fn with_field_pixels<R>(
     window: HWND,
@@ -429,6 +441,10 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
     with_bar(window, |bar| {
         if !bar.open {
             return None;
+        }
+        // A change made without a key, such as a drag that selects, counts too.
+        if bar.field.as_ref().is_some_and(|field| field.take_changed()) {
+            bar.generation += 1;
         }
         Some(View {
             x: x * f,
@@ -834,8 +850,15 @@ pub(crate) unsafe fn message(
             None
         }
         WM_TIMER if (TIMER_BASE..=TIMER_LAST).contains(&wparam) => {
+            // Most of the field's timers blink the caret, which moves only the caret's own visual.
+            let before = with_bar(window, |bar| bar.generation);
             forward(window, message, wparam - TIMER_BASE, 0);
-            crate::frame::update_appbar(window);
+            let after = with_bar(window, |bar| bar.generation);
+            if crate::features::field_caret::only_caret(before, after) {
+                crate::frame::update_card_caret(window, crate::appbar::caret::Which::Command);
+            } else {
+                crate::frame::update_appbar(window);
+            }
             Some(0)
         }
         WM_KILLFOCUS | WM_SETFOCUS => {

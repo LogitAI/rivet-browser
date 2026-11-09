@@ -154,6 +154,24 @@ impl<'a> PeFile<'a> {
             .any(|(address, size)| (*address..address.saturating_add(*size)).contains(&rva))
     }
 
+    /// The image base the module was linked at.
+    pub fn image_base(&self) -> u64 {
+        self.image_base
+    }
+
+    /// Every section as `(rva, bytes)`, cut to what the file holds, with whether it is code.
+    pub fn sections(&self) -> Vec<(u32, &'a [u8], bool)> {
+        self.sections
+            .iter()
+            .filter_map(|(address, size, raw)| {
+                let start = *raw as usize;
+                let end = start.saturating_add(*size as usize).min(self.bytes.len());
+                let bytes = self.bytes.get(start..end)?;
+                Some((*address, bytes, self.is_code(*address)))
+            })
+            .collect()
+    }
+
     /// Reads bytes at an RVA.
     pub fn read(&self, rva: u32, length: usize) -> Option<&'a [u8]> {
         let start = self.offset(rva)?;
@@ -259,6 +277,7 @@ mod tests {
         let table: Vec<ChromeBuild> = serde_json::from_str(TABLE).unwrap();
         assert!(table.iter().any(|build| build.version == "156.0.8078.48"));
         assert!(table.iter().any(|build| build.version == "156.0.8078.80"));
+        assert!(table.iter().any(|build| build.version == "157.0.8103.38"));
         assert!(table.iter().any(|build| build.version == "150.0.7871.187"));
         assert!(table
             .iter()
@@ -269,6 +288,9 @@ mod tests {
         assert!(table
             .iter()
             .any(|build| build.browser == "Brave" && build.version == "156.1.98.63"));
+        assert!(table
+            .iter()
+            .any(|build| build.browser == "Brave" && build.version == "157.1.99.55"));
         assert!(table
             .iter()
             .any(|build| build.module == "samsunginternet.dll" && build.version == "30.0.4.29"));

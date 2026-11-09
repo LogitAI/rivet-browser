@@ -186,8 +186,196 @@ Expect 'fr_link_preview_over_the_page_passes' (Test-FloatingPage $preview $B $A)
 Expect 'fr_link_preview_fails_beside_the_page' (Test-FloatingPage $two $B $A) 'FAIL'
 # A preview that fills the whole page area hides the page under it.
 Expect 'fr_link_preview_fails_when_no_page_shows_under_it' (Test-FloatingPage (Fill (New-Window) 160 60 890 540 $A) $B $A) 'FAIL'
+# A notice at the page bottom: a preview that ends above it passes, with the margin looked for
+# between them; one that reaches over it fails.
+$noticed = Fill (Fill (Fill (Fill (New-Window) 160 60 890 540 $B) 200 70 850 90 0xFBFAF7) 200 90 850 515 $A) 300 525 750 535 0xF5E6B8
+Expect 'fr10_link_preview_keeps_clear_of_a_notice_at_the_page_bottom' (Test-FloatingPage $noticed $B $A @(300, 525, 750, 535)) 'PASS'
+Expect 'fr10_link_preview_fails_over_a_notice_at_the_page_bottom' (Test-FloatingPage $noticed $B $A @(300, 505, 750, 535)) 'FAIL'
 # The page under the preview gone, with the window ground around it.
 Expect 'fr_link_preview_fails_on_the_window_ground' (Test-FloatingPage (Fill (New-Window) 200 90 850 515 $A) $B $A) 'FAIL'
+
+# --- Window surface rows: split panel looks, Sidebar panel and open button, developer row ---------
+. (Join-Path $PSScriptRoot 'windows-features-surface-lib.ps1')
+function Round-Lower($Cap, [int]$X0, [int]$X1, [int]$Y1, [int]$Ground = 0xF0F0F0) {
+  foreach ($d in @(@(0, 1), @(1, 1), @(0, 2), @(1, 2), @(2, 1), @(0, 3), @(3, 1))) {
+    Fill (Fill $Cap ($X0 + $d[0]) ($Y1 - $d[1]) ($X0 + $d[0] + 1) ($Y1 - $d[1] + 1) $Ground) ($X1 - 1 - $d[0]) ($Y1 - $d[1]) ($X1 - $d[0]) ($Y1 - $d[1] + 1) $Ground | Out-Null
+  }
+  $Cap
+}
+function New-Panels([int]$ShadowA = 0xC8C8C8, [int]$ShadowB = 0xE6E6E6, [switch]$Square) {
+  $c = Fill (Fill (New-Window) 160 60 520 400 $A) 530 60 890 400 $B
+  $c = Fill (Fill $c 180 400 500 410 $ShadowA) 550 400 870 410 $ShadowB
+  if (-not $Square) { $c = Round-Lower (Round-Lower $c 160 520 400) 530 890 400 }
+  $c
+}
+Expect 'fr9_panels_with_round_corners_and_one_raised_by_shadow_pass' (Test-PanelLook (New-Panels) $A $B 1) 'PASS'
+Expect 'fr9_square_panels_fail' (Test-PanelLook (New-Panels -Square) $A $B 1) 'FAIL'
+Expect 'fr9_panels_with_equal_shadows_fail' (Test-PanelLook (New-Panels 0xD8D8D8 0xD8D8D8) $A $B 1) 'FAIL'
+Expect 'fr9_an_accent_border_on_the_active_panel_fails' (Test-PanelLook (Fill (New-Panels) 524 80 528 380 0x1E78FF) $A $B 1) 'FAIL'
+
+function New-Marked([int]$Right, [int]$Marker) { Fill (Fill (New-Window) 160 60 $Right 540 $A) $Marker 60 ($Marker + 4) 252 0x101010 }
+$floatBefore = New-Marked 890 525
+Expect 'fr10_panel_over_the_page_keeps_its_width_passes' (Test-PanelFloats $floatBefore (Fill (New-Marked 890 525) 700 60 890 540 $B) $A $B 1) 'PASS'
+Expect 'fr10_panel_that_narrows_the_page_fails' (Test-PanelFloats $floatBefore (Fill (New-Marked 700 430) 710 60 890 540 $B) $A $B 1) 'FAIL'
+Expect 'fr10_no_panel_fails' (Test-PanelFloats $floatBefore (New-Marked 890 525) $A $B 1) 'FAIL'
+Expect 'fr10_rail_takes_its_own_width_passes' (Test-RailWidth (New-Marked 890 525) (New-Marked 850 505) $A 1) 'PASS'
+Expect 'fr10_rail_of_the_wrong_width_fails' (Test-RailWidth (New-Marked 890 525) (New-Marked 870 515) $A 1) 'FAIL'
+
+function Mix([int]$Over, [int]$Under, [double]$Alpha) {
+  $o = ConvertTo-Colour $Over; $u = ConvertTo-Colour $Under
+  ([int]($o.R * $Alpha + $u.R * (1 - $Alpha)) -shl 16) -bor ([int]($o.G * $Alpha + $u.G * (1 - $Alpha)) -shl 8) -bor [int]($o.B * $Alpha + $u.B * (1 - $Alpha))
+}
+$corner = @(818, 468, 890, 540)
+$away = Fill (New-Window) 160 60 890 540 $A
+$near = Fill (Fill (New-Window) 160 60 890 540 $A) 856 504 886 534 (Mix 0x404040 $A 0.6)
+$over = Fill (Fill (New-Window) 160 60 890 540 $A) 856 504 886 534 0x404040
+Expect 'fr10_open_button_hidden_faint_then_solid_passes' (Test-OpenButtonFade $away $near $over $A $corner) 'PASS'
+Expect 'fr10_open_button_that_never_appears_fails' (Test-OpenButtonFade $away $away $over $A $corner) 'FAIL'
+Expect 'fr10_open_button_solid_near_the_corner_fails' (Test-OpenButtonFade $away $over $over $A $corner) 'FAIL'
+Expect 'fr10_open_button_shown_with_the_pointer_away_fails' (Test-OpenButtonFade $over $near $over $A $corner) 'FAIL'
+# The study's look on a bright page: near the corner a light ground at 60%, under the pointer a 6%
+# dark ground with dark ink. The light ground changes the page more, and the check still passes.
+$nearLight = Fill (Fill (New-Window) 160 60 890 540 $A) 856 504 886 534 (Mix 0xFFFFFF $A 0.24)
+$overDark = Fill (Fill (Fill (New-Window) 160 60 890 540 $A) 856 504 886 534 (Mix 0x1F2024 $A 0.06)) 866 514 876 524 0x1F2024
+Expect 'fr10_open_button_of_the_study_on_a_bright_page_passes' (Test-OpenButtonFade $away $nearLight $overDark $A $corner) 'PASS'
+
+function New-Row([int]$Ground, [int]$Buttons) {
+  $c = Fill (Fill (New-Window) 160 64 890 540 $A) 160 20 890 64 $Ground
+  for ($k = 0; $k -lt $Buttons; $k++) { $x = 646 + 30 * $k + 8; $c = Fill $c $x 35 ($x + 14) 49 0xFFFFFF }
+  $c
+}
+$plainRow = New-Row 0xF7F5F0 0
+Expect 'fr11_dev_row_with_its_background_and_seven_buttons_passes' (Test-DevRow $plainRow (New-Row 0x2A2B2E 7) @(20, 64) @(640, 856) 7) 'PASS'
+Expect 'fr11_dev_row_with_the_plain_background_fails' (Test-DevRow $plainRow (Fill (New-Row 0xF7F5F0 0) 646 35 860 49 0x202020) @(20, 64) @(640, 856) 7) 'FAIL'
+Expect 'fr11_dev_row_missing_buttons_fails' (Test-DevRow $plainRow (New-Row 0x2A2B2E 4) @(20, 64) @(640, 856) 7) 'FAIL'
+$text = Fill (Fill (New-Window) 200 30 210 50 0x202020) 300 30 305 50 0x202020
+$width = Get-InkWidth $text @(160, 25, 600, 55)
+if ($width -ne 105) { Write-Host "FAIL fr11_ink_width_spans_the_text : wanted 105, got $width"; $failures++ } else { Write-Host 'ok   fr11_ink_width_spans_the_text : 105' }
+Expect 'fr11_equal_widths_are_monospace' (Test-Monospace 200 201 1 400) 'PASS'
+Expect 'fr11_unequal_widths_are_not_monospace' (Test-Monospace 200 260 1 400) 'FAIL'
+Expect 'fr11_a_full_field_says_nothing' (Test-Monospace 398 398 1 400) 'NOT_DRIVEN'
+# The first frames of a window: a band of the browser's own colour above the page fails.
+$settled = Fill (Fill (New-Window 0xECE8E2) 160 0 890 52 0xFBFAF7) 160 60 890 540 $A
+$band = Fill (Fill (New-Window 0xECE8E2) 160 0 890 52 0xCCCCCC) 160 60 890 540 $A
+Expect 'fr12_first_frames_like_the_settled_window_pass' (Test-FirstFrames @($settled, (New-Window 0xFFFFFF)) $settled 160 890 56) 'PASS'
+Expect 'fr12_a_grey_band_in_a_first_frame_fails' (Test-FirstFrames @($band, $settled) $settled 160 890 56) 'FAIL'
+Expect 'fr12_only_blank_first_frames_are_not_driven' (Test-FirstFrames @((New-Window 0x000000)) $settled 160 890 56) 'NOT_DRIVEN'
+
+# The run registry: a run that must be alone never starts beside another, and no run starts beside it.
+. (Join-Path $PSScriptRoot 'windows-test-safety.ps1')
+$plain = [pscustomobject]@{ pid = 11; out = 'a'; alone = $false }
+$lonely = [pscustomobject]@{ pid = 12; out = 'b'; alone = $true }
+foreach ($case in @(
+    @($false, $null, $true, 'nfr5_a_run_starts_when_none_is_active'),
+    @($true, $null, $true, 'nfr5_open_link_rows_start_when_no_other_run_is_active'),
+    @($false, @($plain), $true, 'nfr5_runs_without_open_link_rows_start_side_by_side'),
+    @($true, @($plain), $false, 'nfr5_open_link_rows_never_start_beside_another_run'),
+    @($false, @($lonely), $false, 'nfr5_no_run_starts_beside_open_link_rows'),
+    @($false, @(([pscustomobject]@{ pid = 13; out = 'c'; alone = [pscustomobject]@{ IsPresent = $false } })), $true, 'nfr5_a_record_holding_a_false_switch_is_not_alone'))) {
+  $ok, $why = Test-RunMayStart $case[0] $case[1]
+  if ([bool]$ok -ne $case[2]) { Write-Host "FAIL $($case[3]) : wanted $($case[2]), got $ok ($why)"; $failures++ }
+  else { Write-Host "ok   $($case[3]) : $ok" }
+}
+
+# A browser a runner starts itself reads STARTF_USESHOWWINDOW with SW_SHOWNOACTIVATE, so Chromium
+# shows its first window without activation. A console probe reads its own startup information.
+$probe = @'
+Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class StartProbe{[StructLayout(LayoutKind.Sequential)] public struct SI{public int cb;public IntPtr a,b,c;public int x,y,w,h,xc,yc,fill,flags;public short show,r;public IntPtr r3,i,o,e;} [DllImport("kernel32.dll")] public static extern void GetStartupInfoW(ref SI si);}'
+$si = New-Object StartProbe+SI
+$si.cb = [Runtime.InteropServices.Marshal]::SizeOf($si)
+[StartProbe]::GetStartupInfoW([ref]$si)
+[Console]::Out.Write("$($si.flags) $($si.show)")
+'@
+if ($IsWindows) {
+  $probeDir = Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\rivet\target'))) 'start-probe'
+  New-Item -ItemType Directory -Force $probeDir | Out-Null
+  $probeOut = Join-Path $probeDir 'startup.txt'
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
+  $started = Start-TestBrowser -FilePath (Get-Process -Id $PID).Path -ArgumentList @('-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -RedirectStandardOutput $probeOut
+  $ended = $started.WaitForExit(60000)
+  $started.Dispose()
+  $seen = if ($ended) { (Get-Content -Raw $probeOut -ErrorAction SilentlyContinue) } else { 'did not end' }
+  $parts = "$seen".Trim() -split ' '
+  $ok = $ended -and $parts.Count -eq 2 -and (([int]$parts[0]) -band 1) -and [int]$parts[1] -eq 4
+  if (-not $ok) { Write-Host "FAIL nfr5_test_browser_starts_without_activation : wanted flags with 1 and show 4, got $seen"; $failures++ }
+  else { Write-Host "ok   nfr5_test_browser_starts_without_activation : $seen" }
+  Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue
+}
+
+# No runner starts a browser through Start-Process: its -WindowStyle Hidden hands the browser SW_HIDE,
+# which Chromium shows as SW_SHOWNORMAL and then activates. The spike scripts exist only on develop.
+$scripts = @(Get-ChildItem (Join-Path $PSScriptRoot '*.ps1')) + @(Get-ChildItem (Join-Path $PSScriptRoot 'appspike\*.ps1') -ErrorAction SilentlyContinue)
+$direct = @($scripts | Select-String -Pattern 'Start-Process\s+-FilePath\s+\$(ExePath|ctx\.ExePath|exe|browser|Browser)\b' | ForEach-Object { "$($_.Filename):$($_.LineNumber)" })
+if ($direct.Count) { Write-Host "FAIL nfr5_runners_start_browsers_without_activation : $($direct -join ', ')"; $failures++ }
+else { Write-Host 'ok   nfr5_runners_start_browsers_without_activation : none through Start-Process' }
+
+# A run moves onto a desktop of its own with the arguments it was given.
+. (Join-Path $PSScriptRoot 'windows-test-desktop.ps1')
+$bound = [ordered]@{ Browsers = @('chrome', 'edge'); OutDir = 'D:\runs\run 52\chrome'; NoBuild = [System.Management.Automation.SwitchParameter]$true; Off = [System.Management.Automation.SwitchParameter]$false }
+$line = ConvertTo-RunnerArguments $bound
+$want = '-Browsers chrome,edge -OutDir "D:\runs\run 52\chrome" -NoBuild'
+if ($line -ne $want) { Write-Host "FAIL nfr5_a_run_keeps_its_arguments_on_its_own_desktop : $line"; $failures++ }
+else { Write-Host 'ok   nfr5_a_run_keeps_its_arguments_on_its_own_desktop' }
+$quoted = ConvertTo-CommandArgument 'C:\a b\'
+if ($quoted -ne '"C:\a b\\"') { Write-Host "FAIL nfr5_a_folder_argument_keeps_its_last_backslash : $quoted"; $failures++ }
+else { Write-Host 'ok   nfr5_a_folder_argument_keeps_its_last_backslash' }
+
+# A browser started with no output to keep, as the launcher rows start rivet-launcher.exe.
+if ($IsWindows) {
+  $p = Start-TestBrowser -FilePath $env:ComSpec -ArgumentList '/c', 'exit', '7'
+  $done = $p.WaitForExit(10000); $code = $p.ExitCode; $p.Dispose()
+  if (-not $done -or $code -ne 7) { Write-Host "FAIL nfr5_a_test_process_starts_without_an_output_file : exit $code"; $failures++ }
+  else { Write-Host 'ok   nfr5_a_test_process_starts_without_an_output_file' }
+}
+
+# A run's Rivet folder sees the held browser copies through the runs' own copy of them. Removing the
+# folder never removes them, and nothing the run writes there reaches the person's folder.
+if ($IsWindows) {
+  $t = Join-Path $PSScriptRoot '..\..\.scratch\selftest-held'
+  Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force (Join-Path $t 'local\Rivet\cache\browsers\chrome\1.2.3.4') | Out-Null
+  Set-Content (Join-Path $t 'local\Rivet\cache\browsers\chrome\1.2.3.4\keep.txt') 'keep'
+  $saved = $env:LOCALAPPDATA; $savedMirror = $env:RIVET_TEST_HELD_MIRROR
+  $env:LOCALAPPDATA = Join-Path $t 'local'; $env:RIVET_TEST_HELD_MIRROR = Join-Path $t 'mirror'
+  try {
+    $before = @(Get-HeldSnapshot)
+    Add-HeldBrowsers (Join-Path $t 'run')
+    $seen = Test-Path (Join-Path $t 'run\Rivet\cache\browsers\chrome\1.2.3.4\keep.txt')
+    New-Item -ItemType Directory -Force (Join-Path $t 'run\Rivet\cache\browsers\chrome\5.6.7.8') | Out-Null
+    Set-Content (Join-Path $t 'run\Rivet\cache\browsers\chrome\hold-state.json') '{}'
+    $untouched = -not @(Compare-Object $before @(Get-HeldSnapshot)).Count
+    Remove-HeldBrowsers (Join-Path $t 'run'); Remove-Item -Recurse -Force (Join-Path $t 'run')
+    $kept = Test-Path (Join-Path $t 'local\Rivet\cache\browsers\chrome\1.2.3.4\keep.txt')
+  } finally {
+    $env:LOCALAPPDATA = $saved; $env:RIVET_TEST_HELD_MIRROR = $savedMirror
+    Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+  }
+  if (-not ($seen -and $kept -and $untouched)) { Write-Host "FAIL nfr5_a_run_reads_the_held_browsers_and_never_writes_them : seen $seen kept $kept untouched $untouched"; $failures++ }
+  else { Write-Host 'ok   nfr5_a_run_reads_the_held_browsers_and_never_writes_them' }
+}
+# A run's leftovers are the processes it started and those naming its folder, never others.
+if ($IsWindows) {
+  $t = Join-Path $PSScriptRoot '..\..\.scratch\selftest-leftovers'
+  New-Item -ItemType Directory -Force $t | Out-Null
+  $t = (Resolve-Path $t).Path
+  $named = Start-Process -PassThru -WindowStyle Hidden $env:ComSpec -ArgumentList '/c', 'ping', '-n', '30', '127.0.0.1', '>', "`"$t\ping.txt`""
+  $other = Start-Process -PassThru -WindowStyle Hidden $env:ComSpec -ArgumentList '/c', 'ping', '-n', '30', '127.0.0.1'
+  $started = Start-TestBrowser -FilePath $env:ComSpec -ArgumentList '/c', 'ping', '-n', '30', '127.0.0.1'
+  Start-Sleep 1
+  $found = @(Get-RunLeftovers $t | ForEach-Object { [int]$_.ProcessId })
+  foreach ($id in $named.Id, $other.Id, $started.Id) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+  $started.Dispose(); Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+  $ok = ($found -contains $named.Id) -and ($found -contains $started.Id) -and -not ($found -contains $other.Id) -and -not ($found -contains $PID)
+  if (-not $ok) { Write-Host "FAIL nfr5_a_run_ends_with_only_its_own_processes_found : found $($found -join ',')"; $failures++ }
+  else { Write-Host 'ok   nfr5_a_run_ends_with_only_its_own_processes_found' }
+}
+# A window on a monitor breaches the person's screen only on the person's own desktop.
+$breach = 0
+foreach ($case in @(@($true, '', $true), @($true, 'WinSta0\rivet-test-1', $false), @($false, '', $false))) {
+  if ((Test-VisibleBreach $case[0] $case[1]) -ne $case[2]) { $breach++ }
+}
+if ($breach) { Write-Host "FAIL nfr5_only_the_persons_desktop_has_visible_monitors : $breach cases"; $failures++ }
+else { Write-Host 'ok   nfr5_only_the_persons_desktop_has_visible_monitors' }
 
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'

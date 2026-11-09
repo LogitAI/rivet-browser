@@ -30,6 +30,7 @@ impl Appbar {
     ) -> Result<()> {
         let Some(view) = card else {
             if self.settings_painted.take().is_some() {
+                self.hide_caret(super::caret::Which::Settings)?;
                 self.settings.SetContent(None)?;
                 return self.device.Commit();
             }
@@ -37,6 +38,14 @@ impl Appbar {
         };
         self.settings.SetOffsetX2(view.x.round())?;
         self.settings.SetOffsetY2(view.y.round())?;
+        // The caret is a visual of its own, so a blink paints nothing here.
+        self.settings_caret
+            .set_origin((view.x.round(), view.y.round()));
+        let field_caret = settings::caret(window as _);
+        self.place_caret(super::caret::Which::Settings, field_caret, dpi, false)?;
+        if !super::caret::card_needs_paint(self.settings_painted.as_ref(), view, dpi) {
+            return self.device.Commit();
+        }
         let (width, height) = (view.width.round() as i32, view.height.round() as i32);
         if width <= 0 || height <= 0 {
             return Ok(());
@@ -134,8 +143,8 @@ impl Appbar {
                 false,
             )?;
             let origin = (view.x, view.y);
-            let drawn = settings::with_field_pixels(window as _, |place, bytes, pw, ph, caret| {
-                canvas.field_pixels(place, bytes, pw, ph, caret, origin, dpi)
+            let drawn = settings::with_field_pixels(window as _, |place, bytes, pw, ph, _caret| {
+                canvas.field_pixels(place, bytes, pw, ph, None, origin, dpi)
             });
             if let Some(result) = drawn {
                 result?;

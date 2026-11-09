@@ -14,6 +14,10 @@ param(
   [string]$Url = 'about:blank',
   [string]$OutDir
 )
+# The whole run, and every browser it starts, runs on a desktop of its own.
+. (Join-Path $PSScriptRoot 'windows-test-desktop.ps1')
+$desktopCode = Invoke-OnOwnDesktop $PSCommandPath $PSBoundParameters
+if ($null -ne $desktopCode) { exit $desktopCode }
 $Browsers = @($Browsers | ForEach-Object { $_ -split ',' })
 . (Join-Path $PSScriptRoot 'windows-features-lib.ps1')
 . (Join-Path $PSScriptRoot 'windows-processes.ps1')
@@ -24,8 +28,8 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 $rivet = Join-Path $debug 'rivet.exe'
 $dll = Join-Path $debug 'rivet_runtime_windows.dll'
-if (-not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($rivet)).Contains('--window-position=9000,1000'))) {
-  Write-Host 'refusing to launch: this rivet.exe was not built with the off-screen test flags'; exit 2
+if (-not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($rivet)).Contains('msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion'))) {
+  Write-Host 'refusing to launch: this rivet.exe was not built with the test flags'; exit 2
 }
 $table = @{
   chrome = @('C:\Program Files\Google\Chrome\Application\chrome.exe', 'chrome.exe')
@@ -38,11 +42,15 @@ Add-Type -TypeDefinition @'
 using System;using System.Runtime.InteropServices;
 public static class LaunchWin{ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr GetProp(IntPtr h,string n); }
 '@
+# Off-screen and inactive windows, Rivet files in this run's folder, and the visible guard.
+. (Join-Path $PSScriptRoot 'windows-test-safety.ps1')
+$safety = Start-RunSafety -OutDir $OutDir -Name 'launch-rate'
 $report = @()
 foreach ($name in $Browsers) {
   $exe, $exeName = $table[$name]
   $ok = 0
   foreach ($run in 1..$Runs) {
+    Assert-RunSafe $safety
     $profile_ = Join-Path $OutDir "p-$name-$run"
     Get-ProcessList $exeName | Where-Object { $_.CommandLine -like "*$OutDir*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep $Gap
@@ -59,7 +67,7 @@ foreach ($name in $Browsers) {
       $mine = Get-ProcessList $exeName | Where-Object { $_.CommandLine -like "*$profile_*" -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
       if ($mine) {
         $alive = $true
-        $h = (Get-Process -Id $mine.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle
+        $h = (Get-BrowserWindow $mine.ProcessId)
         if ($h -and $h -ne [IntPtr]::Zero -and [LaunchWin]::GetProp($h, 'Rivet.OriginalWindowProc') -ne [IntPtr]::Zero) { $attached = $true; break }
       }
       Start-Sleep 1
@@ -73,3 +81,4 @@ foreach ($name in $Browsers) {
   "{0}: {1} of {2} launches reported the runtime loaded and attached" -f $name, $ok, $Runs | Write-Host
 }
 $report | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $OutDir 'launch-rate.json') -Encoding utf8
+Stop-RunSafety $safety

@@ -302,7 +302,14 @@ pub fn compiled_rows() -> Vec<serde_json::Value> {
             let frame = frames
                 .iter()
                 .find(|frame| frame.module == build.module && frame.version == version);
-            serde_json::json!({ "frame": frame, "build": build.to_row() })
+            // The parts a built-in row keeps in lists of their own go into the row, so the
+            // generator ports them with every other address and a table row carries them.
+            let mut row = build.to_row();
+            row["page_tools"] = builds::page_tool_rows::page_tools_for(build)
+                .copied()
+                .to_row();
+            row["bubble_anchor"] = builds::bubble_anchor_of(build).to_row();
+            serde_json::json!({ "frame": frame, "build": row })
         })
         .collect()
 }
@@ -340,6 +347,8 @@ mod address_display;
 #[cfg(windows)]
 mod appbar;
 #[cfg(windows)]
+mod browser;
+#[cfg(windows)]
 mod browsers;
 #[cfg(windows)]
 mod builds;
@@ -361,6 +370,10 @@ mod ground;
 mod hooks;
 #[cfg(windows)]
 mod installed_browsers;
+#[cfg(windows)]
+mod offscreen;
+#[cfg(windows)]
+mod os;
 #[cfg(any(windows, test))]
 mod press;
 #[cfg(windows)]

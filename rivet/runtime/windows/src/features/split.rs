@@ -242,7 +242,7 @@ pub unsafe fn pop_out(window: HWND, slot: usize) -> bool {
     if !crate::features::second_view::close_pane(window, slot) {
         return false;
     }
-    crate::features::mini_window::open(window, tab)
+    crate::features::mini_window::open(window, tab, false)
 }
 
 /// The part of a page near each edge where a drop splits it, as a share of its size.
@@ -440,11 +440,10 @@ pub(crate) fn in_a_line(rects: &[Rect]) -> bool {
 /// The right edge of the window's client area in device-independent pixels.
 pub(crate) unsafe fn client_right(window: HWND) -> i32 {
     use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
-    let dpi = GetDpiForWindow(window).max(96) as i32;
+    let dpi = crate::frame::layout_dpi(window) as i32;
     client.right * 96 / dpi
 }
 

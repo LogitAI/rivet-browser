@@ -61,6 +61,20 @@ pub(crate) const ROWS: &[AnchorRow] = &[
         verified: false,
     },
     AnchorRow {
+        browser: "Google Chrome",
+        version: [157, 0, 8103, 38],
+        get_anchor_rect: 0x0AF2_96E0,
+        prologue: PROLOGUE_D0,
+        verified: false,
+    },
+    AnchorRow {
+        browser: "Brave",
+        version: [157, 1, 99, 55],
+        get_anchor_rect: 0x0C3B_8D60,
+        prologue: PROLOGUE_D0,
+        verified: false,
+    },
+    AnchorRow {
         browser: "Microsoft Edge",
         version: [156, 0, 4314, 58],
         get_anchor_rect: 0x0330_BF40,
@@ -131,32 +145,113 @@ pub(crate) fn choose(
 
 /// Set while Rivet opens the page info bubble from its security chip.
 static PAGE_INFO: AtomicBool = AtomicBool::new(false);
+/// The window whose security chip opens the page info bubble, while it opens.
+static PAGE_INFO_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
-/// Runs `open` with the next bubble anchored at the security chip.
-pub(crate) fn with_page_info<R>(open: impl FnOnce() -> R) -> R {
+/// Runs `open` with the next bubble anchored at the security chip of `window`.
+pub(crate) fn with_page_info<R>(window: HWND, open: impl FnOnce() -> R) -> R {
+    PAGE_INFO_WINDOW.store(window as usize, Ordering::Release);
     PAGE_INFO.store(true, Ordering::Release);
     let result = open();
     PAGE_INFO.store(false, Ordering::Release);
+    PAGE_INFO_WINDOW.store(0, Ordering::Release);
     result
+}
+
+/// The Rivet window a bubble belongs to: the active window when it is a Rivet window, else the
+/// window whose security chip opened page info, else the only Rivet window of the thread. A bubble
+/// can open while its window is not active, as a permission request of a page in a window the
+/// person has not clicked yet does, and it must still open by that window's address row.
+pub(crate) fn bubble_window(active: usize, page_info: usize, windows: &[usize]) -> Option<usize> {
+    if active != 0 && windows.contains(&active) {
+        return Some(active);
+    }
+    if page_info != 0 && windows.contains(&page_info) {
+        return Some(page_info);
+    }
+    match windows {
+        [only] => Some(*only),
+        _ => None,
+    }
 }
 
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 type GetAnchorRect = unsafe extern "system" fn(*const core::ffi::c_void, *mut Rect) -> *mut Rect;
 
-/// Client DIPs of `window` as screen DIPs.
-unsafe fn to_screen(window: HWND, [x, y, w, h]: [f32; 4]) -> Rect {
-    let factor = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
-    let mut origin = POINT { x: 0, y: 0 };
-    ClientToScreen(window, &mut origin);
-    let (ox, oy) = (origin.x as f32 / factor, origin.y as f32 / factor);
+/// Where Chromium puts a monitor's top left corner in screen DIPs. The primary monitor starts at
+/// zero, and a monitor beside it starts where the primary ends in DIPs, offset along the shared edge
+/// by its physical offset at the primary's scale, as `display::win::ScreenWin` lays displays out. A
+/// monitor that touches no edge of the primary keeps its physical place at its own scale.
+pub(crate) fn dip_origin(monitor: ([i32; 4], f32), primary: ([i32; 4], f32)) -> (f32, f32) {
+    let ([l, t, r, b], scale) = monitor;
+    let ([pl, pt, pr, pb], ps) = primary;
+    let (pw, ph) = ((pr - pl) as f32 / ps, (pb - pt) as f32 / ps);
+    if [l, t, r, b] == [pl, pt, pr, pb] {
+        (0.0, 0.0)
+    } else if l == pr {
+        (pw, (t - pt) as f32 / ps)
+    } else if r == pl {
+        (-((r - l) as f32 / scale), (t - pt) as f32 / ps)
+    } else if t == pb {
+        ((l - pl) as f32 / ps, ph)
+    } else if b == pt {
+        ((l - pl) as f32 / ps, -((b - t) as f32 / scale))
+    } else {
+        (l as f32 / scale, t as f32 / scale)
+    }
+}
+
+/// A point in physical screen pixels as Chromium's screen DIPs, on `monitor`.
+pub(crate) fn to_dips(
+    (x, y): (f32, f32),
+    monitor: ([i32; 4], f32),
+    primary: ([i32; 4], f32),
+) -> (f32, f32) {
+    let (ox, oy) = dip_origin(monitor, primary);
+    let ([l, t, _, _], scale) = monitor;
+    (ox + (x - l as f32) / scale, oy + (y - t as f32) / scale)
+}
+
+/// A rect in client DIPs of a window whose client origin is at `origin` pixels and whose layout
+/// scale is `factor`, as screen DIPs on `monitors`, the window's display and the primary. Chromium
+/// puts every view of a window into screen DIPs with that one display:
+/// `display::win::ScreenWin::ScreenToDIPRect` takes the window's nearest monitor
+/// (`GetScreenWinDisplayNearestHWND`), so the chip lands where the browser's own views do even when
+/// it sits over another monitor than the client origin.
+fn client_to_screen_dips(
+    origin: (i32, i32),
+    factor: f32,
+    [x, y, w, h]: [f32; 4],
+    monitors: Option<(crate::os::win32::Monitor, crate::os::win32::Monitor)>,
+) -> Rect {
+    let px = origin.0 as f32 + x * factor;
+    let py = origin.1 as f32 + y * factor;
+    let (sx, sy) = match monitors {
+        Some((near, primary)) => {
+            to_dips((px, py), (near.rect, factor), (primary.rect, primary.scale))
+        }
+        None => (px / factor, py / factor),
+    };
     [
-        (ox + x).round() as i32,
-        (oy + y).round() as i32,
+        sx.round() as i32,
+        sy.round() as i32,
         w.round() as i32,
         h.round() as i32,
     ]
 }
 
+/// Client DIPs of `window` as screen DIPs.
+unsafe fn to_screen(window: HWND, rect: [f32; 4]) -> Rect {
+    let factor = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
+    let mut origin = POINT { x: 0, y: 0 };
+    ClientToScreen(window, &mut origin);
+    client_to_screen_dips(
+        (origin.x, origin.y),
+        factor,
+        rect,
+        crate::os::win32::monitors_of(window),
+    )
+}
 /// The page area, the address and the chip of a Rivet window, in screen DIPs.
 unsafe fn targets(window: HWND) -> Option<(Rect, Rect, Rect)> {
     let (address, chip) = crate::features::address_bar::anchors(window)?;
@@ -183,12 +278,33 @@ unsafe extern "system" fn get_anchor_rect(
 ) -> *mut Rect {
     let original: GetAnchorRect = std::mem::transmute(ORIGINAL.load(Ordering::Acquire));
     let result = original(delegate, out);
-    // Bubbles are made on the browser's UI thread, where the window they belong to is active.
-    let window = GetActiveWindow();
-    if result.is_null() || window.is_null() || !crate::frame::rivet_windows().contains(&window) {
+    // Bubbles are made on the browser's UI thread, which holds the Rivet windows.
+    let windows: Vec<usize> = crate::frame::rivet_windows()
+        .into_iter()
+        .map(|window| window as usize)
+        .collect();
+    let Some(window) = bubble_window(
+        GetActiveWindow() as usize,
+        PAGE_INFO_WINDOW.load(Ordering::Acquire),
+        &windows,
+    ) else {
+        return result;
+    };
+    let window = window as HWND;
+    if result.is_null() {
         return result;
     }
     if let Some((page, address, chip)) = targets(window) {
+        let original = *result;
+        crate::trace::trace(&format!(
+            "bubble anchor: original {original:?} address {address:?} chip {chip:?} client origin {:?} layout dpi {}",
+            {
+                let mut origin = POINT { x: 0, y: 0 };
+                ClientToScreen(window, &mut origin);
+                (origin.x, origin.y)
+            },
+            crate::frame::layout_dpi(window)
+        ));
         *result = choose(
             *result,
             page,
@@ -196,22 +312,21 @@ unsafe extern "system" fn get_anchor_rect(
             chip,
             PAGE_INFO.load(Ordering::Acquire),
         );
+        crate::trace::trace(&format!("bubble anchor: chose {:?}", *result));
     }
     result
 }
 
 /// Wraps the build's `GetAnchorRect`. A build without a row, or whose bytes differ, is left alone.
 pub(crate) fn install() {
-    let Some(build) = crate::builds::current() else {
-        return;
-    };
-    let Some(row) = row_for(build.browser, build.version) else {
+    let Some((at, prologue)) = crate::builds::current().and_then(crate::builds::bubble_anchor_of)
+    else {
         return;
     };
     let Some(image) = crate::chromium::image::recorded() else {
         return;
     };
-    if unsafe { image.bytes(row.get_anchor_rect, row.prologue.len()) } != Some(row.prologue) {
+    if unsafe { image.bytes(at, prologue.len()) } != Some(prologue) {
         crate::trace::trace("bubble anchor: GetAnchorRect is not the recorded one");
         return;
     }
@@ -222,8 +337,8 @@ pub(crate) fn install() {
         crate::targets::transaction(|| {
             crate::targets::detour(
                 image.base,
-                row.get_anchor_rect,
-                row.prologue,
+                at,
+                prologue,
                 get_anchor_rect as *const () as usize,
                 &ORIGINAL,
             )
@@ -240,6 +355,40 @@ mod tests {
     const ADDRESS: Rect = [300, 108, 600, 28];
     const CHIP: Rect = [310, 108, 22, 28];
 
+    #[test]
+    fn fr12_a_chip_over_another_monitor_is_converted_on_the_windows_display() {
+        use crate::os::win32::Monitor;
+        // A primary at 100 percent and two monitors at 125 percent stacked against its right edge,
+        // as on the test machine.
+        let primary = Monitor {
+            rect: [0, 0, 1440, 900],
+            scale: 1.0,
+            primary: true,
+        };
+        let upper = Monitor {
+            rect: [1440, -716, 4000, 724],
+            scale: 1.25,
+            primary: false,
+        };
+        // The window's display is the upper monitor; its chip 16 DIPs below the client origin
+        // reaches over the lower one, and still lands where the browser's own views would.
+        let chip = super::client_to_screen_dips(
+            (1500, 710),
+            1.25,
+            [6.0, 16.0, 22.0, 28.0],
+            Some((upper, primary)),
+        );
+        let (ox, oy) = super::to_dips((1500.0, 710.0), (upper.rect, 1.25), (primary.rect, 1.0));
+        assert_eq!(
+            chip,
+            [
+                (ox + 6.0).round() as i32,
+                (oy + 16.0).round() as i32,
+                22,
+                28
+            ]
+        );
+    }
     #[test]
     fn fr12_bubble_at_the_monitor_edge_moves_to_the_address_bar() {
         // Brave's save bubble was seen at x=4863, past the window.
@@ -265,8 +414,48 @@ mod tests {
     fn fr12_page_info_anchors_at_the_security_chip() {
         assert_eq!(choose([4863, 0, 0, 0], PAGE, ADDRESS, CHIP, true), CHIP);
         assert_eq!(choose([500, 400, 40, 20], PAGE, ADDRESS, CHIP, true), CHIP);
-        assert!(with_page_info(|| PAGE_INFO.load(Ordering::Acquire)));
+        assert!(with_page_info(std::ptr::null_mut(), || PAGE_INFO.load(Ordering::Acquire)));
         assert!(!PAGE_INFO.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn fr12_screen_dips_follow_chromiums_display_layout_on_mixed_scales() {
+        // A 200% primary of 2880 x 1800 and a 125% monitor to its right, 725 pixels lower.
+        let primary = ([0, 0, 2880, 1800], 2.0);
+        let right = ([2880, 725, 5440, 2165], 1.25);
+        assert_eq!(dip_origin(primary, primary), (0.0, 0.0));
+        assert_eq!(dip_origin(right, primary), (1440.0, 362.5));
+        // The window's client origin at (9000, 1000) pixels, past that monitor's edge, as Chromium
+        // put the window's own anchor in the trace: 1440 + 6120 / 1.25 and 362.5 + 275 / 1.25.
+        assert_eq!(to_dips((9000.0, 1000.0), right, primary), (6336.0, 582.5));
+        // Monitors left of, above and below the primary, and a single monitor.
+        assert_eq!(
+            dip_origin(([-1920, 0, 0, 1080], 1.0), primary),
+            (-1920.0, 0.0)
+        );
+        assert_eq!(
+            dip_origin(([0, -1080, 1920, 0], 1.0), primary),
+            (0.0, -1080.0)
+        );
+        assert_eq!(
+            dip_origin(([500, 1800, 2420, 2880], 1.0), primary),
+            (250.0, 900.0)
+        );
+        assert_eq!(to_dips((100.0, 50.0), primary, primary), (50.0, 25.0));
+    }
+
+    #[test]
+    fn fr12_a_bubble_of_an_inactive_window_still_anchors_at_its_address_row() {
+        // The active window is Rivet's: its bubble goes there.
+        assert_eq!(bubble_window(7, 0, &[7, 9]), Some(7));
+        // No Rivet window is active, as when a page asks for a permission in the background.
+        assert_eq!(bubble_window(0, 0, &[9]), Some(9));
+        assert_eq!(bubble_window(3, 0, &[9]), Some(9));
+        // Page info of a chip names its window.
+        assert_eq!(bubble_window(0, 9, &[7, 9]), Some(9));
+        // With several windows and nothing to tell them apart, the browser's own place stays.
+        assert_eq!(bubble_window(0, 0, &[7, 9]), None);
+        assert_eq!(bubble_window(0, 0, &[]), None);
     }
 
     #[test]
@@ -280,6 +469,8 @@ mod tests {
             .all(|row| !row.verified && row.prologue.len() >= 14));
         for (browser, version, at) in [
             ("Google Chrome", [156, 0, 8078, 80], 0x0AA7_2C00),
+            ("Google Chrome", [157, 0, 8103, 38], 0x0AF2_96E0),
+            ("Brave", [157, 1, 99, 55], 0x0C3B_8D60),
             ("Microsoft Edge", [156, 0, 4314, 58], 0x0330_BF40),
             ("Naver Whale", [5, 39, 412, 57], 0x0903_7B10),
             ("Samsung Internet", [30, 0, 4, 29], 0x090C_B920),

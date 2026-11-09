@@ -111,7 +111,8 @@ fn nfr3_chrome_156_frame_paint_prologues_match_the_installed_build() {
 
 #[test]
 fn nfr6_the_launcher_opens_exactly_the_complete_rows() {
-    use rivet_platform_windows::hold::{module_of, table_versions, VERIFIED};
+    use rivet_platform_windows::hold::{module_of, table_versions, verified};
+    let verified = verified();
     // Chrome 150 only keeps the frame hooks, so a window of it would not have Rivet's top row.
     let complete: Vec<_> = all()
         .iter()
@@ -119,7 +120,7 @@ fn nfr6_the_launcher_opens_exactly_the_complete_rows() {
         .collect();
     assert_eq!(
         complete.len(),
-        VERIFIED.len(),
+        verified.len(),
         "the launcher's list and the table differ"
     );
     for build in complete {
@@ -132,7 +133,7 @@ fn nfr6_the_launcher_opens_exactly_the_complete_rows() {
             other => panic!("no launcher name for {other:?}"),
         };
         assert!(
-            VERIFIED.contains(&(executable, build.version)),
+            verified.contains(&(executable, build.version)),
             "{executable} {:?}",
             build.version
         );
@@ -141,7 +142,6 @@ fn nfr6_the_launcher_opens_exactly_the_complete_rows() {
     // The signed table is read by the same names the rows carry.
     let table: serde_json::Value = serde_json::from_str(CHECKED_IN).unwrap();
     assert!(table_versions(&table, "msedge.exe").contains(&[156, 0, 4314, 58]));
-    assert!(table_versions(&table, "chrome.exe").is_empty());
 }
 
 #[test]
@@ -832,6 +832,8 @@ const APP_WINDOW_MODULES: &[(&str, [u16; 4], &str)] = &[
         [156, 0, 8078, 80],
         r"C:\Program Files\Google\Chrome\Application\156.0.8078.80\chrome.dll",
     ),
+    ("Google Chrome", [157, 0, 8103, 38], CHROME_157_DLL),
+    ("Brave", [157, 1, 99, 55], BRAVE_157_DLL),
 ];
 
 #[test]
@@ -868,6 +870,8 @@ fn fr12_every_address_bar_row_matches_its_installed_build() {
             r"C:\Program Files\BraveSoftware\Brave-Browser\Application\156.1.98.63\chrome.dll",
         ),
         (&WHALE, WHALE_DLL),
+        (&CHROME_157_38, CHROME_157_DLL),
+        (&BRAVE_157_55, BRAVE_157_DLL),
     ];
     for (build, path) in modules {
         let row = build
@@ -969,6 +973,170 @@ fn fr13_app_window_functions_match_the_installed_builds() {
     if let Some(file) = held.and_then(|path| std::fs::read(path).ok()) {
         check_app_window_bytes("Google Chrome", &[156, 0, 8078, 74], &file);
     }
+    // Chrome 156.0.8078.80 and Brave 156.1.98.63 are held the same way.
+    for (browser, folder, version, path) in [
+        (
+            "Google Chrome",
+            "chrome",
+            [156, 0, 8078, 80],
+            "156.0.8078.80",
+        ),
+        ("Brave", "brave", [156, 1, 98, 63], "156.1.98.63"),
+    ] {
+        let held = rivet_core::paths::Layout::current().map(|layout| {
+            layout
+                .held_browsers()
+                .join(folder)
+                .join(path)
+                .join(path)
+                .join("chrome.dll")
+        });
+        if let Some(file) = held.and_then(|path| std::fs::read(path).ok()) {
+            check_app_window_bytes(browser, &version, &file);
+        }
+    }
+}
+
+#[test]
+fn fr9_app_window_rows_keep_only_the_way_back_of_the_mini_window() {
+    // The Mini Window goes out by the browser's command, which needs no address, and comes back by
+    // the tab strip's detach and insert, which every row with an app window part keeps.
+    let expected: [(&str, [u16; 4]); 8] = [
+        ("Google Chrome", [157, 0, 8103, 38]),
+        ("Brave", [157, 1, 99, 55]),
+        ("Google Chrome", [156, 0, 8078, 74]),
+        ("Google Chrome", [156, 0, 8078, 80]),
+        ("Microsoft Edge", [156, 0, 4314, 58]),
+        ("Brave", [156, 1, 98, 63]),
+        ("Naver Whale", [5, 39, 412, 57]),
+        ("Samsung Internet", [30, 0, 4, 29]),
+    ];
+    for (browser, version) in expected {
+        let build = all()
+            .iter()
+            .find(|build| build.browser == browser && build.version == version)
+            .unwrap_or_else(|| panic!("{browser} {version:?} has a row"));
+        let row = build.app_window.as_ref().unwrap();
+        assert!(row.detach.is_some(), "{browser} {version:?}");
+        assert!(row.insert.is_some(), "{browser} {version:?}");
+        assert_eq!(
+            crate::features::app_window::row_value(row, "move_new"),
+            None,
+            "{browser} {version:?}"
+        );
+    }
+}
+
+/// The installed modules of the Chromium 157 builds.
+const CHROME_157_DLL: &str = r"C:\Program Files\Google\Chrome\Application\157.0.8103.38\chrome.dll";
+const BRAVE_157_DLL: &str =
+    r"C:\Program Files\BraveSoftware\Brave-Browser\Application\157.1.99.55\chrome.dll";
+
+#[test]
+fn nfr3_chromium_157_rows_match_the_installed_builds() {
+    // Both rows were ported by name from the 156 rows with each build's own public symbols. Every
+    // recorded first byte must be the installed module's.
+    for (build, path) in [
+        (&CHROME_157_38, CHROME_157_DLL),
+        (&BRAVE_157_55, BRAVE_157_DLL),
+    ] {
+        let Ok(file) = std::fs::read(path) else {
+            continue;
+        };
+        let mut checked = 0;
+        check_row_bytes(
+            &file,
+            &crate::row_data::RowValue::to_row(build),
+            "build",
+            &mut checked,
+        );
+        assert!(
+            checked > 60,
+            "{}: only {checked} recorded byte runs were compared",
+            build.browser
+        );
+    }
+}
+
+#[test]
+fn nfr3_chromium_157_rows_record_the_members_that_moved() {
+    // Chromium 157 made `views::View` eight bytes shorter after its bounds, so every view member
+    // past them moved, and it took one virtual out of the frame view. The values were read again
+    // from each build's instructions, not carried over.
+    for build in [&CHROME_157_38, &BRAVE_157_55] {
+        let name = build.browser;
+        assert_eq!(build.tabs.browser_in_view, 0x558, "{name}");
+        assert_eq!(build.side_panel.browser_offset, 0x558, "{name}");
+        assert_eq!(build.layout.view_bounds_offset, 0x1C8, "{name}");
+        assert_eq!(build.layout.frame_browser_window_offset, 0x338, "{name}");
+        assert_eq!(build.layout.caption_container_offset, 0x3C0, "{name}");
+        assert_eq!(
+            (build.layout.top_inset_slot, build.layout.caption_paint_slot),
+            (126, 113),
+            "{name}"
+        );
+        assert_eq!(build.omnibox.as_ref().unwrap().match_size, 0x690, "{name}");
+        let split = &build.split;
+        assert_eq!(
+            (
+                split.layout_delegate_offset,
+                split.containers_member,
+                split.container_count_member,
+                split.active_member,
+                split.split_insets_member,
+            ),
+            (0x320, 0x348, 0x350, 0x3C0, 0x3FC),
+            "{name}"
+        );
+        assert_eq!(
+            (
+                split.container_delegate_offset,
+                split.mini_toolbar_member,
+                split.outline_member
+            ),
+            (0x318, 0x438, 0x440),
+            "{name}"
+        );
+        let row = build.app_window.as_ref().unwrap();
+        assert_eq!(row.web_view_size, 0x520, "{name}");
+        assert_eq!(
+            (row.view_parent, row.view_children),
+            (0x198, 0x1A0),
+            "{name}"
+        );
+    }
+    // Chromium 157 dropped one side panel entry. Brave keeps its own four.
+    assert_eq!(
+        (
+            CHROME_157_38.side_panel.extension_entry,
+            CHROME_157_38.side_panel.entry_count
+        ),
+        (22, 23)
+    );
+    assert_eq!(
+        (
+            BRAVE_157_55.side_panel.extension_entry,
+            BRAVE_157_55.side_panel.entry_count
+        ),
+        (26, 27)
+    );
+    // Colour ids moved by five, and Brave's stay 17 above Chrome's past the frame ones.
+    assert_eq!(
+        CHROME_157_38.layout.frame_ids,
+        &[0x141, 0x142, 0x145, 0x146, 0x149]
+    );
+    assert_eq!(
+        BRAVE_157_55.layout.frame_ids,
+        CHROME_157_38.layout.frame_ids
+    );
+    assert_eq!(CHROME_157_38.layout.caption_ink_ids, &[0x673, 0x674, 0x675]);
+    assert_eq!(BRAVE_157_55.layout.caption_ink_ids, &[0x684, 0x685, 0x686]);
+    // Brave's window feature object keeps its browser type eight bytes further on.
+    assert_eq!(
+        CHROME_157_38.app_window.as_ref().unwrap().browser_type,
+        0x10
+    );
+    assert_eq!(BRAVE_157_55.app_window.as_ref().unwrap().browser_type, 0x18);
 }
 
 fn check_app_window_bytes(browser: &str, version: &[u16; 4], file: &[u8]) {
@@ -1328,4 +1496,127 @@ fn fr12_edge_58_and_whale_57_record_the_page_view_that_moves_below_the_bar() {
             "Whale .57 records {name}"
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn nfr6_newest_row_of_each_ported_browser_has_its_symbol_key() {
+    // The row job ports a new build from the newest row of its browser, read through that row's
+    // public symbols. A newest row without its symbol key stops every later row of the browser.
+    let table: serde_json::Value =
+        serde_json::from_str(CHECKED_IN).expect("the checked-in table is JSON");
+    let mut rows = crate::compiled_rows();
+    rows.extend(table["rows"].as_array().cloned().unwrap_or_default());
+    let version_of = |row: &serde_json::Value| -> Vec<u64> {
+        row["build"]["version"]
+            .as_array()
+            .map(|parts| parts.iter().filter_map(serde_json::Value::as_u64).collect())
+            .unwrap_or_default()
+    };
+    for browser in ["Google Chrome", "Microsoft Edge", "Brave"] {
+        let newest = rows
+            .iter()
+            .filter(|row| row["build"]["browser"] == browser && !row["frame"].is_null())
+            .max_by_key(|row| version_of(row))
+            .unwrap_or_else(|| panic!("{browser} has a row"));
+        let version: Vec<String> = version_of(newest).iter().map(u64::to_string).collect();
+        let key = format!("{browser} {}", version.join("."));
+        assert!(
+            table["symbols"][key.as_str()].is_string(),
+            "{key} has no symbol key in rows/table.json"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn nfr6_recipes_read_every_row_value_they_cover_again_from_its_own_module() {
+    // Replays the row job's recipes on the modules this machine has: the installed Chrome and
+    // Brave 157, the held Chrome 156 and the installed Edge 156. Each hand-made row value that a
+    // recipe covers must come out the same, which is what lets a later build get them without a
+    // person. Chromium 157 moved these values (0x560 to 0x558, 0x528 to 0x520, slot 127 to 126),
+    // so a recipe that only copied them would fail here.
+    use crate::row_data::RowValue;
+    use rivet_platform_windows::{chrome_build::PeFile, row_recipe};
+    let table: serde_json::Value =
+        serde_json::from_str(CHECKED_IN).expect("the checked-in table is JSON");
+    let edge_156 = table["rows"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter().find(|row| {
+                row["build"]["browser"] == "Microsoft Edge"
+                    && row["build"]["version"] == serde_json::json!([156, 0, 4314, 58])
+            })
+        })
+        .map(|row| row["build"].clone());
+    let mut cases: Vec<(serde_json::Value, std::path::PathBuf)> = vec![
+        (
+            crate::builds::CHROME_157_38.to_row(),
+            r"C:\Program Files\Google\Chrome\Application\157.0.8103.38\chrome.dll".into(),
+        ),
+        (
+            crate::builds::BRAVE_157_55.to_row(),
+            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\157.1.99.55\chrome.dll"
+                .into(),
+        ),
+    ];
+    if let Some(held) = rivet_core::paths::Layout::current().map(|layout| layout.held_browsers()) {
+        cases.push((
+            crate::builds::CHROME_156_80.to_row(),
+            held.join(r"chrome\156.0.8078.80\156.0.8078.80\chrome.dll"),
+        ));
+    }
+    if let Some(edge) = edge_156 {
+        cases.push((
+            edge,
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\156.0.4314.58\msedge.dll".into(),
+        ));
+    }
+    for (row, module) in cases {
+        // A machine without this build has nothing to replay it on.
+        let Ok(bytes) = std::fs::read(&module) else {
+            continue;
+        };
+        let pe = PeFile::parse(&bytes).expect("a 64-bit module");
+        let mut derived_row = row.clone();
+        let derived = row_recipe::derive_row(&mut derived_row, &pe);
+        let name = format!("{} {}", row["browser"], row["version"]);
+        assert!(derived.failed.is_empty(), "{name}: {:?}", derived.failed);
+        assert_eq!(derived_row, row, "{name}: {:?}", derived.read);
+        // The member offset, the object size and the frame slots at least.
+        assert!(derived.read.len() >= 7, "{name}: {:?}", derived.read);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn nfr6_a_table_row_carries_the_page_tools_and_bubble_anchor_of_its_prior_row() {
+    use crate::row_data::RowValue;
+    // The generator ports every part of the built-in row it is given, so the parts kept in lists
+    // of their own must be in that row.
+    let rows = crate::compiled_rows();
+    let chrome = rows
+        .iter()
+        .find(|row| {
+            row["build"]["browser"] == "Google Chrome"
+                && row["build"]["version"] == serde_json::json!([157, 0, 8103, 38])
+        })
+        .expect("Chrome 157.0.8103.38 is built in");
+    assert!(chrome["build"]["page_tools"].is_object());
+    assert!(chrome["build"]["bubble_anchor"].is_array());
+    // A table row with those parts gives a build that has them, with no list entry for it.
+    let mut row = chrome["build"].clone();
+    row["version"] = serde_json::json!([157, 0, 8103, 99]);
+    let build: &'static Build = Box::leak(Box::new(Build::from_row(&row).unwrap()));
+    let tools = crate::builds::page_tool_rows::page_tools_for(build).expect("the row's page tools");
+    assert_eq!(
+        tools.update_target_url,
+        crate::builds::page_tool_rows::page_tools_for(&CHROME_157_38)
+            .unwrap()
+            .update_target_url
+    );
+    assert_eq!(
+        crate::builds::bubble_anchor_of(build),
+        crate::builds::bubble_anchor_of(&CHROME_157_38)
+    );
 }

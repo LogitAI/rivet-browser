@@ -56,11 +56,13 @@ pub(crate) const PREVIEW_HEADER: i32 = 40;
 
 /// Where a floating page sits in the page area `full`, below its header. The study's preview keeps
 /// 64 DIPs at the sides, 20 above its header and 40 below. A small window keeps a narrower margin.
-pub(crate) fn floating(full: [i32; 4]) -> [i32; 4] {
+pub(crate) fn floating(full: [i32; 4], reserve: i32) -> [i32; 4] {
     let [x, y, w, h] = full;
     let side = 64.min(w / 10);
     let top = 20.min(h / 10);
-    let bottom = 40.min(h / 10);
+    // `reserve` DIPs at the page bottom belong to a notice that sits there, such as the held build
+    // warning, so the floating page keeps clear of them.
+    let bottom = 40.min(h / 10).max(reserve);
     [
         x + side,
         y + top + PREVIEW_HEADER,
@@ -700,7 +702,7 @@ pub(crate) fn layout(full: [i32; 4], mode: Mode, rail: i32) -> ([i32; 4], [i32; 
     let [x, y, w, h] = full;
     match mode {
         Mode::Inset | Mode::Split => (full, [x + w, y, 0, h]),
-        Mode::Floating => (full, floating(full)),
+        Mode::Floating => (full, floating(full, crate::frame::held_reserve())),
         Mode::Docked { width } => {
             let width = width.clamp(0, w.max(0));
             (full, [x + w - width, y, width, h])
@@ -1675,10 +1677,10 @@ unsafe fn window_origin(view: usize) -> [i32; 2] {
     [x, y]
 }
 
-/// The DIPs per pixel of a window.
+/// The pixels per DIP of a window, at the scale the browser laid it out. Windows can report another
+/// DPI for the window, as it does while the window crosses monitors of different DPIs.
 unsafe fn scale_of(window: HWND) -> f32 {
-    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-    GetDpiForWindow(window).max(96) as f32 / 96.0
+    crate::frame::layout_dpi(window) as f32 / 96.0
 }
 
 /// The dividers of the window's split in window DIPs.
@@ -1735,7 +1737,6 @@ pub(crate) unsafe fn on_mouse(
     lparam: isize,
     browser: &dyn Fn() -> isize,
 ) -> Option<isize> {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
@@ -1752,7 +1753,7 @@ pub(crate) unsafe fn on_mouse(
                 .find(|divider| inside(divider.rect, x, y))
             {
                 DRAGGING.store(divider.node, Ordering::Release);
-                SetCapture(window);
+                rivet_platform_windows::focus::capture(window);
                 return Some(0);
             }
             let Some(slot) = extra_at(window, x, y) else {
@@ -1803,7 +1804,7 @@ pub(crate) unsafe fn on_mouse(
             if DRAGGING.swap(usize::MAX, Ordering::AcqRel) != usize::MAX =>
         {
             if message == WM_LBUTTONUP {
-                ReleaseCapture();
+                rivet_platform_windows::focus::release(window);
             }
             Some(0)
         }
@@ -1883,34 +1884,6 @@ pub(crate) mod bare {
                 crate::trace::trace("bare view: no destructor for this build; the view is kept")
             }
         }
-    }
-
-    /// Gives the view the keyboard.
-    pub(crate) unsafe fn focus(view: usize) -> bool {
-        let Some(function) = virtual_of(view, "request_focus", "focus_slot") else {
-            return false;
-        };
-        std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(function)(view);
-        true
-    }
-
-    /// The browser moved `page` into the window's page view because its tab became active. The page
-    /// view takes `behind` back and `view` shows `page` again. Returns whether the pages moved.
-    pub(crate) unsafe fn take_back(window: HWND, view: usize, page: usize, behind: usize) -> bool {
-        let Some(parent) = browser_view(window) else {
-            return false;
-        };
-        let size = recorded("size").unwrap_or(0x528);
-        let Some(main) = views_with_vtable(parent, *(view as *const usize))
-            .into_iter()
-            .find(|candidate| *candidate != view && holds(*candidate, page, size))
-        else {
-            return false;
-        };
-        set_page(view, 0);
-        set_page(main, behind);
-        set_page(view, page);
-        true
     }
 
     /// The window's active page, or zero.

@@ -159,7 +159,7 @@ pub(crate) unsafe fn page_info(window: HWND) -> bool {
     // highlight: an empty `std::optional`.
     let mut callback: usize = 0;
     const ANCHOR_LOCATION_BAR: i32 = 0;
-    crate::features::bubble_anchor::with_page_info(|| {
+    crate::features::bubble_anchor::with_page_info(window, || {
         at::<ShowPageInfo>(base, f.show_page_info)(contents, &mut callback, ANCHOR_LOCATION_BAR, 0)
     })
 }
@@ -170,6 +170,46 @@ pub(crate) struct Suggestion {
     pub contents: String,
     pub description: String,
     pub destination: String,
+    /// `fill_into_edit`: the text the browser puts in its field for this match.
+    pub fill: String,
+    /// `inline_autocompletion`: what the browser shows selected after the typed text when this match
+    /// is the default one. Empty when nothing is completed.
+    pub inline: String,
+}
+
+/// `AutocompleteMatch` starts with its provider, relevance, typed count and deletable flag, then
+/// `fill_into_edit`, two more `std::u16string` members and two flags before `destination_url`.
+/// Every recorded build keeps `destination_url` at 0x68, so this head is the same in all of them.
+/// Chromium has kept `additional_text` or `prefix_autocompletion` next to `inline_autocompletion`
+/// over the years, so both strings are read and only the one that completes the typed text into
+/// `fill_into_edit` counts.
+const MATCH_DESTINATION_WITH_HEAD: usize = 0x68;
+const MATCH_FILL_INTO_EDIT: usize = 0x18;
+const MATCH_TEXT_AFTER_FILL: [usize; 2] = [0x30, 0x48];
+
+/// The inline completion of `typed` that a default match with `fill_into_edit` and the candidate
+/// strings after it stands for: the candidate that, after the typed text, makes the fill. Chromium
+/// matches the typed text without regard to case.
+pub(crate) fn inline_completion(typed: &str, fill: &str, candidates: &[String]) -> Option<String> {
+    if typed.is_empty() || typed.chars().last()?.is_whitespace() {
+        return None;
+    }
+    let lower = |text: &str| {
+        text.chars()
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    candidates
+        .iter()
+        .find(|inline| {
+            !inline.is_empty()
+                && fill.len() == typed.len() + inline.len()
+                && fill.ends_with(inline.as_str())
+                && fill
+                    .get(..typed.len())
+                    .is_some_and(|start| lower(start) == lower(typed))
+        })
+        .cloned()
 }
 
 type Allocate = unsafe extern "system" fn(usize) -> *mut c_void;
@@ -278,26 +318,47 @@ unsafe fn u16_text(value: *const u8) -> String {
 /// The browser's suggestions for `text`, history and typed addresses included, from the providers
 /// that answer at once. Suggestions that need the network are left out, so typing never waits.
 pub(crate) unsafe fn suggest(window: HWND, text: &str) -> Option<Vec<Suggestion>> {
+    suggest_with(window, text, false, false, true)
+}
+
+/// The browser's suggestions for `text`, as [`suggest`], letting the browser complete the typed
+/// text inline when `inline` is set. Its own address bar asks so while the person types at the end
+/// of the text and did not just delete.
+pub(crate) unsafe fn suggest_with(
+    window: HWND,
+    text: &str,
+    inline: bool,
+    asynchronous: bool,
+    start: bool,
+) -> Option<Vec<Suggestion>> {
     let (f, base) = loaded()?;
     let profile = profile_of(f, base, window)?;
     let (controller, classifier) = autocomplete_for(f, base, profile);
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let string = borrowed_u16(&wide);
-    let mut input = Box::new(Raw::<0x800>([0; 0x800]));
-    let input = input.0.as_mut_ptr().cast::<c_void>();
-    at::<InputNew>(base, f.input_new)(
-        input,
-        &string,
-        PAGE_OTHER,
-        classifier as *const c_void,
-        false,
-        0,
-        false,
-    );
-    *input.cast::<u8>().add(f.input_prevent_inline) = 1;
-    *input.cast::<u8>().add(f.input_omit_asynchronous) = 1;
-    at::<Start>(base, f.start)(controller as *mut c_void, input);
-    at::<Construct>(base, f.input_drop)(input);
+    // Without `start` the result of the query last started is read again, as its asynchronous
+    // providers add to it, and nothing new is asked.
+    if start {
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let string = borrowed_u16(&wide);
+        let mut input = Box::new(Raw::<0x800>([0; 0x800]));
+        let input = input.0.as_mut_ptr().cast::<c_void>();
+        at::<InputNew>(base, f.input_new)(
+            input,
+            &string,
+            PAGE_OTHER,
+            classifier as *const c_void,
+            false,
+            0,
+            false,
+        );
+        *input.cast::<u8>().add(f.input_prevent_inline) = u8::from(!inline);
+        // The history providers' slower pass and the search engine's suggestions answer after Start
+        // returns. With `asynchronous` the browser runs them, as its own address bar does, and their
+        // matches reach the published result later, read again without `start`.
+        *input.cast::<u8>().add(f.input_omit_asynchronous) = u8::from(!asynchronous);
+        at::<Start>(base, f.start)(controller as *mut c_void, input);
+        at::<Construct>(base, f.input_drop)(input);
+    }
+
     // `AutocompleteResult` starts with its `std::vector<AutocompleteMatch>`.
     let result = (controller + f.controller_published_result) as *const usize;
     let count = match_count(*result, *result.add(1), f.match_size)?;
@@ -305,10 +366,28 @@ pub(crate) unsafe fn suggest(window: HWND, text: &str) -> Option<Vec<Suggestion>
     let mut out = Vec::new();
     for index in 0..count {
         let one = (begin + index * f.match_size) as *const u8;
+        let head = f.match_destination == MATCH_DESTINATION_WITH_HEAD;
+        let fill = if head {
+            u16_text(one.add(MATCH_FILL_INTO_EDIT))
+        } else {
+            String::new()
+        };
+        // Only the default match, the first one, is completed inline.
+        let inline = if head && inline && index == 0 {
+            let candidates: Vec<String> = MATCH_TEXT_AFTER_FILL
+                .iter()
+                .map(|at| u16_text(one.add(*at)))
+                .collect();
+            inline_completion(text, &fill, &candidates).unwrap_or_default()
+        } else {
+            String::new()
+        };
         out.push(Suggestion {
             contents: u16_text(one.add(f.match_contents)),
             description: u16_text(one.add(f.match_description)),
             destination: spec(one.add(f.match_destination)).unwrap_or_default(),
+            fill,
+            inline,
         });
     }
     Some(out)
@@ -355,6 +434,41 @@ mod tests {
         assert_eq!(match_count(begin, begin + 5, 0x6F0), None);
         assert_eq!(match_count(begin, begin + 65 * 0x6F0, 0x6F0), None);
         assert_eq!(match_count(0, 3, 0x6C0), None);
+    }
+
+    #[test]
+    fn fr12_inline_completion_is_the_rest_of_the_default_match_after_the_typed_text() {
+        let fill = "example.com/page-a.html";
+        let found = |typed: &str, candidates: &[&str]| {
+            let candidates: Vec<String> = candidates.iter().map(|c| c.to_string()).collect();
+            inline_completion(typed, fill, &candidates)
+        };
+        assert_eq!(
+            found("exa", &["", "mple.com/page-a.html"]),
+            Some("mple.com/page-a.html".into())
+        );
+        assert_eq!(
+            found("EXA", &["mple.com/page-a.html", ""]),
+            Some("mple.com/page-a.html".into())
+        );
+        // A string that does not complete the typed text into the fill is not the completion.
+        assert_eq!(found("exa", &["Example", "page-a.html"]), None);
+        assert_eq!(found("exa", &["", ""]), None);
+        assert_eq!(found("", &["example.com/page-a.html"]), None);
+        assert_eq!(found("exa ", &["mple.com/page-a.html"]), None);
+    }
+
+    #[test]
+    fn fr12_every_recorded_match_keeps_the_head_inline_completion_is_read_from() {
+        for build in crate::builds::compiled() {
+            if let Some(known) = build.omnibox.as_ref() {
+                assert_eq!(
+                    known.match_destination, MATCH_DESTINATION_WITH_HEAD,
+                    "{}",
+                    build.browser
+                );
+            }
+        }
     }
 
     #[test]

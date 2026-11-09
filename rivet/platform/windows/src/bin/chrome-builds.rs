@@ -68,6 +68,10 @@ fn main() -> ExitCode {
         ["pending", stable, beta, edge, brave, known] => {
             pending(Path::new(stable), Path::new(beta), Path::new(edge), Path::new(brave), Path::new(known))
         }
+        ["gate", results, browser] => gate(Path::new(results), browser),
+        ["fingerprint", row, module, out] => fingerprint(Path::new(row), Path::new(module), Path::new(out)),
+        ["release-sign", version, signed, files @ ..] => release_sign(version, Path::new(signed), files),
+        ["release-check", signed, file] => release_check(Path::new(signed), Path::new(file)),
         ["table-key"] => signed_table::generate_key().map(|(private, public)| {
             println!("private {private}");
             println!("public {public}");
@@ -79,7 +83,10 @@ fn main() -> ExitCode {
         ["table-sign", table, signed, published] => {
             table_sign(Path::new(table), Path::new(signed), Some(Path::new(published)))
         }
-        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | table-key | table-add <table.json> <row.json> <module> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file]".into()),
+        ["table-withdraw", published, signed, builds @ ..] if !builds.is_empty() => {
+            table_withdraw(Path::new(published), Path::new(signed), builds)
+        }
+        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> <module> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -171,7 +178,7 @@ fn port(
             },
         )
         .collect();
-    let (row, report) = row_port::port_row(
+    let (row, mut report) = row_port::port_row(
         &prior,
         &named,
         &NewBuild {
@@ -181,6 +188,7 @@ fn port(
             private: &private,
         },
     );
+    report.review.extend(row_port::hand_only_review(&prior));
     let text = |value: &dyn erased::Json| value.pretty();
     std::fs::write(row_path, text(&row)).map_err(|error| error.to_string())?;
     std::fs::write(report_path, text(&report)).map_err(|error| error.to_string())?;
@@ -296,6 +304,37 @@ fn table_sign(table: &Path, signed: &Path, published: Option<&Path>) -> Result<(
         "sequence {}, {} rows",
         merged["sequence"],
         merged["rows"].as_array().map_or(0, Vec::len)
+    );
+    Ok(())
+}
+
+/// Signs the published table again without the rows of `builds`, each `browser@version`.
+fn table_withdraw(published: &Path, signed: &Path, builds: &[&str]) -> Result<(), String> {
+    let private = std::env::var("RIVET_TABLE_SIGNING_KEY")
+        .map_err(|_| "RIVET_TABLE_SIGNING_KEY is not set")?;
+    let public =
+        std::env::var("RIVET_TABLE_PUBLIC_KEY").map_err(|_| "RIVET_TABLE_PUBLIC_KEY is not set")?;
+    let table = signed_table::parse(signed_table::open(&public, &read(published)?)?)?;
+    let pairs = builds
+        .iter()
+        .map(|build| {
+            build
+                .split_once('@')
+                .ok_or(format!("{build} is not browser@version"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    let table = signed_table::withdraw_rows(&table, &pairs, now)?;
+    let payload = serde_json::to_vec(&table).map_err(|error| error.to_string())?;
+    std::fs::write(signed, signed_table::sign(&private, &payload)?)
+        .map_err(|error| error.to_string())?;
+    println!(
+        "sequence {}, {} rows",
+        table["sequence"],
+        table["rows"].as_array().map_or(0, Vec::len)
     );
     Ok(())
 }
@@ -665,4 +704,67 @@ mod symbols {
             unreachable!()
         }
     }
+}
+
+/// Refuses a browser that did not pass every feature check, so it is never listed as supported.
+fn gate(results: &Path, browser: &str) -> Result<(), String> {
+    let text = String::from_utf8(read(results)?)
+        .map_err(|error| format!("the feature results are not text: {error}"))?;
+    // PowerShell writes UTF-8 with a byte order mark.
+    let results: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|error| format!("the feature results are not JSON: {error}"))?;
+    let notes = row_watch::publish_gate(&results, browser)
+        .map_err(|reasons| format!("{browser} is not supported: {}", reasons.join("; ")))?;
+    for note in notes {
+        println!("note: {note}");
+    }
+    Ok(())
+}
+
+/// Adds the function fingerprints of a verified row, read from its own module, so a runtime can
+/// find the same functions in a build that has no row yet.
+fn fingerprint(row_path: &Path, module: &Path, out: &Path) -> Result<(), String> {
+    let mut row: serde_json::Value = serde_json::from_slice(&read(row_path)?)
+        .map_err(|error| format!("the row is not JSON: {error}"))?;
+    let bytes = read(module)?;
+    let pe = PeFile::parse(&bytes).ok_or("the module is not a 64-bit PE image")?;
+    row_port::add_fingerprints(&mut row, &pe)?;
+    let text = serde_json::to_string_pretty(&row).map_err(|error| error.to_string())?;
+    std::fs::write(out, text).map_err(|error| format!("could not write {}: {error}", out.display()))
+}
+
+/// Signs the SHA-256 of each release file, so an installer or update applies only these files.
+fn release_sign(version: &str, signed: &Path, files: &[&str]) -> Result<(), String> {
+    let private = std::env::var("RIVET_TABLE_SIGNING_KEY")
+        .map_err(|_| "RIVET_TABLE_SIGNING_KEY is not set")?;
+    let mut read_files = Vec::new();
+    for file in files {
+        let path = Path::new(file);
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("{file} has no file name"))?
+            .to_owned();
+        read_files.push((name, read(path)?));
+    }
+    let listed: Vec<(&str, &[u8])> = read_files
+        .iter()
+        .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+        .collect();
+    let manifest = signed_table::artifact_manifest(version, &listed)?;
+    let file = signed_table::sign(&private, &manifest)?;
+    std::fs::write(signed, file).map_err(|error| error.to_string())
+}
+
+/// Fails unless a file matches its hash in a release manifest signed with the release key.
+fn release_check(signed: &Path, file: &Path) -> Result<(), String> {
+    let public =
+        std::env::var("RIVET_TABLE_PUBLIC_KEY").map_err(|_| "RIVET_TABLE_PUBLIC_KEY is not set")?;
+    let name = file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("the file has no name")?;
+    let version = signed_table::check_artifact(&public, &read(signed)?, name, &read(file)?)?;
+    println!("{name} matches release {version}");
+    Ok(())
 }

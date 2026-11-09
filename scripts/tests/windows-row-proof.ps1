@@ -4,7 +4,10 @@ param(
     [Parameter(Mandatory = $true)][string]$Browser,
     [Parameter(Mandatory = $true)][string]$Work
 )
-
+# The whole run, and every browser it starts, runs on a desktop of its own.
+. (Join-Path $PSScriptRoot 'windows-test-desktop.ps1')
+$desktopCode = Invoke-OnOwnDesktop $PSCommandPath $PSBoundParameters
+if ($null -ne $desktopCode) { exit $desktopCode }
 $ErrorActionPreference = 'Stop'
 # Opens a real Rivet window of a browser build the way an installed Rivet does, then measures it.
 # The window is never activated and keeps its off-screen place only on a machine with no monitor
@@ -15,7 +18,7 @@ $state = Join-Path $Work 'sessions.json'
     --state $state --user-data-dir (Join-Path $Work 'profile')
 if ($LASTEXITCODE -ne 0) { throw 'NFR-3: The session did not start.' }
 Start-Sleep -Seconds 12
-& (Join-Path $PSScriptRoot 'windows-frame.ps1') -State $state
+& (Join-Path $PSScriptRoot 'windows-frame.ps1') -State $state -Rivet $Rivet
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
@@ -23,7 +26,6 @@ using System;using System.Runtime.InteropServices;
 public static class RivetRowProof{
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int w,int ht,uint f);
- [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint f);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out R r);
  public struct R{public int L,T,Ri,B;}
@@ -47,7 +49,10 @@ $graphics.Dispose()
 $image = Join-Path $Work 'row.png'
 $bitmap.Save($image)
 $bitmap.Dispose()
-$dpi = [RivetRowProof]::GetDpiForWindow($handle)
+# The scale the browser lays the window out at, as the installed build reports it with a capture.
+$read = & $Rivet read frame --out (Join-Path $Work 'frame.bmp') --state $state --json | ConvertFrom-Json
+if (-not $read.ok -or -not $read.layout_dpi) { throw 'NFR-3: Rivet did not report the window''s layout scale.' }
+$dpi = [int]$read.layout_dpi
 try {
     & (Join-Path $PSScriptRoot 'windows-row.ps1') -Image $image -Dpi $dpi
 } catch {

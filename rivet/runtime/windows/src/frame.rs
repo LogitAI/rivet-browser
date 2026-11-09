@@ -13,8 +13,7 @@ use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
-    TME_NONCLIENT, TRACKMOUSEEVENT,
+    GetFocus, GetKeyState, SetFocus, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CallWindowProcW, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos,
@@ -42,6 +41,11 @@ use crate::feature::Step;
 use crate::press::Presses;
 use crate::spaces::{SavedTab, Spaces, MAX_SPACES};
 use crate::tab_rows::{self, Row};
+
+/// The composition root of the runtime's layers. A feature that has moved behind the operating
+/// system and browser access traits is given these adapters, and nothing else picks one.
+pub(crate) const OS: crate::os::win32::Win32 = crate::os::win32::Win32;
+pub(crate) const BROWSER: crate::browser::chromium::Chromium = crate::browser::chromium::Chromium;
 
 const BROWSER_CLASS: &str = "Chrome_WidgetWin_1";
 const ORIGINAL_PROC: &str = "Rivet.OriginalWindowProc";
@@ -157,6 +161,208 @@ const WORKSPACE_ROW: f32 = 48.0;
 const SETTINGS_ROW: f32 = 34.0;
 const SETTINGS_PAD: f32 = 4.0;
 const FOOT_HEIGHT: f32 = 38.0;
+
+/// Finds the window's views by class metadata from the window's own user data, and traces them
+/// beside the browser view and parent field this build's row records. The walk only reads memory,
+/// so it runs on a worker thread and never holds up the window; the offsets it derives are kept by
+/// build fingerprint, so its budget is paid once per build. Returns whether it started.
+unsafe fn trace_reflection(window: HWND) -> bool {
+    use crate::chromium::reflect;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
+    let Some(image) = crate::chromium::image::recorded() else {
+        crate::trace::trace("reflect: the browser module is not known");
+        return false;
+    };
+    let headers = std::slice::from_raw_parts(image.base as *const u8, 0x1000.min(image.size));
+    let ranges = reflect::ranges_of(image.base, &reflect::sections(headers));
+    let Some(build) = reflect::fingerprint(headers) else {
+        crate::trace::trace("reflect: the browser module has no fingerprint");
+        return false;
+    };
+    let handler = GetWindowLongPtrW(window, GWLP_USERDATA) as usize;
+    // Read on the window's own thread, where the browser layout recorded it.
+    let host = crate::hooks::page_area::laid_out_host(window);
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let found = reflect::find_cached(
+            &ranges,
+            handler,
+            std::time::Duration::from_millis(500),
+            build,
+        );
+        let took = started.elapsed().as_millis();
+        let parent_row = crate::chromium::view::View::PARENT;
+        match found {
+            Ok((found, cached)) => crate::trace::trace(&format!(
+                "reflect: browser view by path {:x?}, view list at {:#x}, parent at {:#x} (row {:#x}), \
+                 browser view {:x?} (row {:x?}, view part {} bytes), same {}, cached {cached}, \
+                 {} objects, {took} ms on a worker thread",
+                found.path,
+                found.children,
+                found.parent,
+                parent_row,
+                found.browser_view,
+                host,
+                found.view_part,
+                found.parent == parent_row
+                    && found.browser_view.is_some()
+                    && found.browser_view == host,
+                found.visited,
+            )),
+            Err(error) => crate::trace::trace(&format!("reflect: {error}, {took} ms")),
+        }
+        // Where the row knows the browser view, what memory shows around it, for designing the walk.
+        if let Some(view) = host {
+            let reached = reflect::reach(&ranges, handler, std::time::Duration::from_millis(500))
+                .ok()
+                .map(|(object, _, _)| object);
+            crate::trace::trace(&reflect::facts(&ranges, view, parent_row, reached));
+            let holder = crate::chromium::memory::readable(view + parent_row, 8)
+                .then(|| unsafe { *((view + parent_row) as *const usize) });
+            if let Some(holder) = holder {
+                crate::trace::trace(&format!(
+                    "facts: holder parts {}",
+                    reflect::parts(&ranges, ranges.text.0, holder, 12)
+                ));
+            }
+            crate::trace::trace(&format!(
+                "facts: view fields naming a class {}",
+                reflect::named_fields(&ranges, view, 16)
+            ));
+        }
+    });
+    true
+}
+/// How far above the page area's bottom the held build warning and its margin reach, in DIPs, or
+/// zero when this process shows no such warning.
+pub(crate) fn held_reserve() -> i32 {
+    if held_warning().is_some() {
+        crate::appbar::HELD_RESERVE
+    } else {
+        0
+    }
+}
+
+thread_local! {
+    /// The windows that took the attach and wait for the browser to lay them out for Rivet's frame.
+    static AWAITING_LAYOUT: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Marks, as the UI thread takes the attach, that the window waits for the browser to lay it out
+/// for Rivet's frame. It stays cloaked until then, or until the longest hide passes: until that
+/// layout a frame can still hold the browser's own title strip, at another scale.
+fn await_layout(window: HWND) {
+    AWAITING_LAYOUT.with(|all| all.borrow_mut().push(window as isize));
+}
+
+/// The browser laid the window out for Rivet's frame. The first such layout after the attach starts
+/// the short reveal, by when Rivet's surfaces are drawn at that layout's scale; later ones do not.
+unsafe fn laid_out(window: HWND) {
+    if take_waiting(window) {
+        GAVE_UP.with(|all| all.borrow_mut().remove(&(window as isize)));
+        crate::trace::trace(&format!(
+            "attach: complete, the browser laid window {:#x} out for Rivet's frame",
+            window as usize
+        ));
+        crate::features::look::first_look(window, crate::features::look::FirstLook::LaidOut);
+    }
+}
+
+/// What the attach needs to know of a window: whether it is shown, minimized or framed, and its
+/// size, which decide whether the browser lays it out for Rivet's frame.
+unsafe fn window_state(window: HWND) -> String {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, WS_VISIBLE};
+    let style = GetWindowLongPtrW(window, GWL_STYLE) as u32;
+    let mut rect: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut rect);
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    format!(
+        "attached {} visible {} style-visible {} minimized {} maximized {} sizing frame {} window [{}, {}, {}, {}] client {}x{}",
+        attached(window),
+        IsWindowVisible(window) != 0,
+        style & WS_VISIBLE != 0,
+        IsIconic(window) != 0,
+        IsZoomed(window) != 0,
+        style & WS_THICKFRAME != 0,
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom,
+        client.right,
+        client.bottom
+    )
+}
+
+/// Whether the window still waits for the browser's layout for Rivet's frame.
+fn is_waiting(window: HWND) -> bool {
+    AWAITING_LAYOUT.with(|all| all.borrow().contains(&(window as isize)))
+}
+
+/// The timer that asks the browser again to lay a window out for Rivet's frame.
+const ATTACH_LAYOUT_TIMER: usize = 0x5249_414C;
+/// How often, and how many times, the browser is asked again, all within the longest hide.
+const ATTACH_LAYOUT_RETRY_MS: u32 = 300;
+const ATTACH_LAYOUT_TRIES: u32 = 4;
+
+thread_local! {
+    /// How many times each window was asked again to lay out for Rivet's frame.
+    static ATTACH_LAYOUT_ASKED: RefCell<HashMap<isize, u32>> = RefCell::new(HashMap::new());
+}
+
+/// What to do when the retry timer fires for a window that took the attach: nothing once the
+/// browser has laid it out, ask again while tries are left, or give up with a warning.
+#[derive(Debug, PartialEq, Eq)]
+enum AttachRetry {
+    Done,
+    AskAgain(u32),
+    GiveUp,
+}
+
+fn attach_retry(waiting: bool, asked: u32) -> AttachRetry {
+    match (waiting, asked < ATTACH_LAYOUT_TRIES) {
+        (false, _) => AttachRetry::Done,
+        (true, true) => AttachRetry::AskAgain(asked + 1),
+        (true, false) => AttachRetry::GiveUp,
+    }
+}
+
+/// The retry timer of a window's attach fired.
+unsafe fn on_attach_layout_timer(window: HWND) {
+    let asked =
+        ATTACH_LAYOUT_ASKED.with(|all| all.borrow().get(&(window as isize)).copied().unwrap_or(0));
+    match attach_retry(is_waiting(window), asked) {
+        AttachRetry::Done => {
+            KillTimer(window, ATTACH_LAYOUT_TIMER);
+        }
+        AttachRetry::AskAgain(tries) => {
+            ATTACH_LAYOUT_ASKED.with(|all| all.borrow_mut().insert(window as isize, tries));
+            crate::trace::trace(&format!(
+                "attach: the browser has not laid window {:#x} out for Rivet's frame yet; asked again (try {tries})",
+                window as usize
+            ));
+            relayout(window);
+        }
+        AttachRetry::GiveUp => {
+            KillTimer(window, ATTACH_LAYOUT_TIMER);
+            // The window's own events ask again from here on, with no more polling.
+            GAVE_UP.with(|all| all.borrow_mut().insert(window as isize));
+            crate::trace::trace(&format!(
+                "attach: warning, the browser never laid window {:#x} out for Rivet's frame after {} tries",
+                window as usize, ATTACH_LAYOUT_TRIES
+            ));
+        }
+    }
+}
+
+/// Whether the window waited for its layout, which it then no longer does.
+fn take_waiting(window: HWND) -> bool {
+    AWAITING_LAYOUT.with(|all| {
+        let mut all = all.borrow_mut();
+        let at = all.iter().position(|key| *key == window as isize);
+        at.map(|at| all.remove(at)).is_some()
+    })
+}
 
 /// The warning of this process when it runs from a held browser build. The clock is read once per
 /// process, and the time left is worked out anew for each paint because a window can stay open for days.
@@ -476,7 +682,7 @@ unsafe fn tab_drag_start(window: HWND, lparam: LPARAM) {
     if start {
         // A press that became a drag is no long press.
         crate::features::link_preview::cancel_hold(window);
-        SetCapture(window);
+        rivet_platform_windows::focus::capture(window);
         // The press no longer clicks the tab.
         press_up(window);
         APPBAR_STATE.with(|states| {
@@ -515,7 +721,7 @@ unsafe fn tab_drag_end(window: HWND, release: Option<LPARAM>) {
     let Some(drag) = TAB_DRAGS.with(|drags| drags.borrow_mut().remove(&(window as isize))) else {
         return;
     };
-    ReleaseCapture();
+    rivet_platform_windows::focus::release(window);
     show_tab_drag(window, None);
     if let Some(lparam) = release.filter(|_| drag.live) {
         let point = POINT {
@@ -929,6 +1135,13 @@ unsafe fn start_url(space: &crate::spaces::SpaceInfo) -> Option<String> {
 }
 
 /// The address of the Rivet start page for the space `window` shows.
+pub(crate) fn start_page_of(window: crate::os::WindowId) -> Option<String> {
+    // The spaces of a window are Rivet's own state, and the runtime's folder is read from this
+    // module's own address.
+    unsafe { start_url_of(window.hwnd()) }
+}
+
+/// The address of the Rivet start page for the space `window` shows.
 pub(crate) unsafe fn start_url_of(window: HWND) -> Option<String> {
     let space = with_spaces(window, |spaces| spaces.list()[spaces.current()].clone());
     start_url(&space)
@@ -966,7 +1179,7 @@ unsafe fn switch_space(window: HWND, index: usize) {
         return;
     };
     let target = with_spaces(window, |spaces| spaces.list()[index].clone());
-    let root = rivet_core::paths::local_app_data();
+    let root = rivet_core::paths::data_home();
     if let Some(hand_over) = root.as_deref().and_then(|root| {
         crate::spaces::hand_over(&target, crate::installed_browsers::current(), root)
     }) {
@@ -1073,7 +1286,7 @@ unsafe fn hand_over_to(
     let dir = hand_over.user_data_dir.to_string_lossy().into_owned();
     let (mut next, root) = (
         with_spaces(window, |spaces| spaces.clone()),
-        rivet_core::paths::local_app_data(),
+        rivet_core::paths::data_home(),
     );
     let Some(root) = root else {
         return;
@@ -1193,7 +1406,7 @@ thread_local! {
 
 /// The spaces file of this process's browser profile.
 pub(crate) fn spaces_file() -> Option<(std::path::PathBuf, String)> {
-    let root = rivet_core::paths::local_app_data()?;
+    let root = rivet_core::paths::data_home()?;
     let dir = crate::spaces::user_data_dir_of(
         std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()),
     );
@@ -1204,7 +1417,8 @@ pub(crate) fn spaces_file() -> Option<(std::path::PathBuf, String)> {
 }
 
 /// Restores the saved spaces, the appbar width and its hidden state when a window attaches.
-/// Missing or corrupt files leave the defaults. A corrupt file is kept under another name.
+/// A corrupt file is kept under another name and its copy is read instead. Without a good one the
+/// defaults stay.
 unsafe fn load_persisted(window: HWND) {
     let owns = PERSIST.with(|persist| {
         let mut persist = persist.borrow_mut();
@@ -1217,11 +1431,7 @@ unsafe fn load_persisted(window: HWND) {
     let Some((path, _)) = spaces_file().filter(|_| owns) else {
         return;
     };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let Some(mut stored) = Spaces::from_json(&text) else {
-        let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
+    let Some(mut stored) = crate::spaces::read_recovering(&path, Spaces::from_json) else {
         return;
     };
     let pending = stored.spaces.take_current_tabs();
@@ -1444,7 +1654,7 @@ unsafe fn open_menu(window: HWND, menu: Menu) {
             .insert(window as isize, (previous as isize, menu))
     });
     SetFocus(window);
-    SetCapture(window);
+    rivet_platform_windows::focus::capture_for_menu(window);
 }
 
 /// Whether a client point is inside the open menu, and the entry it is on.
@@ -1474,7 +1684,7 @@ unsafe fn close_menu(window: HWND) {
                 entry.0 = None;
             }
         });
-        ReleaseCapture();
+        rivet_platform_windows::focus::release(window);
         if previous != 0 {
             SetFocus(previous as HWND);
         }
@@ -1819,8 +2029,22 @@ unsafe fn relayout(window: HWND) {
     // The frame view lays out again on request, which also works for a maximized window.
     crate::features::vertical_tabs::invalidate_strip(window);
     if frame_layout::relayout(window) {
+        if is_waiting(window) {
+            crate::trace::trace("attach: asked the frame view to lay out again");
+        }
         update_appbar(window);
         return;
+    }
+    // A frame change only marks the browser's views for a layout on its next compositor frame,
+    // and a cloaked or off-screen window may draw none; a size change lays it out at once.
+    if nudge(window, "retry") {
+        update_appbar(window);
+        return;
+    }
+    if is_waiting(window) {
+        crate::trace::trace(
+            "attach: asked for a frame change, as the frame view's layout is not recorded",
+        );
     }
     SetWindowPos(
         window,
@@ -1834,10 +2058,91 @@ unsafe fn relayout(window: HWND) {
     update_appbar(window);
 }
 
+/// The window's state that decides whether it may be nudged.
+#[derive(Debug, Clone, Copy, Default)]
+struct NudgeState {
+    waiting: bool,
+    cloaked: bool,
+    minimized: bool,
+    maximized: bool,
+    snapped: bool,
+    fullscreen: bool,
+}
+
+/// Whether the browser is asked for its layout by a size change: only for a window that still
+/// waits for it, is still cloaked so no one sees the change, and has a size of its own, neither
+/// minimized, maximized, snapped nor fullscreen.
+fn asks_by_size(state: NudgeState) -> bool {
+    state.waiting
+        && state.cloaked
+        && !state.minimized
+        && !state.maximized
+        && !state.snapped
+        && !state.fullscreen
+}
+
+/// Resizes a window that still waits for the browser's layout for Rivet's frame by one pixel and
+/// back. The size change lays the root view out at once, in
+/// `views::Widget::OnNativeWidgetSizeChanged`, and the exact first rect is put back and checked.
+/// Returns whether the window was nudged.
+unsafe fn nudge(window: HWND, why: &str) -> bool {
+    use windows_sys::Win32::Graphics::Dwm::DWMWA_CLOAKED;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsWindowArranged};
+    let mut cloaked: u32 = 0;
+    DwmGetWindowAttribute(
+        window,
+        DWMWA_CLOAKED as u32,
+        (&mut cloaked as *mut u32).cast(),
+        std::mem::size_of::<u32>() as u32,
+    );
+    let state = NudgeState {
+        waiting: is_waiting(window),
+        cloaked: cloaked != 0,
+        minimized: IsIconic(window) != 0,
+        maximized: IsZoomed(window) != 0,
+        snapped: IsWindowArranged(window) != 0,
+        // Chromium removes the sizing frame of a fullscreen window.
+        fullscreen: GetWindowLongPtrW(window, GWL_STYLE) as u32 & WS_THICKFRAME == 0,
+    };
+    if !asks_by_size(state) {
+        if state.waiting {
+            crate::trace::trace(&format!(
+                "attach: no nudge of window {:#x} ({why}): {state:?}",
+                window as usize
+            ));
+        }
+        return false;
+    }
+    let mut before: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut before);
+    let (width, height) = (before.right - before.left, before.bottom - before.top);
+    let flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
+    SetWindowPos(window, std::ptr::null_mut(), 0, 0, width, height - 1, flags);
+    SetWindowPos(
+        window,
+        std::ptr::null_mut(),
+        before.left,
+        before.top,
+        width,
+        height,
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
+    let mut after: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut after);
+    let restored = (after.left, after.top, after.right, after.bottom)
+        == (before.left, before.top, before.right, before.bottom);
+    crate::trace::trace(&format!(
+        "attach: nudged window {:#x} ({why}) by one pixel and back, rect restored {restored}, laid out {}",
+        window as usize,
+        !is_waiting(window)
+    ));
+    true
+}
 /// Hides the docked appbar so the page takes its width, or docks it again.
 unsafe fn toggle_appbar(window: HWND) {
     close_menu(window);
     edit_layout(window, |layout| layout.toggle());
+    crate::trace::trace(&format!("appbar: hidden {}", layout_of(window).collapsed));
     sync_strip(window);
     SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
     KillTimer(window, PEEK_TIMER);
@@ -1854,6 +2159,7 @@ unsafe fn set_peek(window: HWND, on: bool) {
         changed
     });
     if changed {
+        crate::trace::trace(&format!("appbar: peek {on}"));
         SetTimer(window, PEEK_TIMER, 16, None);
     }
 }
@@ -1949,7 +2255,7 @@ unsafe fn end_drag(window: HWND) {
         apply_drag(window);
     }
     if DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize))) {
-        ReleaseCapture();
+        rivet_platform_windows::focus::release(window);
         APPBAR_STATE.with(|states| {
             if let Some(entry) = states.borrow_mut().get_mut(&(window as isize)) {
                 entry.0 = None;
@@ -2029,6 +2335,7 @@ unsafe fn apply_drag(window: HWND) {
     let factor = layout_dpi(window) as f32 / 96.0;
     let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
     if edit_layout(window, |layout| layout.set_width(wanted)) {
+        crate::trace::trace(&format!("appbar: width {}", layout_of(window).side));
         sync_strip(window);
         // The appbar takes its new width before the browser lays the page out, so what the
         // browser exposes is only ever ground or appbar, never the appbar's old surface over a
@@ -2046,6 +2353,11 @@ unsafe fn class_name(window: HWND) -> String {
     let mut class = [0u16; 128];
     let length = GetClassNameW(window, class.as_mut_ptr(), class.len() as i32);
     String::from_utf16_lossy(&class[..length.max(0) as usize])
+}
+
+/// Whether `window` has the class of the browser's top-level windows.
+pub(crate) unsafe fn is_browser_window_class(window: HWND) -> bool {
+    class_name(window) == BROWSER_CLASS
 }
 
 unsafe fn attach_message() -> u32 {
@@ -2114,23 +2426,36 @@ pub(crate) fn rivet_windows() -> Vec<HWND> {
     })
 }
 
-/// Every top-level browser window of this process, whoever made it. For the app window spike.
+/// Every top-level browser window of this process, whoever made it. Only windows of the browser's
+/// class are visited, so the half second tab timer does not read the class of every window.
 pub(crate) fn browser_windows_of_process() -> Vec<HWND> {
-    unsafe extern "system" fn each(window: HWND, found: LPARAM) -> i32 {
-        let mut owner = 0;
-        GetWindowThreadProcessId(window, &mut owner);
-        if owner == GetCurrentProcessId() && class_name(window) == BROWSER_CLASS {
-            (*(found as *mut Vec<HWND>)).push(window);
-        }
-        1
+    use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowExW;
+    thread_local! {
+        static CLASS: Vec<u16> = wide(BROWSER_CLASS);
     }
     let mut found: Vec<HWND> = Vec::new();
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows(
-            Some(each),
-            &mut found as *mut _ as LPARAM,
-        )
-    };
+    CLASS.with(|class| unsafe {
+        let me = GetCurrentProcessId();
+        let mut window = FindWindowExW(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            class.as_ptr(),
+            std::ptr::null(),
+        );
+        while !window.is_null() {
+            let mut owner = 0;
+            GetWindowThreadProcessId(window, &mut owner);
+            if owner == me {
+                found.push(window);
+            }
+            window = FindWindowExW(
+                std::ptr::null_mut(),
+                window,
+                class.as_ptr(),
+                std::ptr::null(),
+            );
+        }
+    });
     found
 }
 
@@ -2167,28 +2492,49 @@ pub(crate) fn own_debug_directory() -> Option<std::path::PathBuf> {
 }
 
 fn own_debug_directory_in(arguments: impl Iterator<Item = String>) -> Option<std::path::PathBuf> {
-    arguments
-        .filter_map(|argument| {
-            argument
-                .strip_prefix("--user-data-dir=")
-                .map(|dir| std::path::PathBuf::from(dir.trim_matches('"')))
-        })
-        .next()
-        .map(|profile| profile.join("rivet-debug"))
-        .filter(|dir| dir.is_dir())
+    rivet_core::paths::session_debug_dir(arguments)
 }
 
-/// A debug switch file: the process's own when its profile has the folder, else the shared one.
-pub(crate) fn debug_switch(name: &str) -> Option<std::path::PathBuf> {
-    debug_directory().map(|dir| dir.join(name))
+/// The folder of debug command files that the window's timer looks in, decided once per process:
+/// the process's own when its profile has one, else the shared one when it exists. `None` means
+/// no folder existed when the first window attached, and the timer then touches no files at all,
+/// so an ordinary window never polls the disk. A tester places the folder before the launch.
+pub(crate) fn debug_switches() -> Option<&'static std::path::Path> {
+    static FOUND: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            pick_debug_switches(
+                own_debug_directory(),
+                rivet_core::paths::Layout::current().map(|layout| layout.debug()),
+                |dir| dir.is_dir(),
+            )
+        })
+        .as_deref()
+}
+
+fn pick_debug_switches(
+    own: Option<std::path::PathBuf>,
+    shared: Option<std::path::PathBuf>,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> Option<std::path::PathBuf> {
+    own.filter(|dir| exists(dir))
+        .or_else(|| shared.filter(|dir| exists(dir)))
+}
+
+/// Every how many tab refresh ticks the window checks that its taskbar identity is still Rivet's.
+const TASKBAR_CHECK_EVERY: u64 = 4;
+
+fn taskbar_check_due(tick: u64) -> bool {
+    tick % TASKBAR_CHECK_EVERY == 0
+}
+
+thread_local! {
+    static TAB_TICKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// The log a switched-on trace writes, rotated when it is full. `None` while the switch is off.
 fn trace_file(name: &str) -> Option<std::path::PathBuf> {
-    let path = rivet_core::paths::Layout::current()?.trace_file(name)?;
-    std::fs::create_dir_all(path.parent()?).ok()?;
-    rivet_core::paths::cap_log(&path);
-    Some(path)
+    crate::trace::switched(name)
 }
 
 pub(crate) unsafe fn runtime_directory() -> Option<std::path::PathBuf> {
@@ -2255,6 +2601,10 @@ pub unsafe fn attach(window: HWND) -> bool {
     if !GetPropW(window, key.as_ptr()).is_null() {
         return true;
     }
+    // The trace starts here, so what the attach and the window's first layouts did is kept.
+    if let Some(path) = trace_file("rivet-vertical-tabs.log") {
+        crate::trace::set_trace(path);
+    }
     // Record the browser procedure before ours can receive a message. The browser UI thread may
     // dispatch between these calls, so the record is refreshed with the exact replaced value.
     SetPropW(
@@ -2268,8 +2618,25 @@ pub unsafe fn attach(window: HWND) -> bool {
         return false;
     }
     SetPropW(window, key.as_ptr(), replaced as _);
+    // A test run's window goes off every monitor and stops activating before anything else runs.
+    crate::offscreen::keep_from_attach(window);
+    // The window stays cloaked until it has Rivet's look, so no frame shows the browser's own strip.
+    crate::features::look::first_look(window, crate::features::look::FirstLook::Attached);
     // DirectComposition targets and frame changes belong on the UI thread that owns the window.
-    PostMessageW(window, attach_message(), 0, 0) != 0
+    let posted = PostMessageW(window, attach_message(), 0, 0) != 0;
+    if posted {
+        // The scale Rivet draws at from the start, before the browser's first layout records its
+        // own; a browser may lay out a window only once a second tab opens.
+        crate::trace::trace(&format!(
+            "layout dpi: window {:#x} at {}",
+            window as usize,
+            layout_dpi(window)
+        ));
+        crate::features::control::serve(window);
+    } else {
+        crate::features::look::first_look(window, crate::features::look::FirstLook::AttachFailed);
+    }
+    posted
 }
 
 unsafe fn call_browser(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -2291,7 +2658,10 @@ fn caption_row_height(window: HWND) -> Option<i32> {
 fn top_inset_extra(window: HWND) -> Option<i32> {
     // A Rivet window has no title bar above its panel: the browser's top elements begin at the
     // panel's top gap on every browser, whatever height its own title bar has.
-    attached(window).then_some(frame_layout::PANEL_GAP)
+    // A Mini Window keeps the room of Rivet's row on its own surface.
+    attached(window)
+        .then_some(frame_layout::PANEL_GAP)
+        .or_else(|| crate::features::mini_window::top_inset(window))
 }
 
 /// The features of a Rivet window in the order they are installed. A feature the browser does not
@@ -2452,6 +2822,7 @@ fn attach_steps() -> Vec<Step<Attach>> {
             }) {
                 PostMessageW(window, group_probe_message(), 0, 0);
             }
+            crate::features::activity::switch_on_if_asked();
             // Tab titles and selection can change without a window title change.
             windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(
                 window,
@@ -2509,12 +2880,7 @@ unsafe fn create_appbar(window: HWND) {
     if attached(window) {
         return;
     }
-    if let Some(path) = own_debug_directory()
-        .map(|dir| dir.join("rivet-vertical-tabs.log"))
-        .filter(|path| path.is_file())
-    {
-        crate::trace::set_trace(path);
-    } else if let Some(path) = trace_file("rivet-vertical-tabs.log") {
+    if let Some(path) = trace_file("rivet-vertical-tabs.log") {
         crate::trace::set_trace(path);
     }
     // Without the layout hook the browser would draw underneath the appbar, so an unknown
@@ -2549,9 +2915,103 @@ unsafe fn compose_appbar(window: HWND) -> bool {
     true
 }
 
+/// Places or hides the top bar's caret alone, for a blink or a caret move that changed nothing
+/// else. The rest of the window's surface stays as it is.
+pub(crate) unsafe fn update_address_caret(window: HWND) {
+    let dpi = layout_dpi(window);
+    let caret = crate::features::address_bar::caret(window);
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.place_address_caret(caret, dpi, true) {
+                log(&format!(
+                    "rivet: could not draw the top bar's caret: {error}"
+                ));
+            }
+        }
+    });
+}
+
+thread_local! {
+    static TICK_GATE: RefCell<crate::features::tick_gate::Gate> = RefCell::default();
+}
+
+/// Whether the tab refresh timer saw anything the window's surface shows differently from the
+/// last tick: its tabs, titles and states, its pages and their rows, the top bar and the cards
+/// over the page, its size and its spaces. Pointer and key input draw on their own.
+unsafe fn tick_needs_draw(window: HWND) -> bool {
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    let visible = framed(window);
+    let address = if crate::features::address_bar::busy() {
+        None
+    } else {
+        crate::features::address_bar::view(window)
+    };
+    let command = if crate::features::command_bar::busy() {
+        None
+    } else {
+        crate::features::command_bar::view(window)
+    };
+    let card = if crate::features::settings::busy() {
+        None
+    } else {
+        crate::features::settings::view(window)
+    };
+    let spaces = with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()));
+    let signature = crate::features::tick_gate::signature(&[
+        &(client.right, client.bottom, layout_dpi(window), visible),
+        &layout_of(window),
+        &page_x(window),
+        &appbar_model(window),
+        &pane_rows(window),
+        &address,
+        &command,
+        &card,
+        &crate::features::link_preview::view(window),
+        &crate::features::link_rules::view(window),
+        &crate::dev_bar::view(window),
+        &crate::features::dev_page::window_in_dev_mode(window),
+        &held_warning(),
+        &spaces,
+        &open_menu_kind(window),
+        &dragging(window),
+        &frame_layout::panel_bounds(window),
+        &ground_holes(window),
+    ]);
+    TICK_GATE.with(|gate| gate.borrow_mut().due(window as isize, signature))
+}
+
+/// Places or hides the caret of the command bar or the settings card alone, for a blink that
+/// changed nothing else.
+pub(crate) unsafe fn update_card_caret(window: HWND, which: crate::appbar::caret::Which) {
+    use crate::appbar::caret::Which;
+    let dpi = layout_dpi(window);
+    let caret = match which {
+        Which::Address => crate::features::address_bar::caret(window),
+        Which::Command => crate::features::command_bar::caret(window),
+        Which::Settings => crate::features::settings::caret(window),
+    };
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.place_caret(which, caret, dpi, true) {
+                log(&format!("rivet: could not draw a field's caret: {error}"));
+            }
+        }
+    });
+}
+
+/// `update_appbar` for a window that may have lost Rivet's frame, which is then left alone.
+pub(crate) fn redraw_appbar(window: crate::os::WindowId) {
+    // Only a window with Rivet's frame is drawn, on the UI thread that owns it.
+    if attached(window.hwnd()) {
+        unsafe { update_appbar(window.hwnd()) }
+    }
+}
+
 /// Places the appbar visual over the strip the browser's layout left free and redraws it when its
 /// size or DPI changed.
 pub(crate) unsafe fn update_appbar(window: HWND) {
+    crate::features::activity::count(crate::features::activity::Counter::AppbarUpdate);
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
     let dpi = layout_dpi(window);
@@ -2643,11 +3103,20 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             if let Err(error) = appbar.update_dev(bar.as_ref(), dpi) {
                 log(&format!("rivet: could not draw the developer bar: {error}"));
             }
-            if let Err(error) = appbar.update_held(
-                held_warning().as_deref(),
-                (client.right, client.bottom),
-                dpi,
-            ) {
+            // The warning keeps clear of the corner where the Sidebar's open button shows, which is
+            // the lower right corner of the page area, or of the window when no page area is known.
+            let per_dip = dpi as f32 / 96.0;
+            let (page, open_zone) =
+                crate::side_rail::page_and_open_zone(window).unwrap_or_else(|| {
+                    let (w, h) = (
+                        client.right as f32 / per_dip,
+                        client.bottom as f32 / per_dip,
+                    );
+                    ([0.0, 0.0, w, h], crate::side_rail::open_zone_at(w, h))
+                });
+            if let Err(error) =
+                appbar.update_held(held_warning().as_deref(), page, Some(open_zone), dpi)
+            {
                 log(&format!(
                     "rivet: could not draw the held build warning: {error}"
                 ));
@@ -2692,7 +3161,6 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             }
             sync_ground(window, appbar, visible, dpi);
             crate::side_rail::update(window, appbar, visible, dpi);
-            crate::features::mini_window::update(window, appbar, visible, dpi);
         }
     });
 }
@@ -2832,8 +3300,24 @@ pub(crate) unsafe fn layout_dpi(window: HWND) -> u32 {
 fn reserved_width(window: HWND, bounds: frame_layout::Rect) -> Option<i32> {
     unsafe {
         if !attached(window) || !framed(window) {
+            // A layout of a window Rivet subclassed but has not finished attaching is one the
+            // window then still needs; the trace shows whether it came too early.
+            let subclassed = !GetPropW(window, wide(ORIGINAL_PROC).as_ptr()).is_null();
+            if is_waiting(window) || subclassed {
+                crate::trace::trace_changed(
+                    "layout not for Rivet's frame",
+                    &format!(
+                        "attach: layout of window {:#x} not for Rivet's frame: {}",
+                        window as usize,
+                        window_state(window)
+                    ),
+                );
+            }
             return None;
         }
+        // The browser is laying the window out for Rivet's frame; the first such layout after the
+        // attach lets the window show.
+        laid_out(window);
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(window, &mut client);
         let layout_width = bounds.x + bounds.width;
@@ -2843,6 +3327,10 @@ fn reserved_width(window: HWND, bounds: frame_layout::Rect) -> Option<i32> {
             let changed = LAYOUT_DPI
                 .with(|layouts| layouts.borrow_mut().insert(window as isize, dpi) != Some(dpi));
             if changed {
+                crate::trace::trace(&format!(
+                    "layout dpi: window {:#x} at {dpi}",
+                    window as usize
+                ));
                 update_appbar(window);
             }
         }
@@ -2931,10 +3419,58 @@ unsafe extern "system" fn browser_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    handle(window, message, wparam, lparam)
+    let result = handle(window, message, wparam, lparam);
+    after_event(window, message, wparam);
+    result
+}
+
+thread_local! {
+    /// The windows whose retries ran out before the browser laid them out for Rivet's frame.
+    static GAVE_UP: RefCell<HashSet<isize>> = RefCell::new(HashSet::new());
+    /// Set while Rivet asks a window again, so the ask's own messages do not ask once more.
+    static ASKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a window event asks the browser again to lay the window out for Rivet's frame: only for
+/// a window that still waits for that layout after its timed retries ran out, and only on an event
+/// after which the browser lays out, a restore or size, a show or an activation.
+fn ask_on_event(waiting: bool, gave_up: bool, message: u32, wparam: WPARAM) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SIZE_MINIMIZED, WM_ACTIVATE, WM_SHOWWINDOW, WM_SIZE,
+    };
+    if !(waiting && gave_up) {
+        return false;
+    }
+    match message {
+        WM_SIZE => wparam != SIZE_MINIMIZED as WPARAM,
+        WM_SHOWWINDOW => wparam != 0,
+        WM_ACTIVATE => wparam & 0xFFFF != 0,
+        _ => false,
+    }
+}
+
+/// After the window handled a message: asks again for the layout for Rivet's frame when the event
+/// is one the browser lays out after, for a window whose timed retries ran out.
+unsafe fn after_event(window: HWND, message: u32, wparam: WPARAM) {
+    let gave_up = GAVE_UP.with(|all| all.borrow().contains(&(window as isize)));
+    if ASKING.with(|asking| asking.get())
+        || !ask_on_event(is_waiting(window), gave_up, message, wparam)
+    {
+        return;
+    }
+    crate::trace::trace(&format!(
+        "attach: window {:#x} still not laid out for Rivet's frame; asked again on message {message:#x}",
+        window as usize
+    ));
+    ASKING.with(|asking| asking.set(true));
+    relayout(window);
+    ASKING.with(|asking| asking.set(false));
 }
 
 unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if let Some(result) = crate::offscreen::message(window, message, wparam, lparam) {
+        return result;
+    }
     if message == RegisterWindowMessageW(wide("Rivet.NewStartPage").as_ptr()) && attached(window) {
         start_page(window);
         return 0;
@@ -2977,13 +3513,17 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         update_appbar(window);
         return 0;
     }
+    if message == crate::features::control::message() && attached(window) {
+        crate::features::control::take(window, lparam);
+        return 0;
+    }
     if message == windows_sys::Win32::UI::WindowsAndMessaging::WM_COPYDATA && attached(window) {
         if let Some(result) = crate::features::link_rules::copy_data(window, lparam) {
             return result;
         }
     }
-    // The command bar's scrim and the link preview's header lie over the pages, and the Mini
-    // Window floats over them, so they take the pointer and the keyboard before the pages do.
+    // The command bar's scrim and the link preview's header lie over the pages, so they take the
+    // pointer and the keyboard before the pages do.
     if attached(window) {
         if let Some(result) = crate::features::settings::message(window, message, wparam, lparam) {
             return result;
@@ -3003,9 +3543,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         }
         if let Some(result) = crate::features::page_links::message(window, message, wparam, lparam)
         {
-            return result;
-        }
-        if let Some(result) = crate::features::mini_window::on_mouse(window, message, lparam) {
             return result;
         }
     }
@@ -3105,7 +3642,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 ROW_PRESS.with(|all| all.borrow_mut().insert(window as isize, hit));
                 // A grip drag may end anywhere, so its release comes back to this window.
                 if hit.1 == crate::features::split::RowButton::Grip {
-                    windows_sys::Win32::UI::Input::KeyboardAndMouse::SetCapture(window);
+                    rivet_platform_windows::focus::capture(window);
                 }
             }
             0
@@ -3130,7 +3667,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             let grip =
                 pressed.filter(|pressed| pressed.1 == crate::features::split::RowButton::Grip);
             if grip.is_some() {
-                windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+                rivet_platform_windows::focus::release(window);
             }
             if let Some(hit) =
                 grip.filter(|hit| crate::features::mini_window::grip_released(window, hit.0, x, y))
@@ -3366,7 +3903,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             tab_drag_press(window, hit, lparam);
             if hit == Some(AppbarHit::Resizer) {
                 DRAGGING.with(|set| set.borrow_mut().insert(window as isize));
-                SetCapture(window);
+                rivet_platform_windows::focus::capture(window);
             }
             press_down(window, hit);
             update_appbar(window);
@@ -3428,6 +3965,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             // Every browser sends this on a resize, so the second view follows it on all of them.
             follow_second_view(window);
             update_appbar(window);
+            crate::features::window_corners::keep_round(window);
             result
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
@@ -3503,6 +4041,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             SPACES.with(|all| all.borrow_mut().remove(&(window as isize)));
             PRESSES.with(|all| all.borrow_mut().remove(&(window as isize)));
             APPBARS.with(|appbars| appbars.borrow_mut().remove(&(window as isize)));
+            TICK_GATE.with(|gate| gate.borrow_mut().forget(window as isize));
             crate::features::address_bar::forget(window);
             crate::features::command_bar::forget(window);
             crate::features::settings::forget(window);
@@ -3523,6 +4062,26 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             RemovePropW(window, key.as_ptr());
             let original: WNDPROC = std::mem::transmute(original);
             CallWindowProcW(original, window, message, wparam, lparam)
+        }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
+            if crate::features::look::on_timer(window, wparam) =>
+        {
+            // The reveal came from the longest hide while the window still waited for the browser
+            // to lay it out for Rivet's frame: the window showed before Rivet's look was in place.
+            // The window keeps waiting, so the retries and then its own events still ask for it.
+            if is_waiting(window) {
+                crate::trace::trace(&format!(
+                    "first look: warning, window {:#x} shown after the longest hide of {} ms \
+                     without the browser's layout for Rivet's frame",
+                    window as usize,
+                    crate::features::look::LONGEST_HIDE_MS
+                ));
+            }
+            0
+        }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam == ATTACH_LAYOUT_TIMER => {
+            on_attach_layout_timer(window);
+            0
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER if wparam == OPEN_LATER_TIMER => {
             windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(window, OPEN_LATER_TIMER);
@@ -3557,24 +4116,51 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         windows_sys::Win32::UI::WindowsAndMessaging::WM_TIMER
             if wparam == TAB_REFRESH_TIMER && attached(window) =>
         {
-            crate::features::side_panel::tick(window, debug_directory().as_deref());
-            crate::features::tab_list::tick(window);
-            crate::features::command_bar::tick(window);
-            // A browser can write its own identity again, for example when a profile finishes
-            // loading. The taskbar groups by that identity, so Rivet puts its own back.
-            if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
-                crate::trace::trace("taskbar identity was replaced; applying Rivet's again");
-                let _ = taskbar::apply(window as isize, runtime_directory().as_deref());
-                set_rivet_icons(window);
+            use crate::features::activity::{add_since, clock, count, timed, Counter};
+            let tick_started = clock();
+            count(Counter::TabTick);
+            let tick = TAB_TICKS.with(|ticks| {
+                ticks.set(ticks.get() + 1);
+                ticks.get()
+            });
+            if debug_switches().is_some() {
+                count(Counter::DebugScan);
             }
-            if let Some(flag) = debug_directory().map(|dir| dir.join("rivet-split-now.flag")) {
+            timed(Counter::DebugMicros, || {
+                crate::features::side_panel::tick(window, debug_switches())
+            });
+            timed(Counter::ListMicros, || {
+                crate::features::tab_list::tick(window)
+            });
+            timed(Counter::FollowMicros, || {
+                crate::features::command_bar::tick(window);
+                // An extension page may load into the browser's side panel some time after the
+                // click that opened it, after the side rail's pointer timer has gone quiet.
+                crate::features::sidebar_page::follow(window);
+            });
+            // A browser can write its own identity again, for example when a profile finishes
+            // loading. The taskbar groups by that identity, so Rivet puts its own back. Reading the
+            // identity goes through the shell's property store, so it is not done on every tick.
+            let taskbar_started = clock();
+            if taskbar_check_due(tick) {
+                count(Counter::TaskbarCheck);
+                if taskbar::current_id(window as isize).as_deref() != Some(taskbar::APP_ID) {
+                    crate::trace::trace("taskbar identity was replaced; applying Rivet's again");
+                    let _ = taskbar::apply(window as isize, runtime_directory().as_deref());
+                    set_rivet_icons(window);
+                }
+            }
+            add_since(Counter::TaskbarMicros, taskbar_started);
+            crate::features::activity::report_on_tick();
+            let debug_started = clock();
+            if let Some(flag) = debug_switches().map(|dir| dir.join("rivet-split-now.flag")) {
                 if std::fs::remove_file(&flag).is_ok() {
                     crate::features::split::probe(window);
                 }
             }
             // A checked build runs one tab command from `rivet-tab.txt` without a pointer: `new [ADDRESS]`,
             // `activate N`, `close N` or `navigate ADDRESS`, and traces the tab list afterwards.
-            if let Some(flag) = debug_switch("rivet-tab.txt") {
+            if let Some(flag) = debug_switches().map(|dir| dir.join("rivet-tab.txt")) {
                 if let Ok(text) = std::fs::read_to_string(&flag) {
                     let _ = std::fs::remove_file(&flag);
                     let mut words = text.split_whitespace();
@@ -3597,13 +4183,21 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         Some("closesel") => crate::features::tab_list::close(window, index),
                         // App window spike: a tab added through Chromium's own tab strip functions.
                         Some(word @ ("back" | "forward" | "reload" | "stop")) => {
-                            crate::features::page_bar::Command::parse(word).is_some_and(|command| {
-                                crate::features::page_bar::run(window, command)
+                            crate::features::page_bar::parse_command(word).is_some_and(|command| {
+                                crate::features::page_bar::run(
+                                    &OS,
+                                    &BROWSER,
+                                    crate::os::WindowId::from_hwnd(window),
+                                    command,
+                                )
                             })
                         }
                         Some("pages") => {
-                            let pages =
-                                crate::features::page_bar::pages(window).unwrap_or_default();
+                            let pages = crate::features::page_bar::pages(
+                                &BROWSER,
+                                crate::os::WindowId::from_hwnd(window),
+                            )
+                            .unwrap_or_default();
                             for page in &pages {
                                 crate::trace::trace(&format!(
                                     "page {} active {} title {:?} url {:?}",
@@ -3647,6 +4241,18 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                         // The top bar: `bar` starts editing the address, `bartext` traces what it holds,
                         // `barsecurity` the page's security level and `barinfo` opens the page info bubble.
                         Some("bar") => crate::features::address_bar::focus(window),
+                        // `reflect` finds the window's views by their class metadata, reading memory
+                        // only, and traces what it found beside what this build's row says.
+                        Some("reflect") => trace_reflection(window),
+                        // `focuswindow`: a row that needs a focused window, on a test desktop only.
+                        // `focuswindow popup` focuses the window's top owned window instead, such as
+                        // the browser's password save offer, so its default button takes Enter.
+                        Some("focuswindow") => {
+                            let popup = words.next() == Some("popup");
+                            let done = crate::offscreen::focus_for_row(window, popup);
+                            crate::trace::trace(&format!("activate on the test desktop: {done}"));
+                            done
+                        }
                         // The command bar: `command` opens it, `commandtype TEXT` puts text in its
                         // field, `commandrun N` runs row N. The link preview: `preview N` shows tab N
                         // floating, `previewopen` opens it as a tab and `previewesc` dismisses it.
@@ -3710,6 +4316,33 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                             crate::trace::trace(&format!("address bar suggestions {found:?}"));
                             found.is_some()
                         }
+                        // `baranchors` traces where the address and its security chip sit, so a
+                        // test can click the chip; `baredit copy|cut|paste|undo|selectall` edits the
+                        // field through the text engine as the keyboard shortcuts do; `devactions`
+                        // traces the developer row's buttons.
+                        Some("baranchors") => {
+                            let anchors = crate::features::address_bar::anchors(window);
+                            crate::trace::trace(&format!(
+                                "address bar anchors {anchors:?} dpi {}",
+                                layout_dpi(window)
+                            ));
+                            anchors.is_some()
+                        }
+                        Some("baredit") => {
+                            let word = text.trim().trim_start_matches("baredit").trim();
+                            crate::features::address_bar::edit_for_test(window, word)
+                        }
+                        Some("devactions") => {
+                            let actions: Vec<_> = crate::features::dev_page::dev_actions()
+                                .into_iter()
+                                .map(|(action, _)| action)
+                                .collect();
+                            crate::trace::trace(&format!(
+                                "dev mode {} actions {actions:?}",
+                                crate::features::dev_page::window_in_dev_mode(window)
+                            ));
+                            true
+                        }
                         Some("barimedone") => {
                             crate::features::address_bar::finish_composition_for_test(window)
                         }
@@ -3758,7 +4391,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 }
             }
             // A checked build drops the first inactive tab on a side of the page without a pointer.
-            if let Some(flag) = debug_directory().map(|dir| dir.join("rivet-drop.flag")) {
+            if let Some(flag) = debug_switches().map(|dir| dir.join("rivet-drop.flag")) {
                 if let Ok(text) = std::fs::read_to_string(&flag) {
                     let _ = std::fs::remove_file(&flag);
                     use crate::features::split::Side;
@@ -3787,8 +4420,12 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     ));
                 }
             }
-            persist_tick(window);
-            update_appbar(window);
+            add_since(Counter::DebugMicros, debug_started);
+            timed(Counter::PersistMicros, || persist_tick(window));
+            if timed(Counter::GateMicros, || tick_needs_draw(window)) {
+                timed(Counter::DrawMicros, || update_appbar(window));
+            }
+            add_since(Counter::TickMicros, tick_started);
             0
         }
         _ if message == group_probe_message() && attached(window) => {
@@ -3805,8 +4442,26 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ if message == attach_message() => {
+            // A test run's windows stay off every monitor and inactive from here on, the browser's
+            // new windows and bubbles among them.
+            crate::offscreen::keep_thread();
+            crate::offscreen::put_away(window);
+            crate::features::look::first_look(window, crate::features::look::FirstLook::UiThread);
+            await_layout(window);
+            crate::trace::trace(&format!(
+                "attach: window {:#x} waits for the browser's layout for Rivet's frame: {}",
+                window as usize,
+                window_state(window)
+            ));
+            // The browser may not lay the window out for Rivet's frame, as when it was minimized at
+            // the attach; it is asked again until it does.
+            SetTimer(window, ATTACH_LAYOUT_TIMER, ATTACH_LAYOUT_RETRY_MS, None);
             crate::features::tab_list::connect_command_bar();
             create_appbar(window);
+            // The browser may have laid the window out before the appbar was registered, which
+            // leaves that layout without Rivet's frame; one nudge while it is still cloaked asks again.
+            nudge(window, "attach");
+            crate::features::window_corners::keep_round(window);
             0
         }
         _ => call_browser(window, message, wparam, lparam),
@@ -3815,6 +4470,177 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fr2_an_attach_asks_the_browser_again_until_it_lays_out_or_gives_up() {
+        use super::{attach_retry, AttachRetry, ATTACH_LAYOUT_TRIES};
+        assert_eq!(attach_retry(false, 0), AttachRetry::Done);
+        assert_eq!(attach_retry(true, 0), AttachRetry::AskAgain(1));
+        assert_eq!(
+            attach_retry(true, ATTACH_LAYOUT_TRIES - 1),
+            AttachRetry::AskAgain(ATTACH_LAYOUT_TRIES)
+        );
+        assert_eq!(attach_retry(true, ATTACH_LAYOUT_TRIES), AttachRetry::GiveUp);
+        // Every try comes before the longest hide shows the window.
+        const {
+            assert!(
+                super::ATTACH_LAYOUT_RETRY_MS * (super::ATTACH_LAYOUT_TRIES + 1)
+                    <= crate::features::look::LONGEST_HIDE_MS
+            )
+        };
+    }
+
+    #[test]
+    fn fr2_after_the_retries_a_restore_asks_the_browser_again() {
+        use super::ask_on_event;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SIZE_MINIMIZED, SIZE_RESTORED, WM_ACTIVATE, WM_MOVE, WM_SHOWWINDOW, WM_SIZE,
+        };
+        // A restore, a show and an activation of a window that gave up ask again.
+        assert!(ask_on_event(true, true, WM_SIZE, SIZE_RESTORED as usize));
+        assert!(ask_on_event(true, true, WM_SHOWWINDOW, 1));
+        assert!(ask_on_event(true, true, WM_ACTIVATE, 1));
+        // Minimizing, hiding, deactivating and other messages do not.
+        assert!(!ask_on_event(true, true, WM_SIZE, SIZE_MINIMIZED as usize));
+        assert!(!ask_on_event(true, true, WM_SHOWWINDOW, 0));
+        assert!(!ask_on_event(true, true, WM_ACTIVATE, 0));
+        assert!(!ask_on_event(true, true, WM_MOVE, 0));
+        // While the timed retries run, or once the layout came, events ask nothing.
+        assert!(!ask_on_event(true, false, WM_SIZE, SIZE_RESTORED as usize));
+        assert!(!ask_on_event(false, true, WM_SIZE, SIZE_RESTORED as usize));
+    }
+
+    #[test]
+    fn fr12_only_the_first_layout_after_the_attach_starts_the_reveal() {
+        let (window, other) = (0x1000 as super::HWND, 0x2000 as super::HWND);
+        assert!(
+            !super::take_waiting(window),
+            "a layout before the attach changes nothing"
+        );
+        super::await_layout(window);
+        assert!(!super::take_waiting(other));
+        assert!(super::take_waiting(window));
+        assert!(!super::take_waiting(window), "later layouts change nothing");
+    }
+
+    #[test]
+    fn fr2_a_window_that_still_waits_is_asked_by_a_size_change() {
+        use super::{asks_by_size, NudgeState};
+        let waiting = NudgeState {
+            waiting: true,
+            cloaked: true,
+            ..NudgeState::default()
+        };
+        assert!(asks_by_size(waiting));
+        // Never on a visible window, and never on one whose size is not its own.
+        for state in [
+            NudgeState {
+                cloaked: false,
+                ..waiting
+            },
+            NudgeState {
+                minimized: true,
+                ..waiting
+            },
+            NudgeState {
+                maximized: true,
+                ..waiting
+            },
+            NudgeState {
+                snapped: true,
+                ..waiting
+            },
+            NudgeState {
+                fullscreen: true,
+                ..waiting
+            },
+            NudgeState {
+                waiting: false,
+                ..waiting
+            },
+        ] {
+            assert!(!asks_by_size(state), "{state:?}");
+        }
+    }
+    #[test]
+    fn fr2_the_longest_hide_leaves_the_window_waiting_for_its_layout() {
+        let window = 0x3000 as super::HWND;
+        super::await_layout(window);
+        // The reveal after the longest hide only reads the mark.
+        assert!(super::is_waiting(window));
+        assert!(super::is_waiting(window));
+        // The retry timer still asks again, and the layout that comes later completes the attach.
+        assert_eq!(
+            super::attach_retry(super::is_waiting(window), 3),
+            super::AttachRetry::AskAgain(4)
+        );
+        assert!(super::take_waiting(window));
+        assert!(!super::is_waiting(window));
+    }
+
+    /// Windows and the browser can disagree on a window's scale: while the window crosses monitors
+    /// of different DPIs, or when it lies off every monitor. Rivet's bar, rows, second page view and
+    /// hit areas sit on the browser's layout, so every conversion between pixels and DIPs takes the
+    /// scale the browser laid the window out at, never the DPI Windows reports.
+    #[test]
+    fn fr2_rivet_converts_pixels_at_the_browsers_layout_scale() {
+        fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    sources(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        sources(&root, &mut files);
+        let mut readers = Vec::new();
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let calls = text
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .filter(|line| line.contains("GetDpiForWindow("))
+                .count();
+            if calls > 0 {
+                readers.push(file.strip_prefix(&root).unwrap().display().to_string());
+            }
+        }
+        // `frame::dpi` reads the window's DPI once, for a window the browser has not laid out yet.
+        assert_eq!(readers, ["frame.rs"]);
+    }
+
+    #[test]
+    fn idle_timer_looks_for_no_debug_files_without_a_debug_folder() {
+        use std::path::{Path, PathBuf};
+        let own = Some(PathBuf::from("own"));
+        let shared = Some(PathBuf::from("shared"));
+        let none = |_: &Path| false;
+        assert_eq!(
+            super::pick_debug_switches(own.clone(), shared.clone(), none),
+            None
+        );
+        let only_shared = |dir: &Path| dir == Path::new("shared");
+        assert_eq!(
+            super::pick_debug_switches(own.clone(), shared.clone(), only_shared),
+            shared
+        );
+        assert_eq!(
+            super::pick_debug_switches(own.clone(), shared, |_: &Path| true),
+            own
+        );
+    }
+
+    #[test]
+    fn idle_taskbar_identity_is_checked_every_two_seconds_not_every_tick() {
+        let due: Vec<u64> = (1..=12)
+            .filter(|&tick| super::taskbar_check_due(tick))
+            .collect();
+        assert_eq!(due, vec![4, 8, 12]);
+    }
+
     #[test]
     fn nfr3_a_build_without_frame_paint_still_attaches_the_rivet_frame() {
         let steps = super::attach_steps();

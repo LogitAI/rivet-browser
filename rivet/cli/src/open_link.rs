@@ -55,15 +55,39 @@ pub fn file_url(path: &str) -> String {
 }
 
 /// The Rivet sessions of `browser` that may take a link, newest window first by session id, so
-/// the window a person used last is tried first.
+/// the window a person used last is tried first. A window that runs from Rivet's held copy of that
+/// browser, below `held`, is one of them too: its session names the copy, not the installed one.
 pub fn candidates<'a>(
     sessions: impl Iterator<Item = &'a SessionRecord>,
     browser: &Path,
+    held: &Path,
 ) -> Vec<&'a SessionRecord> {
-    let wanted = browser.to_string_lossy().to_lowercase();
-    let mut found: Vec<&SessionRecord> = sessions
-        .filter(|session| session.browser.to_string_lossy().to_lowercase() == wanted)
-        .collect();
+    let lower = |path: &Path| path.to_string_lossy().to_lowercase();
+    let wanted = lower(browser);
+    let name = browser.file_name().map(|name| lower(Path::new(name)));
+    let copies = browser
+        .file_stem()
+        .map(|stem| format!("{}{}", lower(&held.join(stem)), std::path::MAIN_SEPARATOR));
+    // A launcher stub such as Whale's runs the program in a version folder beside it, and the
+    // session names that program.
+    let beside = browser.parent().map(lower);
+    let of_browser = |session: &&SessionRecord| {
+        let path = lower(&session.browser);
+        let same_name = session
+            .browser
+            .file_name()
+            .map(|found| lower(Path::new(found)))
+            == name;
+        path == wanted
+            || (same_name
+                && beside.is_some()
+                && session.browser.parent().and_then(Path::parent).map(lower) == beside)
+            || (copies
+                .as_ref()
+                .is_some_and(|copies| path.starts_with(copies.as_str()))
+                && same_name)
+    };
+    let mut found: Vec<&SessionRecord> = sessions.filter(of_browser).collect();
     found.sort_by(|a, b| b.id.cmp(&a.id));
     found
 }
@@ -93,7 +117,8 @@ pub fn open(url: &str, saved: &Saved, root: &Path) -> Result<(), String> {
     let load = || SessionRegistry::load(&registry_file).unwrap_or_default();
     let registry = load();
     let before: HashSet<String> = registry.list().map(|session| session.id.clone()).collect();
-    if candidates(registry.list(), &saved.browser)
+    let held = rivet_core::paths::Layout::under(root).held_browsers();
+    if candidates(registry.list(), &saved.browser, &held)
         .into_iter()
         .any(|session| send(session, url))
     {
@@ -104,7 +129,7 @@ pub fn open(url: &str, saved: &Saved, root: &Path) -> Result<(), String> {
     for _ in 0..60 {
         std::thread::sleep(std::time::Duration::from_millis(500));
         let registry = load();
-        let fresh: Vec<&SessionRecord> = candidates(registry.list(), &saved.browser)
+        let fresh: Vec<&SessionRecord> = candidates(registry.list(), &saved.browser, &held)
             .into_iter()
             .filter(|session| !before.contains(&session.id))
             .collect();
@@ -158,14 +183,89 @@ mod tests {
             window_handle: 1,
             process_id: 2,
             url: String::new(),
+            display: "visible".into(),
         };
         let all = [
             record("1700000001-a", r"C:\B\chrome.exe"),
             record("1700000003-c", r"C:\B\msedge.exe"),
             record("1700000002-b", r"C:\b\CHROME.exe"),
         ];
-        let found = candidates(all.iter(), Path::new(r"C:\B\chrome.exe"));
+        let found = candidates(
+            all.iter(),
+            Path::new(r"C:\B\chrome.exe"),
+            Path::new(r"C:\H"),
+        );
         let ids: Vec<&str> = found.iter().map(|session| session.id.as_str()).collect();
         assert_eq!(ids, ["1700000002-b", "1700000001-a"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fr3_a_link_goes_to_a_window_that_runs_from_the_held_copy_of_the_saved_browser() {
+        let record = |id: &str, browser: &str| SessionRecord {
+            id: id.into(),
+            browser: PathBuf::from(browser),
+            window_handle: 1,
+            process_id: 2,
+            url: String::new(),
+            display: "visible".into(),
+        };
+        let held = Path::new(r"C:\Local\Rivet\cache\browsers");
+        let all = [
+            record(
+                "1700000001-a",
+                r"C:\Local\Rivet\cache\browsers\msedge\156.0.4314.58\156.0.4314.58\msedge.exe",
+            ),
+            record(
+                "1700000002-b",
+                r"C:\Local\Rivet\cache\browsers\chrome\156.0.1.2\chrome.exe",
+            ),
+            record(
+                "1700000003-c",
+                r"C:\Local\Rivet\cache\browsers\msedge\156.0.4314.58\setup.exe",
+            ),
+            record("1700000004-d", r"C:\Elsewhere\msedge\msedge.exe"),
+        ];
+        let found = candidates(
+            all.iter(),
+            Path::new(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+            held,
+        );
+        let ids: Vec<&str> = found.iter().map(|session| session.id.as_str()).collect();
+        assert_eq!(ids, ["1700000001-a"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fr3_a_link_goes_to_a_window_of_the_program_a_launcher_stub_runs() {
+        let record = |id: &str, browser: &str| SessionRecord {
+            id: id.into(),
+            browser: PathBuf::from(browser),
+            window_handle: 1,
+            process_id: 2,
+            url: String::new(),
+            display: "visible".into(),
+        };
+        let all = [
+            record(
+                "1700000001-a",
+                r"C:\Naver Whale\Application\5.39.412.57\whale.exe",
+            ),
+            record(
+                "1700000002-b",
+                r"C:\Naver Whale\Application\5.39.412.57\setup.exe",
+            ),
+            record(
+                "1700000003-c",
+                r"C:\Naver Whale\Application\5.39.412.57\x\whale.exe",
+            ),
+        ];
+        let found = candidates(
+            all.iter(),
+            Path::new(r"C:\Naver Whale\Application\whale.exe"),
+            Path::new(r"C:\Local\Rivet\cache\browsers"),
+        );
+        let ids: Vec<&str> = found.iter().map(|session| session.id.as_str()).collect();
+        assert_eq!(ids, ["1700000001-a"]);
     }
 }

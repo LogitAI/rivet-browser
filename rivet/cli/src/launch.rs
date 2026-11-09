@@ -3,6 +3,7 @@
 
 use crate::config::{profile_dir, profiles_folder, Saved};
 use crate::detect::Browser;
+use rivet_platform_windows::background::hidden;
 use rivet_platform_windows::hold;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -48,6 +49,13 @@ pub fn browsers_in_use<'a>(root: &Path, detected: &'a [Browser]) -> Vec<&'a Brow
         .collect()
 }
 
+/// Where the held browser builds live below `root`, the same folder `rivet` itself uses. The older
+/// place, Rivet\browsers, is moved there on a start, so a launcher that still read it found no held
+/// build and refused a browser it could open.
+fn held_folder(root: &Path) -> PathBuf {
+    rivet_core::paths::Layout::under(root).held_browsers()
+}
+
 /// Keeps the installed build of every browser this person already opens with Rivet, so that a copy
 /// exists before the browser's next update replaces the build. Nothing waits for the copy.
 pub fn keep_used_builds(root: &Path, detected: &[Browser]) {
@@ -55,11 +63,11 @@ pub fn keep_used_builds(root: &Path, detected: &[Browser]) {
         return;
     };
     for browser in browsers_in_use(root, detected) {
-        let _ = Command::new(&rivet)
+        let _ = hidden(&mut Command::new(&rivet))
             .args(["hold", "refresh", "--browser"])
             .arg(&browser.path)
             .arg("--hold")
-            .arg(root.join("Rivet").join("browsers"))
+            .arg(held_folder(root))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -73,9 +81,9 @@ pub fn start(saved: &Saved, root: &Path) -> Result<(), String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
-    let held = root.join("Rivet").join("browsers");
+    let held = held_folder(root);
     hold::plan(&saved.browser, &held, now).map_err(|refusal| refusal.to_string())?;
-    Command::new(rivet_executable()?)
+    hidden(&mut Command::new(rivet_executable()?))
         .args(session_arguments(
             &saved.browser,
             &profile_dir(root, &saved.browser, &saved.profile),
@@ -90,6 +98,20 @@ pub fn start(saved: &Saved, root: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::detect::Status;
+
+    #[test]
+    #[cfg(windows)]
+    fn nfr6_the_launcher_plans_and_keeps_held_builds_where_rivet_keeps_them() {
+        let root = Path::new(r"C:\Local");
+        assert_eq!(
+            held_folder(root),
+            Path::new(r"C:\Local\Rivet\cache\browsers")
+        );
+        assert_eq!(
+            held_folder(root),
+            rivet_core::paths::Layout::under(root).held_browsers()
+        );
+    }
 
     #[test]
     // The paths here are Windows paths, which only Windows splits into folders.

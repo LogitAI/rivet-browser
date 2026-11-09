@@ -111,8 +111,10 @@ function Test-Blank($Capture) {
 # A link preview: the `Floating` page shows solidly over the `Under` page, which still shows in a
 # margin to its left, to its right and below it. The preview covers most of the page, so the page
 # under it is looked for in those margins rather than as a page region of its own. Its header lies
-# above the floating page, so the top margin is not checked.
-function Test-FloatingPage($Capture, [int]$Under, [int]$Floating) {
+# above the floating page, so the top margin is not checked. `Avoid` is a notice Rivet shows over
+# the page bottom, as x0, y0, x1, y1: the preview must stay clear of it, and the margin below the
+# preview is looked for above it.
+function Test-FloatingPage($Capture, [int]$Under, [int]$Floating, $Avoid = $null) {
   if (Test-Blank $Capture) { return New-Verdict 'NOT_DRIVEN' 'the capture is blank' }
   $w = $Capture.Width; $h = $Capture.Height
   $window = $w * $h
@@ -124,6 +126,11 @@ function Test-FloatingPage($Capture, [int]$Under, [int]$Floating) {
     left = @(($f.X0 - $gap - $band), $f.Y0, ($f.X0 - $gap), $f.Y1)
     right = @(($f.X1 + $gap), $f.Y0, ($f.X1 + $gap + $band), $f.Y1)
     below = @($f.X0, ($f.Y1 + $gap), $f.X1, ($f.Y1 + $gap + $band))
+  }
+  if ($Avoid) {
+    $ax0, $ay0, $ax1, $ay1 = $Avoid
+    if ($f.Y1 -gt $ay0 -and $f.X0 -lt $ax1 -and $ax0 -lt $f.X1) { return New-Verdict 'FAIL' ('the preview reaches over the notice at the page bottom: it ends at {0}, the notice starts at {1}' -f $f.Y1, $ay0) }
+    $sides.below = @($f.X0, ($f.Y1 + $gap), $f.X1, [Math]::Min($f.Y1 + $gap + $band, $ay0))
   }
   foreach ($side in $sides.Keys) {
     $x0, $y0, $x1, $y1 = $sides[$side]
@@ -271,7 +278,8 @@ function Format-Rows($Rows) {
 # stays in the window. Without it every other default space belongs to another browser, and a
 # switch would start that browser.
 function Write-SpaceSeed([string]$Profile, [string]$Key) {
-  $local = $env:LOCALAPPDATA
+  # A test run keeps its Rivet files in its own folder, which stands in for the local one.
+  $local = if ($env:RIVET_DATA_ROOT) { $env:RIVET_DATA_ROOT } else { $env:LOCALAPPDATA }
   $normal = $Profile.TrimEnd('\', '/').Replace('/', '\').ToLowerInvariant()
   # FNV-1a over the lower-cased profile path, as the runtime keys its spaces file.
   $hash = [System.Numerics.BigInteger]::Parse('14695981039346656037')
@@ -449,4 +457,43 @@ function Test-PaneRows($Capture, [int]$ColourOne, [int]$ColourTwo, [double]$Scal
     $shared = [FeaturePixels]::Fraction($px, $w, $g0, $y0, $g1, $y1, $script:Paper, 4)
     if ($shared -ge 0.5) { return New-Verdict 'FAIL' ('one bar runs across both pages ({0:P0} of the gap above them is paper)' -f $shared) }
     New-Verdict 'PASS' ('each pane has its own row; tops at {0} and {1} px' -f $left.Y0, $right.Y0)
+}
+
+# The first frames of a window against its settled look. Every frame the window showed before it
+# settled must look like it in the top band (`X0` to `X1`, rows 0 to `Y1`, in pixels), where a
+# browser's own title strip would show. A blank frame, painted nothing yet, is no band and is
+# skipped. A frame that differs in more than a sixth of the band fails.
+function Test-FirstFrames($Frames, $Steady, [int]$X0, [int]$X1, [int]$Y1) {
+  if (-not $Steady -or (Test-Blank $Steady)) { return New-Verdict 'NOT_DRIVEN' 'the settled capture is blank' }
+  $painted = 0; $blank = 0; $index = 0
+  foreach ($frame in $Frames) {
+    $index++
+    if (Test-Blank $frame) { $blank++; continue }
+    $x1 = [Math]::Min($X1, [Math]::Min($frame.Width, $Steady.Width))
+    $y1 = [Math]::Min($Y1, [Math]::Min($frame.Height, $Steady.Height))
+    if ($x1 -le $X0 -or $y1 -le 0) { continue }
+    $painted++
+    $differ = 0; $total = 0
+    for ($y = 0; $y -lt $y1; $y += 2) {
+      for ($x = $X0; $x -lt $x1; $x += 2) {
+        $total++
+        $p = $frame.Pixels[$y * $frame.Width + $x]; $q = $Steady.Pixels[$y * $Steady.Width + $x]
+        if ([Math]::Abs((($p -shr 16) -band 255) - (($q -shr 16) -band 255)) -gt $script:Tolerance -or
+            [Math]::Abs((($p -shr 8) -band 255) - (($q -shr 8) -band 255)) -gt $script:Tolerance -or
+            [Math]::Abs(($p -band 255) - ($q -band 255)) -gt $script:Tolerance) { $differ++ }
+      }
+    }
+    if ($total -gt 0 -and $differ / $total -gt (1.0 / 6)) {
+      return New-Verdict 'FAIL' ('frame {0} of {1} differs from the settled window in {2:P0} of the top band' -f $index, @($Frames).Count, ($differ / $total))
+    }
+  }
+  if ($painted -eq 0) { return New-Verdict 'NOT_DRIVEN' "no painted frame was caught before the window settled ($blank blank)" }
+  New-Verdict 'PASS' "$painted painted frames before the window settled all look like it; $blank blank"
+}
+
+# Whether a test window on a monitor is a breach of the person's screen. A run on a test desktop of
+# its own (`TestDesktop` names it) shows nothing on any screen, so only a run on the person's own
+# desktop breaches it.
+function Test-VisibleBreach([bool]$OnMonitor, [string]$TestDesktop) {
+  $OnMonitor -and -not $TestDesktop
 }

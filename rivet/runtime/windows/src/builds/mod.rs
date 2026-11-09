@@ -20,8 +20,8 @@ pub mod page_tool_rows;
 mod samsung;
 mod whale;
 
-pub use brave::{BRAVE, BRAVE_63};
-pub use chrome::{CHROME, CHROME_150, CHROME_156_74, CHROME_156_80};
+pub use brave::{BRAVE, BRAVE_157_55, BRAVE_63};
+pub use chrome::{CHROME, CHROME_150, CHROME_156_74, CHROME_156_80, CHROME_157_38};
 pub use edge::EDGE;
 pub use samsung::SAMSUNG;
 pub use whale::{WHALE, WHALE_ADD_TAB_AT};
@@ -49,6 +49,12 @@ pub struct Build {
     pub app_window: Option<AppWindow>,
     /// Chromium's address bar functions, for the builds whose addresses were found.
     pub omnibox: Option<Omnibox>,
+    /// Chromium's DevTools and link-under-the-pointer functions, when the row carries them. A
+    /// built-in row keeps them in `page_tool_rows` instead.
+    pub page_tools: Option<page_tool_rows::PageTools>,
+    /// `BubbleDialogDelegate::GetAnchorRect` and its first bytes, when the row carries them. A
+    /// built-in row keeps it in the bubble anchor's own list instead.
+    pub bubble_anchor: Option<(usize, &'static [u8])>,
 }
 }
 
@@ -892,15 +898,17 @@ pub fn unchecked_reason(build: &Build, feature: &str) -> &'static str {
 }
 
 /// The builds Rivet supports, in the order they are tried.
-static TABLE: [&Build; 9] = [
+static TABLE: [&Build; 11] = [
     &CHROME_156_74,
     &CHROME_156_80,
+    &CHROME_157_38,
     &CHROME,
     &EDGE,
     &CHROME_150,
     &WHALE,
     &BRAVE,
     &BRAVE_63,
+    &BRAVE_157_55,
     &SAMSUNG,
 ];
 
@@ -925,12 +933,39 @@ pub fn get() -> &'static Build {
     current().expect("a recorded build is loaded before its table is read")
 }
 
+/// The `GetAnchorRect` of a build and its first bytes: the row's own when it carries them, else
+/// the built-in list's.
+pub fn bubble_anchor_of(build: &Build) -> Option<(usize, &'static [u8])> {
+    build.bubble_anchor.or_else(|| {
+        crate::features::bubble_anchor::row_for(build.browser, build.version)
+            .map(|row| (row.get_anchor_rect, row.prologue))
+    })
+}
+
 /// The rows that came as data with this binary, which needed no code change to add.
 pub const CHECKED_IN: &str = include_str!("../../rows/table.json");
 
+/// How many optional parts a row has: the app window and the address bar functions.
+fn parts(build: &Build) -> usize {
+    usize::from(build.app_window.is_some()) + usize::from(build.omnibox.is_some())
+}
+
 /// The rows in the order they are tried: a signed row first, since it can replace one that shipped.
+/// A signed row with fewer parts than the row that shipped for the same build never replaces it,
+/// so a table made by an older generator cannot turn features off.
 pub fn in_order(signed: Vec<&'static Build>, compiled: &[&'static Build]) -> Vec<&'static Build> {
-    signed.into_iter().chain(compiled.iter().copied()).collect()
+    signed
+        .into_iter()
+        .filter(|row| {
+            !compiled.iter().any(|known| {
+                known.browser == row.browser
+                    && known.module == row.module
+                    && known.version == row.version
+                    && parts(row) < parts(known)
+            })
+        })
+        .chain(compiled.iter().copied())
+        .collect()
 }
 
 struct Loaded {

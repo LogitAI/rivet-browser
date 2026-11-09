@@ -9,7 +9,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
 
 use crate::features::second_view::{self, Mode, PREVIEW_HEADER};
@@ -132,7 +131,10 @@ unsafe fn open_over_split(window: HWND, index: usize) -> bool {
     let Some([left, top, right, bottom]) = crate::features::split::page_area(window) else {
         return false;
     };
-    let rect = second_view::floating([left, top, right - left, bottom - top]);
+    let rect = second_view::floating(
+        [left, top, right - left, bottom - top],
+        crate::frame::held_reserve(),
+    );
     let Some((view, parent)) = bare::new_view(window, page) else {
         return false;
     };
@@ -241,7 +243,7 @@ pub(crate) unsafe fn open_as_tab(window: HWND) -> bool {
 }
 
 fn scale(window: HWND) -> f32 {
-    unsafe { GetDpiForWindow(window).max(96) as f32 / 96.0 }
+    unsafe { crate::frame::layout_dpi(window) as f32 / 96.0 }
 }
 
 /// The header in client pixels as left, top, right and bottom, right above the floating page.
@@ -398,14 +400,24 @@ mod tests {
         let full = [0, 40, 1200, 800];
         let (page, preview) = layout(full, Mode::Floating, 0);
         assert_eq!(page, full, "the page being read is not narrowed");
-        assert_eq!(preview, floating(full));
+        assert_eq!(preview, floating(full, 0));
         // 64 at the sides, the 40 DIP header 20 below the bar, 40 below.
         assert_eq!(preview, [64, 40 + 20 + 40, 1200 - 128, 800 - 20 - 40 - 40]);
     }
 
     #[test]
+    fn fr3_link_preview_keeps_clear_of_the_held_build_warning() {
+        let full = [0, 0, 1200, 800];
+        let reserve = crate::appbar::HELD_RESERVE;
+        let preview = floating(full, reserve);
+        // The preview's bottom edge sits above the warning and its margin.
+        assert!(preview[1] + preview[3] <= full[3] - reserve);
+        assert_eq!(floating(full, 0)[3] - preview[3], reserve - 40);
+    }
+
+    #[test]
     fn fr3_link_preview_keeps_a_page_in_a_small_window() {
-        let preview = floating([0, 0, 300, 200]);
+        let preview = floating([0, 0, 300, 200], 0);
         assert_eq!(preview[0], 30);
         assert!(preview[2] > 0 && preview[3] > 0);
     }

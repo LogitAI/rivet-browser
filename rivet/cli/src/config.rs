@@ -26,7 +26,7 @@ pub fn setup_file(root: &Path) -> PathBuf {
 
 /// The local application data folder, which tests replace to keep real settings untouched.
 pub fn data_root() -> Result<PathBuf, String> {
-    rivet_core::paths::local_app_data()
+    rivet_core::paths::data_home()
         .ok_or_else(|| "could not find the local application data folder.".to_owned())
 }
 
