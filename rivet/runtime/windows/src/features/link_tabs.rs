@@ -63,6 +63,17 @@ pub fn fate(urls: &[String], mini: bool, front: bool, empty_for: std::time::Dura
     }
 }
 
+/// The windows a link may have opened: the shown ones. A browser can keep a hidden window ready
+/// and show it for the next link, so a hidden window is not known yet and counts as new once it
+/// shows.
+pub fn shown(windows: &[(isize, bool)]) -> Vec<isize> {
+    windows
+        .iter()
+        .filter(|(_, visible)| *visible)
+        .map(|(window, _)| *window)
+        .collect()
+}
+
 /// The windows that appeared since `known`, and the new set of known windows.
 pub fn appeared(known: &HashSet<isize>, now: &[isize], rivet: &[isize]) -> Vec<isize> {
     now.iter()
@@ -78,10 +89,7 @@ pub(crate) unsafe fn tick(window: HWND) {
         .into_iter()
         .map(|window| window as isize)
         .collect();
-    let now: Vec<isize> = crate::frame::browser_windows_of_process()
-        .into_iter()
-        .map(|window| window as isize)
-        .collect();
+    let now: Vec<isize> = shown(&crate::frame::browser_windows_of_process_shown());
     let fresh = KNOWN.with(|known| {
         let mut known = known.borrow_mut();
         let fresh = known
@@ -217,6 +225,17 @@ unsafe fn move_all(window: HWND, from: HWND) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr3_a_window_kept_hidden_counts_as_new_when_it_shows_for_a_link() {
+        let rivet = [1];
+        // The first look: the Rivet window and a hidden spare window.
+        let known: HashSet<isize> = shown(&[(1, true), (7, false)]).into_iter().collect();
+        assert!(!known.contains(&7));
+        // The browser shows the spare window for a link.
+        let now = shown(&[(1, true), (7, true)]);
+        assert_eq!(appeared(&known, &now, &rivet), [7]);
+    }
 
     #[test]
     fn fr3_a_new_window_without_tabs_yet_is_looked_at_again() {
