@@ -238,6 +238,10 @@ $script:ParkW = 1800; $script:ParkH = 1067
 # same, so there the park sits level with the primary monitor, where a bubble the browser fits onto
 # the display stays by the window's row.
 $script:ParkY = 1000
+# The park's left edge. RIVET_TEST_PARK_X ("-9000") parks left of every monitor instead, nearest the
+# primary, so a run takes the primary monitor's scale rather than that of a monitor on its right.
+$script:ParkX = 9000
+if ($env:RIVET_TEST_PARK_X -match '^-?\d+$') { $script:ParkX = [int]$env:RIVET_TEST_PARK_X }
 if ($script:OnRunner) {
   Add-Type -AssemblyName System.Windows.Forms
   $script:ParkY = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Y
@@ -247,7 +251,7 @@ $script:ParkedSize = $null
 function Test-Parked($ctx) {
   $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
   $size = '{0}x{1}' -f ($r.Ri - $r.L), ($r.B - $r.T)
-  $placed = $r.L -eq 9000 -and $r.T -eq $script:ParkY
+  $placed = $r.L -eq $script:ParkX -and $r.T -eq $script:ParkY
   if (-not $script:OnRunner) { return $placed -and $size -eq ('{0}x{1}' -f $script:ParkW, $script:ParkH) }
   if (-not $placed) { return $false }
   $stable = $script:ParkedSize -eq $size
@@ -292,7 +296,7 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   $held = 0
   foreach ($try in 1..60) {
     if (Test-Parked $ctx) { $held++; if ($held -ge 6) { break } }
-    else { $held = 0; [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, $script:ParkY, $script:ParkW, $script:ParkH, 0x14) | Out-Null }
+    else { $held = 0; [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, $script:ParkX, $script:ParkY, $script:ParkW, $script:ParkH, 0x14) | Out-Null }
     Start-Sleep -Milliseconds 250
   }
   if ($held -lt 6 -and -not $ctx.Error) {
@@ -301,7 +305,7 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
     # whether its profile holds a crash report.
     $alive = @(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count
     $dumps = @(Get-ChildItem (Join-Path $ctx.Profile 'Crashpad\reports') -Filter *.dmp -ErrorAction SilentlyContinue).Count
-    $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not 9000,$($script:ParkY) $($script:ParkW)x$($script:ParkH); window alive $([FeatureWin]::IsWindow($ctx.Hwnd)), $alive browser processes, $dumps crash reports"
+    $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not $($script:ParkX),$($script:ParkY) $($script:ParkW)x$($script:ParkH); window alive $([FeatureWin]::IsWindow($ctx.Hwnd)), $alive browser processes, $dumps crash reports"
   }
   [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
