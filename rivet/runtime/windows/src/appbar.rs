@@ -1373,6 +1373,17 @@ impl Appbar {
             self.address.SetContent(&surface)?;
         }
         self.address_painted = Some((bar.clone(), dpi));
+        if crate::trace::tracing() {
+            crate::trace::trace_changed(
+                "bar painted",
+                &painted_line(
+                    [bar.x, bar.y, bar.width, bar.height],
+                    bar.pane,
+                    bar.reserve,
+                    scale,
+                ),
+            );
+        }
         self.device.Commit()
     }
 
@@ -2760,9 +2771,57 @@ pub(crate) fn make_fonts_known_to_gdi() {
     });
 }
 
+/// Where the top bar's controls were painted, in client pixels, as `name left right` each, so a
+/// test can click them where they show. `rect` is the bar's place and size in client pixels.
+pub(crate) fn painted_line(rect: [f32; 4], pane: bool, reserve: f32, scale: f32) -> String {
+    use crate::features::address_bar::{caption_buttons, parts_reserving};
+    let [x, y, width, height] = rect;
+    let w = width / scale;
+    let px = |at: f32| (x + at * scale).round() as i32;
+    let mut parts: Vec<String> = parts_reserving(w, pane, reserve)
+        .into_iter()
+        .map(|(part, at, pw)| format!("{part:?} {} {}", px(at), px(at + pw)))
+        .collect();
+    if !pane {
+        for (button, at, bw) in caption_buttons(w) {
+            parts.push(format!("{button:?} {} {}", px(at), px(at + bw)));
+        }
+    }
+    format!(
+        "address bar: painted at {} {} {}x{} px: {}",
+        x.round() as i32,
+        y.round() as i32,
+        width.round() as i32,
+        height.round() as i32,
+        parts.join(", ")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_the_painted_bar_names_each_controls_place_in_client_pixels() {
+        let line = painted_line([20.0, 10.0, 2000.0, 88.0], false, 0.0, 2.0);
+        assert!(
+            line.starts_with("address bar: painted at 20 10 2000x88 px: Back "),
+            "{line}"
+        );
+        // The parts the bar hit-tests are the ones named, at the same places.
+        for (part, at, pw) in crate::features::address_bar::parts_reserving(1000.0, false, 0.0) {
+            let named = format!(
+                "{part:?} {} {}",
+                (20.0 + at * 2.0).round() as i32,
+                (20.0 + (at + pw) * 2.0).round() as i32
+            );
+            assert!(line.contains(&named), "{named} in {line}");
+        }
+        assert!(
+            line.ends_with(&format!("Close {} 2020", 20 + 2 * (1000 - 46))),
+            "{line}"
+        );
+    }
 
     #[test]
     fn fr11_a_page_in_developer_mode_has_the_dark_row_of_the_study() {
