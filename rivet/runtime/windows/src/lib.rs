@@ -302,11 +302,27 @@ pub fn compiled_rows() -> Vec<serde_json::Value> {
             let frame = frames
                 .iter()
                 .find(|frame| frame.module == build.module && frame.version == version);
-            serde_json::json!({ "frame": frame, "build": build.to_row() })
+            serde_json::json!({ "frame": frame, "build": build.to_row(), "hand_only": hand_only(build) })
         })
         .collect()
 }
 
+/// The parts of a built-in row that a person wrote and a table row cannot carry yet: a row made
+/// from it without them would open Rivet's frame with those features off.
+#[cfg(windows)]
+fn hand_only(build: &builds::Build) -> Vec<&'static str> {
+    let mut parts = Vec::new();
+    if build.omnibox.is_some() {
+        parts.push("address bar functions and the app window layout");
+    }
+    if builds::page_tool_rows::page_tools_for(build).is_some() {
+        parts.push("page tools");
+    }
+    if features::bubble_anchor::row_for(build.browser, build.version).is_some() {
+        parts.push("the bubble anchor");
+    }
+    parts
+}
 /// Whether this runtime can read every row of a table: the reasons when it cannot.
 #[cfg(windows)]
 pub fn refused_rows(table: &serde_json::Value) -> Vec<String> {
