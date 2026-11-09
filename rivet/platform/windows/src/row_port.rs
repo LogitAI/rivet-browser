@@ -1348,10 +1348,36 @@ fn check_frame_slot(frame: &mut Value, pe: &PeFile, report: &mut PortReport) {
     }
 }
 
+/// The review items for the parts of the prior row that only a person writes today. A row made
+/// without them opens Rivet's frame with those features off, so it goes to a person instead of
+/// the table. The runtime names them in the prior row's `hand_only` list.
+pub fn hand_only_review(prior: &Value) -> Vec<String> {
+    prior["hand_only"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|part| {
+            format!("the prior row has {part}, which this generator cannot make yet; without it those features would be off")
+        })
+        .collect()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn nfr6_a_row_whose_prior_had_hand_written_parts_goes_to_a_person() {
+        let prior = serde_json::json!({
+            "frame": {}, "build": {},
+            "hand_only": ["address bar functions and the app window layout", "page tools", "the bubble anchor"]
+        });
+        let review = hand_only_review(&prior);
+        assert_eq!(review.len(), 3);
+        assert!(review[0].contains("address bar functions"));
+        // A prior row with nothing written by hand adds nothing.
+        assert!(hand_only_review(&serde_json::json!({ "frame": {}, "build": {} })).is_empty());
+    }
     const IMAGE_BASE: u64 = 0x1_8000_0000;
 
     /// A small 64-bit module: one code section at RVA 0x100000, read from the given bytes.

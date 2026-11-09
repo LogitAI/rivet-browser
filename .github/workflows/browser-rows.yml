@@ -24,6 +24,11 @@ on:
     # Every two hours: a rollout starts within hours of a version appearing in the feeds.
     - cron: "17 */2 * * *"
   workflow_dispatch:
+    inputs:
+      withdraw:
+        description: "Rows to take out of the published table, as browser@version separated by semicolons. Leave empty for a normal run."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -56,10 +61,43 @@ jobs:
         run: |
           if [[ -n "$SIGNING_KEY" ]]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; else echo "enabled=false" >> "$GITHUB_OUTPUT"; fi
 
+  withdraw:
+    name: Take rows out of the published table
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true' && github.event.inputs.withdraw != ''
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Build the table tool
+        working-directory: rivet
+        run: cargo build --release -p rivet-platform-windows --bin chrome-builds
+
+      - name: Sign the published table again without the rows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RIVET_TABLE_SIGNING_KEY: ${{ secrets.RIVET_TABLE_SIGNING_KEY }}
+          RIVET_TABLE_PUBLIC_KEY: ${{ vars.RIVET_TABLE_PUBLIC_KEY }}
+          WITHDRAW: ${{ github.event.inputs.withdraw }}
+        run: |
+          gh release download $env:RELEASE_TAG --pattern table.bin --output published.bin
+          if ($LASTEXITCODE -ne 0) { throw "There is no published table to take rows out of." }
+          $builds = @($env:WITHDRAW -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          rivet/target/release/chrome-builds.exe table-withdraw published.bin table.bin @builds
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release upload $env:RELEASE_TAG table.bin --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   watch:
     name: Find builds with no row
     needs: gate
-    if: needs.gate.outputs.enabled == 'true'
+    if: needs.gate.outputs.enabled == 'true' && github.event.inputs.withdraw == ''
     runs-on: windows-latest
     defaults:
       run:
