@@ -235,7 +235,8 @@ mod tests {
             fate(
                 &["devtools://devtools/bundled/inspector.html".to_owned()],
                 false,
-                true
+                true,
+                ZERO
             ),
             Fate::Leave
         );
