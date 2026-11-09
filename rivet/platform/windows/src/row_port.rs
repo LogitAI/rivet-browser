@@ -62,6 +62,8 @@ pub struct PortReport {
     pub derived: Vec<String>,
     /// Values that are not addresses and have no recipe, so they were carried over.
     pub carried: Vec<String>,
+    /// Optional parts the new build could not supply. The runtime does without them.
+    pub left_out: Vec<String>,
 }
 
 fn is_address(value: u64) -> bool {
@@ -1348,6 +1350,61 @@ fn check_frame_slot(frame: &mut Value, pe: &PeFile, report: &mut PortReport) {
     }
 }
 
+/// The start of the public name of `views::View::ConvertPointToScreen(const View*, gfx::Point*)`:
+/// a static function returning nothing. The other overload returns the point and is named `SA?AV`.
+pub const SCREEN_ORIGIN_NAME: &str = "?ConvertPointToScreen@View@views@@SAX";
+
+/// How many bytes of that function's start the runtime compares before it ever calls it.
+const SCREEN_ORIGIN_BYTES: usize = 12;
+
+/// Whether a public name is the one `screen_origin` is found by.
+pub fn is_screen_origin_name(name: &str) -> bool {
+    stable_name(name).starts_with(SCREEN_ORIGIN_NAME)
+}
+
+/// The first whole instructions of a function, at least `SCREEN_ORIGIN_BYTES` long.
+fn function_start(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
+    if !pe.is_code(address) {
+        return None;
+    }
+    let window = pe.read(address, 32)?;
+    let (ends, _) = x64::boundaries(window, SCREEN_ORIGIN_BYTES);
+    let end = *ends.iter().find(|end| **end >= SCREEN_ORIGIN_BYTES)?;
+    Some(window[..end].to_vec())
+}
+
+/// Adds `screen_origin`, `[address, first bytes]` of `views::View::ConvertPointToScreen`, to a row
+/// whose prior row had none, by the function's public name in the new build. A prior row that had
+/// it was ported with every other address. A build with no single place for the name goes without
+/// it, and the runtime keeps placing bubbles from the window's monitor, so the row is not stopped.
+pub fn seed_screen_origin(row: &mut Value, places: &[u32], pe: &PeFile, report: &mut PortReport) {
+    if row["build"]["screen_origin"].is_array() {
+        return;
+    }
+    let mut places = places.to_vec();
+    places.sort_unstable();
+    places.dedup();
+    let found = match places.as_slice() {
+        [only] => function_start(pe, *only).map(|bytes| (*only, bytes)),
+        _ => None,
+    };
+    match found {
+        Some((address, bytes)) => {
+            row["build"]["screen_origin"] =
+                json!([write_address(u64::from(address)), hex_text(&bytes)]);
+            report.derived.push(format!(
+                "build.screen_origin: {SCREEN_ORIGIN_NAME} at {address:#x}"
+            ));
+        }
+        None => {
+            row["build"]["screen_origin"] = Value::Null;
+            report.left_out.push(format!(
+                "build.screen_origin: no single readable function named {SCREEN_ORIGIN_NAME}: {places:x?}"
+            ));
+        }
+    }
+}
+
 /// The review items for the parts of the prior row that only a person writes today. A row made
 /// without them opens Rivet's frame with those features off, so it goes to a person instead of
 /// the table. The runtime names them in the prior row's `hand_only` list.
@@ -1487,6 +1544,44 @@ mod tests {
         code.iter()
             .map(|(rva, data)| (*rva, data.as_slice()))
             .collect()
+    }
+
+    #[test]
+    fn nfr3_screen_origin_is_found_by_its_public_name_in_the_new_build() {
+        // push rsi; push rdi; sub rsp, 0x28; mov rsi, rdx; mov rdi, rcx; call.
+        let start = hex("56574883ec284889d64889cfe800000000").unwrap();
+        let bytes = module(&[(0x101400, start.as_slice())]);
+        let pe = PeFile::parse(&bytes).unwrap();
+        let mut row = prior();
+        let mut report = PortReport::default();
+        seed_screen_origin(&mut row, &[0x101400, 0x101400], &pe, &mut report);
+        assert_eq!(
+            row["build"]["screen_origin"],
+            json!(["0x101400", "56574883ec284889d64889cf"])
+        );
+        assert!(report.review.is_empty() && report.left_out.is_empty());
+        // A row that already has it keeps the place the port gave it.
+        seed_screen_origin(&mut row, &[0x101500], &pe, &mut report);
+        assert_eq!(row["build"]["screen_origin"][0], "0x101400");
+        // No name, or two places for it, leaves the part out without stopping the row.
+        for places in [&[][..], &[0x101400, 0x101500][..]] {
+            let mut row = prior();
+            let mut report = PortReport::default();
+            seed_screen_origin(&mut row, places, &pe, &mut report);
+            assert!(row["build"]["screen_origin"].is_null());
+            assert_eq!(report.left_out.len(), 1);
+            assert!(report.review.is_empty());
+        }
+        // Only the in-place overload, which returns nothing, is the one.
+        assert!(is_screen_origin_name(
+            "?ConvertPointToScreen@View@views@@SAXPEBV12@PEAVPoint@gfx@@@Z"
+        ));
+        assert!(!is_screen_origin_name(
+            "?ConvertPointToScreen@View@views@@SA?AVPoint@gfx@@PEBV12@AEBV34@@Z"
+        ));
+        assert!(!is_screen_origin_name(
+            "?ConvertRectToScreen@View@views@@SAXPEBV12@PEAVRect@gfx@@@Z"
+        ));
     }
 
     #[test]
