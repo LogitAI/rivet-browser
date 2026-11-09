@@ -1619,4 +1619,16 @@ fn nfr6_a_table_row_carries_the_page_tools_and_bubble_anchor_of_its_prior_row() 
         crate::builds::bubble_anchor_of(build),
         crate::builds::bubble_anchor_of(&CHROME_157_38)
     );
+    // No built-in row has `ConvertPointToScreen`; a table row found by its name brings it.
+    assert!(chrome["build"]["screen_origin"].is_null());
+    assert_eq!(build.screen_origin, None);
+    row["screen_origin"] = serde_json::json!(["0x1234560", "56574883ec284889d64889cf"]);
+    let build = Build::from_row(&row).unwrap();
+    assert_eq!(
+        build.screen_origin,
+        Some((
+            0x1234560,
+            &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF][..]
+        ))
+    );
 }

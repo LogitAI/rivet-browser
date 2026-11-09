@@ -52,6 +52,7 @@ pub static CHROME: Build = Build {
     omnibox: None,
     page_tools: None,
     bubble_anchor: None,
+    screen_origin: None,
     app_window: None,
     browser: "Google Chrome",
     module: "chrome.dll",
@@ -391,6 +392,7 @@ pub static CHROME_156_74: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_CHROME_156_74),
     page_tools: None,
     bubble_anchor: None,
+    screen_origin: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x001BE6D0),
         feature_impl_prologue: &[
@@ -810,6 +812,7 @@ pub static CHROME_156_80: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_CHROME_156_80),
     page_tools: None,
     bubble_anchor: None,
+    screen_origin: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x001E54E0),
         feature_impl_prologue: &[
@@ -1257,6 +1260,7 @@ pub static CHROME_157_38: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_CHROME_157_38),
     page_tools: None,
     bubble_anchor: None,
+    screen_origin: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x0012D300),
         feature_impl_prologue: &[
@@ -1661,6 +1665,7 @@ pub static CHROME_150: Build = Build {
     omnibox: None,
     page_tools: None,
     bubble_anchor: None,
+    screen_origin: None,
     app_window: None,
     browser: "Google Chrome",
     module: "chrome.dll",

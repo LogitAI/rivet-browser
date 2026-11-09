@@ -51,6 +51,7 @@ pub static EDGE: Build = Build {
     omnibox: None,
     page_tools: None,
     bubble_anchor: None,
+    screen_origin: None,
     app_window: None,
     browser: "Microsoft Edge",
     module: "msedge.dll",
