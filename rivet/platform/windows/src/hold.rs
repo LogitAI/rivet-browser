@@ -24,17 +24,15 @@ pub type Version = [u16; 4];
 /// All application packages and all restricted application packages may read and run a hold.
 const HOLD_GRANTS: [&str; 2] = ["*S-1-15-2-1:(OI)(CI)(RX)", "*S-1-15-2-2:(OI)(CI)(RX)"];
 
-/// The builds with a complete and checked table row. The runtime's tests compare this list with its
-/// table, so the launcher and the runtime cannot disagree.
-pub const VERIFIED: [(&str, Version); 13] = [
-    ("chrome.exe", [157, 0, 8103, 39]),
+/// The builds whose complete row is written by hand in the runtime's code. Rows the table job
+/// records come from the checked-in table instead, so recording one needs no change here. The
+/// runtime's tests compare `verified` with its rows, so the launcher and the runtime cannot disagree.
+const HAND_ROWS: [(&str, Version); 10] = [
     ("chrome.exe", [157, 0, 8103, 38]),
-    ("chrome.exe", [156, 0, 8078, 82]),
     ("chrome.exe", [156, 0, 8078, 80]),
     ("chrome.exe", [156, 0, 8078, 74]),
     ("chrome.exe", [156, 0, 8078, 48]),
     ("msedge.exe", [156, 0, 4314, 50]),
-    ("msedge.exe", [156, 0, 4314, 58]),
     ("whale.exe", [5, 39, 412, 57]),
     ("brave.exe", [156, 1, 98, 62]),
     ("brave.exe", [156, 1, 98, 63]),
@@ -42,6 +40,32 @@ pub const VERIFIED: [(&str, Version); 13] = [
     ("samsunginternet.exe", [30, 0, 4, 29]),
 ];
 
+/// The rows the table job recorded in the repository, built into Rivet with the runtime.
+const CHECKED_IN_TABLE: &str = include_str!("../../../runtime/windows/rows/table.json");
+
+/// The launchers Rivet integrates with.
+const LAUNCHERS: [&str; 5] = [
+    "chrome.exe",
+    "msedge.exe",
+    "whale.exe",
+    "brave.exe",
+    "samsunginternet.exe",
+];
+
+/// The builds with a complete and checked row built into Rivet: the hand rows and the rows of the
+/// checked-in table.
+pub fn verified() -> Vec<(&'static str, Version)> {
+    let table: serde_json::Value = serde_json::from_str(CHECKED_IN_TABLE).unwrap_or_default();
+    let mut all: Vec<_> = HAND_ROWS.to_vec();
+    for launcher in LAUNCHERS {
+        for version in table_versions(&table, launcher) {
+            if !all.contains(&(launcher, version)) {
+                all.push((launcher, version));
+            }
+        }
+    }
+    all
+}
 /// The module that holds the browser's code, for the browsers Rivet integrates with.
 pub fn module_of(executable: &str) -> Option<&'static str> {
     match executable.to_ascii_lowercase().as_str() {
@@ -70,10 +94,10 @@ pub fn supported_versions(executable: &str) -> Vec<Version> {
 
 fn built_in_versions(executable: &str) -> Vec<Version> {
     let executable = executable.to_ascii_lowercase();
-    VERIFIED
-        .iter()
+    verified()
+        .into_iter()
         .filter(|(name, _)| *name == executable)
-        .map(|(_, version)| *version)
+        .map(|(_, version)| version)
         .collect()
 }
 
@@ -615,6 +639,22 @@ fn file_version(_path: &Path) -> Option<Version> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nfr6_a_row_recorded_in_the_checked_in_table_needs_no_hand_edit() {
+        let all = verified();
+        // Rows the table job recorded, read from the checked-in table.
+        assert!(all.contains(&("chrome.exe", [157, 0, 8103, 39])));
+        assert!(all.contains(&("msedge.exe", [156, 0, 4314, 58])));
+        // Hand rows stay, and no build is listed twice.
+        assert!(all.contains(&("chrome.exe", [157, 0, 8103, 38])));
+        for (index, entry) in all.iter().enumerate() {
+            assert!(
+                !all[index + 1..].contains(entry),
+                "{entry:?} is listed twice"
+            );
+        }
+    }
 
     const NEW: Version = [156, 0, 8078, 99];
     const HELD: Version = [156, 0, 8078, 74];
