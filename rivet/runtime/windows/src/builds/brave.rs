@@ -43,6 +43,7 @@ pub static BRAVE: Build = Build {
     omnibox: None,
     page_tools: None,
     bubble_anchor: None,
+    screen_origin: None,
     app_window: None,
     browser: "Brave",
     module: "chrome.dll",
@@ -309,6 +310,7 @@ pub static BRAVE_63: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_BRAVE_63),
     page_tools: None,
     bubble_anchor: None,
+    screen_origin: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x00107B60),
         feature_impl_prologue: &[
@@ -710,6 +712,7 @@ pub static BRAVE_157_55: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_BRAVE_157_55),
     page_tools: None,
     bubble_anchor: None,
+    screen_origin: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x0017C0B0),
         feature_impl_prologue: &[

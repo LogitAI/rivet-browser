@@ -240,6 +240,26 @@ fn client_to_screen_dips(
     ]
 }
 
+/// A rect in a window's client DIPs as screen DIPs, from where Chromium puts the window's top left
+/// corner. Rivet's rows sit at whole DIPs of the window, so they move with that corner as they are.
+pub(crate) fn at_origin(origin: (i32, i32), [x, y, w, h]: [f32; 4]) -> Rect {
+    [
+        origin.0 + x.round() as i32,
+        origin.1 + y.round() as i32,
+        w.round() as i32,
+        h.round() as i32,
+    ]
+}
+
+/// The largest distance in DIPs between the same edge of two lists of rects.
+pub(crate) fn largest_difference(one: &[Rect], other: &[Rect]) -> i32 {
+    one.iter()
+        .zip(other)
+        .flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs()))
+        .max()
+        .unwrap_or(0)
+}
+
 /// Client DIPs of `window` as screen DIPs.
 unsafe fn to_screen(window: HWND, rect: [f32; 4]) -> Rect {
     let factor = crate::frame::layout_dpi(window).max(96) as f32 / 96.0;
@@ -252,8 +272,11 @@ unsafe fn to_screen(window: HWND, rect: [f32; 4]) -> Rect {
         crate::os::win32::monitors_of(window),
     )
 }
-/// The page area, the address and the chip of a Rivet window, in screen DIPs.
-unsafe fn targets(window: HWND) -> Option<(Rect, Rect, Rect)> {
+/// The page area, the address and the chip of a Rivet window, in its client DIPs and in screen DIPs.
+type Targets = ([[f32; 4]; 3], (Rect, Rect, Rect));
+
+/// The `Targets` of a Rivet window.
+unsafe fn targets(window: HWND) -> Option<Targets> {
     let (address, chip) = crate::features::address_bar::anchors(window)?;
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
@@ -266,9 +289,12 @@ unsafe fn targets(window: HWND) -> Option<(Rect, Rect, Rect)> {
         client.bottom as f32 / factor - below,
     ];
     Some((
-        to_screen(window, page),
-        to_screen(window, address),
-        to_screen(window, chip),
+        [page, address, chip],
+        (
+            to_screen(window, page),
+            to_screen(window, address),
+            to_screen(window, chip),
+        ),
     ))
 }
 
@@ -294,7 +320,7 @@ unsafe extern "system" fn get_anchor_rect(
     if result.is_null() {
         return result;
     }
-    if let Some((page, address, chip)) = targets(window) {
+    if let Some((client, (page, address, chip))) = targets(window) {
         let original = *result;
         crate::trace::trace(&format!(
             "bubble anchor: original {original:?} address {address:?} chip {chip:?} client origin {:?} layout dpi {}",
@@ -305,6 +331,19 @@ unsafe extern "system" fn get_anchor_rect(
             },
             crate::frame::layout_dpi(window)
         ));
+        // Where Chromium itself puts the same rows, beside the place derived from the monitor.
+        let view = crate::features::frame_layout::frame_view(window).unwrap_or(0);
+        if let Some(origin) = crate::chromium::screen::origin(view) {
+            let own = client.map(|rect| at_origin(origin, rect));
+            let off = largest_difference(&own, &[page, address, chip]);
+            crate::trace::trace(&format!(
+                "bubble anchor: chromium origin {origin:?} page {:?} address {:?} chip {:?} same {} off {off}",
+                own[0],
+                own[1],
+                own[2],
+                off <= 1
+            ));
+        }
         *result = choose(
             *result,
             page,
@@ -345,6 +384,10 @@ pub(crate) fn install() {
         })
     };
     crate::trace::trace(&format!("bubble anchor: hook {result:?}"));
+    crate::trace::trace(&format!(
+        "bubble anchor: screen origin {}",
+        crate::chromium::screen::install()
+    ));
 }
 
 #[cfg(test)]
@@ -389,6 +432,25 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn fr12_rows_move_with_the_window_corner_chromium_reports() {
+        // A window parked off every monitor at a scale its nearest monitor does not have: Chromium
+        // put its frame view's corner at 9402,0 DIPs, and the chip 16 DIPs into the row follows it.
+        let chip = at_origin((9402, 0), [16.4, 16.0, 22.0, 28.0]);
+        assert_eq!(chip, [9418, 16, 22, 28]);
+        assert_eq!(
+            at_origin((-1920, -300), [0.0, 0.0, 0.0, 0.0]),
+            [-1920, -300, 0, 0]
+        );
+        // The trace's same flag: equal places, one DIP of rounding, and the 441 DIPs once seen.
+        assert_eq!(largest_difference(&[chip], &[chip]), 0);
+        assert_eq!(largest_difference(&[chip], &[[9419, 16, 22, 28]]), 1);
+        assert_eq!(
+            largest_difference(&[ADDRESS, chip], &[ADDRESS, [8977, 16, 22, 28]]),
+            441
+        );
+    }
+
     #[test]
     fn fr12_bubble_at_the_monitor_edge_moves_to_the_address_bar() {
         // Brave's save bubble was seen at x=4863, past the window.

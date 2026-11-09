@@ -19,6 +19,7 @@ pub static WHALE: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_WHALE_57),
     page_tools: None,
     bubble_anchor: None,
+    screen_origin: None,
     app_window: Some(AppWindow {
         // `WindowFeatureController::SupportsWindowFeatureImpl`, found statically and unverified: the
         // function `BrowserView::ShouldDrawTabStrip` asks through the thunk at 0x8104DF0
