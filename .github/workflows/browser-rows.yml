@@ -250,6 +250,8 @@ jobs:
           $pair = ./tools/chrome-builds.exe table-key
           $env:RIVET_TABLE_SIGNING_KEY = ($pair[0] -split ' ')[1]
           $env:RIVET_TABLE_PUBLIC_KEY = ($pair[1] -split ' ')[1]
+          # The drive step builds Rivet again and must trust the same throwaway key, so it reads it here.
+          Set-Content (Join-Path $temp "test-key.txt") $env:RIVET_TABLE_PUBLIC_KEY
           $env:LOCALAPPDATA = Join-Path $temp "local"
           New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
           Set-Content "$temp/part.json" '{"schema":1,"sequence":0,"symbols":{},"rows":[]}'
@@ -277,6 +279,11 @@ jobs:
           $features = Join-Path $temp "session/features"
           # The table the proof step applied lives here, and this Rivet trusts its key.
           $env:LOCALAPPDATA = Join-Path $temp "local"
+          # This Rivet must trust the throwaway key the proof step signed the candidate row with, so the
+          # features run against the row being proposed; the key is built in, so it is set before the build.
+          $env:RIVET_TABLE_PUBLIC_KEY = (Get-Content (Join-Path $temp "test-key.txt")).Trim()
+          # An installed build has rivet.ico beside the runtime, which the taskbar relaunch row needs.
+          Copy-Item rivet/installer/windows/setup-ui/assets/logo.ico rivet/target/debug/rivet.ico -Force
           # The harness builds Rivet itself, with the test flags that keep sync and sign-in off.
           ./scripts/tests/windows-features.ps1 -Browsers $name `
             -Executable "${{ steps.build.outputs.executable }}" -OutDir $features

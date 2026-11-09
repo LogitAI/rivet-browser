@@ -2426,6 +2426,115 @@ pub(crate) fn rivet_windows() -> Vec<HWND> {
     })
 }
 
+/// Traces what kind of window `window` is, read only on a worker thread: its title, rect and the
+/// class names near its `HWNDMessageHandler`. For a new window that holds a page but is not a
+/// browser view's.
+pub(crate) unsafe fn trace_window_kind(window: HWND, why: &'static str) {
+    use crate::chromium::reflect;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GWLP_USERDATA,
+    };
+    let Some(image) = crate::chromium::image::recorded() else {
+        return;
+    };
+    let mut title = [0u16; 128];
+    let length = GetWindowTextW(window, title.as_mut_ptr(), title.len() as i32).max(0) as usize;
+    let title = String::from_utf16_lossy(&title[..length]);
+    let mut rect: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut rect);
+    let headers = std::slice::from_raw_parts(image.base as *const u8, 0x1000.min(image.size));
+    let ranges = reflect::ranges_of(image.base, &reflect::sections(headers));
+    let handler = GetWindowLongPtrW(window, GWLP_USERDATA) as usize;
+    let window = window as usize;
+    std::thread::spawn(move || {
+        let names = reflect::names_near(
+            &ranges,
+            handler,
+            2,
+            24,
+            std::time::Duration::from_millis(300),
+        );
+        crate::trace::trace(&format!(
+            "window kind: {window:#x} ({why}) title {title:?} rect [{}, {}, {}, {}] classes {names:?}",
+            rect.left, rect.top, rect.right, rect.bottom
+        ));
+    });
+}
+/// Which step of finding a window's browser finds nothing, for the trace: Chromium's
+/// `views::HWNDMessageHandler` window to its aura window, that window to its `BrowserView`, and the
+/// view to its `Browser`.
+pub(crate) unsafe fn browser_lookup_step(window: HWND) -> &'static str {
+    type Pointer = unsafe extern "system" fn(*const std::ffi::c_void) -> *mut std::ffi::c_void;
+    let Some(base) = crate::features::tabs::base() else {
+        return "the browser module is not recorded";
+    };
+    let tabs = &crate::builds::get().tabs;
+    let content = crate::features::tabs::function::<Pointer>(base, tabs.content_window_for_hwnd)(
+        window as *const std::ffi::c_void,
+    );
+    if content.is_null() {
+        return "the window has no content window";
+    }
+    let view =
+        crate::features::tabs::function::<Pointer>(base, tabs.browser_view_for_window)(content);
+    if view.is_null() {
+        return "the content window belongs to no browser view";
+    }
+    if (*(view.cast::<u8>().add(tabs.browser_in_view) as *const *mut u8)).is_null() {
+        return "the browser view holds no browser";
+    }
+    "the browser was found"
+}
+/// Traces every browser window of this process, when the set or any of them changed since the
+/// last call: its handle, whether it is shown, its rect, and its tab count or the step of finding
+/// its browser that finds nothing. Reads only. Tells which windows a link's window was, and when.
+pub(crate) unsafe fn trace_browser_windows_if_changed() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
+    thread_local! {
+        static LAST: RefCell<String> = const { RefCell::new(String::new()) };
+    }
+    if !crate::trace::tracing() {
+        return;
+    }
+    let census: Vec<String> = browser_windows_of_process()
+        .into_iter()
+        .map(|window| {
+            let mut rect: RECT = std::mem::zeroed();
+            GetWindowRect(window, &mut rect);
+            let tabs = match crate::features::tabs::tabs(window) {
+                Some(titles) => format!("{} tabs", titles.len()),
+                None => browser_lookup_step(window).to_owned(),
+            };
+            format!(
+                "{:#x} shown {} [{}, {}, {}x{}] {tabs}",
+                window as usize,
+                IsWindowVisible(window) != 0,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top
+            )
+        })
+        .collect();
+    let text = census.join("; ");
+    let changed = LAST.with(|last| {
+        let mut last = last.borrow_mut();
+        let changed = *last != text;
+        *last = text.clone();
+        changed
+    });
+    if changed {
+        crate::trace::trace(&format!("browser windows: {text}"));
+    }
+}
+/// The browser windows of this process, each with whether it is shown.
+pub(crate) fn browser_windows_of_process_shown() -> Vec<(isize, bool)> {
+    browser_windows_of_process()
+        .into_iter()
+        .map(|window| (window as isize, unsafe { IsWindowVisible(window) } != 0))
+        .collect()
+}
+
 /// Every top-level browser window of this process, whoever made it. Only windows of the browser's
 /// class are visited, so the half second tab timer does not read the class of every window.
 pub(crate) fn browser_windows_of_process() -> Vec<HWND> {
