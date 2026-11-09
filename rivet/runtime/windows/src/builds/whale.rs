@@ -17,6 +17,8 @@ pub const WHALE_ADD_TAB_AT: (usize, &[u8]) = (
 /// Naver Whale 5.39.412.57 (Chromium 150.0.7871.252). Only Chromium's functions are recorded.
 pub static WHALE: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_WHALE_57),
+    page_tools: None,
+    bubble_anchor: None,
     app_window: Some(AppWindow {
         // `WindowFeatureController::SupportsWindowFeatureImpl`, found statically and unverified: the
         // function `BrowserView::ShouldDrawTabStrip` asks through the thunk at 0x8104DF0

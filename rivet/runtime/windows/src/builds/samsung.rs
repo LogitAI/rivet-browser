@@ -7,6 +7,8 @@ use super::*;
 /// versioned launcher. The file version resource names the Samsung release, not Chromium's.
 pub static SAMSUNG: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_SAMSUNG_29),
+    page_tools: None,
+    bubble_anchor: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x001FBB10),
         feature_impl_prologue: &[

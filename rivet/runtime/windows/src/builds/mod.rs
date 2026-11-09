@@ -49,6 +49,12 @@ pub struct Build {
     pub app_window: Option<AppWindow>,
     /// Chromium's address bar functions, for the builds whose addresses were found.
     pub omnibox: Option<Omnibox>,
+    /// Chromium's DevTools and link-under-the-pointer functions, when the row carries them. A
+    /// built-in row keeps them in `page_tool_rows` instead.
+    pub page_tools: Option<page_tool_rows::PageTools>,
+    /// `BubbleDialogDelegate::GetAnchorRect` and its first bytes, when the row carries them. A
+    /// built-in row keeps it in the bubble anchor's own list instead.
+    pub bubble_anchor: Option<(usize, &'static [u8])>,
 }
 }
 

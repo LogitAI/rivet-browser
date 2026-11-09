@@ -49,6 +49,8 @@ const DEV_EDGE_156: DevMode = DevMode {
 
 pub static EDGE: Build = Build {
     omnibox: None,
+    page_tools: None,
+    bubble_anchor: None,
     app_window: None,
     browser: "Microsoft Edge",
     module: "msedge.dll",

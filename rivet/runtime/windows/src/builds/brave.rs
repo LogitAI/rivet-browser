@@ -41,6 +41,8 @@ const DEV_BRAVE_156: DevMode = DevMode {
 /// `PaintButtonContents`.
 pub static BRAVE: Build = Build {
     omnibox: None,
+    page_tools: None,
+    bubble_anchor: None,
     app_window: None,
     browser: "Brave",
     module: "chrome.dll",
@@ -305,6 +307,8 @@ pub static BRAVE: Build = Build {
 /// jump to the next function here, and the vtable slot holds that jump.
 pub static BRAVE_63: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_BRAVE_63),
+    page_tools: None,
+    bubble_anchor: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x00107B60),
         feature_impl_prologue: &[
@@ -704,6 +708,8 @@ const DEV_BRAVE_157: DevMode = DevMode {
 /// Chromium's, checked against Chrome 157.0.8103.38 too. Found statically and not driven yet.
 pub static BRAVE_157_55: Build = Build {
     omnibox: Some(super::omnibox_rows::OMNIBOX_BRAVE_157_55),
+    page_tools: None,
+    bubble_anchor: None,
     app_window: Some(AppWindow {
         feature_impl: Some(0x0017C0B0),
         feature_impl_prologue: &[
