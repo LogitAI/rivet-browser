@@ -1323,9 +1323,13 @@ function Invoke-LinkNewTab($Name, $shots) {
     if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     $before = Get-MyTops $ctx
     $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
-    $page = [FeatureWin]::Inside($ctx.Hwnd, (& { $p = New-Object FeatureWin+P; $p.X = [int]($cr.Ri * 0.7); $p.Y = [int]($cr.B / 2); [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$p) | Out-Null; $p }))
-    $l = [IntPtr](([int]($cr.B / 2) -shl 16) -bor ([int]($cr.Ri * 0.7) -band 0xffff))
+    $screen = New-Object FeatureWin+P; $screen.X = [int]($cr.Ri * 0.7); $screen.Y = [int]($cr.B / 2); [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$screen) | Out-Null
+    $page = [FeatureWin]::Inside($ctx.Hwnd, $screen)
     $target = if ($page -ne [IntPtr]::Zero) { $page } else { $ctx.Hwnd }
+    # The click goes to the window under the point, in that window's own coordinates: at another
+    # scale the page's window starts further right, and the window's client point misses it.
+    $c = $screen; [FeatureWin]::ScreenToClient($target, [ref]$c) | Out-Null
+    $l = [IntPtr](($c.Y -shl 16) -bor ($c.X -band 0xffff))
     # The browser's status bubble, a short strip of its own, can show the link's address. It is not
     # a window the link opened, so only a window at least 100 px high counts as one.
     $isPage = { param($h) $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($h, [ref]$r) | Out-Null; ($r.B - $r.T) -ge 100 }
