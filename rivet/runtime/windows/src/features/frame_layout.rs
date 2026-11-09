@@ -1018,6 +1018,11 @@ pub unsafe fn relayout(window: HWND) -> bool {
             let layout_immediately: unsafe extern "system" fn(*mut c_void) =
                 std::mem::transmute(base + bv().layout_immediately);
             layout_immediately(view as *mut c_void);
+            // The non-client view above the frame view gives the client view the bounds the frame
+            // view leaves it, so a new appbar width moves the page only when it lays out too.
+            if let Some(parent) = crate::chromium::view::parent_of(view) {
+                layout_immediately(parent as *mut c_void);
+            }
             true
         }
         None => false,
