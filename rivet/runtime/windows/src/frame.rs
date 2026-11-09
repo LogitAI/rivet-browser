@@ -3711,6 +3711,16 @@ unsafe extern "system" fn browser_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // Where a character goes when Rivet's bar does not take it: the window with the thread's
+    // keyboard focus, and the page of the split Rivet last gave the keyboard.
+    if message == 0x0102 && crate::trace::tracing() {
+        crate::trace::trace(&format!(
+            "keys: character {wparam:#x} to window {:#x}, keyboard focus {:#x}, split page {}",
+            window as usize,
+            GetFocus() as usize,
+            crate::features::second_view::focused()
+        ));
+    }
     if matches!(
         message,
         windows_sys::Win32::UI::WindowsAndMessaging::WM_SIZE | WM_DPICHANGED
