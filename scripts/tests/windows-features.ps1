@@ -264,7 +264,10 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
     else { $held = 0; [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, 1800, 1067, 0x14) | Out-Null }
     Start-Sleep -Milliseconds 250
   }
-  if ($held -lt 6 -and -not $ctx.Error) { $ctx.Error = 'the window did not stay at its off-screen park' }  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
+  if ($held -lt 6 -and -not $ctx.Error) {
+    $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
+    $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not 9000,1000 1800x1067"
+  }  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
   if ($dpi) { $ctx.Dpi = $dpi } elseif (-not $ctx.Error) { $ctx.Error = 'the runtime traced no scale for the window' }
