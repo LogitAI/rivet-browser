@@ -296,7 +296,8 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
     $alive = @(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count
     $dumps = @(Get-ChildItem (Join-Path $ctx.Profile 'Crashpad\reports') -Filter *.dmp -ErrorAction SilentlyContinue).Count
     $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not 9000,$($script:ParkY) $($script:ParkW)x$($script:ParkH); window alive $([FeatureWin]::IsWindow($ctx.Hwnd)), $alive browser processes, $dumps crash reports"
-  }  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
+  }
+  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
   # The window must keep the scale it was first laid out at: a park that moves it to another scale
