@@ -269,14 +269,16 @@ jobs:
         if: steps.made.outputs.for_review == 'false'
         run: |
           # A browser is listed as supported only when every feature check passed on it. A check
-          # that could not run counts as failed, so its row is not published.
+          # that could not run counts as failed, so its row is not published, except the features
+          # rivet/platform/windows/test-desktop-limits.json lists, which stay reported as not driven.
           trap { Add-Content (Join-Path $env:RUNNER_TEMP failure.txt) "Drive every feature: $_"; break }
           $temp = $env:RUNNER_TEMP
           $name = "${{ matrix.build.browser }}".ToLower()
           $features = Join-Path $temp "session/features"
           # The table the proof step applied lives here, and this Rivet trusts its key.
           $env:LOCALAPPDATA = Join-Path $temp "local"
-          ./scripts/tests/windows-features.ps1 -NoBuild -Browsers $name `
+          # The harness builds Rivet itself, with the test flags that keep sync and sign-in off.
+          ./scripts/tests/windows-features.ps1 -Browsers $name `
             -Executable "${{ steps.build.outputs.executable }}" -OutDir $features
           ./tools/chrome-builds.exe gate (Join-Path $features "results.json") $name
           if ($LASTEXITCODE -ne 0) { throw "a feature check failed or could not run; results.json lists which" }

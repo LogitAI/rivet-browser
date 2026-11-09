@@ -261,11 +261,34 @@ pub const FEATURES: &[&str] = &[
     "cli-hidden",
 ];
 
+/// The features a test desktop can never drive, each with its reason, kept in one file. They are
+/// still reported as not driven and never count as passed.
+const TEST_DESKTOP_LIMITS: &str = include_str!("../test-desktop-limits.json");
+
+/// The features of `TEST_DESKTOP_LIMITS` and their reasons.
+pub fn test_desktop_limits() -> Vec<(String, String)> {
+    let limits: Value = serde_json::from_str(TEST_DESKTOP_LIMITS).unwrap_or_default();
+    limits
+        .as_array()
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter_map(|limit| {
+            Some((
+                limit["feature"].as_str()?.to_owned(),
+                limit["reason"].as_str()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
 /// Whether a browser may be published as supported, from the rows of a feature run
-/// (`results.json`: browser, feature, result). Every feature must read `PASS` for that browser. A
-/// feature that failed, was not driven or is missing keeps the browser off the list, because a
-/// check that could not run proves nothing. The error lists each reason.
-pub fn publish_gate(results: &Value, browser: &str) -> Result<(), Vec<String>> {
+/// (`results.json`: browser, feature, result). Every feature must read `PASS` for that browser,
+/// except a feature a test desktop can never drive, which must read `NOT_DRIVEN`. A feature that
+/// failed, was not driven for any other reason or is missing keeps the browser off the list,
+/// because a check that could not run proves nothing. The error lists each reason. On success the
+/// notes name each feature left undriven by the test desktop, and a listed feature that now
+/// passes, so the list is looked at again.
+pub fn publish_gate(results: &Value, browser: &str) -> Result<Vec<String>, Vec<String>> {
     let rows: Vec<&Value> = match results {
         Value::Array(rows) => rows.iter().collect(),
         // ConvertTo-Json writes a single row as an object.
@@ -289,19 +312,40 @@ pub fn publish_gate(results: &Value, browser: &str) -> Result<(), Vec<String>> {
                 .push(row["result"].as_str().unwrap_or("NOT_DRIVEN"));
         }
     }
+    let limits = test_desktop_limits();
     let mut reasons = Vec::new();
+    let mut notes = Vec::new();
     for feature in FEATURES {
-        match seen.get(feature) {
-            None => reasons.push(format!("{feature}: not run")),
-            Some(results) => {
+        let limit = limits.iter().find(|(name, _)| name == feature);
+        match (seen.get(feature), limit) {
+            (None, _) => reasons.push(format!("{feature}: not run")),
+            (Some(results), None) => {
                 if let Some(other) = results.iter().find(|result| **result != "PASS") {
                     reasons.push(format!("{feature}: {other}"));
+                }
+            }
+            (Some(results), Some((_, why))) => {
+                if results.iter().all(|result| *result == "NOT_DRIVEN") {
+                    notes.push(format!("{feature}: NOT_DRIVEN on the test desktop: {why}"));
+                } else if results.iter().all(|result| *result == "PASS") {
+                    notes.push(format!(
+                        "{feature}: passed although it is listed as a test desktop limit; look at the list again"
+                    ));
+                } else {
+                    let other = results
+                        .iter()
+                        .find(|result| **result != "NOT_DRIVEN" && **result != "PASS")
+                        .copied()
+                        .unwrap_or("mixed results");
+                    reasons.push(format!(
+                        "{feature}: {other}, though it is listed as a test desktop limit"
+                    ));
                 }
             }
         }
     }
     if reasons.is_empty() {
-        Ok(())
+        Ok(notes)
     } else {
         Err(reasons)
     }
@@ -479,10 +523,7 @@ mod tests {
 
     #[test]
     fn nfr3_a_browser_that_passed_every_feature_is_published() {
-        assert_eq!(
-            publish_gate(&results(&all_pass("chrome")), "Chrome"),
-            Ok(())
-        );
+        assert!(publish_gate(&results(&all_pass("chrome")), "Chrome").is_ok());
     }
 
     #[test]
@@ -499,6 +540,86 @@ mod tests {
         assert!(publish_gate(&results(&twice), "edge").is_err());
     }
 
+    /// The rows of a run on a test desktop: every feature passes but the listed limits.
+    fn test_desktop_run(browser: &str) -> Vec<(&str, &'static str, &'static str)> {
+        let limits = test_desktop_limits();
+        FEATURES
+            .iter()
+            .map(|feature| {
+                let undriven = limits.iter().any(|(name, _)| name == feature);
+                (
+                    browser,
+                    *feature,
+                    if undriven { "NOT_DRIVEN" } else { "PASS" },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn nfr3_the_test_desktop_limits_are_the_eleven_known_features_with_reasons() {
+        let limits = test_desktop_limits();
+        let names: Vec<&str> = limits.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "split-shortcut",
+                "split-maximised",
+                "credentials-system",
+                "view-click-other",
+                "view-ime",
+                "address-editing",
+                "taskbar-identity",
+                "sidebar-scale-monitor",
+                "password-bubble",
+                "cli-input",
+                "cli-hidden"
+            ]
+        );
+        for (name, reason) in &limits {
+            assert!(FEATURES.contains(&name.as_str()), "{name} is a feature");
+            assert!(!reason.is_empty(), "{name} has a reason");
+        }
+    }
+
+    #[test]
+    fn nfr3_a_test_desktop_run_publishes_and_still_reports_its_limits_as_not_driven() {
+        let notes = publish_gate(&results(&test_desktop_run("chrome")), "chrome").unwrap();
+        assert_eq!(notes.len(), 11);
+        assert!(notes
+            .iter()
+            .all(|note| note.contains("NOT_DRIVEN on the test desktop")));
+    }
+
+    #[test]
+    fn nfr3_any_other_undriven_feature_or_any_failure_blocks_publication() {
+        // An undriven feature that is not a test desktop limit.
+        let mut rows = test_desktop_run("edge");
+        let at = rows.iter().position(|row| row.1 == "sidebar").unwrap();
+        rows[at].2 = "NOT_DRIVEN";
+        assert_eq!(
+            publish_gate(&results(&rows), "edge"),
+            Err(vec!["sidebar: NOT_DRIVEN".to_owned()])
+        );
+        // A listed limit that failed.
+        let mut rows = test_desktop_run("edge");
+        let at = rows.iter().position(|row| row.1 == "view-ime").unwrap();
+        rows[at].2 = "FAIL";
+        let reasons = publish_gate(&results(&rows), "edge").unwrap_err();
+        assert_eq!(reasons.len(), 1);
+        assert!(reasons[0].starts_with("view-ime: FAIL"));
+    }
+
+    #[test]
+    fn nfr3_a_listed_limit_that_passes_is_reported() {
+        let mut rows = test_desktop_run("brave");
+        let at = rows.iter().position(|row| row.1 == "cli-hidden").unwrap();
+        rows[at].2 = "PASS";
+        let notes = publish_gate(&results(&rows), "brave").unwrap();
+        assert!(notes
+            .iter()
+            .any(|note| note.starts_with("cli-hidden: passed although")));
+    }
     #[test]
     fn nfr3_a_feature_that_was_not_run_does_not_count_as_passed() {
         let mut rows = all_pass("brave");
