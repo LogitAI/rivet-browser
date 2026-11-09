@@ -3325,6 +3325,12 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                 let (x, y, w, _) = toggle_rect(page_x(window));
                 (scale(x, dpi), scale(y, dpi), scale(w, dpi))
             };
+            if crate::trace::tracing() {
+                crate::trace::trace_changed(
+                    "toggle",
+                    &format!("appbar: toggle at {x} {y} {size} px"),
+                );
+            }
             if let Err(error) = appbar.update_toggle(visible, x, y, size, dpi) {
                 log(&format!("rivet: could not draw the toggle: {error}"));
             }

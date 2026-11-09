@@ -3111,31 +3111,63 @@ function Test-BarControls($ctx, [string]$Stage, $Capture) {
   $bad
 }
 
+# The appbar's own fold button, where the runtime painted it, clicked as a person clicks it: the
+# window's hit test must give it to the appbar, and the press and release go there.
+function Send-ToggleClick($ctx) {
+  $line = @(Read-Log | Where-Object { $_ -match '^appbar: toggle at ' }) | Select-Object -Last 1
+  if (-not $line -or $line -notmatch 'toggle at (-?\d+) (-?\d+) (\d+) px') { return 'the runtime traced no fold button' }
+  $cx = [int]$Matches[1] + [int]([int]$Matches[3] / 2); $cy = [int]$Matches[2] + [int]([int]$Matches[3] / 2)
+  $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
+  $o = New-Object FeatureWin+P; $o.X = 0; $o.Y = 0
+  [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$o) | Out-Null
+  $hit = Get-HitTest $ctx ($cx + $o.X - $r.L) ($cy + $o.Y - $r.T)
+  if ($hit -ne 18) { return "the fold button at $cx,$cy hits $hit, not the appbar's 18" }
+  Send-AppbarNc $ctx 0xA1 $cx $cy
+  Start-Sleep -Milliseconds 120
+  Send-AppbarNc $ctx 0xA2 $cx $cy
+  $null
+}
+
+# As a person's window: three tabs, one pinned and two in a folder, folded and shown three times,
+# with the fold button and with the command, and every control clicked after each change. A held
+# build shows its warning over the page meanwhile.
 function Invoke-BarFolded($Name, $shots) {
   $ctx, $state = Start-Scene $Name 'bar-folded' $urlA
   try {
-    Open-Scene $ctx $state $urlA $null
-    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
-    $one = Get-Capture $ctx (Join-Path $shots 'bar-folded-1-open.png')
+    $why = Open-ThreeTabs $ctx $state $shots 'bar-folded'
+    if ($why) { return @('NOT_DRIVEN', $null, $why) }
+    foreach ($command in 'pin 2', 'folder 1 Launch Atlas', 'into 0') {
+      if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $null, "the runtime did not take '$command'") }
+    }
+    $one = Get-Capture $ctx (Join-Path $shots 'bar-folded-0-shown.png')
     if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
-    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
-    $notes = @()
-    $open = @(Test-BarControls $ctx 'shown' $one)
+    $notes = @(); $bad = @(@(Test-BarControls $ctx 'shown' $one))
     $notes += (Get-PaintedBar).Line -replace '^address bar: ', 'shown: '
-    Send-RivetMessage $ctx 'Rivet.ToggleAppbar'
-    Start-Sleep 4
-    $folded = Get-Capture $ctx (Join-Path $shots 'bar-folded-2-folded.png')
-    $fold = @(Test-BarControls $ctx 'folded' $folded)
-    $notes += (Get-PaintedBar).Line -replace '^address bar: ', 'folded: '
-    Send-RivetMessage $ctx 'Rivet.ToggleAppbar'
-    Start-Sleep 4
-    $back = Get-Capture $ctx (Join-Path $shots 'bar-folded-3-shown.png')
-    $again = @(Test-BarControls $ctx 'shown again' $back)
-    $bad = @($open + $fold + $again)
+    $hidden = $false
+    foreach ($step in 1..6) {
+      $before = @(Read-Log).Count
+      # Odd steps fold, even steps show again; the fold button does it but for the third and fourth.
+      $byButton = $step -notin 3, 4
+      if ($byButton) {
+        $why = Send-ToggleClick $ctx
+        if ($why) { $bad += "step $step`: $why"; break }
+      } else {
+        Send-RivetMessage $ctx 'Rivet.ToggleAppbar'
+      }
+      $want = if ($hidden) { 'false' } else { 'true' }
+      if (-not (Wait-Log $before "^appbar: hidden $want$" 5)) { $bad += "step $step`: the appbar did not $(if ($hidden) { 'show' } else { 'fold' })"; break }
+      $hidden = -not $hidden
+      Start-Sleep 3
+      $stage = "step $step $(if ($hidden) { 'folded' } else { 'shown' })$(if ($byButton) { ' by the button' } else { ' by the command' })"
+      $shot = Get-Capture $ctx (Join-Path $shots "bar-folded-$step.png")
+      $bad += @(Test-BarControls $ctx $stage $shot)
+      $notes += (Get-PaintedBar).Line -replace '^address bar: ', "$stage`: "
+    }
+    $last = Join-Path $shots 'bar-folded-1.png'
     $painted = [string]::Join('; ', [string[]]$notes)
-    if ($bad.Count) { return @('FAIL', $folded.Path, ([string]::Join('; ', [string[]]$bad) + '. ' + $painted)) }
-    $reason = 'back, forward, reload, the address and the window buttons answer where they are drawn, shown, folded and shown again. ' + $painted
-    @('PASS', $folded.Path, $reason)
+    if ($bad.Count) { return @('FAIL', $last, ([string]::Join('; ', [string[]]$bad) + '. ' + $painted)) }
+    $reason = 'with three tabs, a pin and a folder, back, forward, reload, the address and the window buttons answer where they are drawn, shown and after three folds and three shows by the fold button and by the command. ' + $painted
+    @('PASS', $last, $reason)
   } finally { Stop-Scene $ctx }
 }
 
