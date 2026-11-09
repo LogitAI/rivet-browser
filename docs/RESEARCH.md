@@ -708,3 +708,32 @@ Brave, Samsung의 기존 행과 같아야 쓸 수 있다.
 메타데이터로 이름을 읽고 `BrowserView`에 닿는 데까지는 빌드 값 없이 된다. 자식 목록 규칙은 M150 무렵 빌드인 Samsung과 Whale에서 행과 같은 browser view를 냈다. 나중에 Whale의 페이지 영역 hook을 만들 때 쓸 수 있는 결과다. Chrome, Brave, Edge에서 행과 같은 값을
 내는 부모와 자식 목록 규칙은 아직 없다. Whale 상단 줄, Sidebar 열기 단추, 전체화면 Sidebar, 두 번째 페이지 키 입력은
 페이지 영역 배치 hook이 없어 생기는 알려진 공백으로 남긴다.
+
+## 2026-11-09: bubble 기준점의 화면 DIP와 Chromium이 쓰는 디스플레이 (M150 공개 소스)
+
+### 확인한 사실
+
+- 창 안 view의 화면 좌표는 `wm::DefaultScreenPositionClient::GetRootWindowOriginInScreen`이 정한다. 이 함수는
+  `root_window->GetHost()->GetBoundsInDIP().origin()`을 쓴다.
+- `aura::WindowTreeHost::GetBoundsInDIP`는 `GetBoundsInPixels()`를 `Screen::ScreenToDIPRectInWindow`로 바꾼다. Windows의
+  `DesktopWindowTreeHostWin`은 픽셀 영역을 호출할 때마다 HWND에서 읽는다. 저장해 둔 값이 아니다.
+- `display::win::ScreenWin::ScreenToDIPRect(hwnd, ...)`는 창 하나에 디스플레이 하나를 쓴다.
+  `GetScreenWinDisplayNearestHWND`, 곧 `MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)`다. 점마다 디스플레이를 고르는
+  것은 HWND 없이 점만 바꿀 때(`ScreenToDIPPoint`)뿐이다.
+- 그래서 Rivet은 주소와 보안 칩을 창의 디스플레이 하나로 바꾼다(#132). 점마다 고르는 규칙(#131)은 Chrome과 Brave의
+  bubble을 주소 줄에서 떼어 놓았다.
+
+### 관찰
+
+- bubbles2 시험에서 실패한 bubble은 모두 창이 모든 모니터 밖의 9440,20에 2100x1664로 있을 때였다. 이 창은 오른쪽에 위아래로
+  놓인 두 모니터의 띠에 함께 걸친다. 이때 브라우저가 스스로 낸 기준점은 약 -194 DIP였고, `MonitorFromWindow`로 바꾼 Rivet의
+  값은 247이었다. 성공한 경우는 모두 9000,1000에 1800x1067로 있을 때였고 두 값이 맞았다(590과 599).
+- 창이 그 자리에 간 까닭은 시험 전용 경로다. 최소화로 시작한 시험 창을 runtime이 복원할 때(`RIVET_KEEP_OFFSCREEN`일 때만)
+  그 복원이 시험의 주차보다 늦으면 창이 처음 자리로 돌아간다. 시험은 이제 주차가 자리 잡을 때까지 되풀이한다(#133).
+- 소스대로라면 두 값은 같은 `MonitorFromWindow`에서 나와야 한다. 모든 모니터 밖에서 두 모니터 띠에 걸친 창에서만 어긋났고,
+  왜 어긋났는지는 아직 모른다. 모니터 위의 창은 가장 많이 겹치는 모니터가 정해지므로 이 모호함이 없다.
+
+### 결론
+
+창의 디스플레이 하나로 바꾸는 지금 규칙을 둔다. 사람이 창을 모니터 사이로 끄는 순간처럼 모니터 위에서 같은 어긋남이
+보이면, 그때 Chromium이 낸 값을 직접 읽는 길을 찾는다. 예를 들면 위젯의 화면 속 영역이다. 그 전에는 바꾸지 않는다.
