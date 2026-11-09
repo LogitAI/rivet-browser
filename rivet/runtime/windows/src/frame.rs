@@ -2426,6 +2426,14 @@ pub(crate) fn rivet_windows() -> Vec<HWND> {
     })
 }
 
+/// The browser windows of this process, each with whether it is shown.
+pub(crate) fn browser_windows_of_process_shown() -> Vec<(isize, bool)> {
+    browser_windows_of_process()
+        .into_iter()
+        .map(|window| (window as isize, unsafe { IsWindowVisible(window) } != 0))
+        .collect()
+}
+
 /// Every top-level browser window of this process, whoever made it. Only windows of the browser's
 /// class are visited, so the half second tab timer does not read the class of every window.
 pub(crate) fn browser_windows_of_process() -> Vec<HWND> {

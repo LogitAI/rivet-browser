@@ -89,16 +89,7 @@ pub(crate) unsafe fn tick(window: HWND) {
         .into_iter()
         .map(|window| window as isize)
         .collect();
-    let now: Vec<isize> = shown(
-        &crate::frame::browser_windows_of_process()
-            .into_iter()
-            .map(|window| {
-                let visible =
-                    windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible(window) != 0;
-                (window as isize, visible)
-            })
-            .collect::<Vec<_>>(),
-    );
+    let now: Vec<isize> = shown(&crate::frame::browser_windows_of_process_shown());
     let fresh = KNOWN.with(|known| {
         let mut known = known.borrow_mut();
         let fresh = known
