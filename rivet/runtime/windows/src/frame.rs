@@ -2426,6 +2426,31 @@ pub(crate) fn rivet_windows() -> Vec<HWND> {
     })
 }
 
+/// Which step of finding a window's browser finds nothing, for the trace: Chromium's
+/// `views::HWNDMessageHandler` window to its aura window, that window to its `BrowserView`, and the
+/// view to its `Browser`.
+pub(crate) unsafe fn browser_lookup_step(window: HWND) -> &'static str {
+    type Pointer = unsafe extern "system" fn(*const std::ffi::c_void) -> *mut std::ffi::c_void;
+    let Some(base) = crate::features::tabs::base() else {
+        return "the browser module is not recorded";
+    };
+    let tabs = &crate::builds::get().tabs;
+    let content = crate::features::tabs::function::<Pointer>(base, tabs.content_window_for_hwnd)(
+        window as *const std::ffi::c_void,
+    );
+    if content.is_null() {
+        return "the window has no content window";
+    }
+    let view =
+        crate::features::tabs::function::<Pointer>(base, tabs.browser_view_for_window)(content);
+    if view.is_null() {
+        return "the content window belongs to no browser view";
+    }
+    if (*(view.cast::<u8>().add(tabs.browser_in_view) as *const *mut u8)).is_null() {
+        return "the browser view holds no browser";
+    }
+    "the browser was found"
+}
 /// The browser windows of this process, each with whether it is shown.
 pub(crate) fn browser_windows_of_process_shown() -> Vec<(isize, bool)> {
     browser_windows_of_process()
