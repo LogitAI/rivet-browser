@@ -930,16 +930,30 @@ pub(crate) fn needs_query(editing: bool, text: &str, queried: &str, inline: &str
     editing && text != queried && (inline.is_empty() || text.strip_prefix(queried) != Some(inline))
 }
 
-/// What a typing message can change on screen: the bar's drawing and its caret.
-fn bar_state(window: HWND) -> (u64, Option<[i32; 4]>) {
+/// What a typing message can change on screen: the text and its selection, the caret, and the
+/// list with its pick and inline completion. The text engine reports a change for many keys that
+/// change none of these, such as a key down before its character, so its own report is not used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Shown {
+    pub text: String,
+    pub selection: (usize, usize),
+    pub caret: Option<[i32; 4]>,
+    pub rows: usize,
+    pub selected: Option<usize>,
+    pub inline: String,
+}
+
+fn bar_state(window: HWND) -> Option<Shown> {
     with_bar(window, |bar| {
-        (
-            bar.generation,
-            bar.field
-                .as_ref()
-                .and_then(|field| field.caret())
-                .map(|r| [r.left, r.top, r.right, r.bottom]),
-        )
+        let field = bar.field.as_ref()?;
+        Some(Shown {
+            text: field.text(),
+            selection: selection(field),
+            caret: field.caret().map(|r| [r.left, r.top, r.right, r.bottom]),
+            rows: bar.suggestions.len(),
+            selected: bar.selected,
+            inline: bar.inline.clone(),
+        })
     })
 }
 
@@ -1781,6 +1795,39 @@ mod tests {
         assert!(!needs_redraw_at(Some(folded), folded));
         // A bar never drawn yet is drawn with the window's first paint.
         assert!(!needs_redraw_at(None, folded));
+    }
+
+    #[test]
+    fn nfr2_a_key_that_shows_nothing_new_draws_nothing() {
+        let before = Shown {
+            text: "exa".into(),
+            selection: (3, 3),
+            caret: Some([40, 4, 41, 20]),
+            rows: 3,
+            selected: None,
+            inline: String::new(),
+        };
+        // A key down before its character, or a key up, leaves what the bar shows as it was.
+        assert_eq!(Some(before.clone()), Some(before.clone()));
+        // A character, a caret move or a new list each draw.
+        let typed = Shown {
+            text: "exam".into(),
+            selection: (4, 4),
+            caret: Some([48, 4, 49, 20]),
+            ..before.clone()
+        };
+        assert_ne!(Some(before.clone()), Some(typed));
+        let moved = Shown {
+            caret: Some([30, 4, 31, 20]),
+            selection: (2, 2),
+            ..before.clone()
+        };
+        assert_ne!(Some(before.clone()), Some(moved));
+        let listed = Shown {
+            rows: 5,
+            ..before.clone()
+        };
+        assert_ne!(Some(before), Some(listed));
     }
 
     #[test]
