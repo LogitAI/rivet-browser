@@ -75,6 +75,7 @@ public static class FeatureWin{
  [DllImport("user32.dll")] public static extern bool EnumWindows(EW f,IntPtr l);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h,uint c);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,StringBuilder s,int n);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr GetProp(IntPtr h,string n);
@@ -218,10 +219,34 @@ function Start-Scene($Name, $Feature, $Url) {
   return $ctx, $state
 }
 
-# Whether the scene's window is at the off-screen park, 9000,1000 at 1800x1067.
+# Whether the scene's window is at the off-screen park, right of every monitor at the park size.
+# On a CI runner Windows clamps a window to the runner's small display, so there the park holds
+# when the window is at its place and keeps one size; everywhere else it must also be the park size.
+# The pixel rows read the window's own client size, so they follow the size it kept.
+$script:OnRunner = [bool]$env:GITHUB_ACTIONS
+# The park's size in pixels. RIVET_TEST_PARK_SIZE ("2880x1800") sets another, so a run at a higher
+# scale can keep the window as wide in DIPs as a run at a lower one.
+$script:ParkW = 1800; $script:ParkH = 1067
+# The park's top is at 1000. Level with a monitor's band, a window can drop to the system scale instead
+# of its monitor's, as on a single 200 percent monitor. A CI runner's system and monitor scale are the
+# same, so there the park sits level with the primary monitor, where a bubble the browser fits onto
+# the display stays by the window's row.
+$script:ParkY = 1000
+if ($script:OnRunner) {
+  Add-Type -AssemblyName System.Windows.Forms
+  $script:ParkY = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Y
+}
+if ($env:RIVET_TEST_PARK_SIZE -match '^(\d+)x(\d+)$') { $script:ParkW = [int]$Matches[1]; $script:ParkH = [int]$Matches[2] }
+$script:ParkedSize = $null
 function Test-Parked($ctx) {
   $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
-  $r.L -eq 9000 -and $r.T -eq 1000 -and ($r.Ri - $r.L) -eq 1800 -and ($r.B - $r.T) -eq 1067
+  $size = '{0}x{1}' -f ($r.Ri - $r.L), ($r.B - $r.T)
+  $placed = $r.L -eq 9000 -and $r.T -eq $script:ParkY
+  if (-not $script:OnRunner) { return $placed -and $size -eq ('{0}x{1}' -f $script:ParkW, $script:ParkH) }
+  if (-not $placed) { return $false }
+  $stable = $script:ParkedSize -eq $size
+  $script:ParkedSize = $size
+  $stable
 }
 
 function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
@@ -261,12 +286,27 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   $held = 0
   foreach ($try in 1..60) {
     if (Test-Parked $ctx) { $held++; if ($held -ge 6) { break } }
-    else { $held = 0; [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, 1000, 1800, 1067, 0x14) | Out-Null }
+    else { $held = 0; [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, $script:ParkY, $script:ParkW, $script:ParkH, 0x14) | Out-Null }
     Start-Sleep -Milliseconds 250
   }
-  if ($held -lt 6 -and -not $ctx.Error) { $ctx.Error = 'the window did not stay at its off-screen park' }  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
+  if ($held -lt 6 -and -not $ctx.Error) {
+    $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
+    # A window that is gone may mean the browser crashed: say whether its processes still run, and
+    # whether its profile holds a crash report.
+    $alive = @(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count
+    $dumps = @(Get-ChildItem (Join-Path $ctx.Profile 'Crashpad\reports') -Filter *.dmp -ErrorAction SilentlyContinue).Count
+    $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not 9000,$($script:ParkY) $($script:ParkW)x$($script:ParkH); window alive $([FeatureWin]::IsWindow($ctx.Hwnd)), $alive browser processes, $dumps crash reports"
+  }
+  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
+  # The window must keep the scale it was first laid out at: a park that moves it to another scale
+  # would run every row at a scale no person's window has there.
+  $hex = '{0:x}' -f $ctx.Hwnd.ToInt64()
+  $scales = @(Read-Log | Where-Object { $_ -match "^layout dpi: window 0x$hex at (\d+)$" } | ForEach-Object { [int]($_ -replace '.* at ', '') })
+  if ($scales.Count -ge 2 -and $scales[0] -ne $scales[-1] -and -not $ctx.Error) {
+    $ctx.Error = "the window's scale changed after it was parked: $($scales[0]) then $($scales[-1])"
+  }
   if ($dpi) { $ctx.Dpi = $dpi } elseif (-not $ctx.Error) { $ctx.Error = 'the runtime traced no scale for the window' }
   # Every scene checks that the attach finished: the browser laid the window out for Rivet's frame.
   if (-not $ctx.Error) {
@@ -368,8 +408,13 @@ function Get-AttachFailure($ctx) {
 # Stops the scene's browser, keeps its trace under the run's `traces` folder and deletes its test
 # profile, so a long run does not fill the disk. Captures are kept where they were written.
 function Stop-Scene($ctx) {
-  Stop-Mine $ctx.ExeName $ctx.Profile
-  for ($i = 0; $i -lt 20 -and @(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count -gt 0; $i++) { Start-Sleep -Milliseconds 250 }
+  # A browser can start one more process of the profile while it is being stopped, as a launcher
+  # handing on a link does, so the stop is repeated until none is left.
+  for ($i = 0; $i -lt 20; $i++) {
+    Stop-Mine $ctx.ExeName $ctx.Profile
+    Start-Sleep -Milliseconds 250
+    if (@(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count -eq 0) { break }
+  }
   if (-not $ctx.Profile -or -not (Test-Path $ctx.Profile)) { return }
   $traces = Join-Path $OutDir 'traces'
   $debugDir = Join-Path $ctx.Profile 'rivet-debug'
@@ -507,6 +552,14 @@ function Get-ViewOpens([string]$Mode) { @(Read-Log | Where-Object { $_ -match "s
 
 # The second page must be owned by Rivet's second view: a new open of that mode since `$Before`.
 function Test-ViewOwns([int]$Before, [string]$Mode) { (Get-ViewOpens $Mode) -gt $Before }
+
+# The titles of the window's tabs from the last tab list the runtime traced.
+function Get-TabTitles {
+  $line = Read-Log | Where-Object { $_ -match '^tab command "list"' } | Select-Object -Last 1
+  if (-not $line) { return @() }
+  $list = $line.Substring($line.IndexOf('tabs ['))
+  @([regex]::Matches($list, '"\*?([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
+}
 
 function Get-TabUrls {
   $line = Read-Log | Where-Object { $_ -match 'tab urls \[' } | Select-Object -Last 1
@@ -1173,7 +1226,7 @@ function Invoke-Mini($Name, $shots, [string]$Step) {
 $urlLink = & {
   $path = Join-Path $pageDir 'page-link.html'
   $hexA = '#{0:X6}' -f $script:ColourA
-  [IO.File]::WriteAllText($path, "<!doctype html><meta charset=utf-8><title>page-link</title><style>html,body{margin:0;height:100%;background:$hexA}</style><a href=`"page-c.html`" onclick=`"window.open(this.href,'_blank','left=9000,top=1000,width=800,height=600');return false`" style=`"display:block;width:100%;height:100%`"></a>")
+  [IO.File]::WriteAllText($path, "<!doctype html><meta charset=utf-8><title>page-link</title><style>html,body{margin:0;height:100%;background:$hexA}</style><a href=`"page-c.html`" onclick=`"document.title='page-link clicked';window.open(this.href,'_blank','left=9000,top=1000,width=800,height=600');return false`" style=`"display:block;width:100%;height:100%`"></a>")
   'file:///' + ($path -replace '\\', '/')
 }
 
@@ -1315,18 +1368,43 @@ function Invoke-LinkNewTab($Name, $shots) {
     if (-not (Test-Attached $ctx)) { return @('FAIL', $null, (Get-AttachFailure $ctx)) }
     $before = Get-MyTops $ctx
     $cr = New-Object FeatureWin+R; [FeatureWin]::GetClientRect($ctx.Hwnd, [ref]$cr) | Out-Null
-    $page = [FeatureWin]::Inside($ctx.Hwnd, (& { $p = New-Object FeatureWin+P; $p.X = [int]($cr.Ri * 0.7); $p.Y = [int]($cr.B / 2); [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$p) | Out-Null; $p }))
-    $l = [IntPtr](([int]($cr.B / 2) -shl 16) -bor ([int]($cr.Ri * 0.7) -band 0xffff))
+    $screen = New-Object FeatureWin+P; $screen.X = [int]($cr.Ri * 0.7); $screen.Y = [int]($cr.B / 2); [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$screen) | Out-Null
+    $page = [FeatureWin]::Inside($ctx.Hwnd, $screen)
     $target = if ($page -ne [IntPtr]::Zero) { $page } else { $ctx.Hwnd }
-    [FeatureWin]::PostMessage($target, 0x201, [IntPtr]1, $l) | Out-Null
-    [FeatureWin]::PostMessage($target, 0x202, [IntPtr]0, $l) | Out-Null
+    # The click goes to the window under the point, in that window's own coordinates: at another
+    # scale the page's window starts further right, and the window's client point misses it.
+    $c = $screen; [FeatureWin]::ScreenToClient($target, [ref]$c) | Out-Null
+    $l = [IntPtr](($c.Y -shl 16) -bor ($c.X -band 0xffff))
+    # The browser's status bubble, a short strip of its own, can show the link's address. It is not
+    # a window the link opened, so only a window at least 100 px high counts as one.
+    $isPage = { param($h) $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($h, [ref]$r) | Out-Null; ($r.B - $r.T) -ge 100 }
+    # A posted click can come before the page is ready for it and do nothing; it is posted again,
+    # at most twice more, only when the page never saw it: the test page's link names itself
+    # "page-link clicked" before it opens the window. A click the page saw that opened nothing fails.
+    foreach ($attempt in 1..3) {
+      [FeatureWin]::PostMessage($target, 0x201, [IntPtr]1, $l) | Out-Null
+      [FeatureWin]::PostMessage($target, 0x202, [IntPtr]0, $l) | Out-Null
+      $opened = $false
+      foreach ($i in 1..30) {
+        Start-Sleep -Milliseconds 100
+        if (@(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ -and (& $isPage $_) }).Count) { $opened = $true; break }
+        if (Read-Log | Where-Object { $_ -match '^link tabs: moved' }) { $opened = $true; break }
+      }
+      if ($opened) { break }
+      if (Send-Flag $ctx 'rivet-tab.txt' 'list') {
+        if (@(Get-TabTitles) -contains 'page-link clicked') {
+          $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png')
+          return @('FAIL', $shot.Path, "the page saw the click (attempt $attempt) and no window or tab came of it")
+        }
+      }
+    }
     # No window of the test may touch a visible monitor at any time. The popup is asked for
     # off-screen; if any window still lands on a monitor the check fails, and the window is closed.
     $extraSeen = $false; $onMonitor = $false; $landed = @()
     foreach ($i in 1..600) {
       Start-Sleep -Milliseconds 10
       foreach ($t in @(Get-MyTops $ctx)) {
-        if ($t -ne $ctx.Hwnd -and $before -notcontains $t) { $extraSeen = $true }
+        if ($t -ne $ctx.Hwnd -and $before -notcontains $t -and (& $isPage $t)) { $extraSeen = $true }
         if ([FeatureMonitor]::OnMonitor($t)) {
           $onMonitor = $true
           $wr = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($t, [ref]$wr) | Out-Null
@@ -1343,7 +1421,7 @@ function Invoke-LinkNewTab($Name, $shots) {
     $placed = ($landed | Select-Object -Unique) -join '; '
     if (Test-VisibleBreach $onMonitor $env:RIVET_TEST_DESKTOP) { $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png'); return @('FAIL', $shot.Path, "a window of the test appeared on a visible monitor: $placed") }
     Start-Sleep 3
-    $left = @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ })
+    $left = @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ -and (& $isPage $_) })
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
     $urls = Get-TabUrls
     $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png')
@@ -1679,6 +1757,15 @@ function New-LinkRoot($Name, [string]$Mode, [string]$ExePath) {
   New-Item -ItemType Directory -Force $config | Out-Null
   $setup = @{ version = 1; browser = $ExePath; profile = 'Link' } | ConvertTo-Json -Compress
   [IO.File]::WriteAllText((Join-Path $config 'setup.json'), $setup)
+  # The signed table the run applied, which a candidate row of the rows workflow is in.
+  if ($env:RIVET_DATA_ROOT) {
+    $table = Join-Path $env:RIVET_DATA_ROOT 'Rivet\cache\builds\table.bin'
+    if (Test-Path $table) {
+      $builds = Join-Path $root 'Rivet\cache\builds'
+      New-Item -ItemType Directory -Force $builds | Out-Null
+      Copy-Item $table (Join-Path $builds 'table.bin') -Force
+    }
+  }
   Add-HeldBrowsers $root
   $root
 }
@@ -2269,7 +2356,7 @@ foreach ($n in $devNarrow, $devWide) {
 # A page with a dark marker at half its width over its top 40 per cent, which moves when the page
 # is laid out narrower and stays when something floats over it.
 $markPath = Join-Path $pageDir 'page-mark.html'
-[IO.File]::WriteAllText($markPath, "<!doctype html><meta charset=utf-8><title>page-mark</title><style>html,body{margin:0;height:100%;background:$hexA}i{position:fixed;left:50%;top:0;width:4px;height:40vh;background:#101010}</style><i></i>")
+[IO.File]::WriteAllText($markPath, "<!doctype html><meta charset=utf-8><title>page-mark</title><style>html,body{margin:0;height:100%;background:$hexA}i{position:fixed;left:25%;top:0;width:4px;height:40vh;background:#101010}</style><i></i>")
 $urlMark = 'file:///' + ($markPath -replace '\\', '/')
 
 # Opens a scene on `$Url` and returns ctx, state, a first capture and an early verdict when the
@@ -2413,11 +2500,14 @@ function Invoke-FullscreenSidebar($Name, $shots) {
     $style = [SurfaceWin]::GetLong($ctx.Hwnd, -16)
     $bare = [IntPtr]([int64]$style -band (-bnot [int64]0x40000))
     [SurfaceWin]::SetLong($ctx.Hwnd, -16, $bare) | Out-Null
-    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, 1801, 1067, 0x36) | Out-Null
+    # One pixel wider than the parked window and back, which a runner's small display leaves alone.
+    $pr = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$pr) | Out-Null
+    $pw = $pr.Ri - $pr.L; $ph = $pr.B - $pr.T
+    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, $pw + 1, $ph, 0x36) | Out-Null
     Start-Sleep 4
     $full = Get-Capture $ctx (Join-Path $shots 'fullscreen-sidebar-2-full.png')
     [SurfaceWin]::SetLong($ctx.Hwnd, -16, $style) | Out-Null
-    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, 1800, 1067, 0x36) | Out-Null
+    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, $pw, $ph, 0x36) | Out-Null
     Start-Sleep 4
     $back = Get-Capture $ctx (Join-Path $shots 'fullscreen-sidebar-3-back.png')
     $f = Get-PageRegion $full $script:ColourA; $b = Get-PageRegion $back $script:ColourA
