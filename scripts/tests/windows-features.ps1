@@ -227,11 +227,9 @@ $script:OnRunner = [bool]$env:GITHUB_ACTIONS
 # The park's size in pixels. RIVET_TEST_PARK_SIZE ("2880x1800") sets another, so a run at a higher
 # scale can keep the window as wide in DIPs as a run at a lower one.
 $script:ParkW = 1800; $script:ParkH = 1067
-# The park's top is level with the primary monitor's top, right of every monitor: a bubble the browser
-# fits onto a display then stays by the window's row, which a park below every monitor's band
-# could not show.
-Add-Type -AssemblyName System.Windows.Forms
-$script:ParkY = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Y
+# The park's top stays at 1000. Level with a monitor's band, a window can drop to the system scale
+# instead of its monitor's, which changed the scale of every row on a single 200 percent monitor.
+$script:ParkY = 1000
 if ($env:RIVET_TEST_PARK_SIZE -match '^(\d+)x(\d+)$') { $script:ParkW = [int]$Matches[1]; $script:ParkH = [int]$Matches[2] }
 $script:ParkedSize = $null
 function Test-Parked($ctx) {
