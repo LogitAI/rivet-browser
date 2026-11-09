@@ -323,6 +323,11 @@ pub(crate) fn has_room(window: HWND) -> bool {
     }
 }
 
+/// The slot of the split that Rivet last gave the keyboard, zero for the window's own page.
+pub(crate) fn focused() -> usize {
+    FOCUSED.load(Ordering::Acquire)
+}
+
 /// Remembers which page of the split has the keyboard, for a page of another window.
 pub(crate) fn set_focused(slot: usize) {
     FOCUSED.store(slot, Ordering::Release);
@@ -1840,9 +1845,11 @@ pub(crate) unsafe fn on_mouse(
             // The click may have made the page's tab active, which moves the page into the
             // window's page view. Rivet puts it back now, and again after the browser's own
             // messages, since the activation may come later.
-            if !hold(window) {
-                focus_slot(window, slot);
-            }
+            let held = hold(window);
+            let focused = !held && focus_slot(window, slot);
+            crate::trace::trace(&format!(
+                "second view: press in slot {slot}, page held back {held}, focus asked {focused}"
+            ));
             post_layout(window);
             Some(result)
         }
