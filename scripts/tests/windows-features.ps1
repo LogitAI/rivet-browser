@@ -751,8 +751,11 @@ function Invoke-SplitPath($Name, $shots, [string]$Feature, [string]$Path, [strin
     $detail = "after the $Path path: $($on.Reason)"
     if ($ThenClick) {
       # A click in the page that is not active, posted to the window under it as a real click would be.
+      # It goes to the middle of the first page as measured in the capture, since a fixed place lands
+      # in the second page on a small window such as a runner's.
+      $first = Get-PageRegion $split $script:ColourA
       $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
-      $p = New-Object FeatureWin+P; $p.X = $r.L + 700; $p.Y = $r.T + 600
+      $p = New-Object FeatureWin+P; $p.X = $r.L + [int](($first.X0 + $first.X1) / 2); $p.Y = $r.T + [int](($first.Y0 + $first.Y1) / 2)
       $target = [FeatureWin]::Inside($ctx.Hwnd, $p)
       if ($target -eq [IntPtr]::Zero) { return @('NOT_DRIVEN', $split.Path, 'no window found at the first pane') }
       $c = New-Object FeatureWin+P; $c.X = $p.X; $c.Y = $p.Y
