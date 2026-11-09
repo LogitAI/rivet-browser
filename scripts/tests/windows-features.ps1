@@ -508,6 +508,14 @@ function Get-ViewOpens([string]$Mode) { @(Read-Log | Where-Object { $_ -match "s
 # The second page must be owned by Rivet's second view: a new open of that mode since `$Before`.
 function Test-ViewOwns([int]$Before, [string]$Mode) { (Get-ViewOpens $Mode) -gt $Before }
 
+# The titles of the window's tabs from the last tab list the runtime traced.
+function Get-TabTitles {
+  $line = Read-Log | Where-Object { $_ -match '^tab command "list"' } | Select-Object -Last 1
+  if (-not $line) { return @() }
+  $list = $line.Substring($line.IndexOf('tabs ['))
+  @([regex]::Matches($list, '"\*?([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
+}
+
 function Get-TabUrls {
   $line = Read-Log | Where-Object { $_ -match 'tab urls \[' } | Select-Object -Last 1
   if (-not $line) { return $null }
@@ -1173,7 +1181,7 @@ function Invoke-Mini($Name, $shots, [string]$Step) {
 $urlLink = & {
   $path = Join-Path $pageDir 'page-link.html'
   $hexA = '#{0:X6}' -f $script:ColourA
-  [IO.File]::WriteAllText($path, "<!doctype html><meta charset=utf-8><title>page-link</title><style>html,body{margin:0;height:100%;background:$hexA}</style><a href=`"page-c.html`" onclick=`"window.open(this.href,'_blank','left=9000,top=1000,width=800,height=600');return false`" style=`"display:block;width:100%;height:100%`"></a>")
+  [IO.File]::WriteAllText($path, "<!doctype html><meta charset=utf-8><title>page-link</title><style>html,body{margin:0;height:100%;background:$hexA}</style><a href=`"page-c.html`" onclick=`"document.title='page-link clicked';window.open(this.href,'_blank','left=9000,top=1000,width=800,height=600');return false`" style=`"display:block;width:100%;height:100%`"></a>")
   'file:///' + ($path -replace '\\', '/')
 }
 
@@ -1318,15 +1326,36 @@ function Invoke-LinkNewTab($Name, $shots) {
     $page = [FeatureWin]::Inside($ctx.Hwnd, (& { $p = New-Object FeatureWin+P; $p.X = [int]($cr.Ri * 0.7); $p.Y = [int]($cr.B / 2); [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$p) | Out-Null; $p }))
     $l = [IntPtr](([int]($cr.B / 2) -shl 16) -bor ([int]($cr.Ri * 0.7) -band 0xffff))
     $target = if ($page -ne [IntPtr]::Zero) { $page } else { $ctx.Hwnd }
-    [FeatureWin]::PostMessage($target, 0x201, [IntPtr]1, $l) | Out-Null
-    [FeatureWin]::PostMessage($target, 0x202, [IntPtr]0, $l) | Out-Null
+    # The browser's status bubble, a short strip of its own, can show the link's address. It is not
+    # a window the link opened, so only a window at least 100 px high counts as one.
+    $isPage = { param($h) $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($h, [ref]$r) | Out-Null; ($r.B - $r.T) -ge 100 }
+    # A posted click can come before the page is ready for it and do nothing; it is posted again,
+    # at most twice more, only when the page never saw it: the test page's link names itself
+    # "page-link clicked" before it opens the window. A click the page saw that opened nothing fails.
+    foreach ($attempt in 1..3) {
+      [FeatureWin]::PostMessage($target, 0x201, [IntPtr]1, $l) | Out-Null
+      [FeatureWin]::PostMessage($target, 0x202, [IntPtr]0, $l) | Out-Null
+      $opened = $false
+      foreach ($i in 1..30) {
+        Start-Sleep -Milliseconds 100
+        if (@(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ -and (& $isPage $_) }).Count) { $opened = $true; break }
+        if (Read-Log | Where-Object { $_ -match '^link tabs: moved' }) { $opened = $true; break }
+      }
+      if ($opened) { break }
+      if (Send-Flag $ctx 'rivet-tab.txt' 'list') {
+        if (@(Get-TabTitles) -contains 'page-link clicked') {
+          $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png')
+          return @('FAIL', $shot.Path, "the page saw the click (attempt $attempt) and no window or tab came of it")
+        }
+      }
+    }
     # No window of the test may touch a visible monitor at any time. The popup is asked for
     # off-screen; if any window still lands on a monitor the check fails, and the window is closed.
     $extraSeen = $false; $onMonitor = $false; $landed = @()
     foreach ($i in 1..600) {
       Start-Sleep -Milliseconds 10
       foreach ($t in @(Get-MyTops $ctx)) {
-        if ($t -ne $ctx.Hwnd -and $before -notcontains $t) { $extraSeen = $true }
+        if ($t -ne $ctx.Hwnd -and $before -notcontains $t -and (& $isPage $t)) { $extraSeen = $true }
         if ([FeatureMonitor]::OnMonitor($t)) {
           $onMonitor = $true
           $wr = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($t, [ref]$wr) | Out-Null
@@ -1343,7 +1372,7 @@ function Invoke-LinkNewTab($Name, $shots) {
     $placed = ($landed | Select-Object -Unique) -join '; '
     if (Test-VisibleBreach $onMonitor $env:RIVET_TEST_DESKTOP) { $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png'); return @('FAIL', $shot.Path, "a window of the test appeared on a visible monitor: $placed") }
     Start-Sleep 3
-    $left = @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ })
+    $left = @(Get-MyTops $ctx | Where-Object { $_ -ne $ctx.Hwnd -and $before -notcontains $_ -and (& $isPage $_) })
     if (-not (Send-Flag $ctx 'rivet-tab.txt' 'list')) { return @('NOT_DRIVEN', $null, 'list was not taken') }
     $urls = Get-TabUrls
     $shot = Get-Capture $ctx (Join-Path $shots 'link-new-tab-1.png')
