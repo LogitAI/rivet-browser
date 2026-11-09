@@ -3119,6 +3119,27 @@ pub(crate) fn redraw_appbar(window: crate::os::WindowId) {
 
 /// Places the appbar visual over the strip the browser's layout left free and redraws it when its
 /// size or DPI changed.
+/// Paints the top bar alone: its text, caret, hover and list. Typing in the bar changes nothing
+/// else of the window's surface, so it never redraws the rest.
+pub(crate) unsafe fn update_top_bar(window: HWND) {
+    if crate::features::address_bar::busy() {
+        return;
+    }
+    let dpi = layout_dpi(window);
+    let top_bar = if framed(window) {
+        crate::features::address_bar::view(window)
+    } else {
+        None
+    };
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.update_address(window as isize, top_bar.as_ref(), dpi) {
+                log(&format!("rivet: could not draw the top bar: {error}"));
+            }
+        }
+    });
+}
+
 /// The steps of one surface update and how long each took, in microseconds.
 pub(crate) struct Laps {
     started: std::time::Instant,
@@ -3588,6 +3609,12 @@ unsafe extern "system" fn browser_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if matches!(
+        message,
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_SIZE | WM_DPICHANGED
+    ) {
+        crate::features::second_view::note_layout();
+    }
     let result = handle(window, message, wparam, lparam);
     after_event(window, message, wparam);
     result
