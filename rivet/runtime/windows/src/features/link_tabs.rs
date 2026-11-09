@@ -165,6 +165,10 @@ pub(crate) unsafe fn tick(window: HWND) {
                         Some(titles) => format!("{} tabs, but a tab has no page", titles.len()),
                     },
                 };
+                // Once per window: what kind of window holds no browser.
+                if empty_for < std::time::Duration::from_millis(100) {
+                    crate::frame::trace_window_kind(other as HWND, "no tab yet");
+                }
                 crate::trace::trace(&format!(
                     "link tabs: window {other:#x} shows no tab yet ({why}); looked at again"
                 ));
