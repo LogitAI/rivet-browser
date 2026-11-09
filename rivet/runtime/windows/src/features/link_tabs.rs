@@ -146,8 +146,27 @@ pub(crate) unsafe fn tick(window: HWND) {
                         seen.remove(&other);
                     }
                 });
+                // The first step of reading its tabs that finds nothing.
+                let why = match crate::features::tabs::base() {
+                    None => "the browser module is not recorded".to_owned(),
+                    Some(base) if crate::features::tabs::browser(base, other as HWND).is_none() => {
+                        "the window has no browser object".to_owned()
+                    }
+                    Some(base)
+                        if crate::features::tabs::tab_model(base, other as HWND).is_none() =>
+                    {
+                        "the browser has no tab model".to_owned()
+                    }
+                    Some(_) => match crate::features::tabs::tabs(other as HWND) {
+                        None => "the tab count is out of range".to_owned(),
+                        Some(titles) if titles.is_empty() => {
+                            "the tab model holds no tab".to_owned()
+                        }
+                        Some(titles) => format!("{} tabs, but a tab has no page", titles.len()),
+                    },
+                };
                 crate::trace::trace(&format!(
-                    "link tabs: window {other:#x} shows no tab yet; looked at again"
+                    "link tabs: window {other:#x} shows no tab yet ({why}); looked at again"
                 ));
                 continue;
             }
