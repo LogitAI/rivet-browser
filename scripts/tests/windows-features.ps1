@@ -2375,7 +2375,9 @@ function Test-BubbleNearBar($ctx, $Bubble, $Anchors) {
     $anchorNote = 'anchor {0},{1} DIPs' -f $chosen[0], $chosen[1]
     $top = $o.ScreenY + $Anchors.Address[1] * $s; $bottom = $o.ScreenY + ($Anchors.Address[1] + $Anchors.Address[3]) * $s
     if ($Bubble.T -lt $top - 8 * $s -or $Bubble.T -gt $bottom + 48 * $s) { return New-Verdict 'FAIL' ('the bubble top {0} is not by the address row ({1:N0} to {2:N0})' -f $Bubble.T, $top, $bottom) }
-    return New-Verdict 'PASS' ('bubble top {0} by the address row; {1}; its left edge is not checked: the window is off every monitor, where Chromium fits a bubble to another display' -f ($Bubble.T - $o.ScreenY), $anchorNote)
+    # A bubble whose top lies above the row's top overlaps the row; Whale's page info does by a few pixels. It passes, and stays visible here.
+    $overlap = if ($Bubble.T -lt $top) { '; overlaps the row by {0} px' -f [int]($top - $Bubble.T) } else { '' }
+    return New-Verdict 'PASS' ('bubble top {0} by the address row (row top {5:N0}{6}); {1}; its left edge is not checked: the window is off every monitor, where Chromium fits a bubble to another display' -f ($Bubble.T - $o.ScreenY), $anchorNote, $null, $null, $null, ($top - $o.ScreenY), $overlap)
   }
   if (-not $Bubble.Inside) { return New-Verdict 'FAIL' ('the bubble opened outside the Rivet window at {0},{1}' -f $Bubble.L, $Bubble.T) }
   $addrLeft = $o.ScreenX + $Anchors.Chip[0] * $s
