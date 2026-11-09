@@ -2995,6 +2995,60 @@ public static class CloakWin{
 }
 '@
 
+# FR-12, NFR-2: typing in the address bar costs the browser's UI thread little per key. Each key is
+# sent as a person's typing arrives, key down, character and key up, and waited for, so the round
+# trip is the time until the bar shows it. The runtime traces its own work per message, the query,
+# the inline completion and the redraw, which this sums per key. English first, then Korean
+# syllables as the input method hands them over.
+function Invoke-AddressTyping($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'address-typing' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    $one = Get-Capture $ctx (Join-Path $shots 'address-typing-1-page.png')
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
+    $keys = @()
+    foreach ($text in 'rivet browser typing', '한국어 주소창 입력 속도를 재는 문장') {
+      if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the bar command') }
+      foreach ($ch in $text.ToCharArray()) {
+        $vk = if ([int]$ch -lt 128) { [int][char]::ToUpperInvariant($ch) } else { 0xE5 }
+        $before = @(Read-Log).Count
+        $r = [IntPtr]::Zero
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        [SurfaceWin]::SendMessageTimeout($ctx.Hwnd, 0x100, [IntPtr]$vk, [IntPtr]1, 2, 5000, [ref]$r) | Out-Null
+        [SurfaceWin]::SendMessageTimeout($ctx.Hwnd, 0x102, [IntPtr][int]$ch, [IntPtr]1, 2, 5000, [ref]$r) | Out-Null
+        [SurfaceWin]::SendMessageTimeout($ctx.Hwnd, 0x101, [IntPtr]$vk, [IntPtr]0xC0000001, 2, 5000, [ref]$r) | Out-Null
+        $trip = $clock.Elapsed.TotalMilliseconds
+        Start-Sleep -Milliseconds 120
+        $work = Get-KeyWork @(Read-Log | Select-Object -Skip $before)
+        $keys += [pscustomobject]@{ Char = $ch; Trip = $trip; Work = $work }
+      }
+      Start-Sleep -Milliseconds 900
+    }
+    $shot = Get-Capture $ctx (Join-Path $shots 'address-typing-2-typed.png')
+    $log = @(Read-Log)
+    $ticks = @($log | Where-Object { $_ -match '^address bar: refresh \d+ took (\d+) us' } | ForEach-Object { [double]($_ -replace '^address bar: refresh \d+ took (\d+) us.*$', '$1') / 1000 })
+    $measured = @($keys | Where-Object { $_.Work.Messages -gt 0 })
+    if ($measured.Count -lt $keys.Count / 2) { return @('NOT_DRIVEN', $shot.Path, "only $($measured.Count) of $($keys.Count) keys reached the bar's trace") }
+    # The first key builds the browser's autocomplete once for the profile, which later keys reuse.
+    $later = @($measured | Select-Object -Skip 1)
+    $ms = @($later | ForEach-Object { $_.Work.Total / 1000 })
+    $step = { param($field) '{0:N1}' -f (Get-Percentile @($later | ForEach-Object { $_.Work.$field / 1000 }) 0.5) }
+    $starts = ($later | ForEach-Object { $_.Work.Starts } | Measure-Object -Maximum).Maximum
+    $median = Get-Percentile $ms 0.5; $p90 = Get-Percentile $ms 0.9; $max = ($ms | Measure-Object -Maximum).Maximum
+    $trips = @($later | ForEach-Object { $_.Trip })
+    $summary = ('{0} keys: Rivet work per key median {1:N1} ms, p90 {2:N1}, max {3:N1} (median forward {4}, query {5}, inline {6}, draw {7}); round trip median {8:N1} ms, p90 {9:N1}; first key {10:N1} ms; most queries started by one key {11}; {12} re-reads, median {13:N1} ms, max {14:N1}' -f `
+      $later.Count, $median, $p90, $max, (& $step 'Forward'), (& $step 'Query'), (& $step 'Inline'), (& $step 'Draw'), `
+      (Get-Percentile $trips 0.5), (Get-Percentile $trips 0.9), ($measured[0].Work.Total / 1000), $starts, $ticks.Count, (Get-Percentile $ticks 0.5), (($ticks + 0) | Measure-Object -Maximum).Maximum)
+    $perKey = ($measured | ForEach-Object { '{0}:{1:N1}/{2:N1}' -f $_.Char, ($_.Work.Total / 1000), $_.Trip }) -join ' '
+    $detail = "$summary. per key (work/trip ms): $perKey"
+    if ($starts -gt 1) { return @('FAIL', $shot.Path, "a key started more than one query. $detail") }
+    if ($p90 -ge 16) { return @('FAIL', $shot.Path, "typing costs the UI thread too much. $detail") }
+    @('PASS', $shot.Path, $detail)
+  } finally { Stop-Scene $ctx }
+}
+
 # --- Run safety -----------------------------------------------------------------------------
 # Every row runs under RIVET_KEEP_OFFSCREEN with its Rivet files in this run's folder, and the
 # visible guard stops the run when a test window shows on a monitor, takes the foreground or holds
@@ -3084,6 +3138,7 @@ foreach ($name in $Browsers) {
         'dev-row' { Invoke-DevRow $name $shots }
         'address-editing' { if ($env:RIVET_TEST_DESKTOP) { @('NOT_DRIVEN', $null, 'the input method composes only on the desktop that has the keyboard, and a test desktop never has it') } else { Invoke-AddressEditing $name $shots } }
         'security-chip' { Invoke-SecurityChip $name $shots }
+        'address-typing' { Invoke-AddressTyping $name $shots }
         'permission-bubble' { Invoke-PermissionBubble $name $shots }
         'password-bubble' { Invoke-PasswordBubble $name $shots }
         'view-reflection' { Invoke-ViewReflection $name $shots }
