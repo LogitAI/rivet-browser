@@ -85,6 +85,7 @@ pub fn appeared(known: &HashSet<isize>, now: &[isize], rivet: &[isize]) -> Vec<i
 /// Looks for new browser windows of this process and moves their tabs into `window`, the Rivet
 /// window that is now in front of the others of this process.
 pub(crate) unsafe fn tick(window: HWND) {
+    crate::frame::trace_browser_windows_if_changed();
     let rivet: Vec<isize> = crate::frame::rivet_windows()
         .into_iter()
         .map(|window| window as isize)
