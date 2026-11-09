@@ -2147,6 +2147,8 @@ unsafe fn toggle_appbar(window: HWND) {
     SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
     KillTimer(window, PEEK_TIMER);
     relayout(window);
+    // The panel moves with the appbar, and the top bar with it.
+    request_bar_paint(window);
 }
 
 /// Shows or puts away the floating appbar of a hidden one, sliding it.
@@ -3468,6 +3470,13 @@ fn panel_moved(window: HWND) {
 }
 
 const BAR_MOVED_MESSAGE: &str = "Rivet.BarMoved";
+
+/// Asks for the top bar to be painted again after the message being handled.
+pub(crate) fn request_bar_paint(window: HWND) {
+    unsafe {
+        PostMessageW(window, bar_moved_message(), 0, 0);
+    }
+}
 
 fn bar_moved_message() -> u32 {
     unsafe { RegisterWindowMessageW(wide(BAR_MOVED_MESSAGE).as_ptr()) }
