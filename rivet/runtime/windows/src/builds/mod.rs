@@ -49,6 +49,12 @@ pub struct Build {
     pub app_window: Option<AppWindow>,
     /// Chromium's address bar functions, for the builds whose addresses were found.
     pub omnibox: Option<Omnibox>,
+    /// Chromium's DevTools and link-under-the-pointer functions, when the row carries them. A
+    /// built-in row keeps them in `page_tool_rows` instead.
+    pub page_tools: Option<page_tool_rows::PageTools>,
+    /// `BubbleDialogDelegate::GetAnchorRect` and its first bytes, when the row carries them. A
+    /// built-in row keeps it in the bubble anchor's own list instead.
+    pub bubble_anchor: Option<(usize, &'static [u8])>,
 }
 }
 
@@ -925,6 +931,15 @@ pub fn get() -> &'static Build {
     return &CHROME;
     #[cfg(not(test))]
     current().expect("a recorded build is loaded before its table is read")
+}
+
+/// The `GetAnchorRect` of a build and its first bytes: the row's own when it carries them, else
+/// the built-in list's.
+pub fn bubble_anchor_of(build: &Build) -> Option<(usize, &'static [u8])> {
+    build.bubble_anchor.or_else(|| {
+        crate::features::bubble_anchor::row_for(build.browser, build.version)
+            .map(|row| (row.get_anchor_rect, row.prologue))
+    })
 }
 
 /// The rows that came as data with this binary, which needed no code change to add.

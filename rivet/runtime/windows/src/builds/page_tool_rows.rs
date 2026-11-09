@@ -11,6 +11,7 @@ use super::Build;
 /// detour.
 pub type Function = (usize, &'static [u8]);
 
+crate::row_data::row_struct! {
 #[derive(Debug, Clone, Copy)]
 pub struct PageTools {
     /// `DevToolsWindow::ToggleDevToolsWindow(WebContents*, Profile*, bool force_open,
@@ -29,6 +30,7 @@ pub struct PageTools {
     /// link under the pointer, which the browser shows in its status bubble. The prologue ends on an
     /// instruction boundary and holds no address relative to itself.
     pub update_target_url: Function,
+}
 }
 
 /// `DevToolsToggleAction::Show`, the same in every build here.
@@ -172,7 +174,10 @@ pub const SAMSUNG_29: PageTools = PageTools {
 
 /// The functions recorded for `build`, by its browser and version. Whale and Samsung Internet were
 /// found by shape, not from symbols.
-pub fn page_tools_for(build: &Build) -> Option<&'static PageTools> {
+pub fn page_tools_for(build: &'static Build) -> Option<&'static PageTools> {
+    if let Some(tools) = build.page_tools.as_ref() {
+        return Some(tools);
+    }
     const ROWS: [(&str, [u16; 4], &PageTools); 8] = [
         ("Google Chrome", [156, 0, 8078, 80], &CHROME_156_80),
         ("Brave", [156, 1, 98, 63], &BRAVE_63),
