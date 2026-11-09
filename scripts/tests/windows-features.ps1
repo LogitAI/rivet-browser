@@ -75,6 +75,7 @@ public static class FeatureWin{
  [DllImport("user32.dll")] public static extern bool EnumWindows(EW f,IntPtr l);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h,uint c);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,StringBuilder s,int n);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr GetProp(IntPtr h,string n);
@@ -281,7 +282,11 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   }
   if ($held -lt 6 -and -not $ctx.Error) {
     $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
-    $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not 9000,1000 $($script:ParkW)x$($script:ParkH)"
+    # A window that is gone may mean the browser crashed: say whether its processes still run, and
+    # whether its profile holds a crash report.
+    $alive = @(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count
+    $dumps = @(Get-ChildItem (Join-Path $ctx.Profile 'Crashpad\reports') -Filter *.dmp -ErrorAction SilentlyContinue).Count
+    $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not 9000,1000 $($script:ParkW)x$($script:ParkH); window alive $([FeatureWin]::IsWindow($ctx.Hwnd)), $alive browser processes, $dumps crash reports"
   }  [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
@@ -1730,6 +1735,15 @@ function New-LinkRoot($Name, [string]$Mode, [string]$ExePath) {
   New-Item -ItemType Directory -Force $config | Out-Null
   $setup = @{ version = 1; browser = $ExePath; profile = 'Link' } | ConvertTo-Json -Compress
   [IO.File]::WriteAllText((Join-Path $config 'setup.json'), $setup)
+  # The signed table the run applied, which a candidate row of the rows workflow is in.
+  if ($env:RIVET_DATA_ROOT) {
+    $table = Join-Path $env:RIVET_DATA_ROOT 'Rivet\cache\builds\table.bin'
+    if (Test-Path $table) {
+      $builds = Join-Path $root 'Rivet\cache\builds'
+      New-Item -ItemType Directory -Force $builds | Out-Null
+      Copy-Item $table (Join-Path $builds 'table.bin') -Force
+    }
+  }
   Add-HeldBrowsers $root
   $root
 }
@@ -2464,11 +2478,14 @@ function Invoke-FullscreenSidebar($Name, $shots) {
     $style = [SurfaceWin]::GetLong($ctx.Hwnd, -16)
     $bare = [IntPtr]([int64]$style -band (-bnot [int64]0x40000))
     [SurfaceWin]::SetLong($ctx.Hwnd, -16, $bare) | Out-Null
-    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, 1801, 1067, 0x36) | Out-Null
+    # One pixel wider than the parked window and back, which a runner's small display leaves alone.
+    $pr = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$pr) | Out-Null
+    $pw = $pr.Ri - $pr.L; $ph = $pr.B - $pr.T
+    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, $pw + 1, $ph, 0x36) | Out-Null
     Start-Sleep 4
     $full = Get-Capture $ctx (Join-Path $shots 'fullscreen-sidebar-2-full.png')
     [SurfaceWin]::SetLong($ctx.Hwnd, -16, $style) | Out-Null
-    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, 1800, 1067, 0x36) | Out-Null
+    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, $pw, $ph, 0x36) | Out-Null
     Start-Sleep 4
     $back = Get-Capture $ctx (Join-Path $shots 'fullscreen-sidebar-3-back.png')
     $f = Get-PageRegion $full $script:ColourA; $b = Get-PageRegion $back $script:ColourA

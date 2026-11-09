@@ -304,6 +304,9 @@ jobs:
             ${{ runner.temp }}/session/row-failed.png
             ${{ runner.temp }}/session/features-passed
             ${{ runner.temp }}/session/features/results.json
+            ${{ runner.temp }}/session/features/traces/**/*.log
+            ${{ runner.temp }}/session/features/*/*.png
+            ${{ runner.temp }}/session/features/profiles/*/Crashpad/reports/*.dmp
           retention-days: 30
 
       - name: Tell a person that this build failed
