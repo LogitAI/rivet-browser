@@ -1441,9 +1441,16 @@ pub(crate) unsafe fn message(
 }
 
 unsafe fn forward(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    let sending = std::time::Instant::now();
     let (used, caret) = with_bar(window, |bar| {
         let field = bar.field.as_ref()?;
         let used = field.send(message, wparam, lparam);
+        let sent_us = micros_since(sending);
+        if sent_us >= 2_000 && crate::trace::tracing() {
+            crate::trace::trace(&format!(
+                "address bar: text engine took {sent_us} us for {message:#x}"
+            ));
+        }
         if field.take_changed() {
             bar.generation += 1;
         }
@@ -1453,7 +1460,14 @@ unsafe fn forward(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) ->
     if let Some(caret) =
         caret.filter(|_| !matches!(message, WM_IME_NOTIFY | WM_IME_SETCONTEXT | WM_IME_REQUEST))
     {
+        let placing = std::time::Instant::now();
         place_input_method(window, caret);
+        let placed_us = micros_since(placing);
+        if placed_us >= 2_000 && crate::trace::tracing() {
+            crate::trace::trace(&format!(
+                "address bar: input method placed in {placed_us} us for {message:#x}"
+            ));
+        }
     }
     used
 }

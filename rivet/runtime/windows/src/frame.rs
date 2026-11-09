@@ -3119,8 +3119,55 @@ pub(crate) fn redraw_appbar(window: crate::os::WindowId) {
 
 /// Places the appbar visual over the strip the browser's layout left free and redraws it when its
 /// size or DPI changed.
+/// The steps of one surface update and how long each took, in microseconds.
+pub(crate) struct Laps {
+    started: std::time::Instant,
+    last: std::time::Instant,
+    steps: Vec<(&'static str, u64)>,
+}
+
+impl Laps {
+    pub(crate) fn start() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            started: now,
+            last: now,
+            steps: Vec::new(),
+        }
+    }
+
+    /// Ends the step `name` now.
+    pub(crate) fn mark(&mut self, name: &'static str) {
+        let now = std::time::Instant::now();
+        self.steps
+            .push((name, now.duration_since(self.last).as_micros() as u64));
+        self.last = now;
+    }
+
+    pub(crate) fn total_us(&self) -> u64 {
+        self.last.duration_since(self.started).as_micros() as u64
+    }
+
+    pub(crate) fn line(&self) -> String {
+        let steps: Vec<String> = self
+            .steps
+            .iter()
+            .map(|(name, us)| format!("{name} {us}"))
+            .collect();
+        format!(
+            "appbar: update took {} us: {}",
+            self.total_us(),
+            steps.join(" ")
+        )
+    }
+}
+
+/// An update slower than this is traced with its steps.
+const SLOW_UPDATE_US: u64 = 2_000;
+
 pub(crate) unsafe fn update_appbar(window: HWND) {
     crate::features::activity::count(crate::features::activity::Counter::AppbarUpdate);
+    let mut laps = Laps::start();
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
     let dpi = layout_dpi(window);
@@ -3139,6 +3186,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
     // browser's layout leaves the strip free. The window's own top border runs across the whole
     // window, so the appbar starts below it exactly like the browser's title bar.
     let top = top_border(window);
+    laps.mark("layout");
     APPBARS.with(|appbars| {
         if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
             let hover = APPBAR_STATE.with(|states| {
@@ -3155,6 +3203,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             if let Err(error) = appbar.update_rows(&rows, dpi) {
                 log(&format!("rivet: could not draw the page rows: {error}"));
             }
+            laps.mark("rows");
             // A repaint asked for from inside the bar's own work waits for the next one.
             if !crate::features::address_bar::busy() {
                 let top_bar = if visible {
@@ -3166,6 +3215,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     log(&format!("rivet: could not draw the top bar: {error}"));
                 }
             }
+            laps.mark("address");
             let preview = if visible {
                 crate::features::link_preview::view(window)
             } else {
@@ -3212,6 +3262,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             if let Err(error) = appbar.update_dev(bar.as_ref(), dpi) {
                 log(&format!("rivet: could not draw the developer bar: {error}"));
             }
+            laps.mark("overlays");
             // The warning keeps clear of the corner where the Sidebar's open button shows, which is
             // the lower right corner of the page area, or of the window when no page area is known.
             let per_dip = dpi as f32 / 96.0;
@@ -3230,6 +3281,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     "rivet: could not draw the held build warning: {error}"
                 ));
             }
+            laps.mark("held");
             let (spaces, current) =
                 with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()));
             appbar.set_state(
@@ -3241,10 +3293,12 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                 open_menu_kind(window),
             );
             appbar.set_layout(!layout.collapsed, dragging(window));
+            laps.mark("model");
             let height = client.bottom - top;
             if let Err(error) = appbar.update(visible, 0, top, width, height, dpi) {
                 log(&format!("rivet: could not draw the appbar: {error}"));
             }
+            laps.mark("appbar");
             appbar.set_dark_row(crate::features::dev_page::window_in_dev_mode(window));
             let (x, y, size) = {
                 let (x, y, w, _) = toggle_rect(page_x(window));
@@ -3268,10 +3322,16 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     "rivet: could not draw the floating appbar: {error}"
                 ));
             }
+            laps.mark("toggle");
             sync_ground(window, appbar, visible, dpi);
+            laps.mark("ground");
             crate::side_rail::update(window, appbar, visible, dpi);
+            laps.mark("rail");
         }
     });
+    if laps.total_us() >= SLOW_UPDATE_US && crate::trace::tracing() {
+        crate::trace::trace(&laps.line());
+    }
 }
 
 /// The pages of a window as the holes of its ground: each page of a split with its top row, or
@@ -4574,6 +4634,24 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ => call_browser(window, message, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod laps_tests {
+    use super::*;
+
+    #[test]
+    fn nfr2_a_slow_surface_update_names_its_steps() {
+        let mut laps = Laps::start();
+        laps.mark("rows");
+        laps.mark("appbar");
+        let line = laps.line();
+        assert!(line.starts_with("appbar: update took "), "{line}");
+        assert!(line.contains(" us: rows "), "{line}");
+        assert!(line.contains(" appbar "), "{line}");
+        assert_eq!(laps.steps.len(), 2);
+        assert!(laps.total_us() >= laps.steps.iter().map(|(_, us)| *us).sum::<u64>());
     }
 }
 
