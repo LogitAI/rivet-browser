@@ -321,23 +321,20 @@ jobs:
             if ($env:RECHECK) { throw }
             "::warning::$($_.Exception.Message). The row is made from the fingerprints of the $browser $priorVersion row."
             "no_pdb=true" >> $env:GITHUB_OUTPUT
-            if ($priorRow.fingerprints) {
-              "prior_module=-" >> $env:GITHUB_OUTPUT
-            } else {
-              # The prior row stored no fingerprints, so they are read from the prior build itself.
-              $found = Join-Path $temp "prior-build.txt"
-              $fetch = @{ Browser = $browser; Version = $priorVersion; Out = (Join-Path $temp "prior-browser"); Output = $found }
-              try {
-                ./.github/scripts/rows/fetch-browser.ps1 @fetch -Channel "${{ matrix.build.channel }}"
-              } catch {
-                if ("${{ matrix.build.channel }}" -eq 'stable') { throw "The symbol server has no PDB for $browser $version, and the prior build $priorVersion could not be fetched for its fingerprints: $_" }
-                ./.github/scripts/rows/fetch-browser.ps1 @fetch -Channel stable
-              }
-              $priorModule = (Get-Content $found | Where-Object { $_ -like 'module=*' } | Select-Object -First 1) -replace '^module=', ''
-              $priorModuleKey = ./tools/chrome-builds.exe pdb-key $priorModule
-              if (($priorModuleKey -split '/')[1] -ne $priorKey) { throw "The fetched $browser $priorVersion is not the build the prior row was made for" }
-              "prior_module=$priorModule" >> $env:GITHUB_OUTPUT
+            # The prior build gives the fingerprints when the prior row stored none, and in any case
+            # tells which prior addresses are function starts, so a match elsewhere does not count.
+            $found = Join-Path $temp "prior-build.txt"
+            $fetch = @{ Browser = $browser; Version = $priorVersion; Out = (Join-Path $temp "prior-browser"); Output = $found }
+            try {
+              ./.github/scripts/rows/fetch-browser.ps1 @fetch -Channel "${{ matrix.build.channel }}"
+            } catch {
+              if ("${{ matrix.build.channel }}" -eq 'stable') { throw "The symbol server has no PDB for $browser $version, and the prior build $priorVersion could not be fetched for its fingerprints: $_" }
+              ./.github/scripts/rows/fetch-browser.ps1 @fetch -Channel stable
             }
+            $priorModule = (Get-Content $found | Where-Object { $_ -like 'module=*' } | Select-Object -First 1) -replace '^module=', ''
+            $priorModuleKey = ./tools/chrome-builds.exe pdb-key $priorModule
+            if (($priorModuleKey -split '/')[1] -ne $priorKey) { throw "The fetched $browser $priorVersion is not the build the prior row was made for" }
+            "prior_module=$priorModule" >> $env:GITHUB_OUTPUT
           }
 
       - name: Make the row

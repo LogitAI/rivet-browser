@@ -1176,7 +1176,7 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
     let Some(stored) = prior["fingerprints"].as_object() else {
         return Err(vec!["the row has no fingerprints".to_owned()]);
     };
-    let (row, report) = find_candidate(prior, stored, version, pe);
+    let (row, report) = find_candidate(prior, stored, &BTreeSet::new(), version, pe);
     if !report.review.is_empty() {
         return Err(report.review);
     }
@@ -1188,9 +1188,14 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
 /// its fingerprint matches exactly one place. Every other address keeps a review line and its
 /// prior value, so such a row is never published as it is. Offsets, slots and sizes are read again
 /// from the new module exactly as for a row made from symbols.
+///
+/// `prior_starts` are the function starts the prior module's exception table lists. A fingerprint
+/// taken at one of them counts only places the new module's exception table also lists, since the
+/// same bytes inside another function are not the function.
 pub fn find_candidate(
     prior: &Value,
     stored: &serde_json::Map<String, Value>,
+    prior_starts: &BTreeSet<u32>,
     version: &str,
     pe: &PeFile,
 ) -> (Value, PortReport) {
@@ -1228,19 +1233,34 @@ pub fn find_candidate(
         }
     }
     let found = find_prints(pe, &functions);
+    let new_starts = if prior_starts.is_empty() {
+        BTreeSet::new()
+    } else {
+        pe.function_starts()
+    };
     let mut moved = BTreeMap::new();
     for target in functions.keys() {
-        match found.get(target).map(Vec::as_slice) {
-            Some([only]) => {
+        let all = found.get(target).map_or(&[][..], Vec::as_slice);
+        let places: Vec<u32> = all
+            .iter()
+            .copied()
+            .filter(|place| !prior_starts.contains(target) || new_starts.contains(place))
+            .collect();
+        match places.as_slice() {
+            [only] => {
                 moved.insert(*target, *only);
                 report
                     .fingerprinted
                     .push(format!("{target:#x} -> {only:#x}"));
             }
-            Some(many) => report
+            [] if !all.is_empty() => report.review.push(format!(
+                "{target:#x} matches no function start, of {} places",
+                all.len()
+            )),
+            [] => report.review.push(format!("{target:#x} matches no place")),
+            many => report
                 .review
                 .push(format!("{target:#x} matches {} places", many.len())),
-            None => report.review.push(format!("{target:#x} matches no place")),
         }
     }
     for (target, (slot, holds)) in &tables {
@@ -2094,7 +2114,57 @@ mod tests {
     ) -> (Value, PortReport) {
         let bytes = module(&code_refs(code));
         let pe = PeFile::parse(&bytes).unwrap();
-        find_candidate(&verified_row(), prints, version, &pe)
+        find_candidate(&verified_row(), prints, &BTreeSet::new(), version, &pe)
+    }
+
+    /// `module` with an exception table at 0x10f000 that lists `starts`.
+    fn with_starts(code: &[(u32, Vec<u8>)], starts: &[u32]) -> Vec<u8> {
+        let mut table = vec![];
+        for start in starts {
+            table.extend_from_slice(&start.to_le_bytes());
+            table.extend_from_slice(&(start + 0x20).to_le_bytes());
+            table.extend_from_slice(&0u32.to_le_bytes());
+        }
+        let mut code = code.to_vec();
+        code.push((0x10f000, table));
+        let mut bytes = module(&code_refs(&code));
+        let directory = 0x98 + 112 + 24;
+        bytes[directory..directory + 4].copy_from_slice(&0x10f000u32.to_le_bytes());
+        bytes[directory + 4..directory + 8]
+            .copy_from_slice(&(12 * starts.len() as u32).to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn nfr6_a_function_start_is_found_only_at_a_function_start() {
+        // The paint function's first bytes also open a block inside another function at 0x105300.
+        let mut code = shifted_code(0x2000, 0x44);
+        code.push((
+            0x105300,
+            hex("4157415641554154565755534881eca0000000").unwrap(),
+        ));
+        let prior_bytes = with_starts(&shifted_code(0, 0x10), &[0x101100, 0x101200, 0x101300]);
+        let prior_pe = PeFile::parse(&prior_bytes).unwrap();
+        let prior_starts = prior_pe.function_starts();
+        assert_eq!(prior_starts.len(), 3);
+        let (prints, _) = fingerprints_of(&verified_row(), &prior_pe);
+        let bytes = with_starts(&code, &[0x103100, 0x103200, 0x103300]);
+        let pe = PeFile::parse(&bytes).unwrap();
+        let (row, report) = find_candidate(&verified_row(), &prints, &prior_starts, "1.0.0.3", &pe);
+        assert!(report.review.is_empty(), "{:?}", report.review);
+        assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
+        // Bytes that match only inside another function are no place at all.
+        let bytes = with_starts(&code, &[0x103100, 0x103200]);
+        let pe = PeFile::parse(&bytes).unwrap();
+        let (_, report) = find_candidate(&verified_row(), &prints, &prior_starts, "1.0.0.3", &pe);
+        assert!(
+            report
+                .review
+                .iter()
+                .any(|line| line == "0x101300 matches no function start, of 2 places"),
+            "{:?}",
+            report.review
+        );
     }
 
     #[test]
