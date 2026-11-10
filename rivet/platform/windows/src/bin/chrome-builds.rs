@@ -326,6 +326,11 @@ fn find(
     std::fs::write(row_path, text(&row)).map_err(|error| error.to_string())?;
     std::fs::write(report_path, text(&report)).map_err(|error| error.to_string())?;
     println!(
+        "exception tables: {} function starts in the prior build, {} in the new one",
+        prior_starts.len(),
+        pe.function_starts().len()
+    );
+    println!(
         "{} {} without its PDB: {} of {} addresses found by fingerprint, {} for review",
         report.browser,
         report.version,

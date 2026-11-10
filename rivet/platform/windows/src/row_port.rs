@@ -1249,9 +1249,15 @@ pub fn find_candidate(
         match places.as_slice() {
             [only] => {
                 moved.insert(*target, *only);
+                // Says which matches the exception tables checked, for the person reading the report.
+                let checked = if prior_starts.contains(target) {
+                    " at a function start"
+                } else {
+                    ""
+                };
                 report
                     .fingerprinted
-                    .push(format!("{target:#x} -> {only:#x}"));
+                    .push(format!("{target:#x} -> {only:#x}{checked}"));
             }
             [] if !all.is_empty() => report.review.push(format!(
                 "{target:#x} matches no function start, of {} places",
