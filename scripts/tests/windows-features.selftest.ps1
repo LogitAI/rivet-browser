@@ -377,5 +377,33 @@ foreach ($case in @(@($true, '', $true), @($true, 'WinSta0\rivet-test-1', $false
 if ($breach) { Write-Host "FAIL nfr5_only_the_persons_desktop_has_visible_monitors : $breach cases"; $failures++ }
 else { Write-Host 'ok   nfr5_only_the_persons_desktop_has_visible_monitors' }
 
+# A parked window counts at its nearest monitor's scale only.
+$park = 0
+foreach ($case in @(
+    # Opened on a 200 percent primary, parked nearest a 125 percent monitor.
+    @(@(192, 120), 120, $true),
+    # One monitor at 200 percent: the window dropped to the system scale.
+    @(@(192, 96), 192, $false),
+    # Parked nearest a 125 percent monitor but left at the scale it opened at.
+    @(@(192), 120, $false),
+    @(@(120), 120, $true),
+    # No scale traced, or no monitor read: the scene's own checks say so.
+    @(@(), 120, $true),
+    @(@(192, 96), 0, $true))) {
+  if ([bool](-not (Get-ParkScaleError $case[0] $case[1])) -ne $case[2]) { $park++ }
+}
+if ($park) { Write-Host "FAIL nfr5_a_parked_window_counts_at_its_nearest_monitors_scale_only : $park cases"; $failures++ }
+else { Write-Host 'ok   nfr5_a_parked_window_counts_at_its_nearest_monitors_scale_only' }
+
+# A key's work is summed over its messages, and other lines do not count.
+$kw = Get-KeyWork @(
+  'address bar: key 0x100 0x41 took 900 us: forward 10 query 0 inline 0 draw 890 starts 0',
+  'address bar: suggestions for "a": [] inline ""',
+  'address bar: key 0x102 0x61 took 5100 us: forward 20 query 4000 inline 80 draw 1000 starts 1',
+  'address bar: key 0x101 0x41 took 700 us: forward 5 query 0 inline 0 draw 695 starts 0')
+if ($kw.Total -ne 6700 -or $kw.Query -ne 4000 -or $kw.Draw -ne 2585 -or $kw.Starts -ne 1 -or $kw.Messages -ne 3 -or (Get-Percentile @(5, 1, 9, 3) 0.5) -ne 5) {
+  Write-Host "FAIL nfr2_a_keys_work_is_read_from_its_trace_lines : $($kw | ConvertTo-Json -Compress)"; $failures++
+} else { Write-Host 'ok   nfr2_a_keys_work_is_read_from_its_trace_lines' }
+
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'windows-features selftest: all passed'

@@ -160,7 +160,12 @@ fn port(
     let wanted = row_port::wanted_names(&named);
     drop(old);
     let mut new = std::collections::HashMap::<String, Vec<u32>>::new();
+    // `views::View::ConvertPointToScreen` is found by its own name, for a prior row without it.
+    let mut screen_origin = Vec::new();
     symbols::publics(new_pdb, &mut |address, name| {
+        if row_port::is_screen_origin_name(name) {
+            screen_origin.push(address);
+        }
         let name = row_port::stable_name(name);
         if wanted.contains(name) {
             new.entry(name.to_owned()).or_default().push(address);
@@ -178,7 +183,7 @@ fn port(
             },
         )
         .collect();
-    let (row, mut report) = row_port::port_row(
+    let (mut row, mut report) = row_port::port_row(
         &prior,
         &named,
         &NewBuild {
@@ -188,6 +193,7 @@ fn port(
             private: &private,
         },
     );
+    row_port::seed_screen_origin(&mut row, &screen_origin, &pe, &mut report);
     report.review.extend(row_port::hand_only_review(&prior));
     let text = |value: &dyn erased::Json| value.pretty();
     std::fs::write(row_path, text(&row)).map_err(|error| error.to_string())?;

@@ -402,6 +402,9 @@ pub(crate) unsafe fn flip_new_tab(window: HWND, offsets: &[usize]) -> bool {
 unsafe fn safe_word(address: usize) -> Option<usize> {
     use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    if let Some(value) = crate::chromium::memory::read_word(address) {
+        return Some(value);
+    }
     let mut value = 0usize;
     let mut done = 0usize;
     let ok = ReadProcessMemory(

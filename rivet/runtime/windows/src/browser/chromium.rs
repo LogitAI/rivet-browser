@@ -104,6 +104,10 @@ impl TabMoves for Chromium {
 fn read_word(address: usize) -> Option<usize> {
     use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    // A word known readable is read in place, without a system call.
+    if let Some(value) = crate::chromium::memory::read_word(address) {
+        return Some(value);
+    }
     let mut value = 0usize;
     let mut done = 0usize;
     // ReadProcessMemory fails, instead of faulting, on an address that is not mapped.

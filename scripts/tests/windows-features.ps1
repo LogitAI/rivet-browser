@@ -16,13 +16,15 @@
 # rows run only when no other run is active (windows-test-safety.ps1).
 param(
   [string[]]$Browsers = @('chrome', 'edge', 'whale', 'brave', 'samsung'),
-  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest', 'appbar-width', 'appbar-peek', 'open-link-running', 'open-link-start', 'credentials-browser', 'credentials-system', 'view-click', 'view-click-other', 'view-keys', 'view-ime', 'tab-moves', 'first-frame', 'fullscreen-sidebar', 'taskbar-identity', 'taskbar-relaunch', 'sidebar-scale-monitor', 'split-panel-look', 'sidebar-floats', 'sidebar-open-button', 'dev-row', 'address-editing', 'security-chip', 'permission-bubble', 'password-bubble', 'typing-keeps-active', 'cli-control', 'cli-input', 'cli-hidden'),
+  [string[]]$Features = @('split', 'sidebar', 'newtab', 'space', 'split-start', 'split-menu', 'split-menu-start', 'split-drag', 'split-drag-start', 'split-shortcut', 'split-one-tab', 'split-maximised', 'split-space', 'split-click', 'split-rows', 'split-drop-top', 'split-drop-bottom', 'split-grid-3', 'split-grid-4', 'bar-layout', 'bar-folded', 'mini-pop-out', 'mini-move', 'mini-return', 'mini-close', 'tab-sections', 'tab-close-select', 'tab-reopen', 'tab-archive', 'ctrl-t-setting', 'link-new-tab', 'command-bar', 'link-preview', 'rivet-settings', 'link-rules', 'address-suggest', 'appbar-width', 'appbar-peek', 'open-link-running', 'open-link-start', 'credentials-browser', 'credentials-system', 'view-click', 'view-click-other', 'view-keys', 'view-ime', 'tab-moves', 'first-frame', 'fullscreen-sidebar', 'taskbar-identity', 'taskbar-relaunch', 'sidebar-scale-monitor', 'split-panel-look', 'sidebar-floats', 'sidebar-open-button', 'dev-row', 'address-editing', 'security-chip', 'permission-bubble', 'password-bubble', 'typing-keeps-active', 'cli-control', 'cli-input', 'cli-hidden'),
   [string]$OutDir,
   [switch]$NoBuild,
   # A browser build outside its usual folder, such as one a row job downloaded. Needs one -Browsers.
   [string]$Executable,
   # The run stops before a row when the output drive has less free space than this.
-  [double]$MinFreeGigabytes = 20
+  [double]$MinFreeGigabytes = 20,
+  # Builds and runs the optimised build, as the installer ships it, for timing rows.
+  [switch]$Release
 )
 $ErrorActionPreference = 'Continue'
 # The whole run, its build and every browser, runs on a desktop of its own.
@@ -34,7 +36,7 @@ $Browsers = @($Browsers | ForEach-Object { $_ -split ',' })
 $Features = @($Features | ForEach-Object { $_ -split ',' })
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $root = Join-Path $repo 'rivet'
-$debug = Join-Path $root 'target\debug'
+$debug = Join-Path $root $(if ($Release) { 'target\release' } else { 'target\debug' })
 
 # Debug switches and the trace of one launch live in its own test profile, `rivet-debug`, which only
 # that browser process reads. Tests of other checkouts on this machine never take its commands.
@@ -76,6 +78,10 @@ public static class FeatureWin{
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+ [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h,uint f);
+ [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr m,int type,out uint x,out uint y);
+ // The effective DPI of the monitor nearest the window, or 0 when it cannot be read.
+ public static int NearestMonitorDpi(IntPtr h){uint x,y;return GetDpiForMonitor(MonitorFromWindow(h,2),0,out x,out y)==0?(int)x:0;}
  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h,uint c);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,StringBuilder s,int n);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr GetProp(IntPtr h,string n);
@@ -173,7 +179,7 @@ if ($NoBuild) {
   [IO.File]::WriteAllText($f, $orig.Replace($marker, "$push $marker"))
   Push-Location $root
   try {
-    $output = & $cargo build -q 2>&1
+    $output = if ($Release) { & $cargo build -q --release 2>&1 } else { & $cargo build -q 2>&1 }
     $code = $LASTEXITCODE
     if ($code -ne 0) { $output | Select-Object -Last 40 | ForEach-Object { Write-Host $_ } }
   } finally { Pop-Location; [IO.File]::WriteAllText($f, $orig) }
@@ -232,6 +238,10 @@ $script:ParkW = 1800; $script:ParkH = 1067
 # same, so there the park sits level with the primary monitor, where a bubble the browser fits onto
 # the display stays by the window's row.
 $script:ParkY = 1000
+# The park's left edge. RIVET_TEST_PARK_X ("-9000") parks left of every monitor instead, nearest the
+# primary, so a run takes the primary monitor's scale rather than that of a monitor on its right.
+$script:ParkX = 9000
+if ($env:RIVET_TEST_PARK_X -match '^-?\d+$') { $script:ParkX = [int]$env:RIVET_TEST_PARK_X }
 if ($script:OnRunner) {
   Add-Type -AssemblyName System.Windows.Forms
   $script:ParkY = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Y
@@ -241,7 +251,7 @@ $script:ParkedSize = $null
 function Test-Parked($ctx) {
   $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
   $size = '{0}x{1}' -f ($r.Ri - $r.L), ($r.B - $r.T)
-  $placed = $r.L -eq 9000 -and $r.T -eq $script:ParkY
+  $placed = $r.L -eq $script:ParkX -and $r.T -eq $script:ParkY
   if (-not $script:OnRunner) { return $placed -and $size -eq ('{0}x{1}' -f $script:ParkW, $script:ParkH) }
   if (-not $placed) { return $false }
   $stable = $script:ParkedSize -eq $size
@@ -286,7 +296,7 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
   $held = 0
   foreach ($try in 1..60) {
     if (Test-Parked $ctx) { $held++; if ($held -ge 6) { break } }
-    else { $held = 0; [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 9000, $script:ParkY, $script:ParkW, $script:ParkH, 0x14) | Out-Null }
+    else { $held = 0; [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, $script:ParkX, $script:ParkY, $script:ParkW, $script:ParkH, 0x14) | Out-Null }
     Start-Sleep -Milliseconds 250
   }
   if ($held -lt 6 -and -not $ctx.Error) {
@@ -295,18 +305,17 @@ function Open-Scene($ctx, $state, $Url, $Seed, [string[]]$Extra = @()) {
     # whether its profile holds a crash report.
     $alive = @(Get-MyProcesses $ctx.ExeName $ctx.Profile).Count
     $dumps = @(Get-ChildItem (Join-Path $ctx.Profile 'Crashpad\reports') -Filter *.dmp -ErrorAction SilentlyContinue).Count
-    $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not 9000,$($script:ParkY) $($script:ParkW)x$($script:ParkH); window alive $([FeatureWin]::IsWindow($ctx.Hwnd)), $alive browser processes, $dumps crash reports"
+    $ctx.Error = "the window did not stay at its off-screen park: it is at $($r.L),$($r.T) $($r.Ri - $r.L)x$($r.B - $r.T), not $($script:ParkX),$($script:ParkY) $($script:ParkW)x$($script:ParkH); window alive $([FeatureWin]::IsWindow($ctx.Hwnd)), $alive browser processes, $dumps crash reports"
   }
   [FeatureWin]::PostMessage($ctx.Hwnd, 0x86, [IntPtr]1, [IntPtr]0) | Out-Null
   Start-Sleep 8
   $dpi = Get-LayoutDpi $ctx
-  # The window must keep the scale it was first laid out at: a park that moves it to another scale
-  # would run every row at a scale no person's window has there.
+  # The parked window must settle at the scale of the monitor it is nearest, as a person's window
+  # there has; Get-ParkScaleError says why another scale does not count.
   $hex = '{0:x}' -f $ctx.Hwnd.ToInt64()
   $scales = @(Read-Log | Where-Object { $_ -match "^layout dpi: window 0x$hex at (\d+)$" } | ForEach-Object { [int]($_ -replace '.* at ', '') })
-  if ($scales.Count -ge 2 -and $scales[0] -ne $scales[-1] -and -not $ctx.Error) {
-    $ctx.Error = "the window's scale changed after it was parked: $($scales[0]) then $($scales[-1])"
-  }
+  $parkScale = Get-ParkScaleError $scales ([FeatureWin]::NearestMonitorDpi($ctx.Hwnd))
+  if ($parkScale -and -not $ctx.Error) { $ctx.Error = $parkScale }
   if ($dpi) { $ctx.Dpi = $dpi } elseif (-not $ctx.Error) { $ctx.Error = 'the runtime traced no scale for the window' }
   # Every scene checks that the attach finished: the browser laid the window out for Rivet's frame.
   if (-not $ctx.Error) {
@@ -751,8 +760,11 @@ function Invoke-SplitPath($Name, $shots, [string]$Feature, [string]$Path, [strin
     $detail = "after the $Path path: $($on.Reason)"
     if ($ThenClick) {
       # A click in the page that is not active, posted to the window under it as a real click would be.
+      # It goes to the middle of the first page as measured in the capture, since a fixed place lands
+      # in the second page on a small window such as a runner's.
+      $first = Get-PageRegion $split $script:ColourA
       $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
-      $p = New-Object FeatureWin+P; $p.X = $r.L + 700; $p.Y = $r.T + 600
+      $p = New-Object FeatureWin+P; $p.X = $r.L + [int](($first.X0 + $first.X1) / 2); $p.Y = $r.T + [int](($first.Y0 + $first.Y1) / 2)
       $target = [FeatureWin]::Inside($ctx.Hwnd, $p)
       if ($target -eq [IntPtr]::Zero) { return @('NOT_DRIVEN', $split.Path, 'no window found at the first pane') }
       $c = New-Object FeatureWin+P; $c.X = $p.X; $c.Y = $p.Y
@@ -2500,10 +2512,14 @@ function Invoke-FullscreenSidebar($Name, $shots) {
     $style = [SurfaceWin]::GetLong($ctx.Hwnd, -16)
     $bare = [IntPtr]([int64]$style -band (-bnot [int64]0x40000))
     [SurfaceWin]::SetLong($ctx.Hwnd, -16, $bare) | Out-Null
-    # One pixel wider than the parked window and back, which a runner's small display leaves alone.
+    # Narrower than the parked window by two DIPs and back. A wider window can be held at the most
+    # Windows allows, which on a runner's small display is the parked width, so nothing would move.
+    # One pixel at a scale above 100 percent can leave the width in DIPs the same, and the browser
+    # then lays nothing out.
     $pr = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$pr) | Out-Null
     $pw = $pr.Ri - $pr.L; $ph = $pr.B - $pr.T
-    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, $pw + 1, $ph, 0x36) | Out-Null
+    $narrower = [int][Math]::Ceiling(2 * $s)
+    [FeatureWin]::SetWindowPos($ctx.Hwnd, [IntPtr]::Zero, 0, 0, $pw - $narrower, $ph, 0x36) | Out-Null
     Start-Sleep 4
     $full = Get-Capture $ctx (Join-Path $shots 'fullscreen-sidebar-2-full.png')
     [SurfaceWin]::SetLong($ctx.Hwnd, -16, $style) | Out-Null
@@ -2985,6 +3001,180 @@ public static class CloakWin{
 }
 '@
 
+# FR-12, NFR-2: typing in the address bar costs the browser's UI thread little per key. Each key is
+# sent as a person's typing arrives, key down, character and key up, and waited for, so the round
+# trip is the time until the bar shows it. The runtime traces its own work per message, the query,
+# the inline completion and the redraw, which this sums per key. English first, then Korean
+# syllables as the input method hands them over.
+function Invoke-AddressTyping($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'address-typing' $urlA
+  try {
+    Open-Scene $ctx $state $urlA $null
+    if ($ctx.Error -and $ctx.Error -notin @('attach-failed', 'attach-incomplete')) { return @('NOT_DRIVEN', $null, $ctx.Error) }
+    $one = Get-Capture $ctx (Join-Path $shots 'address-typing-1-page.png')
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    if (-not (Test-Attached $ctx)) { return @('FAIL', $one.Path, (Get-AttachFailure $ctx)) }
+    $keys = @()
+    foreach ($text in 'rivet browser typing', '한국어 주소창 입력 속도를 재는 문장') {
+      if (-not (Send-Flag $ctx 'rivet-tab.txt' 'bar')) { return @('NOT_DRIVEN', $one.Path, 'the runtime did not take the bar command') }
+      foreach ($ch in $text.ToCharArray()) {
+        $vk = if ([int]$ch -lt 128) { [int][char]::ToUpperInvariant($ch) } else { 0xE5 }
+        $before = @(Read-Log).Count
+        $r = [IntPtr]::Zero
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        [SurfaceWin]::SendMessageTimeout($ctx.Hwnd, 0x100, [IntPtr]$vk, [IntPtr]1, 2, 5000, [ref]$r) | Out-Null
+        [SurfaceWin]::SendMessageTimeout($ctx.Hwnd, 0x102, [IntPtr][int]$ch, [IntPtr]1, 2, 5000, [ref]$r) | Out-Null
+        [SurfaceWin]::SendMessageTimeout($ctx.Hwnd, 0x101, [IntPtr]$vk, [IntPtr]0xC0000001, 2, 5000, [ref]$r) | Out-Null
+        $trip = $clock.Elapsed.TotalMilliseconds
+        Start-Sleep -Milliseconds 120
+        $work = Get-KeyWork @(Read-Log | Select-Object -Skip $before)
+        $keys += [pscustomobject]@{ Char = $ch; Trip = $trip; Work = $work }
+      }
+      Start-Sleep -Milliseconds 900
+    }
+    $shot = Get-Capture $ctx (Join-Path $shots 'address-typing-2-typed.png')
+    $log = @(Read-Log)
+    $ticks = @($log | Where-Object { $_ -match '^address bar: refresh \d+ took (\d+) us' } | ForEach-Object { [double]($_ -replace '^address bar: refresh \d+ took (\d+) us.*$', '$1') / 1000 })
+    $measured = @($keys | Where-Object { $_.Work.Messages -gt 0 })
+    if ($measured.Count -lt $keys.Count / 2) { return @('NOT_DRIVEN', $shot.Path, "only $($measured.Count) of $($keys.Count) keys reached the bar's trace") }
+    # The first key builds the browser's autocomplete once for the profile, which later keys reuse.
+    $later = @($measured | Select-Object -Skip 1)
+    $ms = @($later | ForEach-Object { $_.Work.Total / 1000 })
+    $step = { param($field) '{0:N1}' -f (Get-Percentile @($later | ForEach-Object { $_.Work.$field / 1000 }) 0.5) }
+    $starts = ($later | ForEach-Object { $_.Work.Starts } | Measure-Object -Maximum).Maximum
+    $median = Get-Percentile $ms 0.5; $p90 = Get-Percentile $ms 0.9; $max = ($ms | Measure-Object -Maximum).Maximum
+    $trips = @($later | ForEach-Object { $_.Trip })
+    $summary = ('{0} keys: Rivet work per key median {1:N1} ms, p90 {2:N1}, max {3:N1} (median forward {4}, query {5}, inline {6}, draw {7}); round trip median {8:N1} ms, p90 {9:N1}; first key {10:N1} ms; most queries started by one key {11}; {12} re-reads, median {13:N1} ms, max {14:N1}' -f `
+      $later.Count, $median, $p90, $max, (& $step 'Forward'), (& $step 'Query'), (& $step 'Inline'), (& $step 'Draw'), `
+      (Get-Percentile $trips 0.5), (Get-Percentile $trips 0.9), ($measured[0].Work.Total / 1000), $starts, $ticks.Count, (Get-Percentile $ticks 0.5), (($ticks + 0) | Measure-Object -Maximum).Maximum)
+    $perKey = ($measured | ForEach-Object { '{0}:{1:N1}/{2:N1}' -f $_.Char, ($_.Work.Total / 1000), $_.Trip }) -join ' '
+    $detail = "$summary. per key (work/trip ms): $perKey"
+    if ($starts -gt 1) { return @('FAIL', $shot.Path, "a key started more than one query. $detail") }
+    if ($p90 -ge 16) { return @('FAIL', $shot.Path, "typing costs the UI thread too much. $detail") }
+    @('PASS', $shot.Path, $detail)
+  } finally { Stop-Scene $ctx }
+}
+
+# FR-12: the top bar's controls answer where they are drawn, with the appbar shown and folded.
+# The runtime traces where it painted each control in client pixels. Each control's middle must
+# hold what was drawn there, the window's hit test must give it to the control (the client area for
+# the bar, the caption codes for the window buttons), and a click there must reach it. Window
+# buttons are only hit-tested, never clicked.
+function Get-PaintedBar {
+  $line = @(Read-Log | Where-Object { $_ -match '^address bar: painted at ' }) | Select-Object -Last 1
+  if (-not $line -or $line -notmatch 'painted at (-?\d+) (-?\d+) (\d+)x(\d+) px: (.*)$') { return $null }
+  $bar = [pscustomobject]@{ Line = $line; X = [int]$Matches[1]; Y = [int]$Matches[2]; W = [int]$Matches[3]; H = [int]$Matches[4]; Parts = @{} }
+  foreach ($m in [regex]::Matches($Matches[5], '(\w+) (-?\d+) (-?\d+)')) { $bar.Parts[$m.Groups[1].Value] = @([int]$m.Groups[2].Value, [int]$m.Groups[3].Value) }
+  $bar
+}
+
+# How many pixels of a capture between columns X0 and X1 and rows Y0 and Y1 are dark, as a glyph's ink is.
+function Get-InkCount($Capture, [int]$X0, [int]$X1, [int]$Y0, [int]$Y1) {
+  $n = 0
+  for ($y = [Math]::Max(0, $Y0); $y -lt [Math]::Min($Capture.Height, $Y1); $y++) {
+    for ($x = [Math]::Max(0, $X0); $x -lt [Math]::Min($Capture.Width, $X1); $x++) {
+      $p = $Capture.Pixels[$y * $Capture.Width + $x]
+      if (((($p -shr 16) -band 255) + (($p -shr 8) -band 255) + ($p -band 255)) -lt 330) { $n++ }
+    }
+  }
+  $n
+}
+
+# What is wrong with the bar's controls of the window as it is now, as a list; empty when nothing is.
+function Test-BarControls($ctx, [string]$Stage, $Capture) {
+  $bar = Get-PaintedBar
+  if (-not $bar) { return @("$Stage`: the runtime traced no painted bar") }
+  $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
+  $o = New-Object FeatureWin+P; $o.X = 0; $o.Y = 0
+  [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$o) | Out-Null
+  $dx = $o.X - $r.L; $dy = $o.Y - $r.T
+  $cy = $bar.Y + [int]($bar.H / 2)
+  $codes = @{ Minimize = 8; Maximize = 9; Close = 20 }
+  $bad = @()
+  foreach ($name in 'Back', 'Forward', 'Reload', 'Address', 'Minimize', 'Maximize', 'Close') {
+    $p = $bar.Parts[$name]
+    if (-not $p) { $bad += "$Stage`: $name was not painted"; continue }
+    $cx = [int](($p[0] + $p[1]) / 2)
+    $want = if ($codes.ContainsKey($name)) { $codes[$name] } else { 1 }
+    $hit = Get-HitTest $ctx ($cx + $dx) ($cy + $dy)
+    if ($hit -ne $want) { $bad += "$Stage`: $name painted at $($p[0])-$($p[1]) hits $hit at its middle, not $want"; continue }
+    if ($name -in 'Back', 'Reload', 'Close') {
+      $ink = Get-InkCount $Capture ($p[0] + $dx) ($p[1] + $dx) ($bar.Y + $dy) ($bar.Y + $bar.H + $dy)
+      if ($ink -lt 4) { $bad += "$Stage`: nothing is drawn where $name was painted ($($p[0])-$($p[1]))"; continue }
+    }
+    if ($codes.ContainsKey($name)) { continue }
+    $before = @(Read-Log).Count
+    Send-ClientMouse $ctx 0x201 $cx $cy 1
+    Start-Sleep -Milliseconds 120
+    Send-ClientMouse $ctx 0x202 $cx $cy
+    $answer = if ($name -eq 'Address') { '^address bar: editing begins' } else { "^address bar: act $name$" }
+    if (-not (Wait-Log $before $answer 5)) { $bad += "$Stage`: a click on the middle of $name did not reach it" }
+    if ($name -eq 'Address') { foreach ($i in 1..3) { Send-Key $ctx 0x1B; Start-Sleep -Milliseconds 300 } }
+    Start-Sleep -Milliseconds 600
+  }
+  $bad
+}
+
+# The appbar's own fold button, where the runtime painted it, clicked as a person clicks it: the
+# window's hit test must give it to the appbar, and the press and release go there.
+function Send-ToggleClick($ctx) {
+  $line = @(Read-Log | Where-Object { $_ -match '^appbar: toggle at ' }) | Select-Object -Last 1
+  if (-not $line -or $line -notmatch 'toggle at (-?\d+) (-?\d+) (\d+) px') { return 'the runtime traced no fold button' }
+  $cx = [int]$Matches[1] + [int]([int]$Matches[3] / 2); $cy = [int]$Matches[2] + [int]([int]$Matches[3] / 2)
+  $r = New-Object FeatureWin+R; [FeatureWin]::GetWindowRect($ctx.Hwnd, [ref]$r) | Out-Null
+  $o = New-Object FeatureWin+P; $o.X = 0; $o.Y = 0
+  [FeatureWin]::ClientToScreen($ctx.Hwnd, [ref]$o) | Out-Null
+  $hit = Get-HitTest $ctx ($cx + $o.X - $r.L) ($cy + $o.Y - $r.T)
+  if ($hit -ne 18) { return "the fold button at $cx,$cy hits $hit, not the appbar's 18" }
+  Send-AppbarNc $ctx 0xA1 $cx $cy
+  Start-Sleep -Milliseconds 120
+  Send-AppbarNc $ctx 0xA2 $cx $cy
+  $null
+}
+
+# As a person's window: three tabs, one pinned and two in a folder, folded and shown three times,
+# with the fold button and with the command, and every control clicked after each change. A held
+# build shows its warning over the page meanwhile.
+function Invoke-BarFolded($Name, $shots) {
+  $ctx, $state = Start-Scene $Name 'bar-folded' $urlA
+  try {
+    $why = Open-ThreeTabs $ctx $state $shots 'bar-folded'
+    if ($why) { return @('NOT_DRIVEN', $null, $why) }
+    foreach ($command in 'pin 2', 'folder 1 Launch Atlas', 'into 0') {
+      if (-not (Send-Flag $ctx 'rivet-tab.txt' $command)) { return @('NOT_DRIVEN', $null, "the runtime did not take '$command'") }
+    }
+    $one = Get-Capture $ctx (Join-Path $shots 'bar-folded-0-shown.png')
+    if (-not $one) { return @('NOT_DRIVEN', $null, 'no capture') }
+    $notes = @(); $bad = @(@(Test-BarControls $ctx 'shown' $one))
+    $notes += (Get-PaintedBar).Line -replace '^address bar: ', 'shown: '
+    $hidden = $false
+    foreach ($step in 1..6) {
+      $before = @(Read-Log).Count
+      # Odd steps fold, even steps show again; the fold button does it but for the third and fourth.
+      $byButton = $step -notin 3, 4
+      if ($byButton) {
+        $why = Send-ToggleClick $ctx
+        if ($why) { $bad += "step $step`: $why"; break }
+      } else {
+        Send-RivetMessage $ctx 'Rivet.ToggleAppbar'
+      }
+      $want = if ($hidden) { 'false' } else { 'true' }
+      if (-not (Wait-Log $before "^appbar: hidden $want$" 5)) { $bad += "step $step`: the appbar did not $(if ($hidden) { 'show' } else { 'fold' })"; break }
+      $hidden = -not $hidden
+      Start-Sleep 3
+      $stage = "step $step $(if ($hidden) { 'folded' } else { 'shown' })$(if ($byButton) { ' by the button' } else { ' by the command' })"
+      $shot = Get-Capture $ctx (Join-Path $shots "bar-folded-$step.png")
+      $bad += @(Test-BarControls $ctx $stage $shot)
+      $notes += (Get-PaintedBar).Line -replace '^address bar: ', "$stage`: "
+    }
+    $last = Join-Path $shots 'bar-folded-1.png'
+    $painted = [string]::Join('; ', [string[]]$notes)
+    if ($bad.Count) { return @('FAIL', $last, ([string]::Join('; ', [string[]]$bad) + '. ' + $painted)) }
+    $reason = 'with three tabs, a pin and a folder, back, forward, reload, the address and the window buttons answer where they are drawn, shown and after three folds and three shows by the fold button and by the command. ' + $painted
+    @('PASS', $last, $reason)
+  } finally { Stop-Scene $ctx }
+}
+
 # --- Run safety -----------------------------------------------------------------------------
 # Every row runs under RIVET_KEEP_OFFSCREEN with its Rivet files in this run's folder, and the
 # visible guard stops the run when a test window shows on a monitor, takes the foreground or holds
@@ -3037,6 +3227,7 @@ foreach ($name in $Browsers) {
         'split-grid-3' { Invoke-SplitGrid $name $shots 'split-grid-3' }
         'split-grid-4' { Invoke-SplitGrid $name $shots 'split-grid-4' }
         'bar-layout' { Invoke-BarLayout $name $shots }
+        'bar-folded' { Invoke-BarFolded $name $shots }
         'mini-pop-out' { Invoke-Mini $name $shots 'pop-out' }
         'mini-move' { Invoke-Mini $name $shots 'move' }
         'mini-return' { Invoke-Mini $name $shots 'return' }
@@ -3074,6 +3265,7 @@ foreach ($name in $Browsers) {
         'dev-row' { Invoke-DevRow $name $shots }
         'address-editing' { if ($env:RIVET_TEST_DESKTOP) { @('NOT_DRIVEN', $null, 'the input method composes only on the desktop that has the keyboard, and a test desktop never has it') } else { Invoke-AddressEditing $name $shots } }
         'security-chip' { Invoke-SecurityChip $name $shots }
+        'address-typing' { Invoke-AddressTyping $name $shots }
         'permission-bubble' { Invoke-PermissionBubble $name $shots }
         'password-bubble' { Invoke-PasswordBubble $name $shots }
         'view-reflection' { Invoke-ViewReflection $name $shots }

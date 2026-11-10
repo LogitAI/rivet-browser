@@ -1027,6 +1027,7 @@ pub unsafe fn relayout(window: HWND) -> bool {
 unsafe extern "system" fn frame_layout(view: *mut c_void) {
     let (original, set_bounds, height) = LAYOUT_HOOK.get().expect("patched after it is stored");
     original(view);
+    crate::features::second_view::note_layout();
     let Some(Ok(hook)) = HOOK.get() else { return };
     remember_view((hook.hwnd_for_view)(view), view);
     if height((hook.hwnd_for_view)(view)).is_none() {

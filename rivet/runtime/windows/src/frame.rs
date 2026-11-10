@@ -2141,12 +2141,80 @@ unsafe fn nudge(window: HWND, why: &str) -> bool {
 /// Hides the docked appbar so the page takes its width, or docks it again.
 unsafe fn toggle_appbar(window: HWND) {
     close_menu(window);
+    let before = frame_layout::panel_bounds(window).map(|panel| panel.x);
     edit_layout(window, |layout| layout.toggle());
     crate::trace::trace(&format!("appbar: hidden {}", layout_of(window).collapsed));
     sync_strip(window);
     SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
     KillTimer(window, PEEK_TIMER);
     relayout(window);
+    let after = frame_layout::panel_bounds(window).map(|panel| panel.x);
+    if needs_size_nudge(before, after, sizing_state(window)) {
+        nudge_size(window, before, after);
+    }
+    // The panel moves with the appbar, and the top bar with it.
+    request_bar_paint(window);
+}
+
+/// Whether a fold or show must be laid out by a size change: the browser laid the window out
+/// again, yet its page panel did not move, as Brave and Whale keep the client area they laid out
+/// until the window's size changes. Only a window of its own size is resized: never a minimized,
+/// maximized, snapped or fullscreen one.
+fn needs_size_nudge(before: Option<i32>, after: Option<i32>, state: NudgeState) -> bool {
+    before.is_some()
+        && before == after
+        && !state.minimized
+        && !state.maximized
+        && !state.snapped
+        && !state.fullscreen
+}
+
+/// The window's size state, for a size change after a fold or show.
+unsafe fn sizing_state(window: HWND) -> NudgeState {
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowArranged;
+    NudgeState {
+        minimized: IsIconic(window) != 0,
+        maximized: IsZoomed(window) != 0,
+        snapped: IsWindowArranged(window) != 0,
+        fullscreen: GetWindowLongPtrW(window, GWL_STYLE) as u32 & WS_THICKFRAME == 0,
+        ..NudgeState::default()
+    }
+}
+
+/// Shrinks the window by one pixel without drawing and puts its exact rect back, which lays the
+/// browser's root view out at once, and traces what happened.
+unsafe fn nudge_size(window: HWND, before: Option<i32>, after: Option<i32>) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, SWP_NOREDRAW};
+    let mut rect: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut rect);
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    SetWindowPos(
+        window,
+        std::ptr::null_mut(),
+        0,
+        0,
+        width,
+        height - 1,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW,
+    );
+    SetWindowPos(
+        window,
+        std::ptr::null_mut(),
+        rect.left,
+        rect.top,
+        width,
+        height,
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
+    let mut now: RECT = std::mem::zeroed();
+    GetWindowRect(window, &mut now);
+    let restored = (now.left, now.top, now.right, now.bottom)
+        == (rect.left, rect.top, rect.right, rect.bottom);
+    crate::trace::trace(&format!(
+        "appbar: the panel stayed at {before:?} after {after:?}, so window {:#x} was resized by one pixel and back, rect restored {restored}, panel now at {:?}",
+        window as usize,
+        frame_layout::panel_bounds(window).map(|panel| panel.x)
+    ));
 }
 
 /// Shows or puts away the floating appbar of a hidden one, sliding it.
@@ -3119,8 +3187,82 @@ pub(crate) fn redraw_appbar(window: crate::os::WindowId) {
 
 /// Places the appbar visual over the strip the browser's layout left free and redraws it when its
 /// size or DPI changed.
+/// Paints the top bar alone: its text, caret, hover and list. Typing in the bar changes nothing
+/// else of the window's surface, so it never redraws the rest.
+pub(crate) unsafe fn update_top_bar(window: HWND) {
+    if crate::features::address_bar::busy() {
+        return;
+    }
+    let mut laps = Laps::start();
+    let dpi = layout_dpi(window);
+    let top_bar = if framed(window) {
+        crate::features::address_bar::view(window)
+    } else {
+        None
+    };
+    laps.mark("view");
+    APPBARS.with(|appbars| {
+        if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
+            if let Err(error) = appbar.update_address(window as isize, top_bar.as_ref(), dpi) {
+                log(&format!("rivet: could not draw the top bar: {error}"));
+            }
+        }
+    });
+    laps.mark("paint");
+    if laps.total_us() >= SLOW_UPDATE_US && crate::trace::tracing() {
+        crate::trace::trace(&laps.line().replacen("appbar:", "top bar:", 1));
+    }
+}
+
+/// The steps of one surface update and how long each took, in microseconds.
+pub(crate) struct Laps {
+    started: std::time::Instant,
+    last: std::time::Instant,
+    steps: Vec<(&'static str, u64)>,
+}
+
+impl Laps {
+    pub(crate) fn start() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            started: now,
+            last: now,
+            steps: Vec::new(),
+        }
+    }
+
+    /// Ends the step `name` now.
+    pub(crate) fn mark(&mut self, name: &'static str) {
+        let now = std::time::Instant::now();
+        self.steps
+            .push((name, now.duration_since(self.last).as_micros() as u64));
+        self.last = now;
+    }
+
+    pub(crate) fn total_us(&self) -> u64 {
+        self.last.duration_since(self.started).as_micros() as u64
+    }
+
+    pub(crate) fn line(&self) -> String {
+        let steps: Vec<String> = self
+            .steps
+            .iter()
+            .map(|(name, us)| format!("{name} {us}"))
+            .collect();
+        format!(
+            "appbar: update took {} us: {}",
+            self.total_us(),
+            steps.join(" ")
+        )
+    }
+}
+
+/// An update slower than this is traced with its steps.
+const SLOW_UPDATE_US: u64 = 2_000;
+
 pub(crate) unsafe fn update_appbar(window: HWND) {
     crate::features::activity::count(crate::features::activity::Counter::AppbarUpdate);
+    let mut laps = Laps::start();
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
     let dpi = layout_dpi(window);
@@ -3139,6 +3281,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
     // browser's layout leaves the strip free. The window's own top border runs across the whole
     // window, so the appbar starts below it exactly like the browser's title bar.
     let top = top_border(window);
+    laps.mark("layout");
     APPBARS.with(|appbars| {
         if let Some(appbar) = appbars.borrow_mut().get_mut(&(window as isize)) {
             let hover = APPBAR_STATE.with(|states| {
@@ -3155,6 +3298,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             if let Err(error) = appbar.update_rows(&rows, dpi) {
                 log(&format!("rivet: could not draw the page rows: {error}"));
             }
+            laps.mark("rows");
             // A repaint asked for from inside the bar's own work waits for the next one.
             if !crate::features::address_bar::busy() {
                 let top_bar = if visible {
@@ -3166,6 +3310,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     log(&format!("rivet: could not draw the top bar: {error}"));
                 }
             }
+            laps.mark("address");
             let preview = if visible {
                 crate::features::link_preview::view(window)
             } else {
@@ -3212,6 +3357,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
             if let Err(error) = appbar.update_dev(bar.as_ref(), dpi) {
                 log(&format!("rivet: could not draw the developer bar: {error}"));
             }
+            laps.mark("overlays");
             // The warning keeps clear of the corner where the Sidebar's open button shows, which is
             // the lower right corner of the page area, or of the window when no page area is known.
             let per_dip = dpi as f32 / 96.0;
@@ -3230,6 +3376,7 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     "rivet: could not draw the held build warning: {error}"
                 ));
             }
+            laps.mark("held");
             let (spaces, current) =
                 with_spaces(window, |spaces| (spaces.list().to_vec(), spaces.current()));
             appbar.set_state(
@@ -3241,15 +3388,23 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                 open_menu_kind(window),
             );
             appbar.set_layout(!layout.collapsed, dragging(window));
+            laps.mark("model");
             let height = client.bottom - top;
             if let Err(error) = appbar.update(visible, 0, top, width, height, dpi) {
                 log(&format!("rivet: could not draw the appbar: {error}"));
             }
+            laps.mark("appbar");
             appbar.set_dark_row(crate::features::dev_page::window_in_dev_mode(window));
             let (x, y, size) = {
                 let (x, y, w, _) = toggle_rect(page_x(window));
                 (scale(x, dpi), scale(y, dpi), scale(w, dpi))
             };
+            if crate::trace::tracing() {
+                crate::trace::trace_changed(
+                    "toggle",
+                    &format!("appbar: toggle at {x} {y} {size} px"),
+                );
+            }
             if let Err(error) = appbar.update_toggle(visible, x, y, size, dpi) {
                 log(&format!("rivet: could not draw the toggle: {error}"));
             }
@@ -3268,10 +3423,16 @@ pub(crate) unsafe fn update_appbar(window: HWND) {
                     "rivet: could not draw the floating appbar: {error}"
                 ));
             }
+            laps.mark("toggle");
             sync_ground(window, appbar, visible, dpi);
+            laps.mark("ground");
             crate::side_rail::update(window, appbar, visible, dpi);
+            laps.mark("rail");
         }
     });
+    if laps.total_us() >= SLOW_UPDATE_US && crate::trace::tracing() {
+        crate::trace::trace(&laps.line());
+    }
 }
 
 /// The pages of a window as the holes of its ground: each page of a split with its top row, or
@@ -3367,7 +3528,24 @@ fn panel_moved(window: HWND) {
                 }
             }
         });
+        // The top bar is the panel's first row, so it moves with the panel. It is painted after
+        // this layout, never inside it, and until then its old place would show where the bar no
+        // longer takes clicks, as after the appbar folds.
+        PostMessageW(window, bar_moved_message(), 0, 0);
     }
+}
+
+const BAR_MOVED_MESSAGE: &str = "Rivet.BarMoved";
+
+/// Asks for the top bar to be painted again after the message being handled.
+pub(crate) fn request_bar_paint(window: HWND) {
+    unsafe {
+        PostMessageW(window, bar_moved_message(), 0, 0);
+    }
+}
+
+fn bar_moved_message() -> u32 {
+    unsafe { RegisterWindowMessageW(wide(BAR_MOVED_MESSAGE).as_ptr()) }
 }
 
 /// The thickness of the visible window border along the top edge. A maximized window has none.
@@ -3496,6 +3674,11 @@ unsafe fn hit_test(window: HWND, lparam: LPARAM) -> StripHit {
         && row_hit(window, point).is_none()
         && crate::dev_bar::hit(window, point).is_none()
     {
+        // The bar's controls are Rivet's, at the places it painted them, whatever the browser's
+        // own hit test would say of its title bar there.
+        if crate::features::address_bar::part_at(window, point).is_some() {
+            return StripHit::Client;
+        }
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(window, &mut client);
         // The panel starts one gap below the client area's top edge, so the row is measured from it.
@@ -3528,6 +3711,22 @@ unsafe extern "system" fn browser_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // Where a character goes when Rivet's bar does not take it: the window with the thread's
+    // keyboard focus, and the page of the split Rivet last gave the keyboard.
+    if message == 0x0102 && crate::trace::tracing() {
+        crate::trace::trace(&format!(
+            "keys: character {wparam:#x} to window {:#x}, keyboard focus {:#x}, split page {}",
+            window as usize,
+            GetFocus() as usize,
+            crate::features::second_view::focused()
+        ));
+    }
+    if matches!(
+        message,
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_SIZE | WM_DPICHANGED
+    ) {
+        crate::features::second_view::note_layout();
+    }
     let result = handle(window, message, wparam, lparam);
     after_event(window, message, wparam);
     result
@@ -3666,6 +3865,10 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
     }
     if message == toggle_message() && attached(window) {
         toggle_appbar(window);
+        return 0;
+    }
+    if message == bar_moved_message() && attached(window) {
+        update_top_bar(window);
         return 0;
     }
     // Rivet's top bar takes the pointer over it and, while its address is edited, the keyboard and
@@ -4046,6 +4249,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             StripHit::Top => HTTOP as LRESULT,
             StripHit::TopLeft => HTTOPLEFT as LRESULT,
             StripHit::Appbar | StripHit::Resizer => APPBAR_HIT as LRESULT,
+            StripHit::Client => 1, // HTCLIENT
             StripHit::Minimize => HTMINBUTTON as LRESULT,
             StripHit::Maximize => HTMAXBUTTON as LRESULT,
             StripHit::Close => HTCLOSE as LRESULT,
@@ -4574,6 +4778,61 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             0
         }
         _ => call_browser(window, message, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod nudge_tests {
+    use super::*;
+
+    #[test]
+    fn fr2_a_fold_resizes_the_window_only_when_its_panel_did_not_move() {
+        let normal = NudgeState::default();
+        // The relayout moved the panel: nothing more.
+        assert!(!needs_size_nudge(Some(268), Some(8), normal));
+        // The panel stayed where it was: a size change lays it out.
+        assert!(needs_size_nudge(Some(268), Some(268), normal));
+        // No panel known yet: the window's own first layout comes.
+        assert!(!needs_size_nudge(None, None, normal));
+        // Never a window without a size of its own.
+        for state in [
+            NudgeState {
+                minimized: true,
+                ..normal
+            },
+            NudgeState {
+                maximized: true,
+                ..normal
+            },
+            NudgeState {
+                snapped: true,
+                ..normal
+            },
+            NudgeState {
+                fullscreen: true,
+                ..normal
+            },
+        ] {
+            assert!(!needs_size_nudge(Some(268), Some(268), state));
+        }
+    }
+}
+
+#[cfg(test)]
+mod laps_tests {
+    use super::*;
+
+    #[test]
+    fn nfr2_a_slow_surface_update_names_its_steps() {
+        let mut laps = Laps::start();
+        laps.mark("rows");
+        laps.mark("appbar");
+        let line = laps.line();
+        assert!(line.starts_with("appbar: update took "), "{line}");
+        assert!(line.contains(" us: rows "), "{line}");
+        assert!(line.contains(" appbar "), "{line}");
+        assert_eq!(laps.steps.len(), 2);
+        assert!(laps.total_us() >= laps.steps.iter().map(|(_, us)| *us).sum::<u64>());
     }
 }
 

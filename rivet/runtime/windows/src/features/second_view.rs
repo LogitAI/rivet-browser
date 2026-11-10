@@ -323,6 +323,11 @@ pub(crate) fn has_room(window: HWND) -> bool {
     }
 }
 
+/// The slot of the split that Rivet last gave the keyboard, zero for the window's own page.
+pub(crate) fn focused() -> usize {
+    FOCUSED.load(Ordering::Acquire)
+}
+
 /// Remembers which page of the split has the keyboard, for a page of another window.
 pub(crate) fn set_focused(slot: usize) {
     FOCUSED.store(slot, Ordering::Release);
@@ -489,6 +494,11 @@ pub(crate) fn is_open(window: HWND) -> bool {
 unsafe fn word(address: usize) -> Option<usize> {
     use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    // A walk over the browser's views reads many thousands of words, so a word known readable is
+    // read in place rather than with a system call each.
+    if let Some(value) = crate::chromium::memory::read_word(address) {
+        return Some(value);
+    }
     let mut value = 0usize;
     let mut done = 0usize;
     let ok = ReadProcessMemory(
@@ -565,6 +575,9 @@ unsafe fn views_with_vtable(root: usize, vtable: usize) -> Vec<usize> {
 
 /// Whether a page view holds this page in one of its words, as `WebView::web_contents_`.
 unsafe fn holds(view: usize, page: usize, size: usize) -> bool {
+    if let Some(found) = crate::chromium::memory::holds_word(view, 8, size, page) {
+        return found;
+    }
     (8..size)
         .step_by(8)
         .any(|offset| word(view + offset) == Some(page))
@@ -1411,12 +1424,24 @@ pub(crate) unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
         let [x, y, w, h] = window_area(&state);
         return Some([x, y, x + w, y + h]);
     }
-    // With no split, the page view is the view of the browser view that holds the active page.
+    // With no split, the page view is the view of the browser view that holds the active page. It
+    // is looked for once per layout and page; a paint in between reads its bounds alone.
     let base = base()?;
     let own = active_page(window);
-    let parent = browser_view(window)?;
     let end = base + crate::chromium::image::recorded().map_or(0, |image| image.size);
     let size = recorded("size").unwrap_or(0x528);
+    let epoch = layout_epoch();
+    if let Some(main) = known_page(window as isize, own, epoch) {
+        if own != 0
+            && word(main).is_some_and(|vptr| vptr > base && vptr < end)
+            && holds(main, own, size)
+        {
+            let [x, y] = window_origin(main);
+            let [_, _, w, h] = bounds_of(main);
+            return Some([x, y, x + w, y + h]);
+        }
+    }
+    let parent = browser_view(window)?;
     let mut queue = vec![(parent, 0usize)];
     let mut best: Option<(i64, usize)> = None;
     let mut visited = 0;
@@ -1441,10 +1466,62 @@ pub(crate) unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
                 .map(|child| (child, depth + 1)),
         );
     }
+    remember_page(window as isize, own, epoch, best.map(|(_, view)| view));
     let (_, main) = best?;
     let [x, y] = window_origin(main);
     let [_, _, w, h] = bounds_of(main);
     Some([x, y, x + w, y + h])
+}
+
+/// Counts the browser's layouts and window size and scale changes, after which a page view found
+/// before is looked for again.
+static LAYOUT_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The browser laid a window out, or a window's size or scale changed.
+pub(crate) fn note_layout() {
+    LAYOUT_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
+fn layout_epoch() -> u64 {
+    LAYOUT_EPOCH.load(Ordering::Relaxed)
+}
+
+/// The page view of a window as last found, for which page and after which layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FoundPage {
+    own: usize,
+    epoch: u64,
+    view: usize,
+}
+
+thread_local! {
+    static FOUND_PAGES: std::cell::RefCell<std::collections::HashMap<isize, FoundPage>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The page view found for `window` showing page `own`, when nothing was laid out since.
+fn known_page(window: isize, own: usize, epoch: u64) -> Option<usize> {
+    FOUND_PAGES.with(|all| {
+        all.borrow()
+            .get(&window)
+            .filter(|found| found.own == own && found.epoch == epoch)
+            .map(|found| found.view)
+    })
+}
+
+/// Keeps what a walk found for `window`, or forgets the window when it found nothing.
+fn remember_page(window: isize, own: usize, epoch: u64, view: Option<usize>) {
+    FOUND_PAGES.with(|all| {
+        let mut all = all.borrow_mut();
+        match view {
+            Some(view) => {
+                all.insert(window, FoundPage { own, epoch, view });
+            }
+            None => {
+                all.remove(&window);
+            }
+        }
+    });
 }
 
 /// The window's page area in window DIPs with the rail's strip included, which is where the
@@ -1768,9 +1845,11 @@ pub(crate) unsafe fn on_mouse(
             // The click may have made the page's tab active, which moves the page into the
             // window's page view. Rivet puts it back now, and again after the browser's own
             // messages, since the activation may come later.
-            if !hold(window) {
-                focus_slot(window, slot);
-            }
+            let held = hold(window);
+            let focused = !held && focus_slot(window, slot);
+            crate::trace::trace(&format!(
+                "second view: press in slot {slot}, page held back {held}, focus asked {focused}"
+            ));
             post_layout(window);
             Some(result)
         }
@@ -1897,6 +1976,33 @@ pub(crate) mod bare {
         crate::features::tabs::tab_model(base, window).map_or(0, |model| {
             crate::features::tabs::contents_at(base, model, index as i32) as usize
         })
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+
+    #[test]
+    fn nfr2_a_paint_without_a_layout_does_not_walk_the_views_again() {
+        let (window, page) = (0x5150_i32 as isize, 0x7000);
+        let epoch = layout_epoch();
+        assert_eq!(
+            known_page(window, page, epoch),
+            None,
+            "nothing found yet: walk"
+        );
+        remember_page(window, page, epoch, Some(0x9000));
+        // A paint with the same page and no layout since takes the view found before.
+        assert_eq!(known_page(window, page, epoch), Some(0x9000));
+        assert_eq!(known_page(window, page, epoch), Some(0x9000));
+        // Another page, or a layout, walks again.
+        assert_eq!(known_page(window, 0x7008, epoch), None);
+        note_layout();
+        assert_eq!(known_page(window, page, layout_epoch()), None);
+        // A walk that found nothing leaves nothing to take.
+        remember_page(window, page, layout_epoch(), None);
+        assert_eq!(known_page(window, page, layout_epoch()), None);
     }
 }
 

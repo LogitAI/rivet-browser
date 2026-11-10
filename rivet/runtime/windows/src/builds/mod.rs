@@ -55,6 +55,10 @@ pub struct Build {
     /// `BubbleDialogDelegate::GetAnchorRect` and its first bytes, when the row carries them. A
     /// built-in row keeps it in the bubble anchor's own list instead.
     pub bubble_anchor: Option<(usize, &'static [u8])>,
+    /// `views::View::ConvertPointToScreen(const View*, gfx::Point*)` and its first bytes, when the
+    /// row carries them: where Chromium itself puts a view in screen DIPs. Without it, bubbles are
+    /// placed from the window's monitor.
+    pub screen_origin: Option<(usize, &'static [u8])>,
 }
 }
 

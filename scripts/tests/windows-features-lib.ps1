@@ -497,3 +497,34 @@ function Test-FirstFrames($Frames, $Steady, [int]$X0, [int]$X1, [int]$Y1) {
 function Test-VisibleBreach([bool]$OnMonitor, [string]$TestDesktop) {
   $OnMonitor -and -not $TestDesktop
 }
+
+# Why a parked window's scale does not count, or $null when it does. `Scales` are the layout DPIs
+# the runtime traced for the window, first to last, and `MonitorDpi` is the DPI of the monitor the
+# park is nearest. A window opened on one monitor and parked nearest another of another scale
+# rightly takes that monitor's scale. Any other scale, such as the system scale a window level with
+# a monitor's band can drop to, would run every row at a scale no person's window has there.
+# The work one key cost the runtime, from its `address bar: key` trace lines: the key's messages
+# summed, in microseconds, with each step and the queries the key started.
+function Get-KeyWork([string[]]$Lines) {
+  $work = [pscustomobject]@{ Total = 0; Forward = 0; Query = 0; Inline = 0; Draw = 0; Starts = 0; Messages = 0 }
+  foreach ($line in $Lines) {
+    if ($line -notmatch '^address bar: key \S+ \S+ took (\d+) us: forward (\d+) query (\d+) inline (\d+) draw (\d+) starts (\d+)$') { continue }
+    $work.Total += [int64]$Matches[1]; $work.Forward += [int64]$Matches[2]; $work.Query += [int64]$Matches[3]
+    $work.Inline += [int64]$Matches[4]; $work.Draw += [int64]$Matches[5]; $work.Starts += [int]$Matches[6]; $work.Messages++
+  }
+  $work
+}
+
+# The value below which `Share` of the numbers lie, from the sorted list.
+function Get-Percentile([double[]]$Values, [double]$Share) {
+  if (-not $Values -or $Values.Count -eq 0) { return 0 }
+  $sorted = @($Values | Sort-Object)
+  $sorted[[Math]::Min($sorted.Count - 1, [int][Math]::Floor($Share * $sorted.Count))]
+}
+
+function Get-ParkScaleError([int[]]$Scales, [int]$MonitorDpi) {
+  if (-not $Scales -or $Scales.Count -eq 0 -or $MonitorDpi -le 0) { return $null }
+  $settled = $Scales[-1]
+  if ($settled -eq $MonitorDpi) { return $null }
+  "the parked window settled at scale $settled (first $($Scales[0])), not at its nearest monitor's $MonitorDpi"
+}

@@ -281,6 +281,10 @@ struct Bar {
     refresh_step: Option<usize>,
     /// Whether the query being re-read may complete inline.
     refresh_inline: bool,
+    /// The caret the input method's windows were last placed at, in client pixels.
+    placed: Option<[i32; 4]>,
+    /// The bar's place, left, top and width in DIPs, when it was last drawn.
+    drawn_at: Option<[f32; 3]>,
 }
 
 thread_local! {
@@ -309,6 +313,8 @@ fn with_bar<R>(window: HWND, work: impl FnOnce(&mut Bar) -> R) -> R {
             deleting: false,
             refresh_step: None,
             refresh_inline: false,
+            placed: None,
+            drawn_at: None,
         });
         work(bar)
     })
@@ -604,6 +610,7 @@ pub(crate) unsafe fn view(window: HWND) -> Option<View> {
         if bar.field.as_ref().is_some_and(|field| field.take_changed()) {
             bar.generation += 1;
         }
+        bar.drawn_at = Some([x, y, width]);
         View {
             dev,
             url: url.clone(),
@@ -689,14 +696,32 @@ pub(crate) unsafe fn with_field_pixels<R>(
     })
 }
 
-unsafe fn part_at(window: HWND, point: POINT) -> Option<Part> {
+/// The control of the top bar under a client pixel. The window's hit test asks it too, so the bar
+/// takes the clicks of its controls wherever the browser would put its own title bar.
+pub(crate) unsafe fn part_at(window: HWND, point: POINT) -> Option<Part> {
     let [x, y, width] = place(window)?;
+    // The bar takes clicks where it is now. When it was drawn elsewhere, as when the browser moved
+    // its panel without a repaint after, it is drawn again here before the click can come.
+    if !busy() && needs_redraw_at(with_bar(window, |bar| bar.drawn_at), [x, y, width]) {
+        crate::frame::request_bar_paint(window);
+    }
     let f = factor(window);
     let (px, py) = (point.x as f32 / f - x, point.y as f32 / f - y);
+    part_in(width, in_pane(window), dev_reserve(window), px, py)
+}
+
+/// Whether a bar drawn at `drawn` must be drawn again to show at `now`, its place for clicks.
+pub(crate) fn needs_redraw_at(drawn: Option<[f32; 3]>, now: [f32; 3]) -> bool {
+    drawn.is_some_and(|drawn| drawn != now)
+}
+
+/// The control of a bar `width` DIPs wide at `px`, `py` DIPs from its top left corner, from the
+/// same places the bar is painted at.
+pub(crate) fn part_in(width: f32, pane: bool, reserve: f32, px: f32, py: f32) -> Option<Part> {
     if py < 0.0 || py >= ROW_HEIGHT as f32 {
         return None;
     }
-    let parts = parts_reserving(width, in_pane(window), dev_reserve(window));
+    let parts = parts_reserving(width, pane, reserve);
     // The chip lies inside the address, so it is looked for first.
     parts
         .iter()
@@ -737,7 +762,9 @@ unsafe fn begin(window: HWND, bar: &mut Bar) {
     bar.queried = url.clone();
     bar.original = url;
     bar.editing = true;
+    bar.placed = None;
     bar.generation += 1;
+    crate::trace::trace("address bar: editing begins");
 }
 
 /// The timer that re-reads the browser's result while a query's slower providers answer. It runs
@@ -775,6 +802,7 @@ unsafe fn end(bar: &mut Bar) {
     bar.queried.clear();
     bar.inline.clear();
     bar.deleting = false;
+    bar.placed = None;
     bar.generation += 1;
 }
 
@@ -895,9 +923,92 @@ pub(crate) fn completed(typed: &str, inline: &str) -> (String, usize, usize) {
     )
 }
 
+/// Whether the field's `text` asks the browser again: only while editing, and only when it is
+/// neither the text last asked for nor that text with the browser's own inline completion, which
+/// Rivet set itself.
+pub(crate) fn needs_query(editing: bool, text: &str, queried: &str, inline: &str) -> bool {
+    editing && text != queried && (inline.is_empty() || text.strip_prefix(queried) != Some(inline))
+}
+
+/// What a typing message can change on screen: the text and its selection, the caret, and the
+/// list with its pick and inline completion. The text engine reports a change for many keys that
+/// change none of these, such as a key down before its character, so its own report is not used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Shown {
+    pub text: String,
+    pub selection: (usize, usize),
+    pub caret: Option<[i32; 4]>,
+    pub rows: usize,
+    pub selected: Option<usize>,
+    pub inline: String,
+}
+
+fn bar_state(window: HWND) -> Option<Shown> {
+    with_bar(window, |bar| {
+        let field = bar.field.as_ref()?;
+        Some(Shown {
+            text: field.text(),
+            selection: selection(field),
+            caret: field.caret().map(|r| [r.left, r.top, r.right, r.bottom]),
+            rows: bar.suggestions.len(),
+            selected: bar.selected,
+            inline: bar.inline.clone(),
+        })
+    })
+}
+
+/// Whether the input method's windows go to `caret` again. Placing them makes the input method
+/// notify the window, so they are placed only when the caret moved.
+pub(crate) fn place_again(placed: Option<[i32; 4]>, caret: [i32; 4]) -> bool {
+    placed != Some(caret)
+}
+
+/// What one message of typing cost Rivet on the browser's UI thread, in microseconds, and how many
+/// queries it started. The trace shows one line per key, so a slow key names the step that took the
+/// time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct KeyWork {
+    pub starts: u32,
+    pub forward_us: u64,
+    pub query_us: u64,
+    pub inline_us: u64,
+    pub draw_us: u64,
+}
+
+impl KeyWork {
+    pub(crate) fn total_us(&self) -> u64 {
+        self.forward_us + self.query_us + self.inline_us + self.draw_us
+    }
+
+    pub(crate) fn line(&self, message: u32, key: usize) -> String {
+        format!(
+            "address bar: key {message:#x} {key:#x} took {} us: forward {} query {} inline {} draw {} starts {}",
+            self.total_us(),
+            self.forward_us,
+            self.query_us,
+            self.inline_us,
+            self.draw_us,
+            self.starts
+        )
+    }
+}
+
+/// Microseconds since `start`.
+fn micros_since(start: std::time::Instant) -> u64 {
+    start.elapsed().as_micros() as u64
+}
+
+/// Writes the work of one key to the trace, when the trace is on.
+fn trace_key(message: u32, key: usize, work: KeyWork) {
+    if crate::trace::tracing() {
+        crate::trace::trace(&work.line(message, key));
+    }
+}
+
 /// Asks the browser for suggestions when the text changed since it last asked. The browser answers
 /// at once, so nothing waits or polls: the list is drawn again only when the text changed.
-unsafe fn refresh_suggestions(window: HWND) {
+unsafe fn refresh_suggestions(window: HWND) -> KeyWork {
+    let mut work = KeyWork::default();
     let Some((text, inline)) = with_bar(window, |bar| {
         let field = bar.field.as_ref()?;
         let text = field.text();
@@ -906,10 +1017,7 @@ unsafe fn refresh_suggestions(window: HWND) {
             bar.inline.clear();
             bar.generation += 1;
         }
-        if !bar.editing
-            || text == bar.queried
-            || (!bar.inline.is_empty() && text == format!("{}{}", bar.queried, bar.inline))
-        {
+        if !needs_query(bar.editing, &text, &bar.queried, &bar.inline) {
             return None;
         }
         Some((
@@ -917,14 +1025,17 @@ unsafe fn refresh_suggestions(window: HWND) {
             may_complete_inline(&text, selection(field), bar.deleting),
         ))
     }) else {
-        return;
+        return work;
     };
     let inline = inline && !composing(window);
+    let asked = std::time::Instant::now();
     let found = if text.trim().is_empty() {
         Some(Vec::new())
     } else {
+        work.starts += 1;
         crate::features::omnibox::suggest_with(window, &text, inline, true, true)
     };
+    work.query_us = micros_since(asked);
     // Each key starts the re-reads over; the last key's query is the one that answers.
     let first = next_refresh(0, true);
     with_bar(window, |bar| {
@@ -950,10 +1061,12 @@ unsafe fn refresh_suggestions(window: HWND) {
             .unwrap_or_default();
         if !bar.inline.is_empty() {
             if let Some(field) = bar.field.as_ref() {
+                let completing = std::time::Instant::now();
                 let (full, start, end) = completed(&text, &bar.inline);
                 field.set_text(&full);
                 field.send(EM_SETSEL, start, end as isize);
                 field.take_changed();
+                work.inline_us = micros_since(completing);
             }
         }
         bar.queried = text.clone();
@@ -966,6 +1079,7 @@ unsafe fn refresh_suggestions(window: HWND) {
         format!("{rows:?} inline {:?}", bar.inline)
     });
     crate::trace::trace(&format!("address bar: suggestions for {text:?}: {shown}"));
+    work
 }
 
 /// Opens a suggestion as the browser's dropdown does.
@@ -1037,8 +1151,10 @@ pub(crate) unsafe fn message(
                     with_bar(window, |bar| bar.refresh_step = None);
                     return Some(0);
                 };
+                let read = std::time::Instant::now();
                 let found =
                     crate::features::omnibox::suggest_with(window, &text, inline, true, false);
+                let read_us = micros_since(read);
                 let changed = with_bar(window, |bar| {
                     let Some(mut found) = found else {
                         return false;
@@ -1072,6 +1188,7 @@ pub(crate) unsafe fn message(
                     bar.generation += 1;
                     true
                 });
+                let drawing = std::time::Instant::now();
                 if changed {
                     let shown = with_bar(window, |bar| {
                         let rows: Vec<&str> = bar
@@ -1084,7 +1201,14 @@ pub(crate) unsafe fn message(
                     crate::trace::trace(&format!(
                         "address bar: suggestions for {text:?} later: {shown}"
                     ));
-                    crate::frame::update_appbar(window);
+                    crate::frame::update_top_bar(window);
+                }
+                if crate::trace::tracing() {
+                    crate::trace::trace(&format!(
+                        "address bar: refresh {step} took {} us: read {read_us} draw {} changed {changed}",
+                        micros_since(read),
+                        micros_since(drawing)
+                    ));
                 }
                 let editing = with_bar(window, |bar| bar.editing);
                 match next_refresh(step + 1, editing) {
@@ -1300,9 +1424,18 @@ pub(crate) unsafe fn message(
                 with_bar(window, |bar| {
                     bar.deleting = matches!(wparam as u16, 0x08 | 0x2E)
                 });
+                let before = bar_state(window);
+                let clock = std::time::Instant::now();
                 let used = forward(window, message, wparam, lparam);
-                refresh_suggestions(window);
-                crate::frame::update_appbar(window);
+                let forward_us = micros_since(clock);
+                let mut work = refresh_suggestions(window);
+                let drawing = std::time::Instant::now();
+                if bar_state(window) != before {
+                    crate::frame::update_top_bar(window);
+                }
+                work.forward_us = forward_us;
+                work.draw_us = micros_since(drawing);
+                trace_key(message, wparam, work);
                 used.or(Some(0))
             }
         },
@@ -1311,9 +1444,18 @@ pub(crate) unsafe fn message(
                 return Some(0);
             }
             with_bar(window, |bar| bar.deleting = wparam == 0x08);
+            let before = bar_state(window);
+            let clock = std::time::Instant::now();
             let used = forward(window, message, wparam, lparam);
-            refresh_suggestions(window);
-            crate::frame::update_appbar(window);
+            let forward_us = micros_since(clock);
+            let mut work = refresh_suggestions(window);
+            let drawing = std::time::Instant::now();
+            if bar_state(window) != before {
+                crate::frame::update_top_bar(window);
+            }
+            work.forward_us = forward_us;
+            work.draw_us = micros_since(drawing);
+            trace_key(message, wparam, work);
             used.or(Some(0))
         }
         WM_KEYUP
@@ -1324,11 +1466,21 @@ pub(crate) unsafe fn message(
         | WM_IME_CHAR
         | WM_IME_REQUEST
         | WM_INPUTLANGCHANGE => {
+            let before = bar_state(window);
+            let clock = std::time::Instant::now();
             let used = forward(window, message, wparam, lparam);
+            let forward_us = micros_since(clock);
+            let mut work = KeyWork::default();
             if matches!(message, WM_IME_COMPOSITION | WM_IME_ENDCOMPOSITION) {
-                refresh_suggestions(window);
+                work = refresh_suggestions(window);
             }
-            crate::frame::update_appbar(window);
+            let drawing = std::time::Instant::now();
+            if bar_state(window) != before {
+                crate::frame::update_top_bar(window);
+            }
+            work.forward_us = forward_us;
+            work.draw_us = micros_since(drawing);
+            trace_key(message, wparam, work);
             if message == WM_INPUTLANGCHANGE {
                 None
             } else {
@@ -1363,19 +1515,41 @@ pub(crate) unsafe fn message(
 }
 
 unsafe fn forward(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    let sending = std::time::Instant::now();
     let (used, caret) = with_bar(window, |bar| {
         let field = bar.field.as_ref()?;
         let used = field.send(message, wparam, lparam);
+        let sent_us = micros_since(sending);
+        if sent_us >= 2_000 && crate::trace::tracing() {
+            crate::trace::trace(&format!(
+                "address bar: text engine took {sent_us} us for {message:#x}"
+            ));
+        }
         if field.take_changed() {
             bar.generation += 1;
         }
-        Some((used, field.caret()))
+        // Placing the windows makes the input method send notices of its own, which need no placing.
+        let placing = !matches!(message, WM_IME_NOTIFY | WM_IME_SETCONTEXT | WM_IME_REQUEST);
+        let caret = field.caret().filter(|caret| {
+            if !placing {
+                return false;
+            }
+            let at = [caret.left, caret.top, caret.right, caret.bottom];
+            let again = place_again(bar.placed, at);
+            bar.placed = Some(at);
+            again
+        });
+        Some((used, caret))
     })?;
-    // Placing the windows makes the input method send notices of its own, which need no placing.
-    if let Some(caret) =
-        caret.filter(|_| !matches!(message, WM_IME_NOTIFY | WM_IME_SETCONTEXT | WM_IME_REQUEST))
-    {
+    if let Some(caret) = caret {
+        let placing = std::time::Instant::now();
         place_input_method(window, caret);
+        let placed_us = micros_since(placing);
+        if placed_us >= 2_000 && crate::trace::tracing() {
+            crate::trace::trace(&format!(
+                "address bar: input method placed in {placed_us} us for {message:#x}"
+            ));
+        }
     }
     used
 }
@@ -1409,6 +1583,7 @@ unsafe fn place_input_method(window: HWND, caret: RECT) {
 }
 
 unsafe fn act(window: HWND, part: Part) {
+    crate::trace::trace(&format!("address bar: act {part:?}"));
     let command: isize = match part {
         Part::Back => 1,
         Part::Forward => 2,
@@ -1550,7 +1725,7 @@ unsafe fn redraw(window: HWND, redraw: Redraw) {
     match redraw {
         Redraw::Nothing => {}
         Redraw::Caret => crate::frame::update_address_caret(window),
-        Redraw::Bar => crate::frame::update_appbar(window),
+        Redraw::Bar => crate::frame::update_top_bar(window),
     }
 }
 
@@ -1569,6 +1744,116 @@ pub(crate) fn caret(window: HWND) -> Option<RECT> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_each_control_answers_where_it_is_painted_shown_and_folded() {
+        // A bar beside the shown appbar and the wider bar of a folded one, as the browser lays
+        // the panel out for each.
+        for width in [1156.0, 1422.0] {
+            for (part, at, w) in parts_reserving(width, false, 0.0) {
+                if part == Part::Chip {
+                    continue;
+                }
+                let middle = at + w / 2.0;
+                assert_eq!(
+                    part_in(width, false, 0.0, middle, ROW_HEIGHT as f32 / 2.0),
+                    Some(part),
+                    "{part:?} of a {width} DIP bar"
+                );
+            }
+            assert_eq!(part_in(width, false, 0.0, 10.0, -1.0), None);
+            assert_eq!(part_in(width, false, 0.0, 10.0, ROW_HEIGHT as f32), None);
+        }
+    }
+
+    #[test]
+    fn nfr2_one_key_asks_the_browser_once_and_rivets_own_completion_never() {
+        // A key down and up leave the text alone, so only the character asks.
+        let mut starts = 0;
+        let (mut queried, inline) = ("exa".to_string(), String::new());
+        for text in ["exa", "exam", "exam"] {
+            if needs_query(true, text, &queried, &inline) {
+                starts += 1;
+                queried = text.to_string();
+            }
+        }
+        assert_eq!(starts, 1);
+        // The browser's completion that Rivet set after the typed text asks nothing again.
+        assert!(!needs_query(true, "example.com", "exa", "mple.com"));
+        assert!(needs_query(true, "examp", "exa", "mple.com"));
+        assert!(!needs_query(false, "examp", "exa", ""));
+        assert!(!needs_query(true, "exa", "exa", "mple.com"));
+    }
+
+    #[test]
+    fn fr12_a_bar_drawn_where_it_no_longer_takes_clicks_is_drawn_again() {
+        // Shown beside the appbar, then folded: the panel moved left and grew.
+        let shown = [276.0, 8.0, 1156.0];
+        let folded = [8.0, 8.0, 1424.0];
+        assert!(needs_redraw_at(Some(shown), folded));
+        assert!(needs_redraw_at(Some(folded), shown));
+        assert!(!needs_redraw_at(Some(folded), folded));
+        // A bar never drawn yet is drawn with the window's first paint.
+        assert!(!needs_redraw_at(None, folded));
+    }
+
+    #[test]
+    fn nfr2_a_key_that_shows_nothing_new_draws_nothing() {
+        let before = Shown {
+            text: "exa".into(),
+            selection: (3, 3),
+            caret: Some([40, 4, 41, 20]),
+            rows: 3,
+            selected: None,
+            inline: String::new(),
+        };
+        // A key down before its character, or a key up, leaves what the bar shows as it was.
+        assert_eq!(Some(before.clone()), Some(before.clone()));
+        // A character, a caret move or a new list each draw.
+        let typed = Shown {
+            text: "exam".into(),
+            selection: (4, 4),
+            caret: Some([48, 4, 49, 20]),
+            ..before.clone()
+        };
+        assert_ne!(Some(before.clone()), Some(typed));
+        let moved = Shown {
+            caret: Some([30, 4, 31, 20]),
+            selection: (2, 2),
+            ..before.clone()
+        };
+        assert_ne!(Some(before.clone()), Some(moved));
+        let listed = Shown {
+            rows: 5,
+            ..before.clone()
+        };
+        assert_ne!(Some(before), Some(listed));
+    }
+
+    #[test]
+    fn nfr2_the_input_method_is_placed_only_when_the_caret_moved() {
+        assert!(place_again(None, [10, 4, 11, 20]));
+        assert!(!place_again(Some([10, 4, 11, 20]), [10, 4, 11, 20]));
+        assert!(place_again(Some([10, 4, 11, 20]), [18, 4, 19, 20]));
+    }
+
+    #[test]
+    fn nfr2_a_keys_work_is_traced_step_by_step() {
+        let work = KeyWork {
+            starts: 1,
+            forward_us: 20,
+            query_us: 4000,
+            inline_us: 80,
+            draw_us: 1000,
+        };
+        assert_eq!(work.total_us(), 5100);
+        // windows-features.ps1 reads this line back, so its shape is part of the test contract.
+        assert_eq!(
+            work.line(0x102, 0x61),
+            "address bar: key 0x102 0x61 took 5100 us: forward 20 query 4000 inline 80 draw 1000 starts 1"
+        );
+        assert_eq!(KeyWork::default().total_us(), 0);
+    }
 
     #[test]
     fn fr12_late_suggestions_are_read_a_few_times_after_a_key_and_never_at_idle() {
