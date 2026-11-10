@@ -1244,7 +1244,12 @@ pub fn find_candidate(
         let places: Vec<u32> = all
             .iter()
             .copied()
-            .filter(|place| !prior_starts.contains(target) || new_starts.contains(place))
+            .filter(|place| {
+                // The linker starts whole functions on 16 bytes, and the exception table also
+                // lists the parts it moves out of a function, which start anywhere.
+                !prior_starts.contains(target)
+                    || (new_starts.contains(place) && (target % 16 != 0 || *place % 16 == 0))
+            })
             .collect();
         match places.as_slice() {
             [only] => {
@@ -2155,6 +2160,17 @@ mod tests {
         assert_eq!(prior_starts.len(), 3);
         let (prints, _) = fingerprints_of(&verified_row(), &prior_pe);
         let bytes = with_starts(&code, &[0x103100, 0x103200, 0x103300]);
+        let pe = PeFile::parse(&bytes).unwrap();
+        let (row, report) = find_candidate(&verified_row(), &prints, &prior_starts, "1.0.0.3", &pe);
+        assert!(report.review.is_empty(), "{:?}", report.review);
+        assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
+        // A part moved out of another function starts where it may, and a whole function does not.
+        let mut split = shifted_code(0x2000, 0x44);
+        split.push((
+            0x105308,
+            hex("4157415641554154565755534881eca0000000").unwrap(),
+        ));
+        let bytes = with_starts(&split, &[0x103100, 0x103200, 0x103300, 0x105308]);
         let pe = PeFile::parse(&bytes).unwrap();
         let (row, report) = find_candidate(&verified_row(), &prints, &prior_starts, "1.0.0.3", &pe);
         assert!(report.review.is_empty(), "{:?}", report.review);
