@@ -18,7 +18,10 @@ $url, $packed = switch ($Browser) {
 if ($ResolveOnly) { $url; return }
 $target = if ($packed) { "$Out.gz" } else { $Out }
 curl.exe -fsSL --retry 3 -o $target $url
-if ($LASTEXITCODE -ne 0) { throw "The symbol server has no PDB at $url yet" }
+# curl exits with 22 when the server answers with an error, which for a symbol server means the PDB
+# is not published yet. The caller may then make the row without it, so that case has its own type.
+if ($LASTEXITCODE -eq 22) { throw [System.IO.FileNotFoundException]::new("The symbol server has no PDB at $url yet") }
+if ($LASTEXITCODE -ne 0) { throw "Could not download ${url}: curl exited with $LASTEXITCODE" }
 if ($packed) {
     $in = [IO.File]::OpenRead($target)
     $gzip = [IO.Compression.GZipStream]::new($in, [IO.Compression.CompressionMode]::Decompress)

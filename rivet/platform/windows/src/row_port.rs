@@ -64,6 +64,10 @@ pub struct PortReport {
     pub carried: Vec<String>,
     /// Optional parts the new build could not supply. The runtime does without them.
     pub left_out: Vec<String>,
+    /// The new build had no symbols, so every address was looked for by the prior row's fingerprints.
+    pub made_without_pdb: bool,
+    /// Addresses a fingerprint found in exactly one place of the new build.
+    pub fingerprinted: Vec<String>,
 }
 
 fn is_address(value: u64) -> bool {
@@ -849,6 +853,10 @@ pub fn port_row(
 /// A copy of the prior row with the new version, and frame addresses in the `0x` form.
 fn begin_row(prior: &Value, version: &str) -> (Value, PortReport) {
     let mut row = prior.clone();
+    if let Some(object) = row.as_object_mut() {
+        // The mark tells how the prior row was made, not this one.
+        object.remove(WITHOUT_PDB);
+    }
     let prior_version = prior["frame"]["version"]
         .as_str()
         .unwrap_or_default()
@@ -1067,6 +1075,17 @@ fn code_print(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
 /// known by a slot that holds one of those functions. An address that is neither cannot be found,
 /// so then the row gets no fingerprints at all.
 pub fn add_fingerprints(row: &mut Value, pe: &PeFile) -> Result<(), String> {
+    let (prints, missing) = fingerprints_of(row, pe);
+    if !missing.is_empty() {
+        return Err(format!("no fingerprint for {}", missing.join(", ")));
+    }
+    row["fingerprints"] = Value::Object(prints);
+    Ok(())
+}
+
+/// The fingerprint of each address of a row that has one, read from the row's own module, and the
+/// addresses that have none. A row made from them leaves those addresses unvouched.
+pub fn fingerprints_of(row: &Value, pe: &PeFile) -> (serde_json::Map<String, Value>, Vec<String>) {
     let targets = fingerprint_targets(row);
     let mut prints = serde_json::Map::new();
     let mut missing = Vec::new();
@@ -1093,11 +1112,7 @@ pub fn add_fingerprints(row: &mut Value, pe: &PeFile) -> Result<(), String> {
             None => missing.push(key),
         }
     }
-    if !missing.is_empty() {
-        return Err(format!("no fingerprint for {}", missing.join(", ")));
-    }
-    row["fingerprints"] = Value::Object(prints);
-    Ok(())
+    (prints, missing)
 }
 
 /// Every place each function fingerprint matches, in one pass over the code.
@@ -1161,7 +1176,26 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
     let Some(stored) = prior["fingerprints"].as_object() else {
         return Err(vec!["the row has no fingerprints".to_owned()]);
     };
+    let (row, report) = find_candidate(prior, stored, version, pe);
+    if !report.review.is_empty() {
+        return Err(report.review);
+    }
+    Ok(row)
+}
+
+/// Makes a candidate row for a build whose symbols are not published, from `stored`, the
+/// fingerprints of the prior row's addresses in the prior build. An address is taken only where
+/// its fingerprint matches exactly one place. Every other address keeps a review line and its
+/// prior value, so such a row is never published as it is. Offsets, slots and sizes are read again
+/// from the new module exactly as for a row made from symbols.
+pub fn find_candidate(
+    prior: &Value,
+    stored: &serde_json::Map<String, Value>,
+    version: &str,
+    pe: &PeFile,
+) -> (Value, PortReport) {
     let (row, mut report) = begin_row(prior, version);
+    report.made_without_pdb = true;
     let targets = fingerprint_targets(prior);
     report.addresses = targets.len();
     let mut functions = BTreeMap::new();
@@ -1199,6 +1233,9 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
         match found.get(target).map(Vec::as_slice) {
             Some([only]) => {
                 moved.insert(*target, *only);
+                report
+                    .fingerprinted
+                    .push(format!("{target:#x} -> {only:#x}"));
             }
             Some(many) => report
                 .review
@@ -1216,6 +1253,9 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
         match find_table(pe, *slot, function).as_slice() {
             [only] => {
                 moved.insert(*target, *only);
+                report
+                    .fingerprinted
+                    .push(format!("{target:#x} -> {only:#x}"));
             }
             many => report.review.push(format!(
                 "{target:#x}: {} tables hold {function:#x} in slot {slot}",
@@ -1230,14 +1270,115 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
             .push("two addresses found the same place".to_owned());
     }
     let (mut row, report) = finish_row(row, &moved, pe, report);
-    if !report.review.is_empty() {
-        return Err(report.review);
-    }
     if let Some(object) = row.as_object_mut() {
         // They describe the prior build, so they would mislead in this row.
         object.remove("fingerprints");
     }
-    Ok(row)
+    (row, report)
+}
+
+/// The key of a row made without its build's symbols. It holds what the row job needs to make the
+/// row again from the symbols once they are published, and to compare the two. The runtime reads
+/// only `frame` and `build`, so the mark changes nothing in a browser.
+pub const WITHOUT_PDB: &str = "made_without_pdb";
+
+/// Marks a row made from fingerprints with the symbol key of its module, the prior row it was made
+/// from, and how the row job fetches the build again.
+pub fn mark_without_pdb(
+    row: &mut Value,
+    pdb_key: &str,
+    prior_version: &str,
+    channel: &str,
+    download: &str,
+) {
+    row[WITHOUT_PDB] = json!({
+        "pdb_key": pdb_key,
+        "prior_version": prior_version,
+        "channel": channel,
+        "download": download,
+    });
+}
+
+/// Where a row made from fingerprints differs from the row the build's own symbols give. A value
+/// the fingerprint row left out is not a difference, since the runtime does without it.
+pub fn differences_from_pdb_row(found: &Value, from_pdb: &Value) -> Vec<String> {
+    fn walk(path: &str, found: &Value, pdb: &Value, out: &mut Vec<String>) {
+        match (found, pdb) {
+            (Value::Null, _) => {}
+            (Value::Object(left), Value::Object(right)) => {
+                for (key, value) in left {
+                    let other = right.get(key).unwrap_or(&Value::Null);
+                    walk(&format!("{path}.{key}"), value, other, out);
+                }
+            }
+            (Value::Array(left), Value::Array(right)) if left.len() == right.len() => {
+                for (index, (a, b)) in left.iter().zip(right).enumerate() {
+                    walk(&format!("{path}[{index}]"), a, b, out);
+                }
+            }
+            _ if found != pdb => {
+                out.push(format!(
+                    "{path}: {found} from fingerprints, {pdb} from the PDB"
+                ));
+            }
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    for part in ["frame", "build"] {
+        walk(part, &found[part], &from_pdb[part], &mut out);
+    }
+    out
+}
+
+/// Compares the marked row of `browser` `version` in `table` with the row made from the build's
+/// symbols. When they agree the mark is removed, since the symbols now vouch for the row. The
+/// differences are returned, and the table is left as it was when there are any.
+pub fn check_against_pdb(
+    table: &mut Value,
+    browser: &str,
+    version: &str,
+    from_pdb: &Value,
+) -> Result<Vec<String>, String> {
+    let row = table["rows"]
+        .as_array_mut()
+        .ok_or("the table has no rows")?
+        .iter_mut()
+        .find(|row| row["frame"]["browser"] == browser && row["frame"]["version"] == version)
+        .ok_or_else(|| format!("the table has no row for {browser} {version}"))?;
+    if row.get(WITHOUT_PDB).is_none() {
+        return Err(format!(
+            "the row of {browser} {version} was not made without its PDB"
+        ));
+    }
+    let differences = differences_from_pdb_row(row, from_pdb);
+    if differences.is_empty() {
+        if let Some(object) = row.as_object_mut() {
+            object.remove(WITHOUT_PDB);
+        }
+    }
+    Ok(differences)
+}
+
+/// Adds to each review line that starts with a prior address the public name that address lies
+/// in, from the prior build's symbols, so a person sees which function was not found.
+pub fn name_review_lines(review: &mut [String], named: &BTreeMap<u32, (u32, Vec<String>)>) {
+    for line in review {
+        let Some(digits) = line.strip_prefix("0x") else {
+            continue;
+        };
+        let end = digits
+            .find(|c: char| !c.is_ascii_hexdigit())
+            .unwrap_or(digits.len());
+        let Ok(address) = u32::from_str_radix(&digits[..end], 16) else {
+            continue;
+        };
+        if let Some((distance, names)) = named.get(&address) {
+            if let Some(name) = names.first() {
+                line.push_str(&format!(" ({name}+{distance:#x} in the prior build)"));
+            }
+        }
+    }
 }
 
 /// A folded function that fills a known table slot is the one in that slot of the new table.
@@ -1934,6 +2075,136 @@ mod tests {
     fn nfr6_a_row_without_fingerprints_finds_nothing() {
         let reasons = find(&verified_row(), &shifted_code(0x2000, 0x44), "1.0.0.3").unwrap_err();
         assert_eq!(reasons, ["the row has no fingerprints"]);
+    }
+
+    /// The fingerprints of the verified row, read from its own module as the row job reads them
+    /// when the prior row stored none.
+    fn prints_of_prior() -> serde_json::Map<String, Value> {
+        let bytes = module(&code_refs(&shifted_code(0, 0x10)));
+        let pe = PeFile::parse(&bytes).unwrap();
+        let (prints, missing) = fingerprints_of(&verified_row(), &pe);
+        assert!(missing.is_empty(), "{missing:?}");
+        prints
+    }
+
+    fn candidate(
+        prints: &serde_json::Map<String, Value>,
+        code: &[(u32, Vec<u8>)],
+        version: &str,
+    ) -> (Value, PortReport) {
+        let bytes = module(&code_refs(code));
+        let pe = PeFile::parse(&bytes).unwrap();
+        find_candidate(&verified_row(), prints, version, &pe)
+    }
+
+    #[test]
+    fn nfr6_a_build_without_symbols_gets_a_row_from_the_prior_builds_fingerprints() {
+        let (row, report) = candidate(&prints_of_prior(), &shifted_code(0x2000, 0x44), "1.0.0.3");
+        assert!(report.review.is_empty(), "{:?}", report.review);
+        assert!(report.made_without_pdb);
+        assert_eq!(report.fingerprinted.len(), 4, "{:?}", report.fingerprinted);
+        assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
+        assert_eq!(row["frame"]["frame_view_vtable"], 0x103000);
+        assert_eq!(row["frame"]["hwnd_for_view"], 0x103200);
+        // Values that are not addresses are left to the recipes, and nothing of the prior build stays.
+        assert_eq!(row["build"]["toolbar"]["view_layer"], "0x20");
+        assert!(row.get("fingerprints").is_none());
+    }
+
+    #[test]
+    fn nfr6_an_address_its_fingerprint_does_not_pin_down_is_not_vouched_for() {
+        // Two places match the paint function: that part keeps its prior value and stops the row,
+        // and the rest of the row is still found.
+        let mut code = shifted_code(0x2000, 0x44);
+        code.push((
+            0x105300,
+            hex("4157415641554154565755534881eca0000000").unwrap(),
+        ));
+        let (row, report) = candidate(&prints_of_prior(), &code, "1.0.0.3");
+        assert!(
+            report
+                .review
+                .iter()
+                .any(|line| line.contains("0x101300 matches 2 places")),
+            "{:?}",
+            report.review
+        );
+        assert!(report
+            .review
+            .iter()
+            .any(|line| line.contains("no new place")));
+        assert_eq!(row["build"]["toolbar"]["paint"], "0x101300");
+        assert_eq!(row["frame"]["hwnd_for_view"], 0x103200);
+        // An address the prior build gave no fingerprint is not looked for at all.
+        let mut prints = prints_of_prior();
+        prints.remove("0x101200");
+        let (_, report) = candidate(&prints, &shifted_code(0x2000, 0x44), "1.0.0.3");
+        assert!(
+            report
+                .review
+                .iter()
+                .any(|line| line == "0x101200: no fingerprint"),
+            "{:?}",
+            report.review
+        );
+    }
+
+    #[test]
+    fn nfr6_a_row_made_without_its_pdb_is_checked_against_the_pdb_row() {
+        let (mut row, _) = candidate(&prints_of_prior(), &shifted_code(0x2000, 0x44), "1.0.0.3");
+        mark_without_pdb(&mut row, "ABC1", "1.0.0.2", "stable", "");
+        assert_eq!(row[WITHOUT_PDB]["prior_version"], "1.0.0.2");
+        let mut from_pdb = row.clone();
+        from_pdb.as_object_mut().unwrap().remove(WITHOUT_PDB);
+        // A part the fingerprint row left out is no difference.
+        row["build"]["screen_origin"] = Value::Null;
+        from_pdb["build"]["screen_origin"] = json!(["0x103400", "5657"]);
+        let table = json!({"rows": [row]});
+        let mut agreed = table.clone();
+        assert_eq!(
+            check_against_pdb(&mut agreed, "B", "1.0.0.3", &from_pdb).unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(agreed["rows"][0].get(WITHOUT_PDB).is_none());
+        // A different address is a difference, and the row keeps its mark.
+        from_pdb["build"]["toolbar"]["paint"] = json!("0x103310");
+        let mut differs = table.clone();
+        let differences = check_against_pdb(&mut differs, "B", "1.0.0.3", &from_pdb).unwrap();
+        assert_eq!(differences.len(), 1, "{differences:?}");
+        assert!(
+            differences[0].starts_with("build.toolbar.paint:"),
+            "{differences:?}"
+        );
+        assert_eq!(differs, table);
+        // A row made from symbols has nothing to check.
+        let mut plain = json!({"rows": [from_pdb.clone()]});
+        assert!(check_against_pdb(&mut plain, "B", "1.0.0.3", &from_pdb).is_err());
+    }
+
+    #[test]
+    fn nfr6_a_row_made_from_a_marked_prior_does_not_inherit_the_mark() {
+        let mut prior = prior();
+        mark_without_pdb(&mut prior, "ABC1", "1.0.0.0", "stable", "");
+        let code = new_code();
+        let (row, _) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "1.0.0.2");
+        assert!(row.get(WITHOUT_PDB).is_none());
+    }
+
+    #[test]
+    fn nfr6_a_review_line_names_the_prior_function_it_is_about() {
+        let named = BTreeMap::from([(0x101300, (0x10, vec!["?Paint@V@@".to_owned()]))]);
+        let mut review = vec![
+            "0x101300 matches no place".to_owned(),
+            "0x101400: no fingerprint".to_owned(),
+            "the milestone changed".to_owned(),
+        ];
+        name_review_lines(&mut review, &named);
+        assert_eq!(
+            review[0],
+            "0x101300 matches no place (?Paint@V@@+0x10 in the prior build)"
+        );
+        assert_eq!(review[1], "0x101400: no fingerprint");
+        assert_eq!(review[2], "the milestone changed");
     }
 
     #[test]
