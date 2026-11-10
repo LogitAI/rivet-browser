@@ -25,6 +25,12 @@ expect "proves a row on the real browser" "windows-row-proof.ps1"
 expect "does not publish a row that needs review" "steps.made.outputs.for_review == 'false'"
 expect "publishes a signed table" "table-sign"
 expect "signs with a secret" "secrets.RIVET_TABLE_SIGNING_KEY"
+expect "makes a row from fingerprints when the new PDB is missing" "chrome-builds.exe find"
+expect "tells a missing PDB from a failed download" "catch [System.IO.FileNotFoundException]"
+expect "compares a row made without its PDB once the PDB appears" "chrome-builds.exe pdb-check"
+expect "reports a row that differs from its PDB" "Row differs from its PDB"
+expect "a trial run publishes nothing" "needs.row.result != 'skipped' && !inputs.trial"
+expect "a trial run proposes nothing" "steps.made.outputs.for_review == 'true' && !inputs.trial"
 
 if [[ -e "$repo_root/.github/workflows/chrome-support.yml" ]]; then
     echo "chrome-support.yml covers Chrome only and is replaced by browser-rows.yml" >&2
