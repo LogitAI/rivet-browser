@@ -2601,6 +2601,649 @@
         "module": "msedge.dll",
         "version": "156.0.4314.58"
       }
+    },
+    {
+      "build": {
+        "app_window": {
+          "add_child": "0x1105eae",
+          "add_child_prologue": "18000f84a81208034889d60f57c0",
+          "bounds_changed_slot": "0x57",
+          "browser_context": "0x11869c0",
+          "browser_context_offset": null,
+          "browser_context_prologue": "488b8190020000c3cccccccccccccccc",
+          "browser_type": "0x10",
+          "destructor_slot": "0x9",
+          "detach": "0xa408856",
+          "detach_prologue": "5e415fe9e24c31f94157415641554154",
+          "feature_impl": "0x100be12",
+          "feature_impl_prologue": "5657534883ec204489c389d64889cf",
+          "focus_behavior": "0x110e22a",
+          "focus_behavior_prologue": "5657534883ec2089d34889ce488b0148",
+          "insert": "0xa3c1072",
+          "insert_prologue": "4157415641554154565755534883ec68",
+          "operator_new": "0x371d5e0",
+          "operator_new_prologue": "40534883ec20488bd9e8b289acfd4885",
+          "request_focus": "0x2dd71a0",
+          "request_focus_prologue": "04010f84b1b34801488b4424704831e0",
+          "request_focus_slot": null,
+          "set_bounds": "0x1047678",
+          "set_bounds_prologue": "4157415641554154565755534881ecb8",
+          "set_contents": "0x2a89660",
+          "set_contents_prologue": "5657534883ec204889d74889ce4889d1",
+          "view_children": "0x1a0",
+          "view_parent": "0x198",
+          "web_view_ctor": "0x2b3a51a",
+          "web_view_ctor_prologue": "fe488d7c24284889f9bae1e3e1ffe873",
+          "web_view_size": "0x5b0"
+        },
+        "browser": "Microsoft Edge",
+        "layout": {
+          "browser_view_view_vtable": "0x11940340",
+          "browser_window_in_view": "0x1f8",
+          "caption_container_offset": "0x438",
+          "caption_ink_ids": [
+            1644,
+            1645,
+            1646
+          ],
+          "caption_paint": "0x2d4ec50",
+          "caption_paint_prologue": "898640030000488d",
+          "caption_paint_slot": "0x7f",
+          "caption_size": "0xa7f61e0",
+          "caption_size_slot": "0x56",
+          "caption_vtable": "0x118faca0",
+          "corner_paint": "0xa6734d0",
+          "corner_paint_prologue": "4989f1e89fb2f5fe",
+          "corner_vtable": "0x118c0700",
+          "draw_color": "0x2a743ba",
+          "draw_color_prologue": "014889f9e8ad",
+          "frame_browser_window_offset": "0x3b0",
+          "frame_ids": [
+            316,
+            317,
+            320,
+            321,
+            324,
+            3406
+          ],
+          "frame_vtable": "0x1185ff40",
+          "get_color_provider": "0x102c890",
+          "get_color_provider_prologue": "4883ec28488b",
+          "layout": "0x2976ca0",
+          "layout_immediately": "0x10683d0",
+          "layout_immediately_prologue": "565755534883ec584889ce48",
+          "layout_prologue": "564883ec4048",
+          "layout_slot": "0x18",
+          "on_paint": "0x2ae31c0",
+          "on_paint_prologue": "56574883ec384889",
+          "on_paint_slot": "0x65",
+          "provider_verified": true,
+          "set_bounds_rect": "0x1047678",
+          "set_bounds_rect_prologue": "4157415641554154",
+          "set_layer": "0x279f578",
+          "set_layer_prologue": "000000488b0c",
+          "set_masks": "0x30d176c",
+          "set_masks_prologue": "488b8970010000",
+          "set_opaque": "0x1054120",
+          "set_opaque_prologue": "564883ec20",
+          "set_radius": "0x2ddb43e",
+          "set_radius_prologue": "4889442430b001",
+          "stack_at_top": "0xb41dd9e",
+          "stack_at_top_prologue": "0048038c24a8",
+          "top_inset": "0x3402f60",
+          "top_inset_adjust": 0,
+          "top_inset_slot": "0xa4",
+          "view_bounds_offset": "0x1c8"
+        },
+        "module": "msedge.dll",
+        "navigation": {
+          "active_web_contents": "0xcaebbe0",
+          "browser_view_for_window": "0x10fc148",
+          "content_window_for_hwnd": "0x26f72a6",
+          "gurl_drop": "0x10035aa",
+          "gurl_empty": "0x112d02c",
+          "gurl_from_text": "0x103d9a2",
+          "gurl_wide": false,
+          "open_url": "0x7a63840",
+          "open_url_params": "0x67a976c",
+          "open_url_params_drop": "0x67a9dd4",
+          "signatures": [
+            [
+              "0x26f72a6",
+              "564883ec20e8"
+            ],
+            [
+              "0x10fc148",
+              "ff1522ea57"
+            ],
+            [
+              "0x103d9a2",
+              "4157415641554154"
+            ],
+            [
+              "0x112d02c",
+              "4889c80f57c0"
+            ],
+            [
+              "0x10035aa",
+              "56574883ec28"
+            ],
+            [
+              "0x67a976c",
+              "415656575553"
+            ],
+            [
+              "0x67a9dd4",
+              "56574883ec"
+            ],
+            [
+              "0x7a63840",
+              "284c8d642440eb53"
+            ],
+            [
+              "0xcaebbe0",
+              "89d84883c4785b"
+            ]
+          ],
+          "supported": true
+        },
+        "omnibox": {
+          "allocate": "0x371d5e0",
+          "app_layout_proposed": "0xa660c30",
+          "app_layout_slot": "0x10",
+          "app_layout_vtable": "0x11736770",
+          "browser_context": "0x11869c0",
+          "classifier_for_profile": "0x2ca1bda",
+          "classify": "0x2972856",
+          "controller_new": "0x27cb422",
+          "controller_published_result": "0x750",
+          "controller_size": "0xa58",
+          "default_providers": "0x27cb2fa",
+          "delete": "0x370af10",
+          "input_drop": "0x2972a48",
+          "input_new": "0x2972b50",
+          "input_omit_asynchronous": "0x22b",
+          "input_prevent_inline": "0x228",
+          "input_size": "0x500",
+          "match_contents": "0x2a0",
+          "match_description": "0x2d0",
+          "match_destination": "0x68",
+          "match_drop": "0x2844822",
+          "match_new": "0x2844c00",
+          "match_size": "0x820",
+          "profile_from_context": "0x269c00",
+          "provider_client_new": "0x2fcaa66",
+          "provider_client_size": "0x88",
+          "scheme_classifier_new": "0x27c5b12",
+          "scheme_classifier_size": "0x10",
+          "security_level": "0x112c43b",
+          "security_state_drop": "0x112c3f2",
+          "show_page_info": "0xa17f4bd",
+          "signatures": [
+            [
+              "0x269c00",
+              "4889c8c3"
+            ],
+            [
+              "0x11869c0",
+              "488b8190020000c3"
+            ],
+            [
+              "0x2ca1bda",
+              "31d241b806000000"
+            ],
+            [
+              "0x2972856",
+              "4157415641554154565755534881ecd8"
+            ],
+            [
+              "0x2844c00",
+              "00e84a799ffdf68540020000"
+            ],
+            [
+              "0x2844822",
+              "4883bd900000000074"
+            ],
+            [
+              "0x112ab38",
+              "8548010000488b41104c8b08"
+            ],
+            [
+              "0x112c43b",
+              "41565657534883ec48"
+            ],
+            [
+              "0x112c3f2",
+              "56574883ec284889ce"
+            ],
+            [
+              "0x370af10",
+              "4883c438c3"
+            ],
+            [
+              "0xa17f4bd",
+              "007918488b8c2480010000488b942490010000"
+            ],
+            [
+              "0x2fcaa66",
+              "4531c0e9"
+            ],
+            [
+              "0x27c5b12",
+              "5c415d415e415fc341"
+            ],
+            [
+              "0x27cb2fa",
+              "4156565755534883ec20"
+            ],
+            [
+              "0x27cb422",
+              "415741564154565755534881ecb00000"
+            ],
+            [
+              "0x2972b50",
+              "564883ec504489c04889ce"
+            ],
+            [
+              "0x2972a48",
+              "564883ec304889ce"
+            ],
+            [
+              "0x287d470",
+              "4157415641554154565755534881ec08"
+            ],
+            [
+              "0x371d5e0",
+              "40534883ec20488bd9"
+            ],
+            [
+              "0xa660c30",
+              "f30f16c8f30f5ec1f30f118300040000"
+            ]
+          ],
+          "start": "0x287d470",
+          "visible_security_state": "0x112ab38"
+        },
+        "screen_origin": null,
+        "side_panel": {
+          "browser_offset": "0x618",
+          "browser_view_view_vtable": "0x11940340",
+          "color_source": "0x98",
+          "contents_container": "0xd8",
+          "contents_outline": "0x7fff0000",
+          "coordinator_vtable": "0x117a07a0",
+          "entry_count": 25,
+          "entry_id_to_string": "0x29aa2c8",
+          "entry_id_to_string_prologue": "00e84a113bff4885c00f85ab",
+          "entry_showing": "0x9579950",
+          "entry_showing_prologue": "488b491080793001",
+          "event_handler_for_point": "0x10cd248",
+          "extension_entry": 24,
+          "features_coordinator": "0x2c0",
+          "features_offset": "0xd8",
+          "generate_colors_css": "0x892c71c",
+          "generate_colors_css_prologue": "415741564155415456575553",
+          "get_color_provider": "0x117fcd0",
+          "get_color_provider_prologue": "4883ec284883e980e8d3e1e8ff48",
+          "hidden_entries": [
+            0
+          ],
+          "host_view": "0x38",
+          "layout_immediately": "0x10683d0",
+          "layout_immediately_prologue": "565755534883ec584889ce488b055e7c4513",
+          "layout_vtable": "0x7fff0000",
+          "old_layout": true,
+          "page_area": "0x0",
+          "proposed": "0x28fbbb0",
+          "proposed_slot": "0x4",
+          "registry_from": "0x2cfea5a",
+          "registry_from_prologue": "4881c1b0000000",
+          "show": "0x9579590",
+          "show_prologue": "41565657534883ec584489cb",
+          "side_panel": "0xb8",
+          "side_panel_animation": "0x7fff0000",
+          "side_panel_vtable": "0x11815ce0",
+          "source_in_widget": "0x48",
+          "supported": false,
+          "toggle": "0x935b830",
+          "toggle_prologue": "7424704c8d05a66660fee8417fcaf7",
+          "toolbar": "0x7fff0000",
+          "vertical_tabs": "0x7fff0000"
+        },
+        "split": {
+          "active_member": "0x420",
+          "add_to_new_split": "0xa3cd1f6",
+          "allocate": "0x371d5e0",
+          "calculate_layout": "0x2c2f6f0",
+          "calculate_layout_prologue": "4c0989114839c10f8564398201",
+          "container_count_member": "0x370",
+          "container_delegate_offset": "0x338",
+          "container_layout": "0xa670d10",
+          "containers_member": "0x368",
+          "flex_layout": "0x1035340",
+          "flex_layout_host": "0x38",
+          "get_split_for_tab": "0x2c2aa44",
+          "layout_delegate_offset": "0x340",
+          "location_bar_vtable": "0x1187c8a0",
+          "mini_toolbar_member": "0x490",
+          "outline_member": "0x498",
+          "remove_split": "0xa4165c0",
+          "schedule_paint": "0x7fff0000",
+          "schedule_paint_prologue": "00",
+          "set_border_slot": "0x1f",
+          "set_rounded_corners": "0x2e7dd62",
+          "set_rounded_corners_changed": "0x7fff0000",
+          "set_rounded_corners_parity": "0x7fff0000",
+          "set_rounded_corners_prologue": "56574883ec284889cef30f1002",
+          "set_visible_slot": "0x13",
+          "signatures": [
+            [
+              "0xa3cd1f6",
+              "415741564155415456575553"
+            ],
+            [
+              "0xa4165c0",
+              "8cca1cfb670fb94001"
+            ],
+            [
+              "0x2c2aa44",
+              "0831c0c3cccccccccc"
+            ],
+            [
+              "0x371d5e0",
+              "40534883ec20488bd9"
+            ]
+          ],
+          "split_adds_active": false,
+          "split_insets_member": "0x45c",
+          "split_vector_ends_by_pointer": false,
+          "supported": true,
+          "update_border": "0x2e5a182",
+          "update_border_prologue": "00488b078378040b720d8b48",
+          "view_size": "0x1d0",
+          "web_contents_focused": "0x2e5a01a",
+          "web_contents_focused_prologue": "415541545657534883ec304889d6"
+        },
+        "tabs": {
+          "activate_tab": "0xa3c5c82",
+          "active_web_contents": "0xcaebbe0",
+          "add_to_new_group": "0x7fff0000",
+          "add_to_new_group_prologue": "00",
+          "allocate": "0x371d5e0",
+          "allocate_prologue": "40534883ec20488bd9",
+          "browser_in_view": "0x618",
+          "browser_view_for_window": "0x10fc148",
+          "change_group": "0x7fff0000",
+          "close_tab": "0xa3c9160",
+          "content_window_for_hwnd": "0x26f72a6",
+          "get_group": "0x26d0670",
+          "get_tab_model": "0x55ec860",
+          "groups": false,
+          "has_group": "0xb27228e",
+          "last_committed_url": "0x117e2e0",
+          "lookup_group": "0xb272324",
+          "new_tab": "0xa2beb40",
+          "new_tab_address": null,
+          "new_tab_delay_ms": 0,
+          "new_tab_prologue": "4889d64889cf0fb7026689014883c1080f57c00f11470848c7471800000000",
+          "new_tab_takes_address": false,
+          "signatures": [
+            [
+              "0x26d0670",
+              "488b15c9f9de114839ca0f85"
+            ],
+            [
+              "0xb27228e",
+              "488b41084885c0743f4883c1"
+            ],
+            [
+              "0xb272324",
+              "488b41084885c00f84800000"
+            ],
+            [
+              "0x26f72a6",
+              "564883ec20e8"
+            ],
+            [
+              "0x10fc148",
+              "ff1522ea57"
+            ],
+            [
+              "0xcaebbe0",
+              "89d84883c4785b"
+            ],
+            [
+              "0x55ec860",
+              "050388f60b"
+            ],
+            [
+              "0x10fd8ee",
+              "488b41108b4020"
+            ],
+            [
+              "0x108cd4e",
+              "5ec356574883"
+            ],
+            [
+              "0xa3c5c82",
+              "56574883ec38"
+            ],
+            [
+              "0xa3c9160",
+              "5657534883ec"
+            ],
+            [
+              "0x11378a0",
+              "56574883ec3848"
+            ],
+            [
+              "0x117e2e0",
+              "486381d4020000"
+            ],
+            [
+              "0x1077a60",
+              "4883ec284881c1"
+            ]
+          ],
+          "supported": true,
+          "tab_at": "0x108cd4e",
+          "tab_collection": "0x0",
+          "tab_contents": "0x0",
+          "tab_count": "0x10fd8ee",
+          "tab_object": "0x7fff0000",
+          "title": "0x11378a0",
+          "visible_url": "0x1077a60"
+        },
+        "toolbar": {
+          "content_window_for_hwnd": "0x26f72a6",
+          "dev": {
+            "colours": [
+              [
+                316,
+                4280953905
+              ],
+              [
+                2893,
+                4280953905
+              ],
+              [
+                2082,
+                0
+              ],
+              [
+                2083,
+                402653183
+              ],
+              [
+                2898,
+                4291086286
+              ],
+              [
+                2899,
+                4291086286
+              ],
+              [
+                2900,
+                4285559675
+              ],
+              [
+                2903,
+                4294967295
+              ],
+              [
+                2901,
+                4294967295
+              ],
+              [
+                2902,
+                4285559675
+              ],
+              [
+                2906,
+                4279703579
+              ],
+              [
+                2914,
+                402653183
+              ],
+              [
+                2915,
+                620756991
+              ],
+              [
+                2947,
+                4294967295
+              ],
+              [
+                2948,
+                4294967295
+              ],
+              [
+                2949,
+                4294967295
+              ],
+              [
+                2951,
+                4294967295
+              ],
+              [
+                3409,
+                4294967295
+              ],
+              [
+                3410,
+                4294967295
+              ],
+              [
+                2300,
+                4291086286
+              ],
+              [
+                2301,
+                4291086286
+              ],
+              [
+                2302,
+                4294967295
+              ],
+              [
+                2343,
+                4291086286
+              ],
+              [
+                2344,
+                4291086286
+              ],
+              [
+                2347,
+                4291086286
+              ],
+              [
+                2350,
+                4294967295
+              ],
+              [
+                2351,
+                4291086286
+              ],
+              [
+                3009,
+                0
+              ]
+            ],
+            "console": 40005,
+            "font_list_new": "0x2b3b05e",
+            "font_list_new_prologue": "d94889fae8f5b25cfe4889f1ba",
+            "font_new": "0x26be46e",
+            "font_new_prologue": "564883ec204889ce4889d14489c2",
+            "inspect": 40023
+          },
+          "get_color": "0x102c8ce",
+          "get_color_bytes": "4157415641545657534883ec2889d748",
+          "get_widget_slot": "0xa",
+          "skip": "updateicon anchor visible",
+          "toolbar_layout": "0x7fff0000",
+          "widget_for_window": "0x28fd6b8"
+        },
+        "version": [
+          157,
+          0,
+          4341,
+          46
+        ],
+        "vertical": {
+          "browser_offset": "0x1b8",
+          "browser_view_for_browser": "0x10ff806",
+          "browser_view_view_vtable": "0x11940340",
+          "destructor": "0xa3dcac0",
+          "destructor_prologue": "8b057a350e0a4831e0488984",
+          "detour_strip": false,
+          "hwnd_for_view": "0x10a6589",
+          "invalidate_layout": "0x101e5c0",
+          "invalidate_layout_prologue": "41574156565755534883ec38",
+          "mode_offset": "0x1e8",
+          "notify_mode_changed": "0xa3db406",
+          "region_minimum_prologue": "e86b4075f34889f9e833ee53f44889f9",
+          "region_minimum_size": "0xcae84e0",
+          "region_preferred_size": "0xcae8560",
+          "region_preferred_size_slot": "0x11827450",
+          "set_bounds_rect": "0x7fff0000",
+          "set_bounds_rect_prologue": "00",
+          "should_display": "0xa386a60",
+          "should_draw_tab_strip": "0x1038320",
+          "should_draw_tab_strip_prologue": "ffffff4883c2084839ca0f8523ffff",
+          "slot": "0x11736700",
+          "supported": false,
+          "toolbar_in_view": "0x0",
+          "toolbar_leading": 0,
+          "top_row": null,
+          "update_collapse_action": "0x0",
+          "width_offset": "0x1cc",
+          "window_feature": "0x7fff0000",
+          "window_feature_callers": [
+            "0x0",
+            "0x0"
+          ],
+          "window_feature_prologue": "00",
+          "window_feature_tab_strip": 0
+        }
+      },
+      "frame": {
+        "browser": "Microsoft Edge",
+        "client_view_bounds": 54928864,
+        "client_view_slot": 115,
+        "frame_view_vtable": 293994304,
+        "hwnd_for_view": 17458569,
+        "hwnd_for_view_prologue": "1f0fb6c84c8d44245849c700000000",
+        "module": "msedge.dll",
+        "version": "157.0.4341.46"
+      },
+      "made_without_pdb": {
+        "channel": "stable",
+        "download": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/069ec728-7a8c-465b-80d4-f8be3bee5728/MicrosoftEdgeEnterpriseX64.msi",
+        "pdb_key": "8EE0E7D6138E9B194C4C44205044422E1",
+        "prior_version": "156.0.4314.58"
+      }
     }
   ],
   "schema": 1,
@@ -2615,6 +3258,7 @@
     "Google Chrome 157.0.8103.38": "B445A620A73B6EA94C4C44205044422E1",
     "Google Chrome 157.0.8103.39": "037147ED9738B0F84C4C44205044422E1",
     "Microsoft Edge 156.0.4314.50": "F44CB0836ADF26834C4C44205044422E1",
-    "Microsoft Edge 156.0.4314.58": "03775A411C2857584C4C44205044422E1"
+    "Microsoft Edge 156.0.4314.58": "03775A411C2857584C4C44205044422E1",
+    "Microsoft Edge 157.0.4341.46": "8EE0E7D6138E9B194C4C44205044422E1"
   }
 }
