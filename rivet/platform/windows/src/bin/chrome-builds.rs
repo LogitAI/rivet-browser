@@ -262,14 +262,22 @@ fn find(
 ) -> Result<bool, String> {
     let prior = json_file(prior_path)?;
     let stored = prior["fingerprints"].as_object();
-    let (prints, prior_starts) = match (stored, old_module) {
-        (Some(stored), "-") => (stored.clone(), std::collections::BTreeSet::new()),
-        (None, "-") => {
+    let prior_bytes = match old_module {
+        "-" => None,
+        path => Some(read(Path::new(path))?),
+    };
+    let prior_pe = match &prior_bytes {
+        Some(bytes) => {
+            Some(PeFile::parse(bytes).ok_or("the prior module is not a 64-bit PE image")?)
+        }
+        None => None,
+    };
+    let prints = match (stored, &prior_pe) {
+        (Some(stored), None) => stored.clone(),
+        (None, None) => {
             return Err("the prior row has no fingerprints, and no prior module was given to read them from".into());
         }
-        _ => {
-            let bytes = read(Path::new(old_module))?;
-            let pe = PeFile::parse(&bytes).ok_or("the prior module is not a 64-bit PE image")?;
+        (_, Some(pe)) => {
             // Fingerprints read from another build would find the wrong functions.
             let start = prior["frame"]["hwnd_for_view"]
                 .as_u64()
@@ -282,10 +290,10 @@ fn find(
                     if pe.read(start, prologue.len()) == Some(prologue.as_slice()) => {}
                 _ => return Err("the prior module is not the build of the prior row".into()),
             }
-            let prints = match stored {
+            match stored {
                 Some(stored) => stored.clone(),
                 None => {
-                    let (prints, missing) = row_port::fingerprints_of(&prior, &pe);
+                    let (prints, missing) = row_port::fingerprints_of(&prior, pe);
                     if !missing.is_empty() {
                         println!(
                             "the prior build gives no fingerprint for {}",
@@ -294,11 +302,15 @@ fn find(
                     }
                     prints
                 }
-            };
-            // A fingerprint taken at a function start counts only function starts of the new build.
-            (prints, pe.function_starts())
+            }
         }
     };
+    // A fingerprint taken at a function start counts only function starts of the new build, and
+    // what fingerprints leave open is looked for by reading the prior build next to the new one.
+    let prior_starts = prior_pe
+        .as_ref()
+        .map(PeFile::function_starts)
+        .unwrap_or_default();
     let mut old = Vec::new();
     symbols::publics(old_pdb, &mut |address, name| {
         old.push((address, name.to_owned()))
@@ -313,7 +325,7 @@ fn find(
     let bytes = read(module)?;
     let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
     let (mut row, mut report) =
-        row_port::find_candidate(&prior, &prints, &prior_starts, version, &pe);
+        row_port::find_candidate(&prior, &prints, prior_pe.as_ref(), version, &pe);
     // No symbols name `screen_origin` here: a prior row without it gives a row without it.
     row_port::seed_screen_origin(&mut row, &[], &pe, &mut report);
     report.review.extend(row_port::hand_only_review(&prior));
@@ -331,11 +343,14 @@ fn find(
         pe.function_starts().len()
     );
     println!(
-        "{} {} without its PDB: {} of {} addresses found by fingerprint, {} for review",
+        "{} {} without its PDB: {} of {} addresses found by fingerprint, {} settled by two methods, {} values read, {} carried, {} for review",
         report.browser,
         report.version,
         report.fingerprinted.len(),
         report.addresses,
+        report.settled.len(),
+        report.derived.len(),
+        report.carried.len(),
         report.review.len()
     );
     Ok(report.review.is_empty())

@@ -235,6 +235,27 @@ impl<'a> PeFile<'a> {
         starts
     }
 
+    /// Every part of a function the exception table lists, as start and end. The linker moves cold
+    /// parts out of a function, and each such part has its own entry.
+    pub fn function_ranges(&self) -> std::collections::BTreeMap<u32, u32> {
+        let (directory, size) = self.exception_directory;
+        let mut ranges = std::collections::BTreeMap::new();
+        let Some(table) = self.offset(directory).filter(|_| directory != 0) else {
+            return ranges;
+        };
+        for index in 0..(size / 12) as usize {
+            let entry = table + index * 12;
+            match (u32_at(self.bytes, entry), u32_at(self.bytes, entry + 4)) {
+                (Some(start), Some(end)) if end > start => {
+                    ranges.insert(start, end);
+                }
+                (Some(_), Some(_)) => {}
+                _ => break,
+            }
+        }
+        ranges
+    }
+
     /// Finds the slot of `function` in the vtable at `vtable`, scanning a bounded number of slots.
     pub fn vtable_slot(&self, vtable: u32, function: u32) -> Option<u32> {
         (0..512u32).find(|slot| self.pointer_rva(vtable + slot * 8) == Some(function))
