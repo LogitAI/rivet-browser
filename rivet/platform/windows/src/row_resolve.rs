@@ -69,6 +69,28 @@ pub struct Step {
     pub immediate: Option<i64>,
     /// A call or jump through memory, as `call [rax + 0x2b8]` calls a table slot.
     pub indirect: bool,
+    /// Its operand is the stack: a local variable, or the frame's size. Neither is a value of a row.
+    pub stack: bool,
+}
+
+/// Whether a memory operand's base is the stack or frame pointer, which hold locals, not members.
+fn stack_based(raw: &[u8], displacement: Option<(usize, usize)>) -> bool {
+    let Some((offset, size)) = displacement else {
+        return false;
+    };
+    let opcode = opcode_at(raw);
+    // REX.B names r12 or r13 where the base field says rsp or rbp.
+    let extended = opcode > 0 && raw[opcode - 1] & 0xF0 == 0x40 && raw[opcode - 1] & 1 != 0;
+    let mode = if size == 1 { 1 } else { 2 };
+    let before = offset.checked_sub(1).and_then(|at| raw.get(at)).copied();
+    let base = match before {
+        // The ModRM byte itself, with no SIB byte after it.
+        Some(modrm) if modrm >> 6 == mode && modrm & 7 != 4 => modrm & 7,
+        // A SIB byte, whose low bits name the base.
+        Some(sib) => sib & 7,
+        None => return false,
+    };
+    !extended && matches!(base, 4 | 5)
 }
 
 fn signed(bytes: &[u8], field: (usize, usize)) -> Option<i64> {
@@ -130,6 +152,9 @@ fn step(raw: &[u8], instruction: &x64::Instruction, rva: u32) -> Step {
         immediate: instruction.immediate.and_then(|field| signed(raw, field)),
         indirect: first == Some(0xFF)
             && second.is_some_and(|modrm| matches!((modrm >> 3) & 7, 2 | 4)),
+        // `add rsp, n` and `sub rsp, n` size the frame.
+        stack: stack_based(raw, instruction.displacement)
+            || (matches!(first, Some(0x81 | 0x83)) && matches!(second, Some(0xC4 | 0xEC))),
     }
 }
 
@@ -886,6 +911,171 @@ fn by_text(texts: &BTreeSet<Vec<u8>>, users: &BTreeMap<Vec<u8>, BTreeSet<u32>>) 
         [only] => Some(*only),
         _ => None,
     }
+}
+
+/// How many instructions on each side of a use name it within its body.
+const VALUE_CONTEXT: usize = 2;
+
+/// Which operand of an instruction holds a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Operand {
+    Displacement,
+    Immediate,
+}
+
+/// A value of the prior row read again from the new build, or why it could not be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reading {
+    pub path: String,
+    pub prior: u64,
+    /// The new value and how it was read.
+    pub value: Result<(u64, String), String>,
+}
+
+fn keys(steps: &[Step]) -> Vec<Vec<u8>> {
+    (0..steps.len())
+        .map(|index| context(steps, index, VALUE_CONTEXT, VALUE_CONTEXT))
+        .collect()
+}
+
+/// Whether an instruction uses `wanted`: as a member displacement or an immediate for a plain
+/// value, or as the displacement of a call through a table for a slot, which is eight bytes each.
+fn use_of(step: &Step, wanted: i64, slot: bool) -> Option<Operand> {
+    if step.stack {
+        return None;
+    }
+    if slot {
+        return (step.indirect && step.displacement == Some(wanted)).then_some(Operand::Displacement);
+    }
+    if step.displacement == Some(wanted) {
+        Some(Operand::Displacement)
+    } else if step.immediate == Some(wanted) {
+        Some(Operand::Immediate)
+    } else {
+        None
+    }
+}
+
+/// Reads one value from the instructions that use it. Each use of `prior` in a prior function body
+/// is named by the instructions around it, with their own operands cleared, and the same
+/// instruction is looked up in the function's new body. A value is taken only when at least two
+/// uses are read and every use read gives the same value.
+fn read_value(
+    old: &mut Side,
+    new: &mut Side,
+    pairs: &[(u32, u32)],
+    prior: u64,
+    slot: bool,
+) -> Result<(u64, String), String> {
+    if prior == 0 {
+        return Err("zero is used too widely in code to be told apart".to_owned());
+    }
+    let wanted = if slot { prior.checked_mul(8) } else { Some(prior) }
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(|| format!("{prior:#x} is too large to be an operand"))?;
+    let mut found: Vec<(u64, u32)> = Vec::new();
+    let mut uses = 0;
+    for (from, to) in pairs {
+        let old_body = old.body(*from);
+        let new_body = new.body(*to);
+        let old_keys = keys(&old_body);
+        let new_keys = keys(&new_body);
+        for (index, step) in old_body.iter().enumerate() {
+            let Some(operand) = use_of(step, wanted, slot) else {
+                continue;
+            };
+            uses += 1;
+            let key = &old_keys[index];
+            let rank = old_keys[..index].iter().filter(|other| *other == key).count();
+            let count = old_keys.iter().filter(|other| *other == key).count();
+            let theirs: Vec<usize> = new_keys
+                .iter()
+                .enumerate()
+                .filter(|(_, other)| *other == key)
+                .map(|(at, _)| at)
+                .collect();
+            if theirs.len() != count {
+                continue;
+            }
+            let other = &new_body[theirs[rank]];
+            let read = match operand {
+                Operand::Displacement => other.displacement,
+                Operand::Immediate => other.immediate,
+            };
+            let Some(read) = read.and_then(|read| u64::try_from(read).ok()) else {
+                continue;
+            };
+            if slot && read % 8 != 0 {
+                continue;
+            }
+            found.push((if slot { read / 8 } else { read }, *from));
+        }
+    }
+    let values: BTreeSet<u64> = found.iter().map(|(value, _)| *value).collect();
+    let functions: BTreeSet<u32> = found.iter().map(|(_, function)| *function).collect();
+    match values.iter().copied().collect::<Vec<_>>().as_slice() {
+        [] if uses == 0 => Err(format!(
+            "no instruction of the {} functions known in both builds uses {prior:#x}",
+            pairs.len()
+        )),
+        [] => Err(format!(
+            "its {uses} uses in the prior build were not found in the new one"
+        )),
+        [value] if found.len() >= 2 => Ok((
+            *value,
+            format!(
+                "read at {} uses in {} of its functions",
+                found.len(),
+                functions.len()
+            ),
+        )),
+        [value] => Err(format!(
+            "read at only one use, as {value:#x}, and a second reading is needed"
+        )),
+        _ => Err(format!("its uses disagree: {values:#x?}")),
+    }
+}
+
+/// Reads each value of the prior row that has no recipe from the instructions that use it in the
+/// functions of its part of the row, and in the functions they call, in both builds. `sections`
+/// pairs the prior and new places of each part's functions, and `followed` pairs the functions
+/// the calls of known functions reach. A value's part is the first name of its path, and a value
+/// whose name ends in `_slot` is a slot of a class table.
+pub fn read_values(
+    old_pe: &PeFile,
+    new_pe: &PeFile,
+    sections: &BTreeMap<String, Vec<(u32, u32)>>,
+    followed: &BTreeMap<u32, u32>,
+    values: &[(String, u64)],
+) -> Vec<Reading> {
+    let mut old = Side::new(old_pe);
+    let mut new = Side::new(new_pe);
+    let mut pairs_of: BTreeMap<&str, Vec<(u32, u32)>> = BTreeMap::new();
+    for (section, pairs) in sections {
+        let mut all: BTreeSet<(u32, u32)> = pairs.iter().copied().collect();
+        for (from, _) in pairs {
+            let body = old.body(*from);
+            for step in body.iter() {
+                if let Some(place) = step.call.and_then(|callee| followed.get(&callee)) {
+                    all.insert((step.call.expect("checked"), *place));
+                }
+            }
+        }
+        pairs_of.insert(section.as_str(), all.into_iter().collect());
+    }
+    let mut readings = Vec::new();
+    for (path, prior) in values {
+        let section = path.split('.').next().unwrap_or_default();
+        let name = path.rsplit('.').next().unwrap_or_default();
+        let slot = name.split('[').next().unwrap_or_default().ends_with("_slot");
+        let pairs = pairs_of.get(section).map_or(&[][..], Vec::as_slice);
+        readings.push(Reading {
+            path: path.clone(),
+            prior: *prior,
+            value: read_value(&mut old, &mut new, pairs, *prior, slot),
+        });
+    }
+    readings
 }
 
 #[cfg(test)]

@@ -69,6 +69,8 @@ pub struct PortReport {
     pub made_without_pdb: bool,
     /// Addresses a fingerprint found in exactly one place of the new build.
     pub fingerprinted: Vec<String>,
+    /// Values that are Rivet's settings rather than facts about the build, kept from the prior row.
+    pub settings: Vec<String>,
 }
 
 fn is_address(value: u64) -> bool {
@@ -979,7 +981,7 @@ pub fn port_row(
     named: &BTreeMap<u32, (u32, Vec<String>)>,
     new: &NewBuild,
 ) -> (Value, PortReport) {
-    let (row, mut report) = begin_row(prior, new.version);
+    let (row, mut report) = begin_row(prior, new.version, true);
     let mut moved: BTreeMap<u32, u32> = BTreeMap::new();
     let targets = addresses_of(&row);
     report.addresses = targets.len();
@@ -987,8 +989,10 @@ pub fn port_row(
     finish_row(row, &moved, new.pe, report)
 }
 
-/// A copy of the prior row with the new version, and frame addresses in the `0x` form.
-fn begin_row(prior: &Value, version: &str) -> (Value, PortReport) {
+/// A copy of the prior row with the new version, and frame addresses in the `0x` form. `carries`
+/// says the values with no recipe stay as the prior row has them, so a new milestone stops the
+/// row; without it they are read from the new build later, each with its own review line.
+fn begin_row(prior: &Value, version: &str, carries: bool) -> (Value, PortReport) {
     let mut row = prior.clone();
     if let Some(object) = row.as_object_mut() {
         // The mark tells how the prior row was made, not this one.
@@ -1017,7 +1021,8 @@ fn begin_row(prior: &Value, version: &str) -> (Value, PortReport) {
             .push(format!("{} is not a four part version", version));
     }
     report.carried = crate::row_recipe::without_recipe(&prior["build"]);
-    if prior_version.split('.').next() != version.split('.').next() {
+    report.settings = crate::row_recipe::settings(&prior["build"]);
+    if carries && prior_version.split('.').next() != version.split('.').next() {
         report.review.push(format!(
             "the milestone changed from {prior_version} to {version}: {} values have no recipe and were carried over unchecked: {}",
             report.carried.len(),
@@ -1321,14 +1326,17 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
 }
 
 /// Makes a candidate row for a build whose symbols are not published, from `stored`, the
-/// fingerprints of the prior row's addresses in the prior build. An address is taken only where
-/// its fingerprint matches exactly one place. Every other address keeps a review line and its
-/// prior value, so such a row is never published as it is. Offsets, slots and sizes are read again
+/// fingerprints of the prior row's addresses in the prior build. An address is taken where its
+/// fingerprint matches exactly one place. Offsets, slots and sizes with a recipe are read again
 /// from the new module exactly as for a row made from symbols.
 ///
-/// `prior_starts` are the function starts the prior module's exception table lists. A fingerprint
-/// taken at one of them counts only places the new module's exception table also lists, since the
-/// same bytes inside another function are not the function.
+/// `prior_pe` is the prior row's own module, when the caller has it. A fingerprint taken at a
+/// function start its exception table lists then counts only places the new module's exception
+/// table also lists, since the same bytes inside another function are not the function. Each
+/// address the fingerprints leave open is looked for by `row_resolve`, which takes a place only
+/// where two independent methods agree, and each value with no recipe is read from the
+/// instructions that use it. Whatever stays open keeps a review line and its prior value, so such
+/// a row is never published as it is.
 pub fn find_candidate(
     prior: &Value,
     stored: &serde_json::Map<String, Value>,
@@ -1336,7 +1344,7 @@ pub fn find_candidate(
     version: &str,
     pe: &PeFile,
 ) -> (Value, PortReport) {
-    let (row, mut report) = begin_row(prior, version);
+    let (row, mut report) = begin_row(prior, version, prior_pe.is_none());
     report.made_without_pdb = true;
     let prior_starts = prior_pe.map(PeFile::function_starts).unwrap_or_default();
     let targets = fingerprint_targets(prior);
@@ -1506,13 +1514,127 @@ pub fn find_candidate(
             .review
             .push("two addresses found the same place".to_owned());
     }
-    let (mut row, report) = finish_row(row, &moved, pe, report);
+    let (mut row, mut report) = finish_row(row, &moved, pe, report);
     if let Some(object) = row.as_object_mut() {
         // They describe the prior build, so they would mislead in this row.
         object.remove("fingerprints");
     }
-    let _ = followed;
+    if let Some(prior_pe) = prior_pe {
+        read_carried(prior, &mut row, &moved, &followed, prior_pe, pe, &mut report);
+    }
     (row, report)
+}
+
+/// The value at a path such as `layout.frame_ids[2]` or `toolbar.dev.colours[3][0]`.
+fn value_at<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+    for part in path.split('.') {
+        let (key, indexes) = part.split_at(part.find('[').unwrap_or(part.len()));
+        current = current.get(key)?;
+        for index in indexes.split(']').filter(|index| !index.is_empty()) {
+            current = current.get(index.trim_start_matches('[').parse::<usize>().ok()?)?;
+        }
+    }
+    Some(current)
+}
+
+fn value_at_mut<'a>(value: &'a mut Value, path: &str) -> Option<&'a mut Value> {
+    let mut current = value;
+    for part in path.split('.') {
+        let (key, indexes) = part.split_at(part.find('[').unwrap_or(part.len()));
+        current = current.get_mut(key)?;
+        for index in indexes.split(']').filter(|index| !index.is_empty()) {
+            current = current.get_mut(index.trim_start_matches('[').parse::<usize>().ok()?)?;
+        }
+    }
+    Some(current)
+}
+
+/// Reads each value the recipes leave, a member offset, slot, size or id, from the instructions
+/// that use it in the prior build's functions and the same instructions in the new build. A value
+/// that cannot be read keeps a review line with the reason and stays listed as carried, so the row
+/// is never published with a value of the prior build.
+fn read_carried(
+    prior: &Value,
+    row: &mut Value,
+    moved: &BTreeMap<u32, u32>,
+    followed: &BTreeMap<u32, u32>,
+    prior_pe: &PeFile,
+    pe: &PeFile,
+    report: &mut PortReport,
+) {
+    let mut values = Vec::new();
+    let mut unreadable = Vec::new();
+    for path in std::mem::take(&mut report.carried) {
+        let items: Vec<(String, &Value)> = match value_at(&prior["build"], &path) {
+            Some(Value::Array(items)) => items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| (format!("{path}[{index}]"), item))
+                .collect(),
+            Some(item) => vec![(path.clone(), item)],
+            None => vec![],
+        };
+        if items.is_empty() {
+            unreadable.push(path);
+        }
+        for (path, item) in items {
+            match crate::row_recipe::number(item) {
+                Some(value) => values.push((path, value)),
+                None => unreadable.push(path),
+            }
+        }
+    }
+    // Each part of the row reads its values from its own functions.
+    let mut sections: BTreeMap<String, Vec<(u32, u32)>> = BTreeMap::new();
+    for (section, part) in prior["build"].as_object().into_iter().flatten() {
+        let mut part = part.clone();
+        let mut pairs = Vec::new();
+        walk_addresses("", &mut part, &mut |_, value| {
+            if let Some(address) = read_address(value).filter(|value| is_address(*value)) {
+                let address = address as u32;
+                if let Some(place) = moved.get(&address).filter(|_| prior_pe.is_code(address)) {
+                    pairs.push((address, *place));
+                }
+            }
+        });
+        pairs.sort_unstable();
+        pairs.dedup();
+        if !pairs.is_empty() {
+            sections.insert(section.clone(), pairs);
+        }
+    }
+    for reading in row_resolve::read_values(prior_pe, pe, &sections, followed, &values) {
+        match reading.value {
+            Ok((value, how)) => {
+                if let Some(place) = value_at_mut(&mut row["build"], &reading.path) {
+                    *place = if place.is_string() {
+                        write_address(value)
+                    } else {
+                        json!(value)
+                    };
+                }
+                report.derived.push(if value == reading.prior {
+                    format!("{}: {value:#x}, {how}", reading.path)
+                } else {
+                    format!("{}: {:#x} -> {value:#x}, {how}", reading.path, reading.prior)
+                });
+            }
+            Err(reason) => {
+                report.review.push(format!(
+                    "{} was not read from the new build: {reason}",
+                    reading.path
+                ));
+                report.carried.push(reading.path);
+            }
+        }
+    }
+    for path in unreadable {
+        report
+            .review
+            .push(format!("{path} is not a number this generator can read"));
+        report.carried.push(path);
+    }
 }
 
 /// The key of a row made without its build's symbols. It holds what the row job needs to make the
@@ -2364,10 +2486,16 @@ mod tests {
 
     /// `module` with an exception table at 0x10f000 that lists `starts`.
     fn with_starts(code: &[(u32, Vec<u8>)], starts: &[u32]) -> Vec<u8> {
+        let ranges: Vec<(u32, u32)> = starts.iter().map(|start| (*start, start + 0x20)).collect();
+        with_ranges(code, &ranges)
+    }
+
+    /// `module` with an exception table at 0x10f000 that lists each `(start, end)`.
+    fn with_ranges(code: &[(u32, Vec<u8>)], ranges: &[(u32, u32)]) -> Vec<u8> {
         let mut table = vec![];
-        for start in starts {
+        for (start, end) in ranges {
             table.extend_from_slice(&start.to_le_bytes());
-            table.extend_from_slice(&(start + 0x20).to_le_bytes());
+            table.extend_from_slice(&end.to_le_bytes());
             table.extend_from_slice(&0u32.to_le_bytes());
         }
         let mut code = code.to_vec();
@@ -2376,8 +2504,89 @@ mod tests {
         let directory = 0x98 + 112 + 24;
         bytes[directory..directory + 4].copy_from_slice(&0x10f000u32.to_le_bytes());
         bytes[directory + 4..directory + 8]
-            .copy_from_slice(&(12 * starts.len() as u32).to_le_bytes());
+            .copy_from_slice(&(12 * ranges.len() as u32).to_le_bytes());
         bytes
+    }
+
+    /// The verified row's paint function, which reads `view_layer` with `loads` past the bytes its
+    /// fingerprint holds.
+    fn paint_reading(loads: &str) -> Vec<u8> {
+        let mut bytes = hex("4157415641554154565755534881eca0000000").unwrap();
+        bytes.resize(32, 0x90);
+        bytes.extend(hex(loads).unwrap());
+        bytes.push(0xC3);
+        bytes
+    }
+
+    /// A candidate row for a build whose paint function reads `view_layer` with `new_loads`, made
+    /// from the verified row and its build, whose paint function reads it with `prior_loads`.
+    fn read_view_layer(prior_loads: &str, new_loads: &str) -> (Value, PortReport) {
+        let ranges = |shift: u32, paint: usize| {
+            vec![
+                (0x101100 + shift, 0x101120 + shift),
+                (0x101200 + shift, 0x101220 + shift),
+                (0x101300 + shift, 0x101300 + shift + paint as u32),
+            ]
+        };
+        let mut old = shifted_code(0, 0x10);
+        old[3].1 = paint_reading(prior_loads);
+        let prior_bytes = with_ranges(&old, &ranges(0, old[3].1.len()));
+        let prior_pe = PeFile::parse(&prior_bytes).unwrap();
+        let (prints, missing) = fingerprints_of(&verified_row(), &prior_pe);
+        assert!(missing.is_empty(), "{missing:?}");
+        let mut new = shifted_code(0x2000, 0x44);
+        new[3].1 = paint_reading(new_loads);
+        let bytes = with_ranges(&new, &ranges(0x2000, new[3].1.len()));
+        let pe = PeFile::parse(&bytes).unwrap();
+        find_candidate(&verified_row(), &prints, Some(&prior_pe), "1.0.0.3", &pe)
+    }
+
+    #[test]
+    fn nfr6_a_carried_value_is_read_from_the_instructions_that_use_it() {
+        // mov rax, [rcx + 0x20]; mov rdx, [rcx + 0x20], and the new build moved the member to 0x28.
+        let (row, report) =
+            read_view_layer("488b8120000000488b9120000000", "488b8128000000488b9128000000");
+        assert!(report.review.is_empty(), "{:?}", report.review);
+        assert_eq!(row["build"]["toolbar"]["view_layer"], "0x28");
+        assert!(report.carried.is_empty(), "{:?}", report.carried);
+        assert_eq!(
+            report.derived,
+            ["toolbar.view_layer: 0x20 -> 0x28, read at 2 uses in 1 of its functions"]
+        );
+    }
+
+    #[test]
+    fn nfr6_a_value_no_instruction_gives_stops_the_row() {
+        // The new build reads the member with a short displacement: not the same instruction.
+        let (_, report) = read_view_layer("488b8120000000488b9120000000", "488b4128488b5128");
+        assert_eq!(report.carried, ["toolbar.view_layer"]);
+        assert!(report.derived.is_empty(), "{:?}", report.derived);
+        assert!(
+            report.review.iter().any(|line| line
+                .starts_with("toolbar.view_layer was not read from the new build: its 2 uses")),
+            "{:?}",
+            report.review
+        );
+        // One use alone is not read either, and neither are uses that disagree.
+        let (_, report) = read_view_layer("488b8120000000", "488b8128000000");
+        assert!(
+            report
+                .review
+                .iter()
+                .any(|line| line.contains("a second reading is needed")),
+            "{:?}",
+            report.review
+        );
+        let (_, report) =
+            read_view_layer("488b8120000000488b9120000000", "488b8128000000488b9130000000");
+        assert!(
+            report
+                .review
+                .iter()
+                .any(|line| line.contains("its uses disagree")),
+            "{:?}",
+            report.review
+        );
     }
 
     #[test]
@@ -2392,10 +2601,16 @@ mod tests {
         let prior_pe = PeFile::parse(&prior_bytes).unwrap();
         let prior_starts = prior_pe.function_starts();
         assert_eq!(prior_starts.len(), 3);
-        let (prints, _) = fingerprints_of(&verified_row(), &prior_pe);
+        // The row holds no value without a recipe, so only its addresses are looked for.
+        let mut verified = verified_row();
+        verified["build"]["toolbar"]
+            .as_object_mut()
+            .unwrap()
+            .remove("view_layer");
+        let (prints, _) = fingerprints_of(&verified, &prior_pe);
         let bytes = with_starts(&code, &[0x103100, 0x103200, 0x103300]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) = find_candidate(&verified_row(), &prints, Some(&prior_pe), "1.0.0.3", &pe);
+        let (row, report) = find_candidate(&verified, &prints, Some(&prior_pe), "1.0.0.3", &pe);
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         // A part moved out of another function starts where it may, and a whole function does not.
@@ -2406,13 +2621,13 @@ mod tests {
         ));
         let bytes = with_starts(&split, &[0x103100, 0x103200, 0x103300, 0x105308]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) = find_candidate(&verified_row(), &prints, Some(&prior_pe), "1.0.0.3", &pe);
+        let (row, report) = find_candidate(&verified, &prints, Some(&prior_pe), "1.0.0.3", &pe);
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         // Bytes that match only inside another function are no place at all.
         let bytes = with_starts(&code, &[0x103100, 0x103200]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (_, report) = find_candidate(&verified_row(), &prints, Some(&prior_pe), "1.0.0.3", &pe);
+        let (_, report) = find_candidate(&verified, &prints, Some(&prior_pe), "1.0.0.3", &pe);
         assert!(
             report
                 .review

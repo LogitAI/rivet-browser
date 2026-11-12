@@ -415,11 +415,43 @@ pub fn derive_row(build: &mut Value, pe: &PeFile) -> Derived {
     derived
 }
 
+/// Values Rivet chooses rather than reads from a build, such as how long it waits before it opens
+/// a new tab. The row carries them for the runtime, so they are kept from the prior row.
+pub const SETTINGS: &[&str] = &["tabs.new_tab_delay_ms"];
+
+/// Lists of `[id, colour]` pairs: the id is a value of the build, and the colour is Rivet's choice.
+pub const ID_COLOUR_PAIRS: &[&str] = &["toolbar.dev.colours"];
+
+/// The values of a row that are Rivet's settings rather than facts about its build.
+pub fn settings(build: &Value) -> Vec<String> {
+    let mut out: Vec<String> = SETTINGS
+        .iter()
+        .filter(|path| number(at_path(build, path)).is_some())
+        .map(|path| (*path).to_owned())
+        .collect();
+    for list in ID_COLOUR_PAIRS {
+        if let Some(pairs) = at_path(build, list).as_array() {
+            out.extend((0..pairs.len()).map(|index| format!("{list}[{index}][1]")));
+        }
+    }
+    out
+}
+
 /// Every number of a row below the address range that no recipe reads: member offsets, slots,
-/// sizes, ids and constants that a port can only carry over.
+/// sizes, ids and constants that a port can only carry over. Rivet's own settings are not listed.
 pub fn without_recipe(build: &Value) -> Vec<String> {
     fn walk(path: &str, value: &Value, out: &mut Vec<String>) {
         match value {
+            Value::Array(items)
+                if items.len() == 2
+                    && path
+                        .rsplit_once('[')
+                        .is_some_and(|(list, _)| ID_COLOUR_PAIRS.contains(&list)) =>
+            {
+                if number(&items[0]).is_some_and(|id| id < LOWEST_ADDRESS) {
+                    out.push(format!("{path}[0]"));
+                }
+            }
             Value::Object(object) => {
                 for (key, item) in object {
                     let next = if path.is_empty() {
@@ -459,6 +491,7 @@ pub fn without_recipe(build: &Value) -> Vec<String> {
         path != "version"
             && !path.starts_with("version[")
             && !FIELDS.iter().any(|field| field.path == path)
+            && !SETTINGS.contains(&path.as_str())
     });
     out
 }
@@ -635,6 +668,31 @@ mod tests {
         assert_eq!(
             without_recipe(&build),
             vec!["layout.caption_container_offset", "layout.frame_ids"]
+        );
+    }
+
+    #[test]
+    fn nfr6_rivet_settings_are_not_values_of_the_build() {
+        let build = json!({
+            "tabs": {"new_tab_delay_ms": 0, "tab_contents": "0x0"},
+            "toolbar": {"dev": {"colours": [[316, 4280953905u32], [2082, 0]], "console": 40005}},
+        });
+        assert_eq!(
+            without_recipe(&build),
+            vec![
+                "tabs.tab_contents",
+                "toolbar.dev.colours[0][0]",
+                "toolbar.dev.colours[1][0]",
+                "toolbar.dev.console"
+            ]
+        );
+        assert_eq!(
+            settings(&build),
+            vec![
+                "tabs.new_tab_delay_ms",
+                "toolbar.dev.colours[0][1]",
+                "toolbar.dev.colours[1][1]"
+            ]
         );
     }
 }
