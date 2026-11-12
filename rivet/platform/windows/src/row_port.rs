@@ -19,6 +19,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::chrome_build::{hex, PeFile};
+use crate::row_resolve;
 
 /// The lowest value taken for an address. Offsets and slots lie below it.
 const LOWEST_ADDRESS: u64 = 0x10_0000;
@@ -68,6 +69,8 @@ pub struct PortReport {
     pub made_without_pdb: bool,
     /// Addresses a fingerprint found in exactly one place of the new build.
     pub fingerprinted: Vec<String>,
+    /// Values that are Rivet's settings rather than facts about the build, kept from the prior row.
+    pub settings: Vec<String>,
 }
 
 fn is_address(value: u64) -> bool {
@@ -163,14 +166,48 @@ fn candidates(
     votes
 }
 
-/// A function's first instructions, read as far as this needs them.
+/// A function's instructions, read as far as this needs them.
 pub mod x64 {
-    /// One decoded instruction: its length and where its RIP-relative displacement or relative
-    /// branch target is, if it has one.
+    /// One decoded instruction: its length, where its RIP-relative displacement or relative branch
+    /// target is, where a displacement from a register is, as in `[rcx + 0x558]`, and where its
+    /// immediate value is. Each place is `(offset, size)` within the instruction.
     #[derive(Debug, PartialEq, Eq, Clone, Copy)]
     pub struct Instruction {
         pub length: usize,
         pub relative: Option<(usize, usize)>,
+        pub displacement: Option<(usize, usize)>,
+        pub immediate: Option<(usize, usize)>,
+    }
+
+    impl Instruction {
+        fn plain(length: usize) -> Self {
+            Self {
+                length,
+                relative: None,
+                displacement: None,
+                immediate: None,
+            }
+        }
+
+        /// An instruction whose last `size` bytes, from `at`, are an immediate value.
+        fn with_immediate(at: usize, size: usize) -> Self {
+            Self {
+                length: at + size,
+                relative: None,
+                displacement: None,
+                immediate: Some((at, size)),
+            }
+        }
+
+        /// A branch whose last `size` bytes, from `at`, are the distance to its target.
+        fn branch(at: usize, size: usize) -> Self {
+            Self {
+                length: at + size,
+                relative: Some((at, size)),
+                displacement: None,
+                immediate: None,
+            }
+        }
     }
 
     fn modrm(bytes: &[u8], at: usize, immediate: usize) -> Option<Instruction> {
@@ -178,10 +215,12 @@ pub mod x64 {
         let (mode, rm) = (byte >> 6, byte & 7);
         let mut length = at + 1;
         let mut relative = None;
+        let mut displacement = None;
         if mode != 3 && rm == 4 {
             let sib = *bytes.get(length)?;
             length += 1;
             if mode == 0 && sib & 7 == 5 {
+                displacement = Some((length, 4));
                 length += 4;
             }
         }
@@ -190,19 +229,39 @@ pub mod x64 {
                 relative = Some((length, 4));
                 length += 4;
             }
-            1 => length += 1,
-            2 => length += 4,
+            1 => {
+                displacement = Some((length, 1));
+                length += 1;
+            }
+            2 => {
+                displacement = Some((length, 4));
+                length += 4;
+            }
             _ => {}
         }
         Some(Instruction {
             length: length + immediate,
             relative,
+            displacement,
+            immediate: (immediate > 0).then_some((length, immediate)),
         })
     }
 
     /// Decodes the instruction at the start of `bytes`, or `None` for one this does not know. The
     /// list covers what function starts are made of, and anything else goes to a person.
     pub fn decode(bytes: &[u8]) -> Option<Instruction> {
+        decode_with(bytes, false)
+    }
+
+    /// Decodes as `decode` does, and also the instructions met inside a function body: lock and
+    /// segment prefixes, string and x87 instructions, VEX encoded vector instructions and more of
+    /// the two and three byte opcodes. It reads bodies to follow calls and operands, and never
+    /// judges a guard, so what a hook may copy stays as `decode` says.
+    pub fn decode_body(bytes: &[u8]) -> Option<Instruction> {
+        decode_with(bytes, true)
+    }
+
+    fn decode_with(bytes: &[u8], body: bool) -> Option<Instruction> {
         let mut at = 0;
         let mut wide_operand = false;
         let mut rex_w = false;
@@ -210,6 +269,7 @@ pub mod x64 {
             match *bytes.get(at)? {
                 0x66 => wide_operand = true,
                 0xF2 | 0xF3 => {}
+                0xF0 | 0x26 | 0x2E | 0x36 | 0x3E | 0x64 | 0x65 if body => {}
                 _ => break,
             }
             at += 1;
@@ -221,15 +281,9 @@ pub mod x64 {
         let opcode = *bytes.get(at)?;
         at += 1;
         let word = if wide_operand { 2 } else { 4 };
-        let plain = |length| {
-            Some(Instruction {
-                length,
-                relative: None,
-            })
-        };
         match opcode {
-            0x50..=0x5F | 0x90 | 0xC3 | 0xCC | 0x99 => plain(at),
-            0x98 => plain(at),
+            0x50..=0x5F | 0x90 | 0xC3 | 0xCC | 0x99 => Some(Instruction::plain(at)),
+            0x98 => Some(Instruction::plain(at)),
             0x00..=0x03
             | 0x08..=0x0B
             | 0x10..=0x13
@@ -246,10 +300,15 @@ pub mod x64 {
             | 0xFE
             | 0xFF => modrm(bytes, at, 0),
             0x04 | 0x0C | 0x14 | 0x1C | 0x24 | 0x2C | 0x34 | 0x3C | 0x6A | 0xA8 | 0xB0..=0xB7 => {
-                plain(at + 1)
+                Some(Instruction::with_immediate(at, 1))
             }
-            0x05 | 0x0D | 0x15 | 0x1D | 0x25 | 0x2D | 0x35 | 0x3D | 0x68 | 0xA9 => plain(at + word),
-            0xB8..=0xBF => plain(at + if rex_w { 8 } else { word }),
+            0x05 | 0x0D | 0x15 | 0x1D | 0x25 | 0x2D | 0x35 | 0x3D | 0x68 | 0xA9 => {
+                Some(Instruction::with_immediate(at, word))
+            }
+            0xB8..=0xBF => Some(Instruction::with_immediate(
+                at,
+                if rex_w { 8 } else { word },
+            )),
             0x80 | 0x83 | 0xC0 | 0xC1 | 0xC6 | 0x6B => modrm(bytes, at, 1),
             0x81 | 0xC7 | 0x69 => modrm(bytes, at, word),
             0xF6 => {
@@ -264,22 +323,13 @@ pub mod x64 {
                 };
                 modrm(bytes, at, immediate)
             }
-            0x70..=0x7F | 0xEB => Some(Instruction {
-                length: at + 1,
-                relative: Some((at, 1)),
-            }),
-            0xE8 | 0xE9 => Some(Instruction {
-                length: at + 4,
-                relative: Some((at, 4)),
-            }),
+            0x70..=0x7F | 0xEB => Some(Instruction::branch(at, 1)),
+            0xE8 | 0xE9 => Some(Instruction::branch(at, 4)),
             0x0F => {
                 let second = *bytes.get(at)?;
                 at += 1;
                 match second {
-                    0x80..=0x8F => Some(Instruction {
-                        length: at + 4,
-                        relative: Some((at, 4)),
-                    }),
+                    0x80..=0x8F => Some(Instruction::branch(at, 4)),
                     0x10..=0x17
                     | 0x1E
                     | 0x1F
@@ -295,9 +345,81 @@ pub mod x64 {
                     | 0xBF
                     | 0xD6
                     | 0xEF => modrm(bytes, at, 0),
+                    _ if body => body_two_byte(bytes, at, second),
                     _ => None,
                 }
             }
+            _ if body => body_one_byte(bytes, at, opcode),
+            _ => None,
+        }
+    }
+
+    /// One byte opcodes that only a function body holds. `at` is just past the opcode.
+    fn body_one_byte(bytes: &[u8], at: usize, opcode: u8) -> Option<Instruction> {
+        match opcode {
+            0x91..=0x97 | 0x9C..=0x9F | 0xA4..=0xA7 | 0xAA..=0xAF | 0xC9 | 0xF4 | 0xF5 => {
+                Some(Instruction::plain(at))
+            }
+            0xF8..=0xFD => Some(Instruction::plain(at)),
+            0xC2 => Some(Instruction::with_immediate(at, 2)),
+            0xCD => Some(Instruction::with_immediate(at, 1)),
+            0xD8..=0xDF => modrm(bytes, at, 0),
+            0xE0..=0xE3 => Some(Instruction::branch(at, 1)),
+            // Two byte VEX: one payload byte, then an opcode of the 0F map.
+            0xC5 => {
+                let opcode = *bytes.get(at + 1)?;
+                modrm(bytes, at + 2, vex_immediate(1, opcode))
+            }
+            // Three byte VEX: the map in the first payload byte, then one more payload byte.
+            0xC4 => {
+                let map = bytes.get(at)? & 0x1F;
+                let opcode = *bytes.get(at + 2)?;
+                modrm(bytes, at + 3, vex_immediate(map, opcode))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether a VEX instruction of `map` ends in an immediate byte.
+    fn vex_immediate(map: u8, opcode: u8) -> usize {
+        match map {
+            3 => 1,
+            1 => usize::from(matches!(opcode, 0x70..=0x73 | 0xC2 | 0xC4..=0xC6)),
+            _ => 0,
+        }
+    }
+
+    /// Two byte opcodes that only a function body holds. `at` is just past the second byte.
+    fn body_two_byte(bytes: &[u8], at: usize, second: u8) -> Option<Instruction> {
+        match second {
+            0x0B | 0x31 | 0x77 | 0xA2 | 0xC8..=0xCF => Some(Instruction::plain(at)),
+            0x0D
+            | 0x18..=0x1D
+            | 0x74..=0x76
+            | 0x7C
+            | 0x7D
+            | 0xA3
+            | 0xA5
+            | 0xAB
+            | 0xAD
+            | 0xAE
+            | 0xB0
+            | 0xB1
+            | 0xB3
+            | 0xB8
+            | 0xBB
+            | 0xBC
+            | 0xBD
+            | 0xC0
+            | 0xC1
+            | 0xC3
+            | 0xC7
+            | 0xD0..=0xD5
+            | 0xD7..=0xEE
+            | 0xF0..=0xFE => modrm(bytes, at, 0),
+            0x70..=0x73 | 0xA4 | 0xAC | 0xBA | 0xC2 | 0xC4..=0xC6 => modrm(bytes, at, 1),
+            0x38 => modrm(bytes, at + 1, 0),
+            0x3A => modrm(bytes, at + 1, 1),
             _ => None,
         }
     }
@@ -353,6 +475,23 @@ pub mod x64 {
             at += instruction.length;
         }
         Some(false)
+    }
+
+    /// An instruction's bytes with its relative value, displacement and immediate cleared: what
+    /// stays the same when code moves and members, slots and constants change.
+    pub fn skeleton(bytes: &[u8], instruction: &Instruction) -> Vec<u8> {
+        let mut out = bytes[..instruction.length.min(bytes.len())].to_vec();
+        let fields = [
+            instruction.relative,
+            instruction.displacement,
+            instruction.immediate,
+        ];
+        for (offset, size) in fields.into_iter().flatten() {
+            for index in offset..(offset + size).min(out.len()) {
+                out[index] = 0;
+            }
+        }
+        out
     }
 }
 
@@ -503,7 +642,7 @@ fn settle(target: u32, choices: &[(u32, usize)], build: &Value, pe: &PeFile) -> 
 }
 
 /// The bytes of a function short enough to read to its end: its first `ret` with no branch before.
-fn whole_function(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
+pub(crate) fn whole_function(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
     let bytes = pe.read(address, 48)?;
     let mut at = 0;
     while at < 32 {
@@ -842,7 +981,7 @@ pub fn port_row(
     named: &BTreeMap<u32, (u32, Vec<String>)>,
     new: &NewBuild,
 ) -> (Value, PortReport) {
-    let (row, mut report) = begin_row(prior, new.version);
+    let (row, mut report) = begin_row(prior, new.version, true);
     let mut moved: BTreeMap<u32, u32> = BTreeMap::new();
     let targets = addresses_of(&row);
     report.addresses = targets.len();
@@ -850,8 +989,10 @@ pub fn port_row(
     finish_row(row, &moved, new.pe, report)
 }
 
-/// A copy of the prior row with the new version, and frame addresses in the `0x` form.
-fn begin_row(prior: &Value, version: &str) -> (Value, PortReport) {
+/// A copy of the prior row with the new version, and frame addresses in the `0x` form. `carries`
+/// says the values with no recipe stay as the prior row has them, so a new milestone stops the
+/// row; without it they are read from the new build later, each with its own review line.
+fn begin_row(prior: &Value, version: &str, carries: bool) -> (Value, PortReport) {
     let mut row = prior.clone();
     if let Some(object) = row.as_object_mut() {
         // The mark tells how the prior row was made, not this one.
@@ -880,7 +1021,8 @@ fn begin_row(prior: &Value, version: &str) -> (Value, PortReport) {
             .push(format!("{} is not a four part version", version));
     }
     report.carried = crate::row_recipe::without_recipe(&prior["build"]);
-    if prior_version.split('.').next() != version.split('.').next() {
+    report.settings = crate::row_recipe::settings(&prior["build"]);
+    if carries && prior_version.split('.').next() != version.split('.').next() {
         report.review.push(format!(
             "the milestone changed from {prior_version} to {version}: {} values have no recipe and were carried over unchecked: {}",
             report.carried.len(),
@@ -1045,7 +1187,7 @@ fn fingerprint_targets(row: &Value) -> BTreeSet<u32> {
 }
 
 /// The start of a function with its displacements cleared, cut at an instruction end.
-fn code_print(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
+pub(crate) fn code_print(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
     if !pe.is_code(address) {
         return None;
     }
@@ -1116,7 +1258,7 @@ pub fn fingerprints_of(row: &Value, pe: &PeFile) -> (serde_json::Map<String, Val
 }
 
 /// Every place each function fingerprint matches, in one pass over the code.
-fn find_prints(pe: &PeFile, prints: &BTreeMap<u32, Vec<u8>>) -> BTreeMap<u32, Vec<u32>> {
+pub(crate) fn find_prints(pe: &PeFile, prints: &BTreeMap<u32, Vec<u8>>) -> BTreeMap<u32, Vec<u32>> {
     let mut by_anchor: HashMap<[u8; ANCHOR], Vec<u32>> = HashMap::new();
     let mut first = [false; 256];
     for (target, shape) in prints {
@@ -1152,7 +1294,7 @@ fn find_prints(pe: &PeFile, prints: &BTreeMap<u32, Vec<u8>>) -> BTreeMap<u32, Ve
 }
 
 /// Every class table whose given slot holds a function, by a pointer search over the module.
-fn find_table(pe: &PeFile, slot: u32, function: u32) -> Vec<u32> {
+pub(crate) fn find_table(pe: &PeFile, slot: u32, function: u32) -> Vec<u32> {
     let value = (pe.image_base() + u64::from(function)).to_le_bytes();
     let mut found = Vec::new();
     for (base, bytes, _) in pe.sections() {
@@ -1176,7 +1318,7 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
     let Some(stored) = prior["fingerprints"].as_object() else {
         return Err(vec!["the row has no fingerprints".to_owned()]);
     };
-    let (row, report) = find_candidate(prior, stored, &BTreeSet::new(), version, pe);
+    let (row, report) = find_candidate(prior, stored, None, version, pe);
     if !report.review.is_empty() {
         return Err(report.review);
     }
@@ -1184,27 +1326,35 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
 }
 
 /// Makes a candidate row for a build whose symbols are not published, from `stored`, the
-/// fingerprints of the prior row's addresses in the prior build. An address is taken only where
-/// its fingerprint matches exactly one place. Every other address keeps a review line and its
-/// prior value, so such a row is never published as it is. Offsets, slots and sizes are read again
+/// fingerprints of the prior row's addresses in the prior build. An address is taken where its
+/// fingerprint matches exactly one place. Offsets, slots and sizes with a recipe are read again
 /// from the new module exactly as for a row made from symbols.
 ///
-/// `prior_starts` are the function starts the prior module's exception table lists. A fingerprint
-/// taken at one of them counts only places the new module's exception table also lists, since the
-/// same bytes inside another function are not the function.
+/// `prior_pe` is the prior row's own module, when the caller has it. A fingerprint taken at a
+/// function start its exception table lists then counts only places the new module's exception
+/// table also lists, since the same bytes inside another function are not the function. Each
+/// address the fingerprints leave open is looked for by `row_resolve`, which takes a place only
+/// where two independent methods agree, and each value with no recipe is read from the
+/// instructions that use it. Whatever stays open keeps a review line and its prior value, so such
+/// a row is never published as it is.
 pub fn find_candidate(
     prior: &Value,
     stored: &serde_json::Map<String, Value>,
-    prior_starts: &BTreeSet<u32>,
+    prior_pe: Option<&PeFile>,
     version: &str,
     pe: &PeFile,
 ) -> (Value, PortReport) {
-    let (row, mut report) = begin_row(prior, version);
+    let (row, mut report) = begin_row(prior, version, prior_pe.is_none());
     report.made_without_pdb = true;
+    let prior_starts = prior_pe.map(PeFile::function_starts).unwrap_or_default();
     let targets = fingerprint_targets(prior);
     report.addresses = targets.len();
     let mut functions = BTreeMap::new();
     let mut tables = BTreeMap::new();
+    // Each address its fingerprint did not pin down, with its review line, waits for the methods
+    // that read the prior build next to the new one.
+    let mut wanted: BTreeMap<u32, (String, row_resolve::Wanted)> = BTreeMap::new();
+    let want = |kind, candidates: Option<Vec<u32>>| row_resolve::Wanted { kind, candidates };
     for target in &targets {
         match stored.get(&format!("{target:#x}")) {
             Some(Value::String(text)) => match hex(text).filter(|shape| shape.len() >= ANCHOR) {
@@ -1229,7 +1379,20 @@ pub fn find_candidate(
                         .push(format!("{target:#x}: unreadable table fingerprint")),
                 }
             }
-            _ => report.review.push(format!("{target:#x}: no fingerprint")),
+            _ => {
+                let line = format!("{target:#x}: no fingerprint");
+                match prior_pe {
+                    Some(prior_pe) => {
+                        let kind = if prior_pe.is_code(*target) {
+                            row_resolve::Kind::Function
+                        } else {
+                            row_resolve::Kind::Table
+                        };
+                        wanted.insert(*target, (line, want(kind, None)));
+                    }
+                    None => report.review.push(line),
+                }
+            }
         }
     }
     let found = find_prints(pe, &functions);
@@ -1251,6 +1414,7 @@ pub fn find_candidate(
                     || (new_starts.contains(place) && (target % 16 != 0 || *place % 16 == 0))
             })
             .collect();
+        let function = row_resolve::Kind::Function;
         match places.as_slice() {
             [only] => {
                 moved.insert(*target, *only);
@@ -1264,21 +1428,28 @@ pub fn find_candidate(
                     .fingerprinted
                     .push(format!("{target:#x} -> {only:#x}{checked}"));
             }
-            [] if !all.is_empty() => report.review.push(format!(
-                "{target:#x} matches no function start, of {} places",
-                all.len()
-            )),
-            [] => report.review.push(format!("{target:#x} matches no place")),
-            many => report
-                .review
-                .push(format!("{target:#x} matches {} places", many.len())),
+            [] if !all.is_empty() => {
+                let line = format!(
+                    "{target:#x} matches no function start, of {} places",
+                    all.len()
+                );
+                wanted.insert(*target, (line, want(function, None)));
+            }
+            [] => {
+                let line = format!("{target:#x} matches no place");
+                wanted.insert(*target, (line, want(function, None)));
+            }
+            many => {
+                let line = format!("{target:#x} matches {} places", many.len());
+                wanted.insert(*target, (line, want(function, Some(many.to_vec()))));
+            }
         }
     }
     for (target, (slot, holds)) in &tables {
+        let table = row_resolve::Kind::Table;
         let Some(function) = moved.get(holds).copied() else {
-            report.review.push(format!(
-                "{target:#x}: the function in slot {slot} was not found"
-            ));
+            let line = format!("{target:#x}: the function in slot {slot} was not found");
+            wanted.insert(*target, (line, want(table, None)));
             continue;
         };
         match find_table(pe, *slot, function).as_slice() {
@@ -1288,11 +1459,54 @@ pub fn find_candidate(
                     .fingerprinted
                     .push(format!("{target:#x} -> {only:#x}"));
             }
-            many => report.review.push(format!(
-                "{target:#x}: {} tables hold {function:#x} in slot {slot}",
-                many.len()
-            )),
+            many => {
+                let line = format!(
+                    "{target:#x}: {} tables hold {function:#x} in slot {slot}",
+                    many.len()
+                );
+                let candidates = (!many.is_empty()).then(|| many.to_vec());
+                wanted.insert(*target, (line, want(table, candidates)));
+            }
         }
+    }
+    let mut followed = BTreeMap::new();
+    match prior_pe {
+        Some(prior_pe) if !wanted.is_empty() => {
+            let table_targets: BTreeSet<u32> = tables
+                .keys()
+                .copied()
+                .chain(
+                    wanted
+                        .iter()
+                        .filter(|(_, (_, want))| want.kind == row_resolve::Kind::Table)
+                        .map(|(target, _)| *target),
+                )
+                .collect();
+            let asked: BTreeMap<u32, row_resolve::Wanted> = wanted
+                .iter()
+                .map(|(target, (_, want))| (*target, want.clone()))
+                .collect();
+            let resolution = row_resolve::resolve(prior_pe, pe, &moved, &asked, &table_targets);
+            for (target, (line, _)) in &wanted {
+                match resolution.places.get(target) {
+                    Some(place) => {
+                        moved.insert(*target, *place);
+                    }
+                    None => {
+                        let reason = resolution
+                            .reasons
+                            .get(target)
+                            .map_or("no method was run", String::as_str);
+                        report.review.push(format!("{line}; not settled: {reason}"));
+                    }
+                }
+            }
+            report.settled.extend(resolution.settled);
+            followed = resolution.followed;
+        }
+        _ => report
+            .review
+            .extend(wanted.into_values().map(|(line, _)| line)),
     }
     let places: BTreeSet<u32> = moved.values().copied().collect();
     if places.len() != moved.len() {
@@ -1300,12 +1514,127 @@ pub fn find_candidate(
             .review
             .push("two addresses found the same place".to_owned());
     }
-    let (mut row, report) = finish_row(row, &moved, pe, report);
+    let (mut row, mut report) = finish_row(row, &moved, pe, report);
     if let Some(object) = row.as_object_mut() {
         // They describe the prior build, so they would mislead in this row.
         object.remove("fingerprints");
     }
+    if let Some(prior_pe) = prior_pe {
+        read_carried(prior, &mut row, &moved, &followed, prior_pe, pe, &mut report);
+    }
     (row, report)
+}
+
+/// The value at a path such as `layout.frame_ids[2]` or `toolbar.dev.colours[3][0]`.
+fn value_at<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+    for part in path.split('.') {
+        let (key, indexes) = part.split_at(part.find('[').unwrap_or(part.len()));
+        current = current.get(key)?;
+        for index in indexes.split(']').filter(|index| !index.is_empty()) {
+            current = current.get(index.trim_start_matches('[').parse::<usize>().ok()?)?;
+        }
+    }
+    Some(current)
+}
+
+fn value_at_mut<'a>(value: &'a mut Value, path: &str) -> Option<&'a mut Value> {
+    let mut current = value;
+    for part in path.split('.') {
+        let (key, indexes) = part.split_at(part.find('[').unwrap_or(part.len()));
+        current = current.get_mut(key)?;
+        for index in indexes.split(']').filter(|index| !index.is_empty()) {
+            current = current.get_mut(index.trim_start_matches('[').parse::<usize>().ok()?)?;
+        }
+    }
+    Some(current)
+}
+
+/// Reads each value the recipes leave, a member offset, slot, size or id, from the instructions
+/// that use it in the prior build's functions and the same instructions in the new build. A value
+/// that cannot be read keeps a review line with the reason and stays listed as carried, so the row
+/// is never published with a value of the prior build.
+fn read_carried(
+    prior: &Value,
+    row: &mut Value,
+    moved: &BTreeMap<u32, u32>,
+    followed: &BTreeMap<u32, u32>,
+    prior_pe: &PeFile,
+    pe: &PeFile,
+    report: &mut PortReport,
+) {
+    let mut values = Vec::new();
+    let mut unreadable = Vec::new();
+    for path in std::mem::take(&mut report.carried) {
+        let items: Vec<(String, &Value)> = match value_at(&prior["build"], &path) {
+            Some(Value::Array(items)) => items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| (format!("{path}[{index}]"), item))
+                .collect(),
+            Some(item) => vec![(path.clone(), item)],
+            None => vec![],
+        };
+        if items.is_empty() {
+            unreadable.push(path);
+        }
+        for (path, item) in items {
+            match crate::row_recipe::number(item) {
+                Some(value) => values.push((path, value)),
+                None => unreadable.push(path),
+            }
+        }
+    }
+    // Each part of the row reads its values from its own functions.
+    let mut sections: BTreeMap<String, Vec<(u32, u32)>> = BTreeMap::new();
+    for (section, part) in prior["build"].as_object().into_iter().flatten() {
+        let mut part = part.clone();
+        let mut pairs = Vec::new();
+        walk_addresses("", &mut part, &mut |_, value| {
+            if let Some(address) = read_address(value).filter(|value| is_address(*value)) {
+                let address = address as u32;
+                if let Some(place) = moved.get(&address).filter(|_| prior_pe.is_code(address)) {
+                    pairs.push((address, *place));
+                }
+            }
+        });
+        pairs.sort_unstable();
+        pairs.dedup();
+        if !pairs.is_empty() {
+            sections.insert(section.clone(), pairs);
+        }
+    }
+    for reading in row_resolve::read_values(prior_pe, pe, &sections, followed, &values) {
+        match reading.value {
+            Ok((value, how)) => {
+                if let Some(place) = value_at_mut(&mut row["build"], &reading.path) {
+                    *place = if place.is_string() {
+                        write_address(value)
+                    } else {
+                        json!(value)
+                    };
+                }
+                report.derived.push(if value == reading.prior {
+                    format!("{}: {value:#x}, {how}", reading.path)
+                } else {
+                    format!("{}: {:#x} -> {value:#x}, {how}", reading.path, reading.prior)
+                });
+            }
+            Err(reason) => {
+                report.review.push(format!(
+                    "{} was not read from the new build: {reason}",
+                    reading.path
+                ));
+                report.carried.push(reading.path);
+            }
+        }
+    }
+    for path in unreadable {
+        report
+            .review
+            .push(format!("{path} is not a number this generator can read"));
+        report.carried.push(path);
+    }
 }
 
 /// The key of a row made without its build's symbols. It holds what the row job needs to make the
@@ -1974,6 +2303,33 @@ mod tests {
         assert_eq!(x64::shape(&[0x56, 0xCF]), None);
     }
 
+    #[test]
+    fn nfr6_the_operands_of_a_body_instruction_are_located() {
+        // mov rax, [rcx + 0x558]: a displacement of four bytes from the third byte.
+        let load = x64::decode(&[0x48, 0x8B, 0x81, 0x58, 0x05, 0x00, 0x00]).unwrap();
+        assert_eq!(load.displacement, Some((3, 4)));
+        assert_eq!(load.immediate, None);
+        // call [rax + 0x2b8]: a table slot read through its displacement.
+        let call = x64::decode(&[0xFF, 0x90, 0xB8, 0x02, 0x00, 0x00]).unwrap();
+        assert_eq!(call.displacement, Some((2, 4)));
+        // mov edx, 0x9c45, and cmp byte [rcx + 0x30], 1.
+        let id = x64::decode(&[0xBA, 0x45, 0x9C, 0x00, 0x00]).unwrap();
+        assert_eq!(id.immediate, Some((1, 4)));
+        let compare = x64::decode(&[0x80, 0x79, 0x30, 0x01]).unwrap();
+        assert_eq!(compare.displacement, Some((2, 1)));
+        assert_eq!(compare.immediate, Some((3, 1)));
+        // lock cmpxchg and a VEX move decode only as body instructions.
+        let lock = [0xF0, 0x48, 0x0F, 0xB1, 0x51, 0x08];
+        assert_eq!(x64::decode(&lock), None);
+        assert_eq!(x64::decode_body(&lock).unwrap().displacement, Some((5, 1)));
+        let vex = [0xC5, 0xF8, 0x10, 0x41, 0x10];
+        assert_eq!(x64::decode_body(&vex).unwrap().length, 5);
+        assert_eq!(
+            x64::skeleton(&[0x48, 0x8B, 0x81, 0x58, 0x05, 0x00, 0x00], &load),
+            [0x48, 0x8B, 0x81, 0, 0, 0, 0]
+        );
+    }
+
     /// A verified row whose functions sit at 0x101000 in its module.
     fn verified_row() -> Value {
         json!({
@@ -2125,15 +2481,21 @@ mod tests {
     ) -> (Value, PortReport) {
         let bytes = module(&code_refs(code));
         let pe = PeFile::parse(&bytes).unwrap();
-        find_candidate(&verified_row(), prints, &BTreeSet::new(), version, &pe)
+        find_candidate(&verified_row(), prints, None, version, &pe)
     }
 
     /// `module` with an exception table at 0x10f000 that lists `starts`.
     fn with_starts(code: &[(u32, Vec<u8>)], starts: &[u32]) -> Vec<u8> {
+        let ranges: Vec<(u32, u32)> = starts.iter().map(|start| (*start, start + 0x20)).collect();
+        with_ranges(code, &ranges)
+    }
+
+    /// `module` with an exception table at 0x10f000 that lists each `(start, end)`.
+    fn with_ranges(code: &[(u32, Vec<u8>)], ranges: &[(u32, u32)]) -> Vec<u8> {
         let mut table = vec![];
-        for start in starts {
+        for (start, end) in ranges {
             table.extend_from_slice(&start.to_le_bytes());
-            table.extend_from_slice(&(start + 0x20).to_le_bytes());
+            table.extend_from_slice(&end.to_le_bytes());
             table.extend_from_slice(&0u32.to_le_bytes());
         }
         let mut code = code.to_vec();
@@ -2142,8 +2504,89 @@ mod tests {
         let directory = 0x98 + 112 + 24;
         bytes[directory..directory + 4].copy_from_slice(&0x10f000u32.to_le_bytes());
         bytes[directory + 4..directory + 8]
-            .copy_from_slice(&(12 * starts.len() as u32).to_le_bytes());
+            .copy_from_slice(&(12 * ranges.len() as u32).to_le_bytes());
         bytes
+    }
+
+    /// The verified row's paint function, which reads `view_layer` with `loads` past the bytes its
+    /// fingerprint holds.
+    fn paint_reading(loads: &str) -> Vec<u8> {
+        let mut bytes = hex("4157415641554154565755534881eca0000000").unwrap();
+        bytes.resize(32, 0x90);
+        bytes.extend(hex(loads).unwrap());
+        bytes.push(0xC3);
+        bytes
+    }
+
+    /// A candidate row for a build whose paint function reads `view_layer` with `new_loads`, made
+    /// from the verified row and its build, whose paint function reads it with `prior_loads`.
+    fn read_view_layer(prior_loads: &str, new_loads: &str) -> (Value, PortReport) {
+        let ranges = |shift: u32, paint: usize| {
+            vec![
+                (0x101100 + shift, 0x101120 + shift),
+                (0x101200 + shift, 0x101220 + shift),
+                (0x101300 + shift, 0x101300 + shift + paint as u32),
+            ]
+        };
+        let mut old = shifted_code(0, 0x10);
+        old[3].1 = paint_reading(prior_loads);
+        let prior_bytes = with_ranges(&old, &ranges(0, old[3].1.len()));
+        let prior_pe = PeFile::parse(&prior_bytes).unwrap();
+        let (prints, missing) = fingerprints_of(&verified_row(), &prior_pe);
+        assert!(missing.is_empty(), "{missing:?}");
+        let mut new = shifted_code(0x2000, 0x44);
+        new[3].1 = paint_reading(new_loads);
+        let bytes = with_ranges(&new, &ranges(0x2000, new[3].1.len()));
+        let pe = PeFile::parse(&bytes).unwrap();
+        find_candidate(&verified_row(), &prints, Some(&prior_pe), "1.0.0.3", &pe)
+    }
+
+    #[test]
+    fn nfr6_a_carried_value_is_read_from_the_instructions_that_use_it() {
+        // mov rax, [rcx + 0x20]; mov rdx, [rcx + 0x20], and the new build moved the member to 0x28.
+        let (row, report) =
+            read_view_layer("488b8120000000488b9120000000", "488b8128000000488b9128000000");
+        assert!(report.review.is_empty(), "{:?}", report.review);
+        assert_eq!(row["build"]["toolbar"]["view_layer"], "0x28");
+        assert!(report.carried.is_empty(), "{:?}", report.carried);
+        assert_eq!(
+            report.derived,
+            ["toolbar.view_layer: 0x20 -> 0x28, read at 2 uses in 1 of its functions"]
+        );
+    }
+
+    #[test]
+    fn nfr6_a_value_no_instruction_gives_stops_the_row() {
+        // The new build reads the member with a short displacement: not the same instruction.
+        let (_, report) = read_view_layer("488b8120000000488b9120000000", "488b4128488b5128");
+        assert_eq!(report.carried, ["toolbar.view_layer"]);
+        assert!(report.derived.is_empty(), "{:?}", report.derived);
+        assert!(
+            report.review.iter().any(|line| line
+                .starts_with("toolbar.view_layer was not read from the new build: its 2 uses")),
+            "{:?}",
+            report.review
+        );
+        // One use alone is not read either, and neither are uses that disagree.
+        let (_, report) = read_view_layer("488b8120000000", "488b8128000000");
+        assert!(
+            report
+                .review
+                .iter()
+                .any(|line| line.contains("a second reading is needed")),
+            "{:?}",
+            report.review
+        );
+        let (_, report) =
+            read_view_layer("488b8120000000488b9120000000", "488b8128000000488b9130000000");
+        assert!(
+            report
+                .review
+                .iter()
+                .any(|line| line.contains("its uses disagree")),
+            "{:?}",
+            report.review
+        );
     }
 
     #[test]
@@ -2158,10 +2601,16 @@ mod tests {
         let prior_pe = PeFile::parse(&prior_bytes).unwrap();
         let prior_starts = prior_pe.function_starts();
         assert_eq!(prior_starts.len(), 3);
-        let (prints, _) = fingerprints_of(&verified_row(), &prior_pe);
+        // The row holds no value without a recipe, so only its addresses are looked for.
+        let mut verified = verified_row();
+        verified["build"]["toolbar"]
+            .as_object_mut()
+            .unwrap()
+            .remove("view_layer");
+        let (prints, _) = fingerprints_of(&verified, &prior_pe);
         let bytes = with_starts(&code, &[0x103100, 0x103200, 0x103300]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) = find_candidate(&verified_row(), &prints, &prior_starts, "1.0.0.3", &pe);
+        let (row, report) = find_candidate(&verified, &prints, Some(&prior_pe), "1.0.0.3", &pe);
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         // A part moved out of another function starts where it may, and a whole function does not.
@@ -2172,18 +2621,19 @@ mod tests {
         ));
         let bytes = with_starts(&split, &[0x103100, 0x103200, 0x103300, 0x105308]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) = find_candidate(&verified_row(), &prints, &prior_starts, "1.0.0.3", &pe);
+        let (row, report) = find_candidate(&verified, &prints, Some(&prior_pe), "1.0.0.3", &pe);
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         // Bytes that match only inside another function are no place at all.
         let bytes = with_starts(&code, &[0x103100, 0x103200]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (_, report) = find_candidate(&verified_row(), &prints, &prior_starts, "1.0.0.3", &pe);
+        let (_, report) = find_candidate(&verified, &prints, Some(&prior_pe), "1.0.0.3", &pe);
         assert!(
             report
                 .review
                 .iter()
-                .any(|line| line == "0x101300 matches no function start, of 2 places"),
+                .any(|line| line
+                    .starts_with("0x101300 matches no function start, of 2 places; not settled:")),
             "{:?}",
             report.review
         );

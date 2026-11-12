@@ -11,6 +11,7 @@ pub mod focus;
 pub mod hold;
 pub mod row_port;
 pub mod row_recipe;
+pub mod row_resolve;
 pub mod row_watch;
 pub mod signed_table;
 pub mod start;
