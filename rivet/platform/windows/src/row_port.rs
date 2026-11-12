@@ -19,6 +19,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::chrome_build::{hex, PeFile};
+use crate::row_resolve;
 
 /// The lowest value taken for an address. Offsets and slots lie below it.
 const LOWEST_ADDRESS: u64 = 0x10_0000;
@@ -639,7 +640,7 @@ fn settle(target: u32, choices: &[(u32, usize)], build: &Value, pe: &PeFile) -> 
 }
 
 /// The bytes of a function short enough to read to its end: its first `ret` with no branch before.
-fn whole_function(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
+pub(crate) fn whole_function(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
     let bytes = pe.read(address, 48)?;
     let mut at = 0;
     while at < 32 {
@@ -1181,7 +1182,7 @@ fn fingerprint_targets(row: &Value) -> BTreeSet<u32> {
 }
 
 /// The start of a function with its displacements cleared, cut at an instruction end.
-fn code_print(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
+pub(crate) fn code_print(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
     if !pe.is_code(address) {
         return None;
     }
@@ -1252,7 +1253,7 @@ pub fn fingerprints_of(row: &Value, pe: &PeFile) -> (serde_json::Map<String, Val
 }
 
 /// Every place each function fingerprint matches, in one pass over the code.
-fn find_prints(pe: &PeFile, prints: &BTreeMap<u32, Vec<u8>>) -> BTreeMap<u32, Vec<u32>> {
+pub(crate) fn find_prints(pe: &PeFile, prints: &BTreeMap<u32, Vec<u8>>) -> BTreeMap<u32, Vec<u32>> {
     let mut by_anchor: HashMap<[u8; ANCHOR], Vec<u32>> = HashMap::new();
     let mut first = [false; 256];
     for (target, shape) in prints {
@@ -1288,7 +1289,7 @@ fn find_prints(pe: &PeFile, prints: &BTreeMap<u32, Vec<u8>>) -> BTreeMap<u32, Ve
 }
 
 /// Every class table whose given slot holds a function, by a pointer search over the module.
-fn find_table(pe: &PeFile, slot: u32, function: u32) -> Vec<u32> {
+pub(crate) fn find_table(pe: &PeFile, slot: u32, function: u32) -> Vec<u32> {
     let value = (pe.image_base() + u64::from(function)).to_le_bytes();
     let mut found = Vec::new();
     for (base, bytes, _) in pe.sections() {
@@ -1312,7 +1313,7 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
     let Some(stored) = prior["fingerprints"].as_object() else {
         return Err(vec!["the row has no fingerprints".to_owned()]);
     };
-    let (row, report) = find_candidate(prior, stored, &BTreeSet::new(), version, pe);
+    let (row, report) = find_candidate(prior, stored, None, version, pe);
     if !report.review.is_empty() {
         return Err(report.review);
     }
@@ -1331,16 +1332,21 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
 pub fn find_candidate(
     prior: &Value,
     stored: &serde_json::Map<String, Value>,
-    prior_starts: &BTreeSet<u32>,
+    prior_pe: Option<&PeFile>,
     version: &str,
     pe: &PeFile,
 ) -> (Value, PortReport) {
     let (row, mut report) = begin_row(prior, version);
     report.made_without_pdb = true;
+    let prior_starts = prior_pe.map(PeFile::function_starts).unwrap_or_default();
     let targets = fingerprint_targets(prior);
     report.addresses = targets.len();
     let mut functions = BTreeMap::new();
     let mut tables = BTreeMap::new();
+    // Each address its fingerprint did not pin down, with its review line, waits for the methods
+    // that read the prior build next to the new one.
+    let mut wanted: BTreeMap<u32, (String, row_resolve::Wanted)> = BTreeMap::new();
+    let want = |kind, candidates: Option<Vec<u32>>| row_resolve::Wanted { kind, candidates };
     for target in &targets {
         match stored.get(&format!("{target:#x}")) {
             Some(Value::String(text)) => match hex(text).filter(|shape| shape.len() >= ANCHOR) {
@@ -1365,7 +1371,20 @@ pub fn find_candidate(
                         .push(format!("{target:#x}: unreadable table fingerprint")),
                 }
             }
-            _ => report.review.push(format!("{target:#x}: no fingerprint")),
+            _ => {
+                let line = format!("{target:#x}: no fingerprint");
+                match prior_pe {
+                    Some(prior_pe) => {
+                        let kind = if prior_pe.is_code(*target) {
+                            row_resolve::Kind::Function
+                        } else {
+                            row_resolve::Kind::Table
+                        };
+                        wanted.insert(*target, (line, want(kind, None)));
+                    }
+                    None => report.review.push(line),
+                }
+            }
         }
     }
     let found = find_prints(pe, &functions);
@@ -1387,6 +1406,7 @@ pub fn find_candidate(
                     || (new_starts.contains(place) && (target % 16 != 0 || *place % 16 == 0))
             })
             .collect();
+        let function = row_resolve::Kind::Function;
         match places.as_slice() {
             [only] => {
                 moved.insert(*target, *only);
@@ -1400,21 +1420,28 @@ pub fn find_candidate(
                     .fingerprinted
                     .push(format!("{target:#x} -> {only:#x}{checked}"));
             }
-            [] if !all.is_empty() => report.review.push(format!(
-                "{target:#x} matches no function start, of {} places",
-                all.len()
-            )),
-            [] => report.review.push(format!("{target:#x} matches no place")),
-            many => report
-                .review
-                .push(format!("{target:#x} matches {} places", many.len())),
+            [] if !all.is_empty() => {
+                let line = format!(
+                    "{target:#x} matches no function start, of {} places",
+                    all.len()
+                );
+                wanted.insert(*target, (line, want(function, None)));
+            }
+            [] => {
+                let line = format!("{target:#x} matches no place");
+                wanted.insert(*target, (line, want(function, None)));
+            }
+            many => {
+                let line = format!("{target:#x} matches {} places", many.len());
+                wanted.insert(*target, (line, want(function, Some(many.to_vec()))));
+            }
         }
     }
     for (target, (slot, holds)) in &tables {
+        let table = row_resolve::Kind::Table;
         let Some(function) = moved.get(holds).copied() else {
-            report.review.push(format!(
-                "{target:#x}: the function in slot {slot} was not found"
-            ));
+            let line = format!("{target:#x}: the function in slot {slot} was not found");
+            wanted.insert(*target, (line, want(table, None)));
             continue;
         };
         match find_table(pe, *slot, function).as_slice() {
@@ -1424,11 +1451,54 @@ pub fn find_candidate(
                     .fingerprinted
                     .push(format!("{target:#x} -> {only:#x}"));
             }
-            many => report.review.push(format!(
-                "{target:#x}: {} tables hold {function:#x} in slot {slot}",
-                many.len()
-            )),
+            many => {
+                let line = format!(
+                    "{target:#x}: {} tables hold {function:#x} in slot {slot}",
+                    many.len()
+                );
+                let candidates = (!many.is_empty()).then(|| many.to_vec());
+                wanted.insert(*target, (line, want(table, candidates)));
+            }
         }
+    }
+    let mut followed = BTreeMap::new();
+    match prior_pe {
+        Some(prior_pe) if !wanted.is_empty() => {
+            let table_targets: BTreeSet<u32> = tables
+                .keys()
+                .copied()
+                .chain(
+                    wanted
+                        .iter()
+                        .filter(|(_, (_, want))| want.kind == row_resolve::Kind::Table)
+                        .map(|(target, _)| *target),
+                )
+                .collect();
+            let asked: BTreeMap<u32, row_resolve::Wanted> = wanted
+                .iter()
+                .map(|(target, (_, want))| (*target, want.clone()))
+                .collect();
+            let resolution = row_resolve::resolve(prior_pe, pe, &moved, &asked, &table_targets);
+            for (target, (line, _)) in &wanted {
+                match resolution.places.get(target) {
+                    Some(place) => {
+                        moved.insert(*target, *place);
+                    }
+                    None => {
+                        let reason = resolution
+                            .reasons
+                            .get(target)
+                            .map_or("no method was run", String::as_str);
+                        report.review.push(format!("{line}; not settled: {reason}"));
+                    }
+                }
+            }
+            report.settled.extend(resolution.settled);
+            followed = resolution.followed;
+        }
+        _ => report
+            .review
+            .extend(wanted.into_values().map(|(line, _)| line)),
     }
     let places: BTreeSet<u32> = moved.values().copied().collect();
     if places.len() != moved.len() {
@@ -1441,6 +1511,7 @@ pub fn find_candidate(
         // They describe the prior build, so they would mislead in this row.
         object.remove("fingerprints");
     }
+    let _ = followed;
     (row, report)
 }
 
@@ -2288,7 +2359,7 @@ mod tests {
     ) -> (Value, PortReport) {
         let bytes = module(&code_refs(code));
         let pe = PeFile::parse(&bytes).unwrap();
-        find_candidate(&verified_row(), prints, &BTreeSet::new(), version, &pe)
+        find_candidate(&verified_row(), prints, None, version, &pe)
     }
 
     /// `module` with an exception table at 0x10f000 that lists `starts`.
@@ -2324,7 +2395,7 @@ mod tests {
         let (prints, _) = fingerprints_of(&verified_row(), &prior_pe);
         let bytes = with_starts(&code, &[0x103100, 0x103200, 0x103300]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) = find_candidate(&verified_row(), &prints, &prior_starts, "1.0.0.3", &pe);
+        let (row, report) = find_candidate(&verified_row(), &prints, Some(&prior_pe), "1.0.0.3", &pe);
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         // A part moved out of another function starts where it may, and a whole function does not.
@@ -2335,18 +2406,19 @@ mod tests {
         ));
         let bytes = with_starts(&split, &[0x103100, 0x103200, 0x103300, 0x105308]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) = find_candidate(&verified_row(), &prints, &prior_starts, "1.0.0.3", &pe);
+        let (row, report) = find_candidate(&verified_row(), &prints, Some(&prior_pe), "1.0.0.3", &pe);
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         // Bytes that match only inside another function are no place at all.
         let bytes = with_starts(&code, &[0x103100, 0x103200]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (_, report) = find_candidate(&verified_row(), &prints, &prior_starts, "1.0.0.3", &pe);
+        let (_, report) = find_candidate(&verified_row(), &prints, Some(&prior_pe), "1.0.0.3", &pe);
         assert!(
             report
                 .review
                 .iter()
-                .any(|line| line == "0x101300 matches no function start, of 2 places"),
+                .any(|line| line
+                    .starts_with("0x101300 matches no function start, of 2 places; not settled:")),
             "{:?}",
             report.review
         );
