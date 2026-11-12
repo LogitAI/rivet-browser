@@ -68,6 +68,7 @@ pub struct PeFile<'a> {
     sections: Vec<(u32, u32, u32)>,
     code_sections: Vec<(u32, u32)>,
     debug_directory: (u32, u32),
+    exception_directory: (u32, u32),
 }
 
 fn u16_at(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -107,6 +108,11 @@ impl<'a> PeFile<'a> {
             u32_at(bytes, optional + 112 + 48)?,
             u32_at(bytes, optional + 116 + 48)?,
         );
+        // Data directory 3 is the exception table, which lists where functions start.
+        let exception_directory = (
+            u32_at(bytes, optional + 112 + 24)?,
+            u32_at(bytes, optional + 116 + 24)?,
+        );
         let table = optional + optional_size;
         // IMAGE_SCN_MEM_EXECUTE.
         let code_sections = (0..sections)
@@ -137,6 +143,7 @@ impl<'a> PeFile<'a> {
             sections,
             code_sections,
             debug_directory,
+            exception_directory,
         })
     }
 
@@ -208,6 +215,45 @@ impl<'a> PeFile<'a> {
             ));
         }
         None
+    }
+
+    /// The start of every function the exception table lists. A function that needs no unwind
+    /// data, such as a leaf that touches no stack, is not listed.
+    pub fn function_starts(&self) -> std::collections::BTreeSet<u32> {
+        let (directory, size) = self.exception_directory;
+        let mut starts = std::collections::BTreeSet::new();
+        let Some(table) = self.offset(directory).filter(|_| directory != 0) else {
+            return starts;
+        };
+        // Each entry is the function's start, its end and its unwind data.
+        for index in 0..(size / 12) as usize {
+            match u32_at(self.bytes, table + index * 12) {
+                Some(start) => starts.insert(start),
+                None => break,
+            };
+        }
+        starts
+    }
+
+    /// Every part of a function the exception table lists, as start and end. The linker moves cold
+    /// parts out of a function, and each such part has its own entry.
+    pub fn function_ranges(&self) -> std::collections::BTreeMap<u32, u32> {
+        let (directory, size) = self.exception_directory;
+        let mut ranges = std::collections::BTreeMap::new();
+        let Some(table) = self.offset(directory).filter(|_| directory != 0) else {
+            return ranges;
+        };
+        for index in 0..(size / 12) as usize {
+            let entry = table + index * 12;
+            match (u32_at(self.bytes, entry), u32_at(self.bytes, entry + 4)) {
+                (Some(start), Some(end)) if end > start => {
+                    ranges.insert(start, end);
+                }
+                (Some(_), Some(_)) => {}
+                _ => break,
+            }
+        }
+        ranges
     }
 
     /// Finds the slot of `function` in the vtable at `vtable`, scanning a bounded number of slots.

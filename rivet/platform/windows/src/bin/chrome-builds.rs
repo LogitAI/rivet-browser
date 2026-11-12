@@ -8,6 +8,13 @@
 //! `chrome-builds port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json>`
 //! makes a whole row for a new build from the row of a prior build, and exits 3 when the row needs
 //! a person's review.
+//! `chrome-builds find <prior-row.json> <prior.pdb> <prior-module|-> <new-module> <version> <channel> <download> <row.json> <report.json>`
+//! makes a candidate row for a new build whose PDB is not published, from the fingerprints of the
+//! prior row: those it stored, or else those read now from the prior build's module. It marks the
+//! row as made without its PDB and exits 3 when the row needs a person's review.
+//! `chrome-builds pdb-check <table.json> <browser> <version> <pdb-row.json>` compares a row made
+//! without its PDB with the row its PDB gives. It removes the mark when they agree and exits 4,
+//! printing each difference, when they do not.
 //! `chrome-builds pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json>`
 //! prints the builds that have no row yet, most urgent first.
 //! `chrome-builds table-key` prints a new signing key pair.
@@ -65,6 +72,36 @@ fn main() -> ExitCode {
                 }
             }
         }
+        ["find", prior, old_pdb, old_module, module, version, channel, download, row, report] => {
+            return match find(
+                Path::new(prior),
+                Path::new(old_pdb),
+                old_module,
+                Path::new(module),
+                version,
+                channel,
+                download,
+                Path::new(row),
+                Path::new(report),
+            ) {
+                Ok(true) => ExitCode::SUCCESS,
+                Ok(false) => ExitCode::from(3),
+                Err(error) => {
+                    eprintln!("chrome-builds: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        ["pdb-check", table, browser, version, row] => {
+            return match pdb_check(Path::new(table), browser, version, Path::new(row)) {
+                Ok(true) => ExitCode::SUCCESS,
+                Ok(false) => ExitCode::from(4),
+                Err(error) => {
+                    eprintln!("chrome-builds: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         ["pending", stable, beta, edge, brave, known] => {
             pending(Path::new(stable), Path::new(beta), Path::new(edge), Path::new(brave), Path::new(known))
         }
@@ -86,7 +123,7 @@ fn main() -> ExitCode {
         ["table-withdraw", published, signed, builds @ ..] if !builds.is_empty() => {
             table_withdraw(Path::new(published), Path::new(signed), builds)
         }
-        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> <module> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
+        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | find <prior-row.json> <prior.pdb> <prior-module|-> <new-module> <version> <channel> <download> <row.json> <report.json> | pdb-check <table.json> <browser> <version> <pdb-row.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> <module> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -207,6 +244,134 @@ fn port(
         report.review.len()
     );
     Ok(report.review.is_empty())
+}
+
+/// Makes a candidate row for a build with no published PDB from the prior row's fingerprints. The
+/// prior PDB names each prior address, so a person sees which function a review line is about.
+#[allow(clippy::too_many_arguments)]
+fn find(
+    prior_path: &Path,
+    old_pdb: &Path,
+    old_module: &str,
+    module: &Path,
+    version: &str,
+    channel: &str,
+    download: &str,
+    row_path: &Path,
+    report_path: &Path,
+) -> Result<bool, String> {
+    let prior = json_file(prior_path)?;
+    let stored = prior["fingerprints"].as_object();
+    let prior_bytes = match old_module {
+        "-" => None,
+        path => Some(read(Path::new(path))?),
+    };
+    let prior_pe = match &prior_bytes {
+        Some(bytes) => {
+            Some(PeFile::parse(bytes).ok_or("the prior module is not a 64-bit PE image")?)
+        }
+        None => None,
+    };
+    let prints = match (stored, &prior_pe) {
+        (Some(stored), None) => stored.clone(),
+        (None, None) => {
+            return Err("the prior row has no fingerprints, and no prior module was given to read them from".into());
+        }
+        (_, Some(pe)) => {
+            // Fingerprints read from another build would find the wrong functions.
+            let start = prior["frame"]["hwnd_for_view"]
+                .as_u64()
+                .and_then(|address| u32::try_from(address).ok());
+            let prologue = prior["frame"]["hwnd_for_view_prologue"]
+                .as_str()
+                .and_then(chrome_build::hex);
+            match (start, prologue) {
+                (Some(start), Some(prologue))
+                    if pe.read(start, prologue.len()) == Some(prologue.as_slice()) => {}
+                _ => return Err("the prior module is not the build of the prior row".into()),
+            }
+            match stored {
+                Some(stored) => stored.clone(),
+                None => {
+                    let (prints, missing) = row_port::fingerprints_of(&prior, pe);
+                    if !missing.is_empty() {
+                        println!(
+                            "the prior build gives no fingerprint for {}",
+                            missing.join(", ")
+                        );
+                    }
+                    prints
+                }
+            }
+        }
+    };
+    // A fingerprint taken at a function start counts only function starts of the new build, and
+    // what fingerprints leave open is looked for by reading the prior build next to the new one.
+    let prior_starts = prior_pe
+        .as_ref()
+        .map(PeFile::function_starts)
+        .unwrap_or_default();
+    let mut old = Vec::new();
+    symbols::publics(old_pdb, &mut |address, name| {
+        old.push((address, name.to_owned()))
+    })?;
+    old.sort();
+    let mut targets = row_port::addresses_of(&prior["build"]);
+    for key in ["frame_view_vtable", "client_view_bounds", "hwnd_for_view"] {
+        targets.extend(prior["frame"][key].as_u64().map(|value| value as u32));
+    }
+    let named = row_port::name_addresses(&targets, &old);
+    drop(old);
+    let bytes = read(module)?;
+    let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
+    let (mut row, mut report) =
+        row_port::find_candidate(&prior, &prints, prior_pe.as_ref(), version, &pe);
+    // No symbols name `screen_origin` here: a prior row without it gives a row without it.
+    row_port::seed_screen_origin(&mut row, &[], &pe, &mut report);
+    report.review.extend(row_port::hand_only_review(&prior));
+    row_port::name_review_lines(&mut report.review, &named);
+    let key = pe
+        .pdb_key()
+        .ok_or("the new module has no CodeView record")?;
+    row_port::mark_without_pdb(&mut row, &key, &report.prior_version, channel, download);
+    let text = |value: &dyn erased::Json| value.pretty();
+    std::fs::write(row_path, text(&row)).map_err(|error| error.to_string())?;
+    std::fs::write(report_path, text(&report)).map_err(|error| error.to_string())?;
+    println!(
+        "exception tables: {} function starts in the prior build, {} in the new one",
+        prior_starts.len(),
+        pe.function_starts().len()
+    );
+    println!(
+        "{} {} without its PDB: {} of {} addresses found by fingerprint, {} settled by two methods, {} values read, {} carried, {} for review",
+        report.browser,
+        report.version,
+        report.fingerprinted.len(),
+        report.addresses,
+        report.settled.len(),
+        report.derived.len(),
+        report.carried.len(),
+        report.review.len()
+    );
+    Ok(report.review.is_empty())
+}
+
+/// Compares a row made without its PDB with the row the PDB gives, and removes the mark when they
+/// agree.
+fn pdb_check(table_path: &Path, browser: &str, version: &str, row: &Path) -> Result<bool, String> {
+    let mut table = json_file(table_path)?;
+    let from_pdb = json_file(row)?;
+    let differences = row_port::check_against_pdb(&mut table, browser, version, &from_pdb)?;
+    for line in &differences {
+        println!("{line}");
+    }
+    if !differences.is_empty() {
+        return Ok(false);
+    }
+    let text = serde_json::to_string_pretty(&table).map_err(|error| error.to_string())? + "\n";
+    std::fs::write(table_path, text).map_err(|error| error.to_string())?;
+    println!("{browser} {version}: the row made from fingerprints agrees with its PDB");
+    Ok(true)
 }
 
 mod erased {
