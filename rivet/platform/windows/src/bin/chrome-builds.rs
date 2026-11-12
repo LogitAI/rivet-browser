@@ -343,11 +343,14 @@ fn find(
         pe.function_starts().len()
     );
     println!(
-        "{} {} without its PDB: {} of {} addresses found by fingerprint, {} for review",
+        "{} {} without its PDB: {} of {} addresses found by fingerprint, {} settled by two methods, {} values read, {} carried, {} for review",
         report.browser,
         report.version,
         report.fingerprinted.len(),
         report.addresses,
+        report.settled.len(),
+        report.derived.len(),
+        report.carried.len(),
         report.review.len()
     );
     Ok(report.review.is_empty())
