@@ -325,8 +325,10 @@ fn find(
     drop(old);
     let bytes = read(module)?;
     let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
+    // A class table of a views class is also found again by the class name its symbol gives.
+    let classes = row_port::class_names(&named);
     let (mut row, mut report) =
-        row_port::find_candidate(&prior, &prints, prior_pe.as_ref(), version, &pe);
+        row_port::find_candidate(&prior, &prints, prior_pe.as_ref(), &classes, version, &pe);
     // No symbols name `screen_origin` here: a prior row without it gives a row without it.
     row_port::seed_screen_origin(&mut row, &[], &pe, &mut report);
     report.review.extend(row_port::hand_only_review(&prior));

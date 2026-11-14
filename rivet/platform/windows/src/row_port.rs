@@ -1481,7 +1481,7 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
     let Some(stored) = prior["fingerprints"].as_object() else {
         return Err(vec!["the row has no fingerprints".to_owned()]);
     };
-    let (row, report) = find_candidate(prior, stored, None, version, pe);
+    let (row, report) = find_candidate(prior, stored, None, &BTreeMap::new(), version, pe);
     if !report.review.is_empty() {
         return Err(report.review);
     }
@@ -1505,6 +1505,7 @@ pub fn find_candidate(
     prior: &Value,
     stored: &serde_json::Map<String, Value>,
     prior_pe: Option<&PeFile>,
+    classes: &BTreeMap<u32, String>,
     version: &str,
     pe: &PeFile,
 ) -> (Value, PortReport) {
@@ -1518,7 +1519,15 @@ pub fn find_candidate(
     // Each address its fingerprint did not pin down, with its review line, waits for the methods
     // that read the prior build next to the new one.
     let mut wanted: BTreeMap<u32, (String, row_resolve::Wanted)> = BTreeMap::new();
-    let want = |kind, candidates: Option<Vec<u32>>| row_resolve::Wanted { kind, candidates };
+    let want = |target: u32, kind: row_resolve::Kind, candidates: Option<Vec<u32>>| {
+        row_resolve::Wanted {
+            kind,
+            candidates,
+            class: (kind == row_resolve::Kind::Table)
+                .then(|| classes.get(&target).cloned())
+                .flatten(),
+        }
+    };
     for target in &targets {
         match stored.get(&format!("{target:#x}")) {
             Some(Value::String(text)) => match hex(text).filter(|shape| shape.len() >= ANCHOR) {
@@ -1552,7 +1561,7 @@ pub fn find_candidate(
                         } else {
                             row_resolve::Kind::Table
                         };
-                        wanted.insert(*target, (line, want(kind, None)));
+                        wanted.insert(*target, (line, want(*target, kind, None)));
                     }
                     None => report.review.push(line),
                 }
@@ -1597,15 +1606,15 @@ pub fn find_candidate(
                     "{target:#x} matches no function start, of {} places",
                     all.len()
                 );
-                wanted.insert(*target, (line, want(function, None)));
+                wanted.insert(*target, (line, want(*target, function, None)));
             }
             [] => {
                 let line = format!("{target:#x} matches no place");
-                wanted.insert(*target, (line, want(function, None)));
+                wanted.insert(*target, (line, want(*target, function, None)));
             }
             many => {
                 let line = format!("{target:#x} matches {} places", many.len());
-                wanted.insert(*target, (line, want(function, Some(many.to_vec()))));
+                wanted.insert(*target, (line, want(*target, function, Some(many.to_vec()))));
             }
         }
     }
@@ -1613,7 +1622,7 @@ pub fn find_candidate(
         let table = row_resolve::Kind::Table;
         let Some(function) = moved.get(holds).copied() else {
             let line = format!("{target:#x}: the function in slot {slot} was not found");
-            wanted.insert(*target, (line, want(table, None)));
+            wanted.insert(*target, (line, want(*target, table, None)));
             continue;
         };
         match find_table(pe, *slot, function).as_slice() {
@@ -1629,7 +1638,7 @@ pub fn find_candidate(
                     many.len()
                 );
                 let candidates = (!many.is_empty()).then(|| many.to_vec());
-                wanted.insert(*target, (line, want(table, candidates)));
+                wanted.insert(*target, (line, want(*target, table, candidates)));
             }
         }
     }
@@ -1953,6 +1962,26 @@ pub fn check_against_pdb(
         }
     }
     Ok(differences)
+}
+
+/// The views class each class table of the prior row is named after by the prior build's public
+/// symbols, for the tables found again by their class name. A table whose symbols name two classes
+/// is left out.
+pub fn class_names(named: &BTreeMap<u32, (u32, Vec<String>)>) -> BTreeMap<u32, String> {
+    let mut out = BTreeMap::new();
+    for (target, (distance, names)) in named {
+        if *distance != 0 {
+            continue;
+        }
+        let classes: BTreeSet<&str> = names
+            .iter()
+            .filter_map(|name| crate::row_class::class_of_table_symbol(stable_name(name)))
+            .collect();
+        if let [only] = classes.into_iter().collect::<Vec<_>>()[..] {
+            out.insert(*target, only.to_owned());
+        }
+    }
+    out
 }
 
 /// Adds to each review line that starts with a prior address the public name that address lies
@@ -2746,6 +2775,10 @@ mod tests {
         row
     }
 
+    fn no_classes() -> BTreeMap<u32, String> {
+        BTreeMap::new()
+    }
+
     fn find(row: &Value, code: &[(u32, Vec<u8>)], version: &str) -> Result<Value, Vec<String>> {
         let bytes = module(&code_refs(code));
         let pe = PeFile::parse(&bytes).unwrap();
@@ -2846,7 +2879,7 @@ mod tests {
     ) -> (Value, PortReport) {
         let bytes = module(&code_refs(code));
         let pe = PeFile::parse(&bytes).unwrap();
-        find_candidate(&verified_row(), prints, None, version, &pe)
+        find_candidate(&verified_row(), prints, None, &BTreeMap::new(), version, &pe)
     }
 
     /// `module` with an exception table at 0x10f000 that lists `starts`.
@@ -2903,7 +2936,8 @@ mod tests {
         new[3].1 = paint_reading(new_loads);
         let bytes = with_ranges(&new, &ranges(0x2000, new[3].1.len()));
         let pe = PeFile::parse(&bytes).unwrap();
-        find_candidate(&verified_row(), &prints, Some(&prior_pe), "1.0.0.3", &pe)
+        let classes = BTreeMap::new();
+        find_candidate(&verified_row(), &prints, Some(&prior_pe), &classes, "1.0.0.3", &pe)
     }
 
     #[test]
@@ -2975,7 +3009,8 @@ mod tests {
         let (prints, _) = fingerprints_of(&verified, &prior_pe);
         let bytes = with_starts(&code, &[0x103100, 0x103200, 0x103300]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) = find_candidate(&verified, &prints, Some(&prior_pe), "1.0.0.3", &pe);
+        let (row, report) =
+            find_candidate(&verified, &prints, Some(&prior_pe), &no_classes(), "1.0.0.3", &pe);
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         // A part moved out of another function starts where it may, and a whole function does not.
@@ -2986,13 +3021,15 @@ mod tests {
         ));
         let bytes = with_starts(&split, &[0x103100, 0x103200, 0x103300, 0x105308]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) = find_candidate(&verified, &prints, Some(&prior_pe), "1.0.0.3", &pe);
+        let (row, report) =
+            find_candidate(&verified, &prints, Some(&prior_pe), &no_classes(), "1.0.0.3", &pe);
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         // Bytes that match only inside another function are no place at all.
         let bytes = with_starts(&code, &[0x103100, 0x103200]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (_, report) = find_candidate(&verified, &prints, Some(&prior_pe), "1.0.0.3", &pe);
+        let (_, report) =
+            find_candidate(&verified, &prints, Some(&prior_pe), &no_classes(), "1.0.0.3", &pe);
         assert!(
             report
                 .review
@@ -3075,7 +3112,8 @@ mod tests {
         });
         let bytes = module(&code_refs(&shifted_code(0x2000, 0x44)));
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) = find_candidate(&prior, &prints_of_prior(), None, "1.0.0.3", &pe);
+        let prints = prints_of_prior();
+        let (row, report) = find_candidate(&prior, &prints, None, &no_classes(), "1.0.0.3", &pe);
         assert_eq!(report.review, Vec::<String>::new());
         assert_eq!(report.unplaced.len(), 2, "{:?}", report.unplaced);
         assert!(report.unplaced[0].starts_with("0x101400: no fingerprint"));
@@ -3100,7 +3138,8 @@ mod tests {
 
         // The same address held by a part the window cannot do without still stops the row.
         prior["build"]["layout"] = json!({"frame_vtable": "0x101400"});
-        let (row, report) = find_candidate(&prior, &prints_of_prior(), None, "1.0.0.3", &pe);
+        let prints = prints_of_prior();
+        let (row, report) = find_candidate(&prior, &prints, None, &no_classes(), "1.0.0.3", &pe);
         assert!(
             report.review.iter().any(|line| line == "0x101400: no fingerprint"),
             "{:?}",
