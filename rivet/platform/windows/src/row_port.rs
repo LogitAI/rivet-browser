@@ -1554,17 +1554,13 @@ pub fn find_candidate(
             }
             _ => {
                 let line = format!("{target:#x}: no fingerprint");
-                match prior_pe {
-                    Some(prior_pe) => {
-                        let kind = if prior_pe.is_code(*target) {
-                            row_resolve::Kind::Function
-                        } else {
-                            row_resolve::Kind::Table
-                        };
-                        wanted.insert(*target, (line, want(*target, kind, None)));
-                    }
-                    None => report.review.push(line),
-                }
+                // Without the prior module no method can place it, but it is still settled with
+                // the other open addresses, so a feature that is off does not stop the row.
+                let kind = match prior_pe {
+                    Some(prior_pe) if !prior_pe.is_code(*target) => row_resolve::Kind::Table,
+                    _ => row_resolve::Kind::Function,
+                };
+                wanted.insert(*target, (line, want(*target, kind, None)));
             }
         }
     }
