@@ -79,6 +79,9 @@ pub struct PortReport {
     /// Values no instruction of the new build gave that the runtime finds by reflection, so the
     /// row leaves them out instead of carrying them.
     pub reflected: Vec<String>,
+    /// Addresses no method placed in the new build that only features this row turns off hold,
+    /// with the values that held them. The row clears those values like the feature's others.
+    pub unplaced: Vec<String>,
     /// Whether every carried value must be settled: the milestone changed, or values were read.
     #[serde(skip)]
     must_check: bool,
@@ -88,6 +91,10 @@ pub struct PortReport {
     /// Why each value that was tried could not be read.
     #[serde(skip)]
     unread: BTreeMap<String, String>,
+    /// Values of features the row turns off whatever the milestone, with the reason: an address
+    /// that has no place in the new build, or a recipe that failed.
+    #[serde(skip)]
+    off_values: BTreeMap<String, String>,
 }
 
 fn is_address(value: u64) -> bool {
@@ -1019,12 +1026,25 @@ fn settle_carried(row: &mut Value, report: &mut PortReport) {
     report
         .derived
         .extend(crate::row_recipe::follow(&mut row["build"]));
-    if !report.must_check {
-        return;
-    }
-    let mut left = Vec::new();
     let mut off: BTreeMap<&'static str, (&'static RowFeature, Vec<String>)> = BTreeMap::new();
-    for path in std::mem::take(&mut report.carried) {
+    for (path, reason) in std::mem::take(&mut report.off_values) {
+        if let Some(feature) = row_features::feature_of(&path) {
+            row_features::clear_value(&mut row["build"], &path, feature);
+            report.unread.insert(path.clone(), reason);
+            off.entry(feature.name)
+                .or_insert((feature, Vec::new()))
+                .1
+                .push(path);
+        }
+    }
+    let must_check = report.must_check;
+    let carried = if must_check {
+        std::mem::take(&mut report.carried)
+    } else {
+        Vec::new()
+    };
+    let mut left = Vec::new();
+    for path in carried {
         if row_features::is_reflected(&path) {
             row_features::leave_out(&mut row["build"], &path);
             report.unread.remove(&path);
@@ -1046,8 +1066,8 @@ fn settle_carried(row: &mut Value, report: &mut PortReport) {
         }
     }
     let mut entries = Vec::new();
-    for (name, (feature, paths)) in off {
-        row_features::switch_off(&mut row["build"], feature);
+    for (name, (_, paths)) in off {
+        row_features::turn_off(&mut row["build"], name);
         let reasons: Vec<String> = paths
             .iter()
             .map(|path| match report.unread.remove(path) {
@@ -1062,6 +1082,9 @@ fn settle_carried(row: &mut Value, report: &mut PortReport) {
     }
     if !entries.is_empty() {
         row[row_features::SWITCHED_OFF] = json!(entries);
+    }
+    if !must_check {
+        return;
     }
     let mut unchecked = Vec::new();
     for path in &left {
@@ -1282,12 +1305,20 @@ fn finish_row(
     // Last, since the recipes read the addresses of the new build.
     let derived = crate::row_recipe::derive_row(&mut row["build"], pe);
     report.derived.extend(derived.read);
-    report.review.extend(
-        derived
-            .failed
-            .into_iter()
-            .map(|reason| format!("a value could not be read from the new build: {reason}")),
-    );
+    for failure in derived.failed {
+        // A value of a feature the runtime can do without turns that feature off instead.
+        let path = failure.split(": ").next().unwrap_or_default();
+        if crate::row_features::feature_of(path).is_some() {
+            report.off_values.insert(
+                path.to_owned(),
+                format!("could not be read from the new build: {failure}"),
+            );
+        } else {
+            report
+                .review
+                .push(format!("a value could not be read from the new build: {failure}"));
+        }
+    }
     (row, report)
 }
 
@@ -1467,8 +1498,9 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
 /// table also lists, since the same bytes inside another function are not the function. Each
 /// address the fingerprints leave open is looked for by `row_resolve`, which takes a place only
 /// where two independent methods agree, and each value with no recipe is read from the
-/// instructions that use it. Whatever stays open keeps a review line and its prior value, so such
-/// a row is never published as it is.
+/// instructions that use it. An address that stays open and that only features the runtime can do
+/// without hold turns those features off and is cleared. Whatever else stays open keeps a review
+/// line and its prior value, so such a row is never published as it is.
 pub fn find_candidate(
     prior: &Value,
     stored: &serde_json::Map<String, Value>,
@@ -1476,7 +1508,7 @@ pub fn find_candidate(
     version: &str,
     pe: &PeFile,
 ) -> (Value, PortReport) {
-    let (row, mut report) = begin_row(prior, version, prior_pe.is_none());
+    let (mut row, mut report) = begin_row(prior, version, prior_pe.is_none());
     report.made_without_pdb = true;
     let prior_starts = prior_pe.map(PeFile::function_starts).unwrap_or_default();
     let targets = fingerprint_targets(prior);
@@ -1602,6 +1634,9 @@ pub fn find_candidate(
         }
     }
     let mut followed = BTreeMap::new();
+    // Each address no method placed, with its review line. Those that only features the runtime
+    // can do without hold do not stop the row.
+    let mut open: BTreeMap<u32, String> = BTreeMap::new();
     match prior_pe {
         Some(prior_pe) if !wanted.is_empty() => {
             let table_targets: BTreeSet<u32> = tables
@@ -1629,17 +1664,16 @@ pub fn find_candidate(
                             .reasons
                             .get(target)
                             .map_or("no method was run", String::as_str);
-                        report.review.push(format!("{line}; not settled: {reason}"));
+                        open.insert(*target, format!("{line}; not settled: {reason}"));
                     }
                 }
             }
             report.settled.extend(resolution.settled);
             followed = resolution.followed;
         }
-        _ => report
-            .review
-            .extend(wanted.into_values().map(|(line, _)| line)),
+        _ => open.extend(wanted.into_iter().map(|(target, (line, _))| (target, line))),
     }
+    release_unplaced(prior, &mut row, open, &mut report);
     let places: BTreeSet<u32> = moved.values().copied().collect();
     if places.len() != moved.len() {
         report
@@ -1656,6 +1690,73 @@ pub fn find_candidate(
     }
     settle_carried(&mut row, &mut report);
     (row, report)
+}
+
+/// Settles each address no method placed in the new build. Where every value that holds it belongs
+/// to a feature the runtime can do without, or is not read in this row, those values are cleared
+/// and the features go off, and the address is listed in the report. An address that a part the
+/// window cannot do without holds, the frame or the page area layout, stops the row with its line.
+fn release_unplaced(
+    prior: &Value,
+    row: &mut Value,
+    open: BTreeMap<u32, String>,
+    report: &mut PortReport,
+) {
+    use crate::row_features::{self, Clear};
+    if open.is_empty() {
+        return;
+    }
+    let mut holders: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+    let mut note = |path: &str, value: &mut Value| {
+        if READ_FROM_CODE.iter().any(|field| path.ends_with(field)) {
+            return;
+        }
+        if let Some(address) = read_address(value).filter(|value| is_address(*value)) {
+            holders
+                .entry(address as u32)
+                .or_default()
+                .push(path.trim_start_matches('.').to_owned());
+        }
+    };
+    let mut build = prior["build"].clone();
+    walk_addresses("", &mut build, &mut note);
+    // The frame part has no feature to turn off, so its paths always stop the row.
+    let mut frame = frame_addresses(&prior["frame"]);
+    walk_addresses("frame", &mut frame, &mut note);
+    for (target, line) in open {
+        let paths = holders.remove(&target).unwrap_or_default();
+        let needed = paths.is_empty()
+            || paths.iter().any(|path| {
+                path.starts_with("frame.")
+                    || (row_features::feature_of(path).is_none()
+                        && row_features::unused(&row["build"], path).is_none())
+            });
+        if needed {
+            report.review.push(line);
+            continue;
+        }
+        for path in &paths {
+            match row_features::feature_of(path) {
+                Some(feature) => {
+                    row_features::clear_value(&mut row["build"], path, feature);
+                    report.off_values.insert(
+                        path.clone(),
+                        format!("has no place in the new build: {line}"),
+                    );
+                }
+                None => {
+                    let why = row_features::unused(&row["build"], path).unwrap_or_default();
+                    // A list holds no single address, so a value in one becomes zero.
+                    let how = if path.contains('[') { Clear::Zero } else { Clear::Absent };
+                    row_features::clear(&mut row["build"], path, how);
+                    report.unused.push(format!("{path}: {why}"));
+                }
+            }
+        }
+        report
+            .unplaced
+            .push(format!("{line}; cleared from {}", paths.join(", ")));
+    }
 }
 
 /// The value at a path such as `layout.frame_ids[2]` or `toolbar.dev.colours[3][0]`.
@@ -2953,6 +3054,60 @@ mod tests {
             "{:?}",
             report.review
         );
+    }
+
+    #[test]
+    fn nfr6_unplaced_functions_of_a_feature_that_is_off_do_not_block_the_row() {
+        // Edge 157's row stopped on functions no method placed, most of which only features the
+        // runtime can do without hold. The prior build gave these two no fingerprint.
+        let mut prior = verified_row();
+        prior["build"]["split"] = json!({
+            "supported": true,
+            "remove_split": "0x101400",
+            "remove_split_prologue": "4883ec28488b0d10000000",
+            "signatures": [["0x101400", "4883ec28"]],
+        });
+        prior["build"]["vertical"] = json!({
+            "supported": false,
+            "detour_strip": false,
+            "should_draw_tab_strip": "0x101500",
+            "should_draw_tab_strip_prologue": "4883ec28",
+        });
+        let bytes = module(&code_refs(&shifted_code(0x2000, 0x44)));
+        let pe = PeFile::parse(&bytes).unwrap();
+        let (row, report) = find_candidate(&prior, &prints_of_prior(), None, "1.0.0.3", &pe);
+        assert_eq!(report.review, Vec::<String>::new());
+        assert_eq!(report.unplaced.len(), 2, "{:?}", report.unplaced);
+        assert!(report.unplaced[0].starts_with("0x101400: no fingerprint"));
+        assert!(report.unplaced[0].ends_with("split.remove_split, split.signatures[0][0]"));
+        let build = &row["build"];
+        // The feature is off and holds nothing of the prior build.
+        assert_eq!(build["split"]["supported"], false);
+        assert_eq!(build["split"]["remove_split"], "0x0");
+        assert_eq!(build["split"]["signatures"][0][0], "0x0");
+        assert_eq!(row[crate::row_features::SWITCHED_OFF][0]["feature"], "split view");
+        assert!(
+            report.switched_off[0]
+                .starts_with("split view is off: split.remove_split has no place"),
+            "{:?}",
+            report.switched_off
+        );
+        // A function this build does not read is absent, and turns nothing off.
+        assert_eq!(build["vertical"]["should_draw_tab_strip"], "0x7fff0000");
+        assert_eq!(report.switched_off.len(), 1, "{:?}", report.switched_off);
+        // The rest of the row is found.
+        assert_eq!(build["toolbar"]["paint"], "0x103300");
+
+        // The same address held by a part the window cannot do without still stops the row.
+        prior["build"]["layout"] = json!({"frame_vtable": "0x101400"});
+        let (row, report) = find_candidate(&prior, &prints_of_prior(), None, "1.0.0.3", &pe);
+        assert!(
+            report.review.iter().any(|line| line == "0x101400: no fingerprint"),
+            "{:?}",
+            report.review
+        );
+        assert!(report.unplaced.iter().all(|line| !line.contains("0x101400")));
+        assert_eq!(row["build"]["split"]["supported"], true);
     }
 
     #[test]
