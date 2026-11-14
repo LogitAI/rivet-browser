@@ -1192,6 +1192,32 @@ fn write_command_ids(row: &mut Value, version: &str, report: &mut PortReport) {
     }
 }
 
+/// The prior row's functions that a browser command runs first, with the command's public id:
+/// `chrome::NewTab`, the first call of the `IDC_NEW_TAB` case of the browser's command switch. The
+/// id must be the same at the prior and the new build's Chromium milestone, which Chrome, Edge and
+/// Brave carry as the first part of their version.
+fn command_targets(prior: &Value, version: &str) -> BTreeMap<u32, i64> {
+    let browser = prior["build"]["browser"].as_str().unwrap_or_default();
+    if !matches!(browser, "Google Chrome" | "Microsoft Edge" | "Brave") {
+        return BTreeMap::new();
+    }
+    let milestone = |version: &str| version.split('.').next()?.parse::<u16>().ok();
+    let prior_version = prior["frame"]["version"].as_str().unwrap_or_default();
+    let ids = (
+        milestone(prior_version).and_then(crate::command_ids::new_tab),
+        milestone(version).and_then(crate::command_ids::new_tab),
+    );
+    let (Some(id), Some(same)) = ids else {
+        return BTreeMap::new();
+    };
+    let address =
+        read_address(&prior["build"]["tabs"]["new_tab"]).filter(|value| is_address(*value));
+    match address {
+        Some(address) if id == same => BTreeMap::from([(address as u32, id as i64)]),
+        _ => BTreeMap::new(),
+    }
+}
+
 /// Finds each address of a row through the public names of both builds.
 fn port_by_name(
     prior: &Value,
@@ -1519,6 +1545,7 @@ pub fn find_candidate(
     // Each address its fingerprint did not pin down, with its review line, waits for the methods
     // that read the prior build next to the new one.
     let mut wanted: BTreeMap<u32, (String, row_resolve::Wanted)> = BTreeMap::new();
+    let commands = command_targets(prior, version);
     let want = |target: u32, kind: row_resolve::Kind, candidates: Option<Vec<u32>>| {
         row_resolve::Wanted {
             kind,
@@ -1526,6 +1553,10 @@ pub fn find_candidate(
             class: (kind == row_resolve::Kind::Table)
                 .then(|| classes.get(&target).cloned())
                 .flatten(),
+            command: (kind == row_resolve::Kind::Function)
+                .then(|| commands.get(&target).copied())
+                .flatten(),
+            loose: Vec::new(),
         }
     };
     for target in &targets {
@@ -1602,7 +1633,9 @@ pub fn find_candidate(
                     "{target:#x} matches no function start, of {} places",
                     all.len()
                 );
-                wanted.insert(*target, (line, want(*target, function, None)));
+                let mut asked = want(*target, function, None);
+                asked.loose = all.to_vec();
+                wanted.insert(*target, (line, asked));
             }
             [] => {
                 let line = format!("{target:#x} matches no place");
@@ -1658,7 +1691,11 @@ pub fn find_candidate(
                 .iter()
                 .map(|(target, (_, want))| (*target, want.clone()))
                 .collect();
-            let resolution = row_resolve::resolve(prior_pe, pe, &moved, &asked, &table_targets);
+            // The tables the prior build's public symbols name after a class are the tables of
+            // views classes the slot shift compares.
+            let views: BTreeSet<u32> = classes.keys().copied().collect();
+            let resolution =
+                row_resolve::resolve(prior_pe, pe, &moved, &asked, &table_targets, &views);
             for (target, (line, _)) in &wanted {
                 match resolution.places.get(target) {
                     Some(place) => {
