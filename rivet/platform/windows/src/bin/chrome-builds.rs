@@ -105,7 +105,8 @@ fn main() -> ExitCode {
         ["pending", stable, beta, edge, brave, known] => {
             pending(Path::new(stable), Path::new(beta), Path::new(edge), Path::new(brave), Path::new(known))
         }
-        ["gate", results, browser] => gate(Path::new(results), browser),
+        ["gate", results, browser] => gate(Path::new(results), browser, None),
+        ["gate", results, browser, row] => gate(Path::new(results), browser, Some(Path::new(row))),
         ["fingerprint", row, module, out] => fingerprint(Path::new(row), Path::new(module), Path::new(out)),
         ["release-sign", version, signed, files @ ..] => release_sign(version, Path::new(signed), files),
         ["release-check", signed, file] => release_check(Path::new(signed), Path::new(file)),
@@ -123,7 +124,7 @@ fn main() -> ExitCode {
         ["table-withdraw", published, signed, builds @ ..] if !builds.is_empty() => {
             table_withdraw(Path::new(published), Path::new(signed), builds)
         }
-        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | find <prior-row.json> <prior.pdb> <prior-module|-> <new-module> <version> <channel> <download> <row.json> <report.json> | pdb-check <table.json> <browser> <version> <pdb-row.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> <module> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
+        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | find <prior-row.json> <prior.pdb> <prior-module|-> <new-module> <version> <channel> <download> <row.json> <report.json> | pdb-check <table.json> <browser> <version> <pdb-row.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> [row.json] | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> <module> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -878,13 +879,18 @@ mod symbols {
 }
 
 /// Refuses a browser that did not pass every feature check, so it is never listed as supported.
-fn gate(results: &Path, browser: &str) -> Result<(), String> {
+/// The row is the one being published: a check of a feature it turns off is not required.
+fn gate(results: &Path, browser: &str, row: Option<&Path>) -> Result<(), String> {
+    let row = match row {
+        Some(path) => json_file(path)?,
+        None => serde_json::Value::Null,
+    };
     let text = String::from_utf8(read(results)?)
         .map_err(|error| format!("the feature results are not text: {error}"))?;
     // PowerShell writes UTF-8 with a byte order mark.
     let results: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .map_err(|error| format!("the feature results are not JSON: {error}"))?;
-    let notes = row_watch::publish_gate(&results, browser)
+    let notes = row_watch::publish_gate_for_row(&results, browser, &row)
         .map_err(|reasons| format!("{browser} is not supported: {}", reasons.join("; ")))?;
     for note in notes {
         println!("note: {note}");

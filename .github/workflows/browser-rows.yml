@@ -431,7 +431,9 @@ jobs:
           # The harness builds Rivet itself, with the test flags that keep sync and sign-in off.
           ./scripts/tests/windows-features.ps1 -Browsers $name `
             -Executable "${{ steps.build.outputs.executable }}" -OutDir $features
-          ./tools/chrome-builds.exe gate (Join-Path $features "results.json") $name
+          # A check of a feature the row turns off for this build is not required; the row ships with
+          # that feature off, and the gate prints a note for it.
+          ./tools/chrome-builds.exe gate (Join-Path $features "results.json") $name "$temp/row.json"
           if ($LASTEXITCODE -ne 0) { throw "a feature check failed or could not run; results.json lists which" }
           Set-Content (Join-Path $temp "session/features-passed") "${{ matrix.build.version }}"
 
@@ -538,6 +540,10 @@ jobs:
             $body += "The symbol server had no PDB for this build, so the row was made from the fingerprints of the $($report.prior_version) row: $($report.fingerprinted.Count) of $($report.addresses) addresses matched exactly one place. When the PDB appears, the row job makes the row again from it and compares the two.`n`n"
           }
           $body += (($report.review | ForEach-Object { "- $_" }) -join "`n")
+          if ($report.switched_off.Count -gt 0) {
+            $body += "`n`nThese features are off in this row, because a value they need could not be read from this build:`n`n"
+            $body += (($report.switched_off | ForEach-Object { "- $_" }) -join "`n")
+          }
           gh pr create --draft --base develop --head $branch --title "Feat: Propose a row for ${{ matrix.build.browser }} ${{ matrix.build.version }}" --body $body
           gh workflow run test.yml --ref $branch
 
