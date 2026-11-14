@@ -139,7 +139,9 @@ pub struct AppWindow {
     pub detach_prologue: &'static [u8],
     pub insert: Option<usize>,
     pub insert_prologue: &'static [u8],
-    /// A `views::View` keeps its parent at this offset and its children vector right after it.
+    /// A `views::View` keeps its parent at this offset and its children vector right after it. Kept
+    /// for runtimes that read them from the row; this runtime takes both from the layout's bounds
+    /// offset, by the member order of `views::View`.
     pub view_parent: usize,
     pub view_children: usize,
     /// `operator new(size)`, `views::WebView::WebView(this, context)` and the object's size.
@@ -184,8 +186,10 @@ pub struct AppWindow {
 row_struct! {
 /// Values for `chrome_toolbar.rs`.
 pub struct Toolbar {
-    /// `views::View::GetWidget` is the twelfth entry of every view's vtable.
-    pub get_widget_slot: usize,
+    /// `views::View::GetWidget`'s entry in every view's vtable, only to confirm the widget the root
+    /// of a view's tree names. `None` when the row does not have it: the widget is then found
+    /// through the view tree alone.
+    pub get_widget_slot: Option<usize>,
     /// What this build needs to show a page in developer mode.
     pub dev: DevMode,
     /// `ui::ColorProvider::GetColor(this, id)`. A provider makes a colour the first time it is asked
@@ -504,11 +508,13 @@ pub struct SidePanel {
     /// toggle and its key.
     pub extensions_by_toggle: Option<bool>,
     /// The layout object keeps the host view at +0x38, the contents container at +0xb8, the side
-    /// panel at +0xc0 and the content shown while the side panel animates at +0xc8.
-    pub host_view: usize,
+    /// panel at +0xc0 and the content shown while the side panel animates at +0xc8. The host view,
+    /// the page area and the contents container are also found by the class names of the views
+    /// they hold, and a row value only confirms them; `None` when the row does not have one.
+    pub host_view: Option<usize>,
     /// The view behind the whole area below the top row, which the rail shares the height of.
-    pub page_area: usize,
-    pub contents_container: usize,
+    pub page_area: Option<usize>,
+    pub contents_container: Option<usize>,
     /// The browser's vertical tab list, which lies left of the page.
     pub vertical_tabs: usize,
     /// The browser's top row: toolbar, address bar and the buttons around it.
@@ -600,8 +606,9 @@ pub struct Layout {
     pub layout_prologue: &'static [u8],
     pub set_bounds_rect_prologue: &'static [u8],
     /// `BrowserFrameViewWin` holds the `BrowserView`'s `BrowserWindow` subobject here, and the
-/// subobject lies this many bytes after the start of the `BrowserView`.
-    pub frame_browser_window_offset: usize,
+    /// subobject lies this many bytes after the start of the `BrowserView`. The field is also found
+    /// as the one that holds the view the layout lays out, and a row value only confirms it.
+    pub frame_browser_window_offset: Option<usize>,
     pub browser_window_in_view: usize,
     pub caption_paint_prologue: &'static [u8],
     /// Colour ids `WindowsCaptionButton::PaintButtonContents` reads for its glyphs: active, inactive
@@ -618,13 +625,10 @@ pub struct Layout {
 row_struct! {
 /// What a build needs to show a page in developer mode.
 pub struct DevMode {
-    /// The browser's own commands the developer bar runs, as `WM_COMMAND` ids, or zero when the build
-    /// has none. They are the commands of the Ctrl+Shift+C and Ctrl+Shift+J keys, read from the
-    /// browser's accelerator table.
-    pub inspect: u32,
-    pub console: u32,
     /// Colour ids of this build and the colours the row takes in developer mode, as `0xAARRGGBB`.
     /// An id that `colours` does not hold is asked of the provider first, like the ones that it does.
+    /// A build with no colours has no developer bar. The bar's browser commands are Chromium's
+    /// public command ids, which come from `browsers::chromium::commands`, not from the row.
     pub colours: &'static [(i32, u32)],
     /// `gfx::Font::Font(this, &name, size)` and `gfx::FontList::FontList(this, &font)`, which build
     /// the monospace font of the address. A build without them keeps the address in its own font.
@@ -636,8 +640,6 @@ pub struct DevMode {
 }
 
 const UNCHECKED_DEV: DevMode = DevMode {
-    inspect: 0,
-    console: 0,
     colours: &[],
     font_new: ABSENT,
     font_new_prologue: &[0],
@@ -654,7 +656,7 @@ const DEV_HOVER: u32 = 0x17FF_FFFF;
 const DEV_RIPPLE: u32 = 0x24FF_FFFF;
 
 const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
-    get_widget_slot: 0,
+    get_widget_slot: None,
     dev: UNCHECKED_DEV,
     content_window_for_hwnd: ABSENT,
     widget_for_window: ABSENT,
@@ -822,9 +824,9 @@ const UNCHECKED_SIDEPANEL: SidePanel = SidePanel {
     coordinator_browser: None,
     entry_key_size: None,
     extensions_by_toggle: None,
-    host_view: 0,
-    page_area: 0,
-    contents_container: 0,
+    host_view: None,
+    page_area: None,
+    contents_container: None,
     vertical_tabs: 0,
     toolbar: 0,
     contents_outline: 0,
@@ -877,7 +879,7 @@ const UNCHECKED_LAYOUT: Layout = Layout {
     corner_paint_prologue: &[0],
     layout_prologue: &[0],
     set_bounds_rect_prologue: &[0],
-    frame_browser_window_offset: 0,
+    frame_browser_window_offset: None,
     browser_window_in_view: 0,
     caption_paint_prologue: &[0],
     caption_ink_ids: &[],

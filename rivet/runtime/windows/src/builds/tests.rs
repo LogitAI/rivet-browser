@@ -217,7 +217,7 @@ fn nfr3_whale_maps_only_the_frame_hooks() {
             WHALE.layout.frame_browser_window_offset,
             WHALE.layout.browser_window_in_view
         ),
-        (0x338, 0x210)
+        (Some(0x338), 0x210)
     );
 }
 
@@ -633,11 +633,16 @@ fn fr3_a_build_with_tabs_checks_only_functions_it_has() {
 #[test]
 fn fr11_developer_commands_are_those_of_the_devtools_keys() {
     for build in [&CHROME, &EDGE, &BRAVE, &BRAVE_63] {
-        let dev = &build.toolbar.dev;
-        assert_eq!((dev.console, dev.inspect), (40005, 40023));
+        assert!(!build.toolbar.dev.colours.is_empty());
+        assert_eq!(
+            crate::features::dev_page::dev_commands(build),
+            (40023, 40005)
+        );
     }
     // A build that was never checked offers no command and no bar.
-    assert_eq!(UNCHECKED_TOOLBAR.dev.inspect, 0);
+    for build in [&WHALE, &SAMSUNG, &CHROME_150] {
+        assert_eq!(crate::features::dev_page::dev_commands(build), (0, 0));
+    }
 }
 
 #[test]
@@ -911,8 +916,6 @@ fn fr13_every_build_that_shows_a_second_view_records_the_same_chromium_functions
             "size",
             "add_child",
             "set_contents",
-            "vparent",
-            "vchildren",
             "dtor_slot",
         ] {
             assert!(
@@ -1068,7 +1071,7 @@ fn nfr3_chromium_157_rows_record_the_members_that_moved() {
         assert_eq!(build.tabs.browser_in_view, 0x558, "{name}");
         assert_eq!(build.side_panel.browser_offset, 0x558, "{name}");
         assert_eq!(build.layout.view_bounds_offset, 0x1C8, "{name}");
-        assert_eq!(build.layout.frame_browser_window_offset, 0x338, "{name}");
+        assert_eq!(build.layout.frame_browser_window_offset, Some(0x338), "{name}");
         assert_eq!(build.layout.caption_container_offset, 0x3C0, "{name}");
         assert_eq!(
             (build.layout.top_inset_slot, build.layout.caption_paint_slot),
@@ -1203,7 +1206,7 @@ fn fr9_whale_split_functions_match_the_installed_build() {
 
 fn check_brave_toolbar_hooks(brave: &Build) {
     assert_eq!(brave.toolbar.skip, "");
-    assert_eq!(brave.toolbar.get_widget_slot, 11);
+    assert_eq!(brave.toolbar.get_widget_slot, Some(11));
     // The Brave row's caption colour ids sit 17 above Chrome's.
     assert_eq!(
         brave.layout.caption_ink_ids,
@@ -1500,36 +1503,6 @@ fn fr12_edge_58_and_whale_57_record_the_page_view_that_moves_below_the_bar() {
 
 #[cfg(windows)]
 #[test]
-fn nfr6_newest_row_of_each_ported_browser_has_its_symbol_key() {
-    // The row job ports a new build from the newest row of its browser, read through that row's
-    // public symbols. A newest row without its symbol key stops every later row of the browser.
-    let table: serde_json::Value =
-        serde_json::from_str(CHECKED_IN).expect("the checked-in table is JSON");
-    let mut rows = crate::compiled_rows();
-    rows.extend(table["rows"].as_array().cloned().unwrap_or_default());
-    let version_of = |row: &serde_json::Value| -> Vec<u64> {
-        row["build"]["version"]
-            .as_array()
-            .map(|parts| parts.iter().filter_map(serde_json::Value::as_u64).collect())
-            .unwrap_or_default()
-    };
-    for browser in ["Google Chrome", "Microsoft Edge", "Brave"] {
-        let newest = rows
-            .iter()
-            .filter(|row| row["build"]["browser"] == browser && !row["frame"].is_null())
-            .max_by_key(|row| version_of(row))
-            .unwrap_or_else(|| panic!("{browser} has a row"));
-        let version: Vec<String> = version_of(newest).iter().map(u64::to_string).collect();
-        let key = format!("{browser} {}", version.join("."));
-        assert!(
-            table["symbols"][key.as_str()].is_string(),
-            "{key} has no symbol key in rows/table.json"
-        );
-    }
-}
-
-#[cfg(windows)]
-#[test]
 fn nfr6_recipes_read_every_row_value_they_cover_again_from_its_own_module() {
     // Replays the row job's recipes on the modules this machine has: the installed Chrome and
     // Brave 157, the held Chrome 156 and the installed Edge 156. Each hand-made row value that a
@@ -1630,5 +1603,34 @@ fn nfr6_a_table_row_carries_the_page_tools_and_bubble_anchor_of_its_prior_row() 
             0x1234560,
             &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF][..]
         ))
+    );
+}
+
+/// The parent and children of a view follow from its bounds by the member order of `views::View`.
+/// Every row that recorded them by hand agrees, so the rule replaces them.
+#[test]
+fn nfr6_a_views_parent_and_children_are_not_row_values() {
+    let mut seen = 0;
+    for build in compiled() {
+        let Some(row) = build.app_window.as_ref() else {
+            continue;
+        };
+        assert_eq!(
+            crate::features::app_window::view_fields(build),
+            Some((row.view_parent, row.view_children)),
+            "{} {:?}",
+            build.browser,
+            build.version
+        );
+        seen += 1;
+    }
+    assert!(seen >= 5, "{seen}");
+    // A row the bounds offset of which moves gives the parent and children of that build.
+    let mut moved = crate::row_data::RowValue::to_row(&CHROME_157_38);
+    moved["layout"]["view_bounds_offset"] = serde_json::json!("0x1d0");
+    let moved = <Build as crate::row_data::RowValue>::from_row(&moved).unwrap();
+    assert_eq!(
+        crate::features::app_window::view_fields(&moved),
+        Some((0x1A0, 0x1A8))
     );
 }

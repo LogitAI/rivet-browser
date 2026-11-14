@@ -399,15 +399,34 @@ mod tests {
     #[test]
     fn nfr6_a_row_without_a_field_is_refused_and_named() {
         let mut row = builds::CHROME.to_row();
-        row["toolbar"]
-            .as_object_mut()
-            .unwrap()
-            .remove("get_widget_slot");
+        row["toolbar"].as_object_mut().unwrap().remove("get_color");
         let error = match builds::Build::from_row(&row) {
             Err(error) => error,
-            Ok(_) => panic!("a row with no widget slot was accepted"),
+            Ok(_) => panic!("a row with no colour getter was accepted"),
         };
-        assert_eq!(error, "toolbar: get_widget_slot is missing");
+        assert_eq!(error, "toolbar: get_color is missing");
+    }
+
+    #[test]
+    fn nfr6_a_row_without_window_offsets_is_not_blocked() {
+        // The window's views and widget are found by class name and the view tree, so a row made
+        // without these values still reads, and has none of them.
+        let mut row = builds::CHROME.to_row();
+        for (part, key) in [
+            ("layout", "frame_browser_window_offset"),
+            ("side_panel", "contents_container"),
+            ("side_panel", "host_view"),
+            ("side_panel", "page_area"),
+            ("toolbar", "get_widget_slot"),
+        ] {
+            row[part].as_object_mut().unwrap().remove(key);
+        }
+        let build = builds::Build::from_row(&row).expect("a row without window offsets reads");
+        assert_eq!(build.layout.frame_browser_window_offset, None);
+        assert_eq!(build.side_panel.contents_container, None);
+        assert_eq!(build.side_panel.host_view, None);
+        assert_eq!(build.side_panel.page_area, None);
+        assert_eq!(build.toolbar.get_widget_slot, None);
     }
 
     #[test]

@@ -57,7 +57,7 @@ pub static EDGE: Build = Build {
     module: "msedge.dll",
     version: [156, 0, 4314, 50],
     toolbar: Toolbar {
-        get_widget_slot: 10,
+        get_widget_slot: Some(10),
         dev: DEV_EDGE_156,
         get_color: 0x0100309E,
         get_color_bytes: &[
@@ -323,9 +323,9 @@ pub static EDGE: Build = Build {
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0,
-        contents_container: 0xd8,
+        host_view: Some(0x38),
+        page_area: Some(0),
+        contents_container: Some(0xd8),
         vertical_tabs: ABSENT,
         toolbar: ABSENT, // the pages of a split fit their toolbar in Chrome's layout only
         contents_outline: ABSENT,
@@ -381,7 +381,7 @@ pub static EDGE: Build = Build {
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         layout_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x40, 0x48],
         set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        frame_browser_window_offset: 0x3B0, // frame view member that holds the BrowserWindow subobject, read by GetBrowserView
+        frame_browser_window_offset: Some(0x3B0), // frame view member that holds the BrowserWindow subobject, read by GetBrowserView
         browser_window_in_view: 0x1F8, // BrowserWindow subobject distance from the BrowserView, read by GetBrowserView
         caption_paint_prologue: &[0xE9, 0x01, 0x00, 0x00, 0x00, 0xCC, 0x41, 0x57],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E], // Chrome value, not checked on Edge

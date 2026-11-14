@@ -1,7 +1,7 @@
 //! Reads the values of a row that are not addresses from the new build itself.
 //!
-//! A row holds member offsets, table slots and object sizes as well as addresses. They have no
-//! public symbols, and a new milestone moves them without notice: Chromium 157 moved many view
+//! A row holds member offsets, table slots and object sizes as well as addresses. No name in the
+//! module tells them, and a new milestone moves them without notice: Chromium 157 moved many view
 //! members by 8 bytes and every frame view slot above one removed virtual by one. A port that
 //! copies them gives a row that looks complete and is wrong. So each such value has recipes that
 //! read it from the new build's own instructions and tables. A value is taken only when every
@@ -415,11 +415,86 @@ pub fn derive_row(build: &mut Value, pe: &PeFile) -> Derived {
     derived
 }
 
+/// Values that follow from another value of the row by the member order of a public Chromium
+/// class, as (path, the value it follows, the distance). `ui/views/view.h` declares `parent_`,
+/// then `children_`, then the members up to `bounds_`, 0x30 bytes after `parent_`. The runtime
+/// takes them the same way, so they are written from the value they follow and never carried.
+pub const FOLLOWS: &[(&str, &str, i64)] = &[
+    ("app_window.view_parent", "layout.view_bounds_offset", -0x30),
+    ("app_window.view_children", "layout.view_bounds_offset", -0x28),
+];
+
+/// Writes each value of `FOLLOWS` the row has from the value it follows.
+pub fn follow(build: &mut Value) -> Vec<String> {
+    let mut read = Vec::new();
+    for (path, from, by) in FOLLOWS {
+        let Some(base) = number(at_path(build, from)).filter(|base| *base >= 0x30) else {
+            continue;
+        };
+        let (parent, key) = path.split_once('.').expect("a path has a parent");
+        let Some(old) = number(&build[parent][key]) else {
+            continue;
+        };
+        let value = (base as i64 + by) as u64;
+        let is_string = build[parent][key].is_string();
+        build[parent][key] = if is_string {
+            Value::String(format!("{value:#x}"))
+        } else {
+            json!(value)
+        };
+        read.push(if old == value {
+            format!("{path}: {value:#x}, from {from}")
+        } else {
+            format!("{path}: {old:#x} -> {value:#x}, from {from}")
+        });
+    }
+    read
+}
+
+/// Values Rivet chooses rather than reads from a build, such as how long it waits before it opens
+/// a new tab, how far its toolbar starts after the browser view's edge to leave room for Rivet's
+/// toggle button, and the DIPs it adds to the top inset it reports. The row carries them for the
+/// runtime, so they are kept from the prior row.
+pub const SETTINGS: &[&str] = &[
+    "tabs.new_tab_delay_ms",
+    "vertical.toolbar_leading",
+    "layout.top_inset_adjust",
+];
+
+/// Lists of `[id, colour]` pairs: the id is a value of the build, and the colour is Rivet's choice.
+pub const ID_COLOUR_PAIRS: &[&str] = &["toolbar.dev.colours"];
+
+/// The values of a row that are Rivet's settings rather than facts about its build.
+pub fn settings(build: &Value) -> Vec<String> {
+    let mut out: Vec<String> = SETTINGS
+        .iter()
+        .filter(|path| number(at_path(build, path)).is_some())
+        .map(|path| (*path).to_owned())
+        .collect();
+    for list in ID_COLOUR_PAIRS {
+        if let Some(pairs) = at_path(build, list).as_array() {
+            out.extend((0..pairs.len()).map(|index| format!("{list}[{index}][1]")));
+        }
+    }
+    out
+}
+
 /// Every number of a row below the address range that no recipe reads: member offsets, slots,
-/// sizes, ids and constants that a port can only carry over.
+/// sizes, ids and constants that a port can only carry over. Rivet's own settings and Chromium's
+/// public command ids are not listed.
 pub fn without_recipe(build: &Value) -> Vec<String> {
     fn walk(path: &str, value: &Value, out: &mut Vec<String>) {
         match value {
+            Value::Array(items)
+                if items.len() == 2
+                    && path
+                        .rsplit_once('[')
+                        .is_some_and(|(list, _)| ID_COLOUR_PAIRS.contains(&list)) =>
+            {
+                if number(&items[0]).is_some_and(|id| id < LOWEST_ADDRESS) {
+                    out.push(format!("{path}[0]"));
+                }
+            }
             Value::Object(object) => {
                 for (key, item) in object {
                     let next = if path.is_empty() {
@@ -459,6 +534,9 @@ pub fn without_recipe(build: &Value) -> Vec<String> {
         path != "version"
             && !path.starts_with("version[")
             && !FIELDS.iter().any(|field| field.path == path)
+            && !SETTINGS.contains(&path.as_str())
+            && !crate::command_ids::ROW_PATHS.contains(&path.as_str())
+            && !FOLLOWS.iter().any(|(follows, _, _)| follows == path)
     });
     out
 }
@@ -635,6 +713,56 @@ mod tests {
         assert_eq!(
             without_recipe(&build),
             vec!["layout.caption_container_offset", "layout.frame_ids"]
+        );
+    }
+
+    #[test]
+    fn nfr6_a_views_parent_and_children_follow_its_bounds() {
+        let mut build = json!({
+            "layout": {"view_bounds_offset": "0x1c0"},
+            "app_window": {"view_parent": "0x198", "view_children": "0x1a0"},
+        });
+        assert_eq!(without_recipe(&build), vec!["layout.view_bounds_offset"]);
+        let read = follow(&mut build);
+        assert_eq!(build["app_window"]["view_parent"], "0x190");
+        assert_eq!(build["app_window"]["view_children"], "0x198");
+        assert_eq!(read.len(), 2, "{read:?}");
+        // A row without the app window part gets none.
+        let mut bare = json!({"layout": {"view_bounds_offset": "0x1c8"}, "app_window": null});
+        assert!(follow(&mut bare).is_empty());
+        assert!(bare["app_window"].is_null());
+    }
+
+    #[test]
+    fn nfr6_rivet_settings_are_not_values_of_the_build() {
+        let build = json!({
+            "tabs": {"new_tab_delay_ms": 0, "tab_contents": "0x0"},
+            "toolbar": {"dev": {"colours": [[316, 4280953905u32], [2082, 0]], "console": 40005}},
+        });
+        assert_eq!(
+            without_recipe(&build),
+            vec![
+                "tabs.tab_contents",
+                "toolbar.dev.colours[0][0]",
+                "toolbar.dev.colours[1][0]"
+            ]
+        );
+        let chosen = json!({
+            "vertical": {"toolbar_leading": 26, "toolbar_in_view": "0x60"},
+            "layout": {"top_inset_adjust": 0},
+        });
+        assert_eq!(without_recipe(&chosen), vec!["vertical.toolbar_in_view"]);
+        assert_eq!(
+            settings(&chosen),
+            vec!["vertical.toolbar_leading", "layout.top_inset_adjust"]
+        );
+        assert_eq!(
+            settings(&build),
+            vec![
+                "tabs.new_tab_delay_ms",
+                "toolbar.dev.colours[0][1]",
+                "toolbar.dev.colours[1][1]"
+            ]
         );
     }
 }

@@ -67,13 +67,22 @@ pub(crate) fn rivet_widgets() -> Vec<usize> {
     all().iter().map(|(widget, _)| *widget).collect()
 }
 
-/// The widget that holds `view`, which must point at a `views::View`: `View::GetWidget` through
-/// the view's own vtable.
+/// The widget that holds `view`, which must point at a `views::View`: the widget the root of its
+/// view tree names, as `View::GetWidget` returns it. Where the row has `GetWidget`'s vtable slot,
+/// the slot confirms the path once.
 pub(crate) unsafe fn widget_holding(view: *mut c_void) -> usize {
-    let table = *(view as *const usize);
-    let get_widget: Pointer =
-        std::mem::transmute(*(table as *const usize).add(row().get_widget_slot));
-    get_widget(view) as usize
+    let by_slot = |view: usize| {
+        let Some(slot) = row().get_widget_slot else {
+            return 0;
+        };
+        let table = *(view as *const usize);
+        let get_widget: Pointer = std::mem::transmute(*(table as *const usize).add(slot));
+        get_widget(view as *const c_void) as usize
+    };
+    let by_slot: Option<&dyn Fn(usize) -> usize> = row()
+        .get_widget_slot
+        .map(|_| &by_slot as &dyn Fn(usize) -> usize);
+    crate::chromium::window_views::widget_holding(view as usize, by_slot)
 }
 
 #[cfg(test)]
