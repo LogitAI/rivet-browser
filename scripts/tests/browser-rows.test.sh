@@ -27,6 +27,8 @@ expect "publishes a signed table" "table-sign"
 expect "signs with a secret" "secrets.RIVET_TABLE_SIGNING_KEY"
 expect "makes each row from the prior row and the prior build's module" 'chrome-builds.exe find "$temp/prior.json" $env:PRIOR_MODULE'
 expect "fingerprints a new row from its own module" "chrome-builds.exe fingerprint"
+expect "scores the generator against verified rows" "scripts/tests/row-score.ps1"
+expect "a score run makes no row" "github.event.inputs.score == ''"
 expect "a trial run publishes nothing" "needs.row.result != 'skipped' && !inputs.trial"
 expect "a trial run proposes nothing" "steps.made.outputs.for_review == 'true' && !inputs.trial"
 

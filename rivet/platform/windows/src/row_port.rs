@@ -1851,6 +1851,125 @@ pub fn leave_out_screen_origin(row: &mut Value, report: &mut PortReport) {
         .push("build.screen_origin: the prior row has none".to_owned());
 }
 
+/// The group a value of a row is scored in: its feature, or the window, whose parts cannot be off.
+const WINDOW: &str = "window";
+
+/// How one feature of a row made without debug symbols compares with the verified row of the same
+/// build, value by value.
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+pub struct FeatureScore {
+    /// Values the made row holds exactly as the verified row does.
+    pub equal: usize,
+    /// Values the made row holds differently, with both. Any is a wrong value.
+    pub different: Vec<String>,
+    /// The made row turns the feature off, so none of its values is used.
+    pub off: bool,
+    /// Values the made row does not hold or does not use: the runtime finds them by reflection,
+    /// does not read them in this build, or the prior row did not have them.
+    pub not_held: Vec<String>,
+}
+
+/// The score of a made row against its answer key: each feature's comparison, and the review lines
+/// that stop the row.
+#[derive(Debug, Default, Serialize)]
+pub struct RowScore {
+    pub browser: String,
+    pub version: String,
+    pub prior_version: String,
+    pub features: BTreeMap<String, FeatureScore>,
+    pub review: Vec<String>,
+}
+
+impl RowScore {
+    /// How many values were found but differ from the verified row. Must be zero.
+    pub fn wrong(&self) -> usize {
+        self.features
+            .values()
+            .map(|score| score.different.len())
+            .sum()
+    }
+}
+
+/// Every value a row part holds that is not a list or object, by its path.
+fn leaves(path: &str, value: &Value, out: &mut BTreeMap<String, Value>) {
+    match value {
+        Value::Object(object) => {
+            for (key, item) in object {
+                let next = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                leaves(&next, item, out);
+            }
+        }
+        Value::Array(items) if !items.is_empty() => {
+            for (index, item) in items.iter().enumerate() {
+                leaves(&format!("{path}[{index}]"), item, out);
+            }
+        }
+        _ => {
+            out.insert(path.to_owned(), value.clone());
+        }
+    }
+}
+
+/// Compares a row made from a prior row with the row people verified for the same build. A value of
+/// a feature the made row turns off is not compared, since the runtime does not use it. A value the
+/// made row leaves out, or writes as zero because this build does not read it, is listed as not
+/// held. Every other value must be equal, and one that differs is listed with both values.
+pub fn score_row(made: &Value, report: &PortReport, verified: &Value) -> RowScore {
+    let off: BTreeSet<&str> = made[crate::row_features::SWITCHED_OFF]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter_map(|entry| entry["feature"].as_str())
+        .collect();
+    let unused: BTreeSet<&str> = report
+        .unused
+        .iter()
+        .chain(&report.reflected)
+        .filter_map(|line| line.split(": ").next())
+        .collect();
+    let mut score = RowScore {
+        browser: report.browser.clone(),
+        version: report.version.clone(),
+        prior_version: report.prior_version.clone(),
+        review: report.review.clone(),
+        ..RowScore::default()
+    };
+    for part in ["frame", "build"] {
+        let (mut want, mut have) = (BTreeMap::new(), BTreeMap::new());
+        leaves("", &verified[part], &mut want);
+        leaves("", &made[part], &mut have);
+        for (path, value) in want {
+            let feature = match part {
+                "build" => {
+                    crate::row_features::feature_of(&path).map_or(WINDOW, |feature| feature.name)
+                }
+                _ => WINDOW,
+            };
+            let entry = score.features.entry(feature.to_owned()).or_default();
+            if off.contains(feature) {
+                entry.off = true;
+                continue;
+            }
+            let shown = format!("{part}.{path}");
+            match have.get(&path) {
+                Some(found) if *found == value => entry.equal += 1,
+                None | Some(Value::Null) => entry.not_held.push(shown),
+                Some(_) if unused.iter().any(|unused| path.starts_with(unused)) => {
+                    entry.not_held.push(shown)
+                }
+                Some(found) => entry
+                    .different
+                    .push(format!("{shown}: made {found}, verified {value}")),
+            }
+        }
+    }
+    score
+}
+
 /// The review items for the parts of the prior row that only a person writes today. A row made
 /// without them opens Rivet's frame with those features off, so it goes to a person instead of
 /// the table. The runtime names them in the prior row's `hand_only` list.
@@ -2754,4 +2873,38 @@ mod tests {
         assert!(!paths.iter().any(|(path, _)| path.ends_with("missing")));
     }
 
+    #[test]
+    fn nfr6_a_made_row_is_scored_value_by_value_against_the_verified_row() {
+        let (made, report) = candidate(&prints_of_prior(), &shifted_code(0x2000, 0x44), "1.0.0.3");
+        let mut verified = made.clone();
+        let score = score_row(&made, &report, &verified);
+        assert_eq!(score.wrong(), 0);
+        assert!(score.features[WINDOW].equal > 0);
+        // A value found at another place than the verified one is wrong.
+        verified["build"]["toolbar"]["paint"] = json!("0x103310");
+        let score = score_row(&made, &report, &verified);
+        assert_eq!(score.wrong(), 1, "{:?}", score.features);
+        let wrong: Vec<&String> = score.features.values().flat_map(|f| &f.different).collect();
+        assert!(
+            wrong[0].starts_with("build.toolbar.paint: made"),
+            "{wrong:?}"
+        );
+        // A value the made row does not hold is not wrong.
+        let mut made_less = made.clone();
+        made_less["build"]["toolbar"]
+            .as_object_mut()
+            .unwrap()
+            .remove("paint");
+        let score = score_row(&made_less, &report, &verified);
+        assert_eq!(score.wrong(), 0);
+        // A feature the made row turns off is not compared at all.
+        let mut off = made.clone();
+        off[crate::row_features::SWITCHED_OFF] = json!([{"feature": "split view", "values": []}]);
+        let mut split = verified.clone();
+        split["build"]["split"] = json!({"supported": true, "outline_member": "0x40"});
+        off["build"]["split"] = json!({"supported": false, "outline_member": "0x0"});
+        let score = score_row(&off, &report, &split);
+        assert!(score.features["split view"].off);
+        assert!(score.features["split view"].different.is_empty());
+    }
 }

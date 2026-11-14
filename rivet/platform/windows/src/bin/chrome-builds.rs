@@ -3,6 +3,9 @@
 //!
 //! `chrome-builds find <prior-row.json> <prior-module> <new-module> <version> <row.json> <report.json>`
 //! makes a candidate row for a new build and exits 3 when the row needs a person's review.
+//! `chrome-builds score <prior-row.json> <prior-module> <new-module> <verified-row.json> <score.json>`
+//! makes the row of a build that already has a verified row the same way, compares the two value
+//! by value and writes the score of each feature. It exits 5 when a value it found is wrong.
 //! `chrome-builds fingerprint <row.json> <module> <row-out.json>` adds the fingerprints of a row's
 //! functions, read from its own module, so the next build's row can start from them.
 //! `chrome-builds pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json>`
@@ -43,6 +46,22 @@ fn main() -> ExitCode {
                 }
             }
         }
+        ["score", prior, prior_module, module, verified, out] => {
+            return match score(
+                Path::new(prior),
+                Path::new(prior_module),
+                Path::new(module),
+                Path::new(verified),
+                Path::new(out),
+            ) {
+                Ok(true) => ExitCode::SUCCESS,
+                Ok(false) => ExitCode::from(5),
+                Err(error) => {
+                    eprintln!("chrome-builds: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         ["pending", stable, beta, edge, brave, known] => {
             pending(Path::new(stable), Path::new(beta), Path::new(edge), Path::new(brave), Path::new(known))
         }
@@ -65,7 +84,7 @@ fn main() -> ExitCode {
         ["table-withdraw", published, signed, builds @ ..] if !builds.is_empty() => {
             table_withdraw(Path::new(published), Path::new(signed), builds)
         }
-        _ => Err("usage: chrome-builds find <prior-row.json> <prior-module> <new-module> <version> <row.json> <report.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> [row.json] | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
+        _ => Err("usage: chrome-builds find <prior-row.json> <prior-module> <new-module> <version> <row.json> <report.json> | score <prior-row.json> <prior-module> <new-module> <verified-row.json> <score.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> [row.json] | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -162,6 +181,53 @@ fn find(
         report.review.len()
     );
     Ok(report.review.is_empty())
+}
+
+/// Makes the row of a build that already has a verified row, and scores it against that row.
+/// True when no value it found is wrong. Nothing is written but the score.
+fn score(
+    prior_path: &Path,
+    prior_module: &Path,
+    module: &Path,
+    verified_path: &Path,
+    out: &Path,
+) -> Result<bool, String> {
+    let prior = json_file(prior_path)?;
+    let verified = json_file(verified_path)?;
+    let version = verified["frame"]["version"]
+        .as_str()
+        .ok_or("the verified row has no frame version")?
+        .to_owned();
+    let (row, report) = make(&prior, prior_module, module, &version)?;
+    let score = row_port::score_row(&row, &report, &verified);
+    std::fs::write(
+        out,
+        serde_json::to_string_pretty(&score).map_err(|error| error.to_string())? + "\n",
+    )
+    .map_err(|error| error.to_string())?;
+    println!(
+        "{} {} from {}:",
+        score.browser, score.version, score.prior_version
+    );
+    for (feature, each) in &score.features {
+        let state = if each.off { "off" } else { "on" };
+        println!(
+            "  {feature}: {state}, {} equal, {} different, {} not held",
+            each.equal,
+            each.different.len(),
+            each.not_held.len()
+        );
+        for line in &each.different {
+            println!("    wrong: {line}");
+        }
+    }
+    if !score.review.is_empty() {
+        println!(
+            "  the row would stop for review: {}",
+            score.review.join("; ")
+        );
+    }
+    Ok(score.wrong() == 0)
 }
 
 mod erased {

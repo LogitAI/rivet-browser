@@ -24,6 +24,10 @@
 # one place, or two independent methods must agree on it, and every offset, slot and size is read
 # again from the new module. A feature whose values are not found is off in the row, and a part the
 # window cannot do without stops the row for a person.
+#
+# A run started by hand with `score` makes, the same way, the rows of builds that already have a
+# verified row, and compares them value by value. It is a measurement: it publishes, proposes and
+# reports nothing, and fails only when a value it found differs from the verified one.
 name: Browser rows
 
 on:
@@ -43,6 +47,10 @@ on:
         default: false
       only:
         description: "With trial: the builds to make, as browser@version separated by semicolons, instead of those the feeds list."
+        required: false
+        default: ""
+      score:
+        description: "Score the generator on builds that have a verified row, as browser@prior>new separated by semicolons, or 'default' for scripts/tests/row-score.ps1's list. Nothing is published."
         required: false
         default: ""
 
@@ -113,7 +121,7 @@ jobs:
   watch:
     name: Find builds with no row
     needs: gate
-    if: needs.gate.outputs.enabled == 'true' && github.event.inputs.withdraw == ''
+    if: needs.gate.outputs.enabled == 'true' && github.event.inputs.withdraw == '' && github.event.inputs.score == ''
     runs-on: windows-latest
     defaults:
       run:
@@ -471,3 +479,36 @@ jobs:
           gh pr create --base develop --head $branch --title "Feat: Record rows published by the table job" --body "These rows are already published in the signed table and passed the row proof in run $env:GITHUB_RUN_ID. Merging adds them to the table compiled into the next Rivet."
           gh workflow run test.yml --ref $branch
 
+  score:
+    name: Score the generator against verified rows
+    # A measurement: it needs no signing key, and it publishes, proposes and reports nothing.
+    if: github.event.inputs.score != ''
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the row tools
+        working-directory: rivet
+        run: cargo build --release -p rivet-platform-windows -p rivet-runtime-windows --bins
+
+      - name: Make each row without symbols and compare it with its verified row
+        env:
+          SCORE: ${{ github.event.inputs.score }}
+        run: |
+          $pairs = if ($env:SCORE -eq 'default') { @() } else { @($env:SCORE -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+          ./scripts/tests/row-score.ps1 `
+            -Rows rivet/target/release/rivet-rows.exe -Generator rivet/target/release/chrome-builds.exe `
+            -Table rivet/runtime/windows/rows/table.json -Pairs $pairs -Fetch `
+            -Work (Join-Path $env:RUNNER_TEMP "score")
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: row-score
+          path: ${{ runner.temp }}/score/*.json
+          retention-days: 30
