@@ -568,43 +568,6 @@ pub(crate) fn whole_function(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
     None
 }
 
-/// Every `(address, bytes)` guard of a row.
-fn collect_guards(value: &Value, guards: &mut Vec<(u32, Vec<u8>)>) {
-    match value {
-        Value::Object(object) => {
-            for (key, item) in object {
-                if let Some(bytes) = item.as_str().filter(|_| is_byte_field(key)).and_then(hex) {
-                    let base = byte_field_address(key)
-                        .map(|(base, _)| base.to_owned())
-                        .unwrap_or_else(|| {
-                            key.trim_end_matches("_prologue")
-                                .trim_end_matches("_bytes")
-                                .to_owned()
-                        });
-                    if let Some(address) = object
-                        .get(&base)
-                        .and_then(read_address)
-                        .filter(|value| is_address(*value))
-                    {
-                        guards.push((address as u32, bytes));
-                    }
-                }
-                collect_guards(item, guards);
-            }
-        }
-        Value::Array(items) => {
-            if let [address, Value::String(bytes)] = items.as_slice() {
-                if let (Some(address), Some(bytes)) = (read_address(address), hex(bytes)) {
-                    guards.push((address as u32, bytes));
-                    return;
-                }
-            }
-            items.iter().for_each(|item| collect_guards(item, guards));
-        }
-        _ => {}
-    }
-}
-
 fn is_byte_field(key: &str) -> bool {
     key.ends_with("_prologue") || key.ends_with("_bytes") || byte_field_address(key).is_some()
 }
