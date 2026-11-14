@@ -76,6 +76,9 @@ pub struct PortReport {
     pub switched_off: Vec<String>,
     /// Values the runtime does not read in this row, written as zero, with the reason.
     pub unused: Vec<String>,
+    /// Values no instruction of the new build gave that the runtime finds by reflection, so the
+    /// row leaves them out instead of carrying them.
+    pub reflected: Vec<String>,
     /// Whether every carried value must be settled: the milestone changed, or values were read.
     #[serde(skip)]
     must_check: bool,
@@ -1005,8 +1008,9 @@ pub fn port_row(
     (row, report)
 }
 
-/// Settles each value no recipe or instruction read from the new build. A value the runtime does
-/// not read in this row is written as zero. A value of a feature the runtime can do without turns
+/// Settles each value no recipe or instruction read from the new build. A value the runtime finds
+/// by reflection is left out of the row. A value the runtime does not read in this row is written
+/// as zero. A value of a feature the runtime can do without turns
 /// that feature off for this build and is cleared, so the rest of the row is not held back by it.
 /// Any other value stops the row with its reason, since no feature may run on a value of another
 /// build.
@@ -1021,7 +1025,13 @@ fn settle_carried(row: &mut Value, report: &mut PortReport) {
     let mut left = Vec::new();
     let mut off: BTreeMap<&'static str, (&'static RowFeature, Vec<String>)> = BTreeMap::new();
     for path in std::mem::take(&mut report.carried) {
-        if let Some(why) = row_features::unused(&row["build"], &path) {
+        if row_features::is_reflected(&path) {
+            row_features::leave_out(&mut row["build"], &path);
+            report.unread.remove(&path);
+            report
+                .reflected
+                .push(format!("{path}: left out, the runtime finds it by reflection"));
+        } else if let Some(why) = row_features::unused(&row["build"], &path) {
             row_features::clear(&mut row["build"], &path, Clear::Zero);
             report.unused.push(format!("{path}: {why}"));
             report.unread.remove(&path);
@@ -2323,6 +2333,31 @@ mod tests {
         assert_eq!(report.unused.len(), 1, "{:?}", report.unused);
         // The addresses of the row still move to the new build.
         assert_eq!(build["tabs"]["tab_at"], "0x101300");
+    }
+
+    #[test]
+    fn nfr6_a_row_without_window_offsets_is_not_blocked() {
+        // Edge 157's row stopped on exactly these values. The runtime finds them by class name and
+        // the view tree, so the new row leaves them out and nothing holds it back.
+        let mut prior = prior_with_features();
+        prior["build"]["layout"] = json!({"frame_browser_window_offset": "0x3b0"});
+        prior["build"]["side_panel"] =
+            json!({"host_view": "0x38", "page_area": "0x0", "contents_container": "0xd8"});
+        prior["build"]["toolbar"]["get_widget_slot"] = json!("0xa");
+        let code = new_code();
+        let (row, report) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "2.0.0.1");
+        assert_eq!(report.review, Vec::<String>::new());
+        assert!(report.carried.is_empty(), "{:?}", report.carried);
+        assert_eq!(report.reflected.len(), 5, "{:?}", report.reflected);
+        let build = &row["build"];
+        assert!(build["layout"].get("frame_browser_window_offset").is_none());
+        assert_eq!(build["side_panel"], json!({}));
+        assert!(build["toolbar"].get("get_widget_slot").is_none());
+        // No feature went off for them.
+        assert!(!report
+            .switched_off
+            .iter()
+            .any(|line| line.contains("side_panel.") || line.contains("get_widget_slot")));
     }
 
     #[test]
