@@ -22,6 +22,12 @@
 //! - for the class table of a views class, its class name: `row_class` reads the table from the
 //!   name the class's `ui::metadata` holds, and the same reading must give the prior table in the
 //!   prior build;
+//! - a known caller: a function known in both builds calls it in the prior build, and of the places
+//!   its fingerprint matched, the caller's new body calls exactly one. Public source tells which
+//!   function calls which (a frame view's `OnPaint` calls `gfx::Canvas::DrawColor`), and the call
+//!   is a fact of the caller apart from the fingerprint's bytes, so with the fingerprint it is two
+//!   methods. Each place a virtual function's table slot settles is a known caller in the next
+//!   round, so drawing helpers follow the functions they are called from;
 //! - its command id: for a function a browser command runs first, the case of the command's public
 //!   id in the browser's command switch, read by `row_command` the same way in both builds;
 //! - its fingerprint: a place a class table or a command id gives that is one of the places the
@@ -581,6 +587,36 @@ fn by_slot_shift(
     found
 }
 
+/// The places the known callers of `target` give it among `candidates`: for each function that
+/// calls it in the prior build and whose new place is known, the one candidate its new body calls,
+/// when it calls exactly one. `callers` holds the prior build's callers of each wanted function.
+fn by_known_callers(
+    new: &mut Side,
+    known: &BTreeMap<u32, u32>,
+    callers: &BTreeSet<u32>,
+    candidates: &[u32],
+) -> BTreeSet<u32> {
+    let mut found = BTreeSet::new();
+    if candidates.is_empty() {
+        return found;
+    }
+    for caller in callers {
+        let Some(place) = known.get(caller).filter(|place| new.pe.is_code(**place)) else {
+            continue;
+        };
+        let called: BTreeSet<u32> = new
+            .body(*place)
+            .iter()
+            .filter_map(|step| step.call)
+            .filter(|callee| candidates.contains(callee))
+            .collect();
+        if let [only] = called.into_iter().collect::<Vec<_>>()[..] {
+            found.insert(only);
+        }
+    }
+    found
+}
+
 /// The candidate tables whose slots hold the same functions as the old table, and how many agree.
 fn by_slots(
     old: &Side,
@@ -735,6 +771,7 @@ pub enum Method {
     Fingerprint,
     SlotShift,
     Command,
+    KnownCaller,
 }
 
 impl fmt::Display for Method {
@@ -750,6 +787,7 @@ impl fmt::Display for Method {
             Method::Fingerprint => "its fingerprint",
             Method::SlotShift => "its slot shift",
             Method::Command => "its command id",
+            Method::KnownCaller => "a known caller",
         })
     }
 }
@@ -925,6 +963,14 @@ pub fn resolve(
         expected.insert(*target, calls);
     }
     let callers = calls_into(&new, &called);
+    // The prior build's callers of each wanted function with fingerprint places, for the method of
+    // a known caller.
+    let with_candidates: BTreeSet<u32> = wanted
+        .iter()
+        .filter(|(_, want)| want.kind == Kind::Function && want.candidates.is_some())
+        .map(|(target, _)| *target)
+        .collect();
+    let prior_callers = calls_into(&old, &with_candidates);
 
     // A class name gives a table from the build alone, so it is read once.
     let mut by_class = BTreeMap::new();
@@ -1008,6 +1054,13 @@ pub fn resolve(
                     }
                     if let Some(place) = by_text(&texts_of[&target], &users) {
                         answers.push((Method::Text, place));
+                    }
+                    if let (Some(list), Some(from)) = (&want.candidates, prior_callers.get(&target)) {
+                        let given = by_known_callers(&mut new, &known, from, list);
+                        answers.extend(fingerprint_agrees(&given, Some(list)));
+                        for place in given {
+                            answers.push((Method::KnownCaller, place));
+                        }
                     }
                     if let Some(place) = by_command.get(&target).copied() {
                         answers.push((Method::Command, place));
@@ -1575,6 +1628,69 @@ pub(crate) mod tests {
         assert!(apart.places.is_empty());
         let reason = &apart.reasons[&VIEW_TARGET];
         assert!(reason.starts_with("only its table slot found it"), "{reason}");
+    }
+
+    /// push rbx; mov ebx, 5; xor eax, eax; call `first`; [call `second`;] nop; pop rbx; ret: a
+    /// caller whose body around the call changed, so no call site of it pairs with the prior one.
+    fn changed_caller(at: u32, first: u32, second: Option<u32>) -> Vec<u8> {
+        let mut bytes = vec![0x53, 0xBB, 0x05, 0, 0, 0, 0x31, 0xC0];
+        bytes.extend(call(at + bytes.len() as u32, first));
+        if let Some(second) = second {
+            bytes.extend(call(at + bytes.len() as u32, second));
+        }
+        bytes.extend([0x90, 0x5B, 0xC3]);
+        bytes
+    }
+
+    fn run_known_caller(second: Option<u32>) -> Resolution {
+        let old_bytes = old_module();
+        let caller = changed_caller(NEW_CALLER, NEW_TARGETS[0], second);
+        let new_bytes = module(
+            &[
+                (NEW_CALLER, caller),
+                (NEW_TARGETS[0], TARGET.to_vec()),
+                (NEW_TARGETS[1], TARGET.to_vec()),
+            ],
+            &[
+                (NEW_CALLER, NEW_CALLER + 24),
+                (NEW_TARGETS[0], NEW_TARGETS[0] + 14),
+                (NEW_TARGETS[1], NEW_TARGETS[1] + 14),
+            ],
+        );
+        let old = PeFile::parse(&old_bytes).unwrap();
+        let new = PeFile::parse(&new_bytes).unwrap();
+        let known = BTreeMap::from([(OLD_CALLER, NEW_CALLER)]);
+        let wanted = BTreeMap::from([(
+            OLD_TARGET,
+            Wanted {
+                kind: Kind::Function,
+                candidates: Some(NEW_TARGETS.to_vec()),
+                class: None,
+                command: None,
+                loose: Vec::new(),
+            },
+        )]);
+        let none = BTreeSet::new();
+        resolve(&old, &new, &known, &wanted, &none, &none)
+    }
+
+    #[test]
+    fn nfr6_a_drawing_helper_is_found_by_the_call_from_its_caller() {
+        // The caller, as a frame view's paint calls `DrawColor`, is known in both builds, and of
+        // the two places the helper's fingerprint matched, its new body calls one.
+        let resolution = run_known_caller(None);
+        assert_eq!(resolution.places.get(&OLD_TARGET), Some(&NEW_TARGETS[0]));
+        assert_eq!(
+            resolution.settled,
+            ["0x101100 -> 0x103100 by its fingerprint and a known caller"]
+        );
+    }
+
+    #[test]
+    fn nfr6_a_caller_that_calls_every_fingerprint_place_names_no_helper() {
+        let resolution = run_known_caller(Some(NEW_TARGETS[1]));
+        assert!(resolution.places.is_empty());
+        assert_eq!(resolution.reasons[&OLD_TARGET], "no method found it");
     }
 
     #[test]
