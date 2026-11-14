@@ -78,6 +78,7 @@ pub const ROW_FEATURES: &[RowFeature] = &[
             "side_panel.extension_entry",
             "side_panel.features_coordinator",
             "side_panel.features_offset",
+            "side_panel.browser_offset",
         ],
         off: &[Off::Flag("side_panel.supported")],
         clear: Clear::Zero,
@@ -105,6 +106,48 @@ pub const ROW_FEATURES: &[RowFeature] = &[
         checks: &["sidebar", "sidebar-", "fullscreen-sidebar"],
     },
     RowFeature {
+        // The Sidebar's own functions and class tables. Only `features/side_panel.rs` reads them,
+        // and only once the Sidebar's targets are all recorded.
+        name: "sidebar",
+        paths: &[
+            "side_panel.side_panel_vtable",
+            "side_panel.coordinator_vtable",
+            "side_panel.browser_view_view_vtable",
+            "side_panel.show",
+            "side_panel.entry_id_to_string",
+            "side_panel.toggle",
+            "side_panel.entry_showing",
+            "side_panel.registry_from",
+            "side_panel.get_color_provider",
+            "side_panel.generate_colors_css",
+            "side_panel.event_handler_for_point",
+        ],
+        off: &[Off::Flag("side_panel.supported")],
+        clear: Clear::Absent,
+        checks: &["sidebar", "sidebar-", "fullscreen-sidebar"],
+    },
+    RowFeature {
+        // The vertical tab controller's functions and class tables. Only
+        // `features/vertical_tabs.rs` reads them, and only once its targets are all recorded.
+        name: "vertical tabs",
+        paths: &[
+            "vertical.slot",
+            "vertical.should_display",
+            "vertical.destructor",
+            "vertical.browser_view_for_browser",
+            "vertical.hwnd_for_view",
+            "vertical.notify_mode_changed",
+            "vertical.browser_view_view_vtable",
+            "vertical.region_preferred_size",
+            "vertical.region_preferred_size_slot",
+            "vertical.region_minimum_size",
+            "vertical.invalidate_layout",
+        ],
+        off: &[Off::Flag("vertical.supported")],
+        clear: Clear::Absent,
+        checks: &[],
+    },
+    RowFeature {
         name: "app window",
         paths: &["app_window."],
         off: &[Off::Part("app_window")],
@@ -124,6 +167,14 @@ pub const ROW_FEATURES: &[RowFeature] = &[
         paths: &["toolbar.dev.colours"],
         off: &[],
         clear: Clear::Empty,
+        checks: &["dev-row"],
+    },
+    RowFeature {
+        // Font functions recorded beside the developer colours. No runtime calls them.
+        name: "developer colours",
+        paths: &["toolbar.dev.font_list_new", "toolbar.dev.font_new"],
+        off: &[],
+        clear: Clear::Absent,
         checks: &["dev-row"],
     },
     RowFeature {
@@ -177,18 +228,26 @@ pub fn leave_out(build: &mut Value, path: &str) {
 /// values of the build at all, and a row holds zero for them.
 pub struct UnusedWhen {
     pub paths: &'static [&'static str],
-    /// The address that decides it.
-    pub address: &'static str,
-    /// Unused while that address is recorded, or while it is absent.
-    pub while_recorded: bool,
+    /// The value of the row that decides it.
+    pub when: When,
     pub why: &'static str,
+}
+
+/// What a deciding value of a row must be for other values to be unused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum When {
+    /// An address the build records.
+    Recorded(&'static str),
+    /// An address the build does not record.
+    Absent(&'static str),
+    /// A flag that is false.
+    False(&'static str),
 }
 
 pub const UNUSED_WHEN: &[UnusedWhen] = &[
     UnusedWhen {
         paths: &["tabs.tab_collection", "tabs.tab_contents"],
-        address: "tabs.tab_at",
-        while_recorded: true,
+        when: When::Recorded("tabs.tab_at"),
         why: "the build has its own GetWebContentsAt",
     },
     UnusedWhen {
@@ -198,9 +257,13 @@ pub const UNUSED_WHEN: &[UnusedWhen] = &[
             "vertical.toolbar_in_view",
             "vertical.toolbar_leading",
         ],
-        address: "vertical.window_feature",
-        while_recorded: false,
+        when: When::Absent("vertical.window_feature"),
         why: "the tab strip is left out through ShouldDrawTabStrip, not the window feature",
+    },
+    UnusedWhen {
+        paths: &["vertical.should_draw_tab_strip"],
+        when: When::False("vertical.detour_strip"),
+        why: "the build does not leave its tab strip out by a detour",
     },
 ];
 
@@ -244,8 +307,13 @@ pub fn unused(build: &Value, path: &str) -> Option<&'static str> {
         .iter()
         .find(|rule| {
             rule.paths.iter().any(|each| covers(each, path))
-                && at(build, rule.address)
-                    .is_some_and(|value| is_recorded(value) == rule.while_recorded)
+                && match rule.when {
+                    When::Recorded(address) => at(build, address).is_some_and(is_recorded),
+                    When::Absent(address) => {
+                        at(build, address).is_some_and(|value| !is_recorded(value))
+                    }
+                    When::False(flag) => at(build, flag).and_then(Value::as_bool) == Some(false),
+                }
         })
         .map(|rule| rule.why)
 }
@@ -287,6 +355,27 @@ pub fn switch_off(build: &mut Value, feature: &RowFeature) {
             Off::Part(name) => build[name] = Value::Null,
         }
     }
+}
+
+/// Turns off the feature of that name, through every part of the row it has, and clears each of
+/// its values that a path names, so a feature that is off holds nothing of another build.
+pub fn turn_off(build: &mut Value, name: &str) {
+    for feature in ROW_FEATURES.iter().filter(|feature| feature.name == name) {
+        switch_off(build, feature);
+        for path in feature.paths.iter().filter(|path| !path.ends_with('.')) {
+            clear(build, path, feature.clear);
+        }
+    }
+}
+
+/// How a value of a feature that is off is cleared where it sits: an address inside a list of
+/// signatures becomes zero with the rest of that list, since a list holds no single address.
+pub fn clear_value(build: &mut Value, path: &str, feature: &RowFeature) {
+    let how = match feature.clear {
+        Clear::Absent if path.contains('[') => Clear::Zero,
+        how => how,
+    };
+    clear(build, path, how);
 }
 
 /// The key of a row that names the features it has off and the values that turned them off. The

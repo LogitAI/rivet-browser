@@ -14,7 +14,13 @@
 //! - a text it uses: it refers to a text the new build holds once, and exactly one function there
 //!   refers to that text;
 //! - for a class table, references to it (a function known in both builds loads it from the same
-//!   spot) and its slots (exactly one candidate holds the same functions in the same slots).
+//!   spot) and its slots (exactly one candidate holds the same functions in the same slots);
+//! - for the class table of a views class, its class name: `row_class` reads the table from the
+//!   name the class's `ui::metadata` holds, and the same reading must give the prior table in the
+//!   prior build;
+//! - its fingerprint: a place a class table gives, by its class name or by a slot, that is one of
+//!   the places the fingerprint matched. Those methods do not search among the fingerprint's
+//!   places, so the two agree independently.
 //!
 //! Anything else stays unresolved with its reason, and its row goes to a person.
 
@@ -680,6 +686,8 @@ pub enum Method {
     Text,
     References,
     Slots,
+    ClassName,
+    Fingerprint,
 }
 
 impl fmt::Display for Method {
@@ -691,6 +699,8 @@ impl fmt::Display for Method {
             Method::Text => "a text it uses",
             Method::References => "references to it",
             Method::Slots => "its slots",
+            Method::ClassName => "its class name",
+            Method::Fingerprint => "its fingerprint",
         })
     }
 }
@@ -752,6 +762,47 @@ pub enum Kind {
 pub struct Wanted {
     pub kind: Kind,
     pub candidates: Option<Vec<u32>>,
+    /// For a class table, the views class the prior build's public symbol names it after.
+    pub class: Option<String>,
+}
+
+/// The class table a views class name gives in the new build, once the same reading gives the
+/// prior table in the prior build.
+pub fn class_place(
+    old_pe: &PeFile,
+    new_pe: &PeFile,
+    target: u32,
+    class: &str,
+) -> Result<u32, String> {
+    let old = crate::row_class::class_tables(old_pe, class);
+    if old != BTreeSet::from([target]) {
+        return Err(format!(
+            "its class name {class} gives {} tables in the prior build, not the prior table alone",
+            old.len()
+        ));
+    }
+    let new = crate::row_class::class_tables(new_pe, class);
+    match new.iter().copied().collect::<Vec<_>>().as_slice() {
+        [only] => Ok(*only),
+        many => Err(format!(
+            "its class name {class} gives {} tables in the new build",
+            many.len()
+        )),
+    }
+}
+
+/// What the fingerprint adds to the places a class table gives: agreement when the table gives
+/// exactly one place and that place is one of the fingerprint's.
+pub fn fingerprint_agrees(
+    given: &BTreeSet<u32>,
+    candidates: Option<&[u32]>,
+) -> Option<(Method, u32)> {
+    let [only] = given.iter().copied().collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    candidates
+        .is_some_and(|candidates| candidates.contains(&only))
+        .then_some((Method::Fingerprint, only))
 }
 
 /// What the methods found.
@@ -818,6 +869,23 @@ pub fn resolve(
     }
     let callers = calls_into(&new, &called);
 
+    // A class name gives a table from the build alone, so it is read once.
+    let mut by_class = BTreeMap::new();
+    let mut class_reasons = BTreeMap::new();
+    for (target, want) in wanted {
+        let Some(class) = want.class.as_deref().filter(|_| want.kind == Kind::Table) else {
+            continue;
+        };
+        match class_place(old_pe, new_pe, *target, class) {
+            Ok(place) => {
+                by_class.insert(*target, place);
+            }
+            Err(reason) => {
+                class_reasons.insert(*target, reason);
+            }
+        }
+    }
+
     let mut pending: BTreeSet<u32> = wanted.keys().copied().collect();
     for _ in 0..ROUNDS {
         let followed = follow(&mut old, &mut new, &known);
@@ -849,7 +917,9 @@ pub fn resolve(
                     for place in by_its_calls(&mut new, calls, &candidates) {
                         answers.push((Method::ItsCalls, place));
                     }
-                    for place in by_table_slot(&old, &new, &known, &table_pairs, target) {
+                    let slotted = by_table_slot(&old, &new, &known, &table_pairs, target);
+                    answers.extend(fingerprint_agrees(&slotted, want.candidates.as_deref()));
+                    for place in slotted {
                         answers.push((Method::TableSlot, place));
                     }
                     if let Some(place) = by_text(&texts_of[&target], &users) {
@@ -860,11 +930,29 @@ pub fn resolve(
                     if let Some(place) = by_reference(&followed, target) {
                         answers.push((Method::References, place));
                     }
-                    let candidates = match &want.candidates {
+                    let mut candidates = match &want.candidates {
                         Some(list) => list.clone(),
                         None => table_candidates(&old, &new, &known, target),
                     };
-                    for place in by_slots(&old, &new, &known, target, &candidates) {
+                    // The table a class name gives is also compared slot by slot, which checks
+                    // its structure apart from the name.
+                    if let Some(place) = by_class.get(&target) {
+                        if !candidates.contains(place) {
+                            candidates.push(*place);
+                        }
+                    }
+                    let mut slots = by_slots(&old, &new, &known, target, &candidates);
+                    if let Some(place) = by_class.get(&target).copied() {
+                        answers.push((Method::ClassName, place));
+                        let given = BTreeSet::from([place]);
+                        answers.extend(fingerprint_agrees(&given, want.candidates.as_deref()));
+                        // Several tables holding the same slots is no answer of their own; the
+                        // class name tells which of them is the class's.
+                        if slots.len() > 1 && slots.contains(&place) {
+                            slots = vec![place];
+                        }
+                    }
+                    for place in slots {
                         answers.push((Method::Slots, place));
                     }
                 }
@@ -882,6 +970,10 @@ pub fn resolve(
                     found_any = true;
                 }
                 Err(reason) => {
+                    let reason = match class_reasons.get(&target) {
+                        Some(class) => format!("{reason}; {class}"),
+                        None => reason,
+                    };
                     resolution.reasons.insert(target, reason);
                 }
             }
@@ -1231,6 +1323,7 @@ pub(crate) mod tests {
             Wanted {
                 kind: Kind::Function,
                 candidates: Some(NEW_TARGETS.to_vec()),
+                class: None,
             },
         )]);
         resolve(&old, &new, &known, &wanted, &BTreeSet::from([OLD_TABLE]))
@@ -1242,9 +1335,32 @@ pub(crate) mod tests {
         assert_eq!(resolution.places.get(&OLD_TARGET), Some(&NEW_TARGETS[0]));
         assert_eq!(
             resolution.settled,
-            ["0x101100 -> 0x103100 by calls into it and its table slot"]
+            ["0x101100 -> 0x103100 by calls into it and its table slot and its fingerprint"]
         );
         assert!(resolution.reasons.is_empty(), "{:?}", resolution.reasons);
+    }
+
+    #[test]
+    fn nfr6_a_class_table_is_taken_where_its_class_name_and_fingerprint_agree() {
+        // Edge 157's frame table: two tables hold the frame's layout function in slot 24, and its
+        // class name tells which of them is the frame view's.
+        let candidates: &[u32] = &[0x11b5_19a8, 0x11b5_2528];
+        let by_name = BTreeSet::from([candidates[1]]);
+        let mut answers = vec![(Method::ClassName, candidates[1])];
+        answers.extend(fingerprint_agrees(&by_name, Some(candidates)));
+        assert_eq!(answers[1], (Method::Fingerprint, candidates[1]));
+        let (place, methods) = decide(&answers, Some(candidates)).unwrap();
+        assert_eq!(place, candidates[1]);
+        assert_eq!(methods.len(), 2);
+        // A class name alone is one method.
+        let alone = decide(&answers[..1], None).unwrap_err();
+        assert!(alone.starts_with("only its class name found it"), "{alone}");
+        // A place that is not one of the fingerprint's places gets no agreement from it.
+        assert_eq!(fingerprint_agrees(&BTreeSet::from([0x11b5_3000]), Some(candidates)), None);
+        // A table slot that gives two places gives the fingerprint nothing to agree with.
+        let both: BTreeSet<u32> = candidates.iter().copied().collect();
+        assert_eq!(fingerprint_agrees(&both, Some(candidates)), None);
+        assert_eq!(fingerprint_agrees(&by_name, None), None);
     }
 
     #[test]

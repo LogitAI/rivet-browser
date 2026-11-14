@@ -10,6 +10,7 @@ pub mod command_ids;
 pub mod control;
 pub mod focus;
 pub mod hold;
+pub mod row_class;
 pub mod row_features;
 pub mod row_port;
 pub mod row_recipe;

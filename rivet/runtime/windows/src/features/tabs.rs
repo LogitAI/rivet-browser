@@ -628,25 +628,58 @@ pub unsafe fn new_tab(window: HWND) -> bool {
     opened
 }
 
-unsafe fn open_new_tab(window: HWND) -> bool {
-    let Some(base) = base() else { return false };
-    if bv().new_tab == crate::builds::ABSENT || bv().new_tab_address.is_some() {
-        // The browser's own new-tab command, as its menu sends it.
-        const IDC_NEW_TAB: usize = 34014;
-        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
-            window,
-            windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
-            IDC_NEW_TAB,
-            0,
-        );
-        return true;
+/// How a Rivet window opens a tab in a build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NewTabBy {
+    /// The browser's own new tab command, sent as its menu sends it. It ends in `chrome::NewTab`
+    /// like the function below, on the same thread, so the new tab hook sees Rivet's own tab.
+    Command(usize),
+    /// `chrome::NewTab` itself, for a build whose milestone has no command id that was read.
+    Function(usize),
+}
+
+/// How a Rivet window of `build` opens a tab: the public command when the build's milestone has
+/// one, else the recorded function, else not at all.
+pub(crate) fn new_tab_by(build: &Build) -> Option<NewTabBy> {
+    let command = crate::browsers::chromium::commands::new_tab(build.browser, build.version);
+    choose_new_tab(command, build.tabs.new_tab, build.tabs.new_tab_address)
+}
+
+fn choose_new_tab(
+    command: Option<usize>,
+    new_tab: usize,
+    new_tab_address: Option<usize>,
+) -> Option<NewTabBy> {
+    if let Some(id) = command {
+        return Some(NewTabBy::Command(id));
     }
-    let Some(browser) = browser(base, window) else {
-        return false;
-    };
-    // Chrome accepts the new-tab command source value 5.
-    function::<NewTab>(base, bv().new_tab)(browser, 5);
-    true
+    // A build that passes its window interface takes another first argument than the browser.
+    (new_tab != crate::builds::ABSENT && new_tab_address.is_none())
+        .then_some(NewTabBy::Function(new_tab))
+}
+
+unsafe fn open_new_tab(window: HWND) -> bool {
+    match new_tab_by(crate::builds::get()) {
+        Some(NewTabBy::Command(id)) => {
+            windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                window,
+                windows_sys::Win32::UI::WindowsAndMessaging::WM_COMMAND,
+                id,
+                0,
+            );
+            true
+        }
+        Some(NewTabBy::Function(rva)) => {
+            let Some(base) = base() else { return false };
+            let Some(browser) = browser(base, window) else {
+                return false;
+            };
+            // Chrome accepts the new-tab command source value 5.
+            function::<NewTab>(base, rva)(browser, 5);
+            true
+        }
+        None => false,
+    }
 }
 
 /// One-shot diagnostic for the isolated test profile.
@@ -912,5 +945,44 @@ mod first_page_tests {
         // Other builds and commands that carry an address keep the browser's command.
         assert_eq!(first_page(false, true, false, start()), None);
         assert_eq!(first_page(true, false, false, start()), None);
+    }
+}
+
+#[cfg(test)]
+mod new_tab_tests {
+    use super::{choose_new_tab, new_tab_by, NewTabBy};
+    use crate::builds;
+
+    #[test]
+    fn nfr6_a_new_tab_uses_the_public_command() {
+        // Every build Rivet knows opens a tab with the browser's own command, also those that
+        // record `chrome::NewTab`, so the function is only the new tab hook's.
+        for build in builds::compiled() {
+            assert_eq!(
+                new_tab_by(build),
+                Some(NewTabBy::Command(34014)),
+                "{} {:?}",
+                build.browser,
+                build.version
+            );
+        }
+        // A milestone whose header was not read has no command, and only a recorded function that
+        // takes the browser itself opens a tab there.
+        assert_eq!(
+            crate::browsers::chromium::commands::new_tab("Google Chrome", [160, 0, 1, 1]),
+            None
+        );
+        let function = 0x0123_4560;
+        assert_eq!(
+            choose_new_tab(None, function, None),
+            Some(NewTabBy::Function(function))
+        );
+        assert_eq!(choose_new_tab(None, function, Some(0x68)), None);
+        assert_eq!(choose_new_tab(None, builds::ABSENT, None), None);
+        // With a command the function is never called, recorded or not.
+        assert_eq!(
+            choose_new_tab(Some(34014), function, None),
+            Some(NewTabBy::Command(34014))
+        );
     }
 }
