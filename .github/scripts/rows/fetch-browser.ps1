@@ -78,10 +78,34 @@ if ($Browser -eq 'Brave') {
     # Brave publishes only update-client installers. Their payload is split into several branch
     # streams that 7-Zip reads as one, so the files come out damaged. A runner is thrown away after
     # the job and has no Brave of its own, so the silent installer installs this exact build.
-    $installed = Join-Path $env:ProgramFiles 'BraveSoftware\Brave-Browser\Application'
-    if (Test-Path $installed) { throw "This runner already has Brave at $installed, so the build would not be the one asked for." }
+    # The installer picks a machine or a user install by itself, and its update client may still be
+    # copying files after the setup process has exited, so every place is checked until the build's
+    # own version folder appears.
+    $places = @(
+        (Join-Path $env:ProgramFiles 'BraveSoftware\Brave-Browser\Application'),
+        (Join-Path ${env:ProgramFiles(x86)} 'BraveSoftware\Brave-Browser\Application'),
+        (Join-Path $env:LOCALAPPDATA 'BraveSoftware\Brave-Browser\Application')
+    )
+    foreach ($place in $places) {
+        if (Test-Path $place) { throw "This runner already has Brave at $place, so the build would not be the one asked for." }
+    }
     $setup = Start-Process $package -Wait -PassThru
     if ($setup.ExitCode -ne 0) { throw "Brave's installer exited with $($setup.ExitCode)" }
+    $installed = $null
+    $until = (Get-Date).AddMinutes(10)
+    while (-not $installed -and (Get-Date) -lt $until) {
+        $installed = $places | Where-Object {
+            (Test-Path (Join-Path $_ 'brave.exe')) -and (Test-Path (Join-Path $_ "$Version\chrome.dll"))
+        } | Select-Object -First 1
+        if (-not $installed) { Start-Sleep -Seconds 5 }
+    }
+    if (-not $installed) {
+        $seen = foreach ($root in $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA) {
+            Get-ChildItem (Join-Path $root 'BraveSoftware') -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                ForEach-Object FullName
+        }
+        throw "Brave's installer exited with 0, but no place holds brave.exe and $Version\chrome.dll after 10 minutes. Under BraveSoftware: $(@($seen) -join '; ')"
+    }
     $unpacked = $installed
 } else {
     7z x $package "-o$unpacked" -y | Out-Null
