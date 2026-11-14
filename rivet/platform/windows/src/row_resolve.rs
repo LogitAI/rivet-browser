@@ -1055,9 +1055,10 @@ pub fn resolve(
                     if let Some(place) = by_text(&texts_of[&target], &users) {
                         answers.push((Method::Text, place));
                     }
-                    if let (Some(list), Some(from)) = (&want.candidates, prior_callers.get(&target)) {
+                    let from = prior_callers.get(&target);
+                    if let (Some(list), Some(from)) = (&want.candidates, from) {
                         let given = by_known_callers(&mut new, &known, from, list);
-                        answers.extend(fingerprint_agrees(&given, Some(list)));
+                        answers.extend(fingerprint_agrees(&given, Some(list.as_slice())));
                         for place in given {
                             answers.push((Method::KnownCaller, place));
                         }

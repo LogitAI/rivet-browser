@@ -70,14 +70,18 @@ fn table_jump(bytes: &[u8], at: usize, rva: u32) -> Option<u32> {
         return None;
     }
     // jmp r64, with a REX prefix for r8 to r15.
-    let jump = if code[14] == 0x41 { &code[15..17] } else { &code[14..16] };
+    let jump = if code[14] == 0x41 {
+        &code[15..17]
+    } else {
+        &code[14..16]
+    };
     (jump[0] == 0xFF && jump[1] & 0xF8 == 0xE0).then_some(table)
 }
 
 /// The `ja` that ends at `end`, as its target, with where it starts.
 fn above_before(bytes: &[u8], end: usize, base: u32) -> Option<(usize, u32)> {
     if let Some(start) = end.checked_sub(6) {
-        if bytes.get(start..start + 2) == Some(&[0x0F, 0x87]) {
+        if bytes.get(start..start + 2) == Some(&[0x0F, 0x87][..]) {
             let target = rip_target(base + start as u32, 6, i32_at(bytes, start + 2)?)?;
             return Some((start, target));
         }
@@ -86,7 +90,10 @@ fn above_before(bytes: &[u8], end: usize, base: u32) -> Option<(usize, u32)> {
     let [0x77, rel] = *bytes.get(start..end)? else {
         return None;
     };
-    Some((start, rip_target(base + start as u32, 2, i32::from(rel as i8))?))
+    Some((
+        start,
+        rip_target(base + start as u32, 2, i32::from(rel as i8))?,
+    ))
 }
 
 /// The `cmp r32, imm` that ends at `end`, as its immediate, with where it starts.
@@ -125,13 +132,13 @@ fn lowest_before(bytes: &[u8], end: usize) -> i64 {
             };
             let skip = usize::from(matches!(code.first(), Some(0x40..=0x4F)) && code.len() > 1);
             let rest = &code[skip..];
-            let value = match rest {
+            let value = match *rest {
                 // lea r32, [r + disp32] or [r + disp8], with no SIB byte.
                 [0x8D, modrm, ..] if modrm >> 6 == 2 && modrm & 7 != 4 && rest.len() == 6 => {
                     i32_at(rest, 2).map(|value| -i64::from(value))
                 }
                 [0x8D, modrm, disp] if modrm >> 6 == 1 && modrm & 7 != 4 => {
-                    Some(-i64::from(*disp as i8))
+                    Some(-i64::from(disp as i8))
                 }
                 [0x05, ..] if rest.len() == 5 => i32_at(rest, 1).map(|value| -i64::from(value)),
                 [0x2D, ..] if rest.len() == 5 => i32_at(rest, 1).map(i64::from),
@@ -277,7 +284,9 @@ pub fn command_place_in(
         .map(|(switch, _)| switch.lowest)
         .collect();
     if lowest.is_empty() {
-        return Err(format!("no switch of the prior build sends command {id} to it"));
+        return Err(format!(
+            "no switch of the prior build sends command {id} to it"
+        ));
     }
     let others = prior
         .iter()
@@ -369,7 +378,10 @@ pub(crate) mod tests {
         let mut parts = vec![
             (DISPATCH, switch_code(DISPATCH, LOWEST, bound, TABLE)),
             (back_case, case_code(back_case, BACK)),
-            (OTHER_SWITCH, switch_code(OTHER_SWITCH, 34000, 40, OTHER_TABLE)),
+            (
+                OTHER_SWITCH,
+                switch_code(OTHER_SWITCH, 34000, 40, OTHER_TABLE),
+            ),
             (other_case, case_code(other_case, ELSEWHERE)),
             (DEFAULT, vec![0xC3]),
             (BACK, vec![0xC3]),
@@ -402,9 +414,17 @@ pub(crate) mod tests {
         let pe = PeFile::parse(&bytes).unwrap();
         let found = switches(&pe);
         // The table load follows `lea`, `cmp` and `ja`: 6, 5 and 6 bytes.
-        let dispatch = found.iter().find(|switch| switch.at == DISPATCH + 17).unwrap();
+        let dispatch = found
+            .iter()
+            .find(|switch| switch.at == DISPATCH + 17)
+            .unwrap();
         assert_eq!(
-            (dispatch.lowest, dispatch.bound, dispatch.table, dispatch.default),
+            (
+                dispatch.lowest,
+                dispatch.bound,
+                dispatch.table,
+                dispatch.default
+            ),
             (i64::from(LOWEST), 1100, TABLE, DEFAULT)
         );
         let back = case_of(&pe, dispatch, 33000).and_then(|case| first_call(&pe, case));
@@ -454,7 +474,10 @@ pub(crate) mod tests {
         let alone = resolve_new_tab(Vec::new());
         assert!(alone.places.is_empty());
         let reason = &alone.reasons[&OLD_NEW_TAB];
-        assert!(reason.starts_with("only its command id found it"), "{reason}");
+        assert!(
+            reason.starts_with("only its command id found it"),
+            "{reason}"
+        );
     }
 
     #[test]
@@ -463,10 +486,16 @@ pub(crate) mod tests {
         let new = dispatch_module(Some(NEW_NEW_TAB), &[NEW_NEW_TAB]);
         let (old, new) = (PeFile::parse(&old).unwrap(), PeFile::parse(&new).unwrap());
         // Only the dispatch's own switch counts; the other switch's case calls another function.
-        assert_eq!(command_place(&old, &new, OLD_NEW_TAB, NEW_TAB_ID), Ok(NEW_NEW_TAB));
+        assert_eq!(
+            command_place(&old, &new, OLD_NEW_TAB, NEW_TAB_ID),
+            Ok(NEW_NEW_TAB)
+        );
         // The prior build must send the command to the prior row's function.
         let refused = command_place(&old, &new, 0x103800, NEW_TAB_ID).unwrap_err();
-        assert!(refused.starts_with("no switch of the prior build"), "{refused}");
+        assert!(
+            refused.starts_with("no switch of the prior build"),
+            "{refused}"
+        );
         // A new build whose dispatch has no case for the command gives nothing.
         let gone = dispatch_module(None, &[]);
         let gone = PeFile::parse(&gone).unwrap();
