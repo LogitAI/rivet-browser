@@ -1292,6 +1292,10 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
 /// addresses in the prior build. An address is taken where its fingerprint matches exactly one
 /// place. Offsets, slots and sizes with a recipe are read again from the new module.
 ///
+/// `classes` names the views class of each class table of the prior row, as `prior_classes` reads
+/// them. The new row records the names of the tables it placed, by the path of each value, so the
+/// next row starts from them.
+///
 /// `prior_pe` is the prior row's own module, when the caller has it. A fingerprint taken at a
 /// function start its exception table lists then counts only places the new module's exception
 /// table also lists, since the same bytes inside another function are not the function. Each
@@ -1498,7 +1502,9 @@ pub fn find_candidate(
     if let Some(object) = row.as_object_mut() {
         // They describe the prior build, so they would mislead in this row.
         object.remove("fingerprints");
+        object.remove(CLASSES);
     }
+    record_classes(prior, &mut row, classes, &moved);
     if let Some(prior_pe) = prior_pe {
         read_carried(prior, &mut row, &moved, &followed, prior_pe, pe, &mut report);
     }
@@ -1683,6 +1689,84 @@ fn read_carried(
             "is not a number this generator can read".to_owned(),
         );
         report.carried.push(path);
+    }
+}
+
+/// The key of a row that names the views class of each of its class tables, by the path of the
+/// value that holds the table, as `{"build.layout.frame_vtable": "BrowserFrameViewWin"}`. The
+/// runtime reads only `frame` and `build`, so the names change nothing in a browser.
+pub const CLASSES: &str = "classes";
+
+/// The path of every address a row holds, the frame entry's included, as `build.layout.frame_vtable`
+/// or `frame.frame_view_vtable`.
+fn address_paths(row: &Value) -> Vec<(String, u32)> {
+    let mut out = Vec::new();
+    let mut note = |path: &str, value: &mut Value| {
+        if READ_FROM_CODE.iter().any(|field| path.ends_with(field)) {
+            return;
+        }
+        if let Some(address) = read_address(value).filter(|value| is_address(*value)) {
+            out.push((path.to_owned(), address as u32));
+        }
+    };
+    let mut build = row["build"].clone();
+    walk_addresses("build", &mut build, &mut note);
+    let mut frame = frame_addresses(&row["frame"]);
+    walk_addresses("frame", &mut frame, &mut note);
+    out
+}
+
+/// The views class of each class table of the prior row, from the build alone. A name the prior
+/// row records for the table is taken when it gives exactly that table in the prior module, and
+/// a table with no such name is named by the class name its metadata holds, read back from the
+/// prior module by `row_class`. Either way the name is the one the class's `BEGIN_METADATA` gives
+/// in Chromium's source, and a table no name gives alone has none.
+pub fn prior_classes(prior: &Value, prior_pe: &PeFile) -> BTreeMap<u32, String> {
+    let recorded = prior[CLASSES].as_object();
+    let mut out = BTreeMap::new();
+    let mut tried = BTreeSet::new();
+    for (path, address) in address_paths(prior) {
+        if prior_pe.is_code(address) || out.contains_key(&address) {
+            continue;
+        }
+        let name = recorded
+            .and_then(|names| names.get(&path))
+            .and_then(Value::as_str)
+            .filter(|name| crate::row_class::names_table(prior_pe, name, address))
+            .map(str::to_owned);
+        let name = match name {
+            Some(name) => Some(name),
+            None if tried.insert(address) => {
+                crate::row_class::class_name_of_table(prior_pe, address)
+            }
+            None => None,
+        };
+        if let Some(name) = name {
+            out.insert(address, name);
+        }
+    }
+    out
+}
+
+/// Writes into the new row the class name of each class table it placed, by the path of each value
+/// that holds the table.
+fn record_classes(
+    prior: &Value,
+    row: &mut Value,
+    classes: &BTreeMap<u32, String>,
+    moved: &BTreeMap<u32, u32>,
+) {
+    let mut names = serde_json::Map::new();
+    for (path, address) in address_paths(prior) {
+        if let Some(name) = classes
+            .get(&address)
+            .filter(|_| moved.contains_key(&address))
+        {
+            names.insert(path, Value::String(name.clone()));
+        }
+    }
+    if !names.is_empty() {
+        row[CLASSES] = Value::Object(names);
     }
 }
 
@@ -2630,6 +2714,44 @@ mod tests {
         row["build"]["screen_origin"] = json!(["0x101400", "5657"]);
         leave_out_screen_origin(&mut row, &mut report);
         assert_eq!(row["build"]["screen_origin"][0], "0x101400");
+    }
+
+    #[test]
+    fn nfr6_a_new_row_records_the_class_names_of_the_tables_it_placed() {
+        let mut prior = verified_row();
+        // A name the prior row recorded is not carried: only names confirmed now are written.
+        prior[CLASSES] = json!({"build.toolbar.stale": "Stale"});
+        let classes = BTreeMap::from([(0x101000, "BrowserFrameViewWin".to_owned())]);
+        let bytes = module(&code_refs(&shifted_code(0x2000, 0x44)));
+        let pe = PeFile::parse(&bytes).unwrap();
+        let (row, report) =
+            find_candidate(&prior, &prints_of_prior(), None, &classes, "1.0.0.3", &pe);
+        assert!(report.review.is_empty(), "{:?}", report.review);
+        assert_eq!(
+            row[CLASSES],
+            json!({"frame.frame_view_vtable": "BrowserFrameViewWin"})
+        );
+        // With no confirmed name the row records none.
+        let (row, _) = find_candidate(
+            &prior,
+            &prints_of_prior(),
+            None,
+            &BTreeMap::new(),
+            "1.0.0.3",
+            &pe,
+        );
+        assert!(row.get(CLASSES).is_none());
+    }
+
+    #[test]
+    fn nfr6_every_address_of_a_row_is_known_by_its_path() {
+        let paths = address_paths(&verified_row());
+        assert!(paths.contains(&("frame.frame_view_vtable".to_owned(), 0x101000)));
+        assert!(paths.contains(&("build.toolbar.paint".to_owned(), 0x101300)));
+        assert!(paths.contains(&("build.tabs.signatures[0][0]".to_owned(), 0x101300)));
+        // Offsets and the absent marker are not addresses.
+        assert!(!paths.iter().any(|(path, _)| path.ends_with("view_layer")));
+        assert!(!paths.iter().any(|(path, _)| path.ends_with("missing")));
     }
 
 }

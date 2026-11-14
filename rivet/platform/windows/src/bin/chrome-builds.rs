@@ -117,8 +117,8 @@ fn make(
             prints
         }
     };
-    // No class names yet: a class table is found by its fingerprint and the other methods.
-    let classes = std::collections::BTreeMap::new();
+    // Each class table of the prior row is found again by its views class's name too.
+    let classes = row_port::prior_classes(prior, &prior_pe);
     let bytes = read(module)?;
     let pe = PeFile::parse(&bytes).ok_or("the new module is not a 64-bit PE image")?;
     let (mut row, mut report) =

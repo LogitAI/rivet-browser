@@ -366,6 +366,172 @@ pub fn class_tables(pe: &PeFile, name: &str) -> BTreeSet<u32> {
     found
 }
 
+/// How many levels of callees below the code that fills the metadata are read for its name.
+const CALLEE_DEPTH: usize = 2;
+/// How many names may be tried for one table before it counts as too unclear to name.
+const NAMES_MOST: usize = 16;
+/// How long a class name may be.
+const NAME_MOST: usize = 120;
+
+/// The zero-terminated text at `rva` when it reads as a C++ class name without its namespace.
+fn identifier_at(pe: &PeFile, rva: u32) -> Option<String> {
+    let bytes = [NAME_MOST + 1, 64, 32, 16, 8]
+        .into_iter()
+        .find_map(|length| pe.read(rva, length))?;
+    let end = bytes.iter().position(|byte| *byte == 0)?;
+    let name = &bytes[..end];
+    let first = *name.first()?;
+    (name.len() >= 2
+        && (first.is_ascii_alphabetic() || first == b'_')
+        && name
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_'))
+    .then(|| String::from_utf8_lossy(name).into_owned())
+}
+
+/// What a function's body loads with a RIP-relative `lea` outside the code, and the functions it
+/// calls or jumps to directly.
+fn body_of(pe: &PeFile, ranges: &BTreeMap<u32, u32>, start: u32) -> (Vec<u32>, Vec<u32>) {
+    let end = ranges.get(&start).copied().unwrap_or(start);
+    let length = end.saturating_sub(start).min(BODY_MOST) as usize;
+    let Some(bytes) = pe.read(start, length) else {
+        return (vec![], vec![]);
+    };
+    let (mut loads, mut callees) = (Vec::new(), Vec::new());
+    let mut at = 0;
+    while at < bytes.len() {
+        let Some(instruction) = x64::decode_body(&bytes[at..]) else {
+            break;
+        };
+        if instruction.length == 0 || at + instruction.length > bytes.len() {
+            break;
+        }
+        let raw = &bytes[at..at + instruction.length];
+        let rva = start + at as u32;
+        if let Some(found) = (raw.len() == 7).then(|| rip_use(raw, rva)).flatten() {
+            if !found.word && !pe.is_code(found.target) {
+                loads.push(found.target);
+            }
+        }
+        if raw.len() == 5 && matches!(raw[0], 0xE8 | 0xE9) {
+            let rel = i32::from_le_bytes(raw[1..5].try_into().expect("five bytes"));
+            if let Ok(target) = u32::try_from(i64::from(rva) + 5 + i64::from(rel)) {
+                if ranges.contains_key(&target) {
+                    callees.push(target);
+                }
+            }
+        }
+        at += instruction.length;
+    }
+    (loads, callees)
+}
+
+/// The metadata statics a class table's objects reach: each constructor that writes the table at
+/// the start of an object also writes other tables into it, and the second slot of the
+/// `ui::metadata::MetaDataProvider` table among them returns the class's static, as `getters` reads.
+fn statics_of_table(pe: &PeFile, ranges: &BTreeMap<u32, u32>, table: u32) -> BTreeSet<(u32, bool)> {
+    let writers: BTreeSet<u32> = rip_uses(pe, &BTreeSet::from([table]))
+        .iter()
+        .filter(|each| !each.word)
+        .filter_map(|each| enclosing(ranges, each.at))
+        .collect();
+    let mut found = BTreeSet::new();
+    for writer in writers {
+        let stores = stores_in(pe, writer, ranges[&writer]);
+        for first in stores
+            .iter()
+            .filter(|store| store.table == table && store.offset == 0)
+        {
+            for other in stores.iter().filter(|store| {
+                store.base == first.base && store.offset != 0 && store.table != table
+            }) {
+                let Some(getter) = pe.pointer_rva(other.table + 8).filter(|at| pe.is_code(*at))
+                else {
+                    continue;
+                };
+                if let Some(each) = load_target(pe, getter).filter(|(at, _)| !pe.is_code(*at)) {
+                    found.insert(each);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The names the code that fills a metadata static loads, nearest first: the texts that the
+/// functions whose result is the static, and their callees, load. Only those that read as a class
+/// name are kept.
+fn names_of_static(
+    pe: &PeFile,
+    ranges: &BTreeMap<u32, u32>,
+    found: (u32, bool),
+) -> Vec<Vec<String>> {
+    let mut layer: BTreeSet<u32> = rip_uses(pe, &BTreeSet::from([found.0]))
+        .iter()
+        .filter_map(|each| enclosing(ranges, each.at))
+        .filter(|function| load_target(pe, *function) == Some(found))
+        .collect();
+    let mut seen = layer.clone();
+    let mut by_depth = Vec::new();
+    for _ in 0..=CALLEE_DEPTH {
+        if layer.is_empty() || seen.len() > CALLERS_MOST {
+            break;
+        }
+        let mut names = Vec::new();
+        let mut next = BTreeSet::new();
+        for function in &layer {
+            let (loads, callees) = body_of(pe, ranges, *function);
+            names.extend(loads.into_iter().filter_map(|at| identifier_at(pe, at)));
+            next.extend(callees.into_iter().filter(|callee| !seen.contains(callee)));
+        }
+        by_depth.push(names);
+        seen.extend(&next);
+        layer = next;
+    }
+    by_depth
+}
+
+/// The views class a class table belongs to, by the class name its `ui::metadata` holds, read back
+/// from the build: the metadata static the table's objects reach, and the names the code that fills
+/// it loads. A name counts only where `class_tables` gives exactly this table for it, so a name
+/// that is not the class's own gives none. The nearest code that yields exactly one such name
+/// names the table; none, or two, gives no name.
+pub fn class_name_of_table(pe: &PeFile, table: u32) -> Option<String> {
+    let ranges = pe.function_ranges();
+    let mut by_depth: Vec<Vec<String>> = Vec::new();
+    for each in statics_of_table(pe, &ranges, table) {
+        for (depth, names) in names_of_static(pe, &ranges, each).into_iter().enumerate() {
+            if by_depth.len() <= depth {
+                by_depth.resize(depth + 1, Vec::new());
+            }
+            by_depth[depth].extend(names);
+        }
+    }
+    let mut tried = BTreeSet::new();
+    for names in by_depth {
+        let mut confirmed = BTreeSet::new();
+        for name in names {
+            if tried.len() >= NAMES_MOST {
+                return None;
+            }
+            if tried.insert(name.clone()) && class_tables(pe, &name) == BTreeSet::from([table]) {
+                confirmed.insert(name);
+            }
+        }
+        match confirmed.len() {
+            0 => continue,
+            1 => return confirmed.into_iter().next(),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Whether `name` is the class name of `table` in `pe`: `class_tables` gives this table alone.
+pub fn names_table(pe: &PeFile, name: &str, table: u32) -> bool {
+    class_tables(pe, name) == BTreeSet::from([table])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +672,36 @@ mod tests {
         assert!(other.unwrap_err().contains("in the prior build"));
         let missing = crate::row_resolve::class_place(&prior, &new, 0x2400, "CustomFloatingCorner");
         assert!(missing.is_err());
+    }
+
+    #[test]
+    fn nfr6_a_class_name_is_read_from_the_prior_build_without_symbols() {
+        let bytes = class_module("EdgeBrowserFrameViewWin");
+        let pe = PeFile::parse(&bytes).unwrap();
+        // The table the constructor writes at the object's start is named by the text its
+        // metadata code loads, and the name gives that table back.
+        assert_eq!(
+            class_name_of_table(&pe, 0x2400).as_deref(),
+            Some("EdgeBrowserFrameViewWin")
+        );
+        assert!(names_table(&pe, "EdgeBrowserFrameViewWin", 0x2400));
+        // The provider table is written further into the object, so it names no class.
+        assert_eq!(class_name_of_table(&pe, 0x2200), None);
+        assert!(!names_table(&pe, "EdgeBrowserFrameViewWin", 0x2200));
+        // A name the metadata code does not load does not name the table.
+        assert!(!names_table(&pe, "BrowserFrameViewWin", 0x2400));
+    }
+
+    #[test]
+    fn nfr6_a_class_name_is_a_plain_identifier() {
+        let mut code = class_module("BrowserView");
+        let at = 0x400 + 0x1000 + 0x100;
+        assert_eq!(&code[at..at + 12], b"BrowserView\0");
+        let pe = PeFile::parse(&code).unwrap();
+        assert_eq!(identifier_at(&pe, 0x2100).as_deref(), Some("BrowserView"));
+        // A path or a qualified name is not a class name.
+        code[at + 7] = b':';
+        let pe = PeFile::parse(&code).unwrap();
+        assert_eq!(identifier_at(&pe, 0x2100), None);
     }
 }
