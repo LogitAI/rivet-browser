@@ -87,9 +87,12 @@ pub(crate) unsafe extern "system" fn proposed_layout(
 ) -> *mut c_void {
     let original: ProposedLayout = std::mem::transmute(page_area::original());
     let result = original(this, out, params);
-    let host = *(this
-        .cast::<u8>()
-        .add(crate::builds::get().side_panel.host_view) as *const usize);
+    // The layout keeps the view it lays out in `BrowserViewLayoutViews::browser_view`, found by
+    // the class name of the view it holds.
+    let Some(host_field) = crate::chromium::window_views::host_field(this as usize) else {
+        return result;
+    };
+    let host = *(this.cast::<u8>().add(host_field) as *const usize);
     crate::trace::trace_changed(
         "layout hook",
         &format!(
@@ -115,9 +118,12 @@ unsafe extern "system" fn app_proposed_layout(
     let original: ProposedLayout =
         std::mem::transmute(APP_ORIGINAL.load(std::sync::atomic::Ordering::Acquire));
     let result = original(this, out, params);
-    let host = *(this
-        .cast::<u8>()
-        .add(crate::builds::get().side_panel.host_view) as *const usize);
+    // The layout keeps the view it lays out in `BrowserViewLayoutViews::browser_view`, found by
+    // the class name of the view it holds.
+    let Some(host_field) = crate::chromium::window_views::host_field(this as usize) else {
+        return result;
+    };
+    let host = *(this.cast::<u8>().add(host_field) as *const usize);
     crate::trace::trace_changed(
         "layout hook",
         &format!(

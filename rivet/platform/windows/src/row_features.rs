@@ -135,6 +135,44 @@ pub const ROW_FEATURES: &[RowFeature] = &[
     },
 ];
 
+/// Values the runtime finds in the browser's own memory by Chromium's class names and the shape of
+/// the view tree, so a row needs none of them. Where a row has one, the runtime only compares it
+/// with what it found. A value no instruction of the new build gave is left out of the row rather
+/// than carried from the prior build, and does not stop the row: the browser view, the area below
+/// the top row and the view of the pages are the layout's views named `BrowserView`,
+/// `MainBackgroundRegionView` and `MultiContentsView`; the frame view's field is the one that holds
+/// that same browser view; and a view's widget is the one the root of its view tree names. A
+/// runtime from before this cannot read a row without them, so it refuses the row and opens its
+/// held build instead of guessing.
+pub const REFLECTED: &[&str] = &[
+    "layout.frame_browser_window_offset",
+    "side_panel.contents_container",
+    "side_panel.host_view",
+    "side_panel.page_area",
+    "toolbar.get_widget_slot",
+];
+
+/// Whether the runtime finds a value by reflection, so a row may leave it out.
+pub fn is_reflected(path: &str) -> bool {
+    REFLECTED.contains(&field_of(path))
+}
+
+/// Leaves the field a value path names out of a row's build part.
+pub fn leave_out(build: &mut Value, path: &str) {
+    let field = field_of(path);
+    let (parent, key) = match field.rsplit_once('.') {
+        Some((parent, key)) => (Some(parent), key),
+        None => (None, field),
+    };
+    let holder = match parent {
+        Some(parent) => at_mut(build, parent),
+        None => Some(build),
+    };
+    if let Some(object) = holder.and_then(Value::as_object_mut) {
+        object.remove(key);
+    }
+}
+
 /// Values the runtime does not read while another value of the row says so: then they are not
 /// values of the build at all, and a row holds zero for them.
 pub struct UnusedWhen {
@@ -303,19 +341,31 @@ mod tests {
         assert_eq!(feature_of("layout.frame_ids[1]").unwrap().name, "frame colour");
         assert_eq!(feature_of("omnibox.match_size").unwrap().name, "address suggestions");
         // The frame and the page area layout have no switch: the window cannot do without them.
-        for core in [
-            "layout.view_bounds_offset",
-            "layout.frame_browser_window_offset",
-            "side_panel.page_area",
-            "side_panel.host_view",
-            "side_panel.contents_container",
-            "side_panel.toolbar",
-            "toolbar.get_widget_slot",
-        ] {
+        for core in ["layout.view_bounds_offset", "side_panel.toolbar"] {
             assert!(feature_of(core).is_none(), "{core}");
+            assert!(!is_reflected(core), "{core}");
+        }
+        // The window's views and widget have no switch either; the runtime finds them itself.
+        for reflected in REFLECTED {
+            assert!(feature_of(reflected).is_none(), "{reflected}");
+            assert!(is_reflected(reflected), "{reflected}");
         }
         // A value that only looks like a section's name is not in it.
         assert!(feature_of("splitter.width").is_none());
+    }
+
+    #[test]
+    fn nfr6_a_reflected_value_is_left_out_of_the_row() {
+        let mut build = json!({
+            "layout": {"frame_browser_window_offset": "0x340", "view_bounds_offset": "0x1c8"},
+            "toolbar": {"get_widget_slot": "0xb"},
+        });
+        leave_out(&mut build, "layout.frame_browser_window_offset");
+        leave_out(&mut build, "toolbar.get_widget_slot");
+        assert_eq!(
+            build,
+            json!({"layout": {"view_bounds_offset": "0x1c8"}, "toolbar": {}})
+        );
     }
 
     #[test]

@@ -22,12 +22,27 @@ pub(crate) fn recorded(name: &str) -> Option<usize> {
     })
 }
 
-/// Where a view of `build` keeps its parent and its children. They follow from where it keeps its
-/// bounds by the member order of `views::View`, so they are not values of the build's row.
+/// Where a view of `build` keeps its parent and its children. The view walk of `reflect` finds them
+/// at run time from the window's own views: each child of the browser view names it as its parent
+/// right before its list of children. They also follow from where the view keeps its bounds by the
+/// member order of `views::View`, which confirms the walk. So they are not values of the build's
+/// row.
 pub(crate) fn view_fields(build: &crate::builds::Build) -> Option<(usize, usize)> {
     use crate::chromium::view::View;
-    let parent = View::parent_offset(build.layout.view_bounds_offset)?;
-    Some((parent, View::children_offset(parent)))
+    let by_bounds = View::parent_offset(build.layout.view_bounds_offset)
+        .map(|parent| (parent, View::children_offset(parent)));
+    agreed_view_fields(crate::chromium::window_views::walked_view_fields(), by_bounds)
+}
+
+/// The view fields from the walk and from the bounds offset. Both must agree when both are known.
+pub(crate) fn agreed_view_fields(
+    walked: Option<(usize, usize)>,
+    by_bounds: Option<(usize, usize)>,
+) -> Option<(usize, usize)> {
+    match (walked, by_bounds) {
+        (Some(walked), Some(by_bounds)) => (walked == by_bounds).then_some(walked),
+        (walked, by_bounds) => walked.or(by_bounds),
+    }
 }
 
 /// A value named in the test profile's `rivet-spike.txt`.
@@ -714,6 +729,21 @@ pub(crate) fn install_features() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nfr6_the_view_walk_gives_the_view_fields_and_the_bounds_offset_confirms_them() {
+        // The walk and the bounds offset agree on Chromium 156 and later.
+        assert_eq!(
+            agreed_view_fields(Some((0x198, 0x1A0)), Some((0x198, 0x1A0))),
+            Some((0x198, 0x1A0))
+        );
+        // A walk that disagrees with the bounds offset leaves the fields unknown.
+        assert_eq!(agreed_view_fields(Some((0x190, 0x198)), Some((0x198, 0x1A0))), None);
+        // Either alone stands until the other is known.
+        assert_eq!(agreed_view_fields(Some((0x190, 0x198)), None), Some((0x190, 0x198)));
+        assert_eq!(agreed_view_fields(None, Some((0x198, 0x1A0))), Some((0x198, 0x1A0)));
+        assert_eq!(agreed_view_fields(None, None), None);
+    }
 
     #[test]
     fn fr9_the_mini_window_is_the_window_the_browser_created_for_the_tab() {

@@ -49,7 +49,7 @@ pub static BRAVE: Build = Build {
     module: "chrome.dll",
     version: [156, 1, 98, 62],
     toolbar: Toolbar {
-        get_widget_slot: 11,
+        get_widget_slot: Some(11),
         dev: DEV_BRAVE_156,
         get_color: 0x06A9A890, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
         get_color_bytes: &[
@@ -236,9 +236,9 @@ pub static BRAVE: Build = Build {
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0x50,
-        contents_container: 0xb8,
+        host_view: Some(0x38),
+        page_area: Some(0x50),
+        contents_container: Some(0xb8),
         vertical_tabs: 0x80,
         toolbar: 0x60,
         contents_outline: 0x58,
@@ -295,7 +295,7 @@ pub static BRAVE: Build = Build {
         stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
         set_opaque: 0x02322E10, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
         set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
-        frame_browser_window_offset: 0x340,
+        frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
         top_inset_adjust: -12,
@@ -380,7 +380,7 @@ pub static BRAVE_63: Build = Build {
     module: "chrome.dll",
     version: [156, 1, 98, 63],
     toolbar: Toolbar {
-        get_widget_slot: 11,
+        get_widget_slot: Some(11),
         dev: DEV_BRAVE_156,
         get_color: 0x06A5CB00, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
         get_color_bytes: &[
@@ -604,9 +604,9 @@ pub static BRAVE_63: Build = Build {
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0x50,
-        contents_container: 0xb8,
+        host_view: Some(0x38),
+        page_area: Some(0x50),
+        contents_container: Some(0xb8),
         vertical_tabs: 0x80,
         toolbar: 0x60,
         contents_outline: 0x58,
@@ -663,7 +663,7 @@ pub static BRAVE_63: Build = Build {
         stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
         set_opaque: 0x0244FE30, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
         set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
-        frame_browser_window_offset: 0x340,
+        frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
         top_inset_adjust: 0, // Chromium's own GetTopInset, as on Chrome
@@ -782,7 +782,7 @@ pub static BRAVE_157_55: Build = Build {
     module: "chrome.dll",
     version: [157, 1, 99, 55],
     toolbar: Toolbar {
-        get_widget_slot: 11,
+        get_widget_slot: Some(11),
         dev: DEV_BRAVE_157,
         get_color: 0x05B6CB30, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
         get_color_bytes: &[
@@ -1006,9 +1006,9 @@ pub static BRAVE_157_55: Build = Build {
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0x50,
-        contents_container: 0xb8,
+        host_view: Some(0x38),
+        page_area: Some(0x50),
+        contents_container: Some(0xb8),
         vertical_tabs: 0x80,
         toolbar: 0x60,
         contents_outline: 0x58,
@@ -1065,7 +1065,7 @@ pub static BRAVE_157_55: Build = Build {
         stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
         set_opaque: 0x0080EA30, // ?SetFillsBoundsOpaquely@Layer@ui@@UEAAX_N@Z
         set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
-        frame_browser_window_offset: 0x338,
+        frame_browser_window_offset: Some(0x338),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x684, 0x685, 0x686],
         top_inset_adjust: 0, // Chromium's own GetTopInset, as on Chrome

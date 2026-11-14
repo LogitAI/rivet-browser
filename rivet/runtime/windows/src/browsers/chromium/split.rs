@@ -83,10 +83,10 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
     let row = &crate::builds::get().side_panel;
     if let (Some(toolbar), Some(contents)) = (
         area.bounds(row.toolbar),
-        area.bounds(row.contents_container),
+        area.contents(),
     ) {
         if area.rail == 0 && active_is_split(area.window) {
-            if let Some(page) = area.bounds(row.page_area) {
+            if let Some(page) = area.page() {
                 fill_area(&mut *contents, &*page);
             }
         }

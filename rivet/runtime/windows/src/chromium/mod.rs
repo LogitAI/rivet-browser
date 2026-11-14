@@ -3,3 +3,4 @@ pub(crate) mod memory;
 pub(crate) mod reflect;
 pub(crate) mod screen;
 pub(crate) mod view;
+pub(crate) mod window_views;

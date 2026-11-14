@@ -133,12 +133,7 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
     if base == 0 || !checked() {
         return None;
     }
-    let browser_window = match frame_layout::frame_view(window) {
-        Some(frame) => {
-            *((frame + crate::builds::get().layout.frame_browser_window_offset) as *const usize)
-        }
-        None => page_area::laid_out_host(window)?,
-    };
+    let browser_window = browser_window_of(window)?;
     let cached = FOUND.with(|found| found.borrow().get(&(window as isize)).copied());
     let vtables = [
         bv().coordinator_vtable,
@@ -162,15 +157,19 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
     Some(found)
 }
 
+/// The `BrowserWindow` subobject of a window's `BrowserView`, which the frame view keeps in its
+/// tracker of the browser view. A window whose frame view is not known has it from the layout,
+/// which lays that same view out.
+unsafe fn browser_window_of(window: HWND) -> Option<usize> {
+    let host = page_area::laid_out_host(window);
+    match frame_layout::frame_view(window) {
+        Some(frame) => crate::chromium::window_views::frame_browser_view(frame, host),
+        None => host,
+    }
+}
+
 unsafe fn find_objects(window: HWND, base: usize) -> Option<Objects> {
-    // The frame view holds the `BrowserWindow` subobject of `BrowserView` at +0x340. A build whose
-    // frame view is not recorded has it from the layout, which lays that same view out.
-    let browser_window = match frame_layout::frame_view(window) {
-        Some(frame) => {
-            *((frame + crate::builds::get().layout.frame_browser_window_offset) as *const usize)
-        }
-        None => page_area::laid_out_host(window)?,
-    };
+    let browser_window = browser_window_of(window)?;
     if !readable(browser_window, 8) {
         return None;
     }
@@ -905,13 +904,13 @@ pub(crate) unsafe fn on_page_area(area: &mut PageArea) {
     let rail = rail_of(area.window);
     area.rail = rail;
     if rail > 0 {
-        if let Some(contents) = area.bounds(bv().contents_container) {
+        if let Some(contents) = area.contents() {
             let side_panel = area.bounds(bv().side_panel);
             let animation = area.bounds(bv().side_panel_animation);
             let outline = area.bounds(bv().contents_outline);
             let panel_view = area.field(bv().side_panel);
             let page = area
-                .bounds(bv().page_area)
+                .page()
                 .map(|bounds| *bounds)
                 .unwrap_or([0; 4]);
             // The page starts where the browser's vertical tab list ends.
@@ -1228,7 +1227,7 @@ mod tests {
         // The traced app window layout keeps the page area, the top row and the page container here.
         assert_eq!(
             (whale.page_area, whale.toolbar, whale.contents_container),
-            (0x28, 0x40, 0x90)
+            (Some(0x28), 0x40, Some(0x90))
         );
         let samsung = row("Samsung Internet");
         assert!(samsung.supported);
@@ -1236,7 +1235,7 @@ mod tests {
         assert_eq!(samsung.old_layout, Some(true));
         assert_eq!(
             (samsung.contents_container, samsung.side_panel),
-            (0x80, 0x98)
+            (Some(0x80), 0x98)
         );
     }
 
