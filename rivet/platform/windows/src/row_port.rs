@@ -1658,7 +1658,11 @@ pub fn find_candidate(
                 .iter()
                 .map(|(target, (_, want))| (*target, want.clone()))
                 .collect();
-            let resolution = row_resolve::resolve(prior_pe, pe, &moved, &asked, &table_targets);
+            // The tables the prior build's public symbols name after a class are the tables of
+            // views classes the slot shift compares.
+            let views: BTreeSet<u32> = classes.keys().copied().collect();
+            let resolution =
+                row_resolve::resolve(prior_pe, pe, &moved, &asked, &table_targets, &views);
             for (target, (line, _)) in &wanted {
                 match resolution.places.get(target) {
                     Some(place) => {

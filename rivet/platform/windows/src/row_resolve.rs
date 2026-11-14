@@ -11,6 +11,10 @@
 //!   build, and exactly one candidate makes the same calls from the same spots;
 //! - its table slot: a class table known in both builds holds it, at the slot that lines up once
 //!   the slots around it are compared, since a milestone can add or remove a virtual function;
+//! - its slot shift: for a virtual function of a views class, the table of a second views class
+//!   lines the same slot up by the same shift. Every views class derives from `views::View`, whose
+//!   virtual functions keep one slot in all their tables (`ui/views/view.h`), so a second table
+//!   confirms the slot number apart from the first;
 //! - a text it uses: it refers to a text the new build holds once, and exactly one function there
 //!   refers to that text;
 //! - for a class table, references to it (a function known in both builds loads it from the same
@@ -536,6 +540,45 @@ fn by_table_slot(
     found
 }
 
+/// The places a views class table gives a function by its slot, where the table of a second views
+/// class, known in both builds, lines the same slot up by the same shift. `views` names the prior
+/// build's tables of views classes. A slot of `views::View` is the same slot in every views class
+/// table, and one of a derived class is the same slot in that class's subclasses, so a slot that two
+/// tables line up alike is a slot number found twice, by tables found apart.
+fn by_slot_shift(
+    old: &Side,
+    new: &Side,
+    known: &BTreeMap<u32, u32>,
+    tables: &[(u32, u32)],
+    views: &BTreeSet<u32>,
+    target: u32,
+) -> BTreeSet<u32> {
+    let mut found = BTreeSet::new();
+    for pair in tables.iter().filter(|pair| views.contains(&pair.0)) {
+        for slot in 0..TABLE_SLOTS {
+            let Some(function) = entry(old.pe, pair.0, i64::from(slot)) else {
+                break;
+            };
+            if function != target {
+                continue;
+            }
+            let Some(shift) = line_up(old, new, known, *pair, slot) else {
+                continue;
+            };
+            let confirmed = tables
+                .iter()
+                .filter(|other| other.0 != pair.0 && views.contains(&other.0))
+                .any(|other| line_up(old, new, known, *other, slot) == Some(shift));
+            if confirmed {
+                if let Some(place) = entry(new.pe, pair.1, i64::from(slot) + shift) {
+                    found.insert(place);
+                }
+            }
+        }
+    }
+    found
+}
+
 /// The candidate tables whose slots hold the same functions as the old table, and how many agree.
 fn by_slots(
     old: &Side,
@@ -688,6 +731,7 @@ pub enum Method {
     Slots,
     ClassName,
     Fingerprint,
+    SlotShift,
 }
 
 impl fmt::Display for Method {
@@ -701,6 +745,7 @@ impl fmt::Display for Method {
             Method::Slots => "its slots",
             Method::ClassName => "its class name",
             Method::Fingerprint => "its fingerprint",
+            Method::SlotShift => "its slot shift",
         })
     }
 }
@@ -820,14 +865,16 @@ pub struct Resolution {
 }
 
 /// Looks for each wanted address with every method, in rounds, since a place found in one round
-/// is known in the next. `known` holds the places the fingerprints found, and `tables` names the
-/// prior row's addresses that are class tables.
+/// is known in the next. `known` holds the places the fingerprints found, `tables` names the
+/// prior row's addresses that are class tables, and `views` those of them that are tables of views
+/// classes.
 pub fn resolve(
     old_pe: &PeFile,
     new_pe: &PeFile,
     known: &BTreeMap<u32, u32>,
     wanted: &BTreeMap<u32, Wanted>,
     tables: &BTreeSet<u32>,
+    views: &BTreeSet<u32>,
 ) -> Resolution {
     let mut old = Side::new(old_pe);
     let mut new = Side::new(new_pe);
@@ -921,6 +968,9 @@ pub fn resolve(
                     answers.extend(fingerprint_agrees(&slotted, want.candidates.as_deref()));
                     for place in slotted {
                         answers.push((Method::TableSlot, place));
+                    }
+                    for place in by_slot_shift(&old, &new, &known, &table_pairs, views, target) {
+                        answers.push((Method::SlotShift, place));
                     }
                     if let Some(place) = by_text(&texts_of[&target], &users) {
                         answers.push((Method::Text, place));
@@ -1326,7 +1376,14 @@ pub(crate) mod tests {
                 class: None,
             },
         )]);
-        resolve(&old, &new, &known, &wanted, &BTreeSet::from([OLD_TABLE]))
+        resolve(
+            &old,
+            &new,
+            &known,
+            &wanted,
+            &BTreeSet::from([OLD_TABLE]),
+            &BTreeSet::new(),
+        )
     }
 
     #[test]
@@ -1379,6 +1436,96 @@ pub(crate) mod tests {
         assert!(resolution.places.is_empty());
         let reason = &resolution.reasons[&OLD_TARGET];
         assert!(reason.starts_with("only calls into it found it"), "{reason}");
+    }
+
+    const VIEW_TARGET: u32 = 0x105000;
+    const VIEW_TABLE: u32 = 0x201000;
+    const OTHER_VIEW_TABLE: u32 = 0x201400;
+
+    /// A build with two tables of views classes. The first holds, among small functions, the
+    /// target in slot 6; the second holds small functions only. In a new build each table gets one
+    /// more slot at slot 2 when `inserted` says so, as when a milestone adds a virtual function to
+    /// `views::View`, and the target's code changed, so its fingerprint finds nothing.
+    fn views_module(new: bool, inserted: [bool; 2]) -> Vec<u8> {
+        let mut parts = vec![];
+        let mut ranges = vec![];
+        let mut slots = |base: u32, first: u8, holds_target: bool, insert: bool| {
+            let mut list = vec![];
+            for n in 0..12u8 {
+                let at = base + 0x10 * u32::from(n);
+                parts.push((at, small(first + n)));
+                list.push(at);
+            }
+            if holds_target {
+                list.insert(6, VIEW_TARGET);
+            }
+            if insert {
+                let at = base + 0x100;
+                parts.push((at, small(first + 0x40)));
+                list.insert(2, at);
+            }
+            list
+        };
+        let first = slots(0x105400, 0, true, new && inserted[0]);
+        let second = slots(0x105800, 0x80, false, new && inserted[1]);
+        parts.push((VIEW_TABLE, table(&first)));
+        parts.push((OTHER_VIEW_TABLE, table(&second)));
+        let mut code = TARGET.to_vec();
+        if new {
+            // mov rsi, rdx instead of mov rsi, rcx.
+            code[7] = 0xD6;
+        }
+        parts.push((VIEW_TARGET, code));
+        ranges.push((VIEW_TARGET, VIEW_TARGET + 14));
+        module(&parts, &ranges)
+    }
+
+    fn run_views(inserted: [bool; 2], views: &[u32]) -> Resolution {
+        let old_bytes = views_module(false, [false; 2]);
+        let new_bytes = views_module(true, inserted);
+        let old = PeFile::parse(&old_bytes).unwrap();
+        let new = PeFile::parse(&new_bytes).unwrap();
+        let known = BTreeMap::from([
+            (VIEW_TABLE, VIEW_TABLE),
+            (OTHER_VIEW_TABLE, OTHER_VIEW_TABLE),
+        ]);
+        let wanted = BTreeMap::from([(
+            VIEW_TARGET,
+            Wanted {
+                kind: Kind::Function,
+                candidates: None,
+                class: None,
+            },
+        )]);
+        let tables = BTreeSet::from([VIEW_TABLE, OTHER_VIEW_TABLE]);
+        let views: BTreeSet<u32> = views.iter().copied().collect();
+        resolve(&old, &new, &known, &wanted, &tables, &views)
+    }
+
+    #[test]
+    fn nfr6_a_virtual_function_is_read_from_its_views_class_table_by_slot() {
+        // Both tables moved the slot by one: the slot number is found twice, and the function is
+        // the one the first table holds there.
+        let resolution = run_views([true, true], &[VIEW_TABLE, OTHER_VIEW_TABLE]);
+        assert_eq!(resolution.places.get(&VIEW_TARGET), Some(&VIEW_TARGET));
+        assert_eq!(
+            resolution.settled,
+            ["0x105000 -> 0x105000 by its table slot and its slot shift"]
+        );
+    }
+
+    #[test]
+    fn nfr6_a_virtual_function_needs_a_second_views_table_to_agree_on_its_slot() {
+        // Without a second table of a views class, the slot is found once.
+        let alone = run_views([true, true], &[VIEW_TABLE]);
+        assert!(alone.places.is_empty());
+        let reason = &alone.reasons[&VIEW_TARGET];
+        assert!(reason.starts_with("only its table slot found it"), "{reason}");
+        // A second table that lines the slot up another way confirms nothing.
+        let apart = run_views([true, false], &[VIEW_TABLE, OTHER_VIEW_TABLE]);
+        assert!(apart.places.is_empty());
+        let reason = &apart.reasons[&VIEW_TARGET];
+        assert!(reason.starts_with("only its table slot found it"), "{reason}");
     }
 
     #[test]
