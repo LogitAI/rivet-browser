@@ -45,6 +45,12 @@ pub(crate) fn dev_tools(browser: &str, version: [u16; 4]) -> (u32, u32) {
         .unwrap_or((0, 0))
 }
 
+/// The new tab command id of a build, from Chromium's public header for its milestone, or `None`
+/// when that milestone's header was not read.
+pub(crate) fn new_tab(browser: &str, version: [u16; 4]) -> Option<usize> {
+    chromium_milestone(browser, version).and_then(rivet_platform_windows::command_ids::new_tab)
+}
+
 /// Whether a browser keeps Chromium's command ids without public source to confirm it. Brave
 /// publishes its changes and adds its own ids only from 56000, so it keeps Chromium's. Edge, Whale
 /// and Samsung Internet take the value of their Chromium milestone, which needs a regression check
