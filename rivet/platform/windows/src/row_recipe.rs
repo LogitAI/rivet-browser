@@ -1,7 +1,7 @@
 //! Reads the values of a row that are not addresses from the new build itself.
 //!
-//! A row holds member offsets, table slots and object sizes as well as addresses. They have no
-//! public symbols, and a new milestone moves them without notice: Chromium 157 moved many view
+//! A row holds member offsets, table slots and object sizes as well as addresses. No name in the
+//! module tells them, and a new milestone moves them without notice: Chromium 157 moved many view
 //! members by 8 bytes and every frame view slot above one removed virtual by one. A port that
 //! copies them gives a row that looks complete and is wrong. So each such value has recipes that
 //! read it from the new build's own instructions and tables. A value is taken only when every
