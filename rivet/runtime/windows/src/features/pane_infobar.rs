@@ -56,8 +56,7 @@ pub(crate) fn narrow(bar: [i32; 4], contents: [i32; 4], columns: (i32, i32)) -> 
 /// The page area step: the bars above the page take the main pane's columns while a split is
 /// open, and their height is kept for the second view's placement.
 pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) {
-    let row = &crate::builds::get().side_panel;
-    let Some(contents) = area.bounds(row.contents_container) else {
+    let Some(contents) = area.contents() else {
         return;
     };
     let page = *contents;
