@@ -1,5 +1,5 @@
-//! Finds, in a build whose symbols are not published, the functions and class tables that the
-//! prior row's fingerprints do not pin down to one place.
+//! Finds, in a new build, the functions and class tables that the prior row's fingerprints do not
+//! pin down to one place.
 //!
 //! Each such address is looked for by several independent methods, and a place is taken only when
 //! two different methods name the same place and no method names another. The methods read the
@@ -849,7 +849,7 @@ pub enum Kind {
 pub struct Wanted {
     pub kind: Kind,
     pub candidates: Option<Vec<u32>>,
-    /// For a class table, the views class the prior build's public symbol names it after.
+    /// For a class table, the views class whose name its metadata holds in the prior build.
     pub class: Option<String>,
     /// For a function a browser command runs first, the command's public id.
     pub command: Option<i64>,

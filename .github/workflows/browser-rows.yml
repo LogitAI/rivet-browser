@@ -1,9 +1,9 @@
 # Keeps Rivet's supported-build table ahead of Chrome, Edge and Brave.
 #
 # A browser updates itself whenever its maker says, and Rivet does not hold it back. So this job
-# watches what the makers publish, builds a whole row for each new build from public symbols,
-# proves the row on the real browser, and publishes a signed table that reaches people without
-# reinstalling Rivet. A row the generator cannot vouch for, such as the first of a new milestone,
+# watches what the makers publish, builds a whole row for each new build from the verified row of
+# the build before it, proves the row on the real browser, and publishes a signed table that reaches
+# people without reinstalling Rivet. A row the generator cannot vouch for, such as the first of a new milestone,
 # becomes a pull request for a person and is not published.
 #
 # Needs on the default branch: this file. Needs in the repository's secrets:
@@ -18,11 +18,16 @@
 # that failed, its reason and the capture of the failing window. Each step records its reason in
 # `failure.txt` before it stops.
 #
-# A maker can ship a build before its PDB reaches the symbol server. Then the row is made from the
-# fingerprints of the prior row's functions, each of which must match one place in the new module,
-# and every offset, slot and size is read again from the new module as for a row made from symbols.
-# Such a row is marked, so once the PDB appears the job makes the row again from it and compares the
-# two. A difference opens an issue.
+# No browser's debug symbols are downloaded or read. A maker can ship a build long before its
+# symbols appear, or never publish them. A row is made from the verified prior row, the fingerprints
+# of its functions, the prior build's module and the new build's module: each function must match
+# one place, or two independent methods must agree on it, and every offset, slot and size is read
+# again from the new module. A feature whose values are not found is off in the row, and a part the
+# window cannot do without stops the row for a person.
+#
+# A run started by hand with `score` makes, the same way, the rows of builds that already have a
+# verified row, and compares them value by value. It is a measurement: it publishes, proposes and
+# reports nothing, and fails only when a value it found differs from the verified one.
 name: Browser rows
 
 on:
@@ -44,6 +49,10 @@ on:
         description: "With trial: the builds to make, as browser@version separated by semicolons, instead of those the feeds list."
         required: false
         default: ""
+      score:
+        description: "Score the generator on builds that have a verified row, as browser@prior>new separated by semicolons, or 'default' for scripts/tests/row-score.ps1's list. Nothing is published."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -59,7 +68,7 @@ concurrency:
 
 env:
   RELEASE_TAG: builds-table
-  # Symbols are several gigabytes, and a run does no more than this many builds.
+  # Each build is a download of hundreds of megabytes, and a run does no more than this many builds.
   MOST_PER_RUN: "3"
 
 jobs:
@@ -112,7 +121,7 @@ jobs:
   watch:
     name: Find builds with no row
     needs: gate
-    if: needs.gate.outputs.enabled == 'true' && github.event.inputs.withdraw == ''
+    if: needs.gate.outputs.enabled == 'true' && github.event.inputs.withdraw == '' && github.event.inputs.score == ''
     runs-on: windows-latest
     defaults:
       run:
@@ -193,41 +202,8 @@ jobs:
               "::warning::$($build.browser) $($build.version) has no row and cannot be fetched yet: $_"
             }
           }
-          # A row made without its PDB is made again from the PDB once the symbol server has it, and
-          # the two are compared. Such a row may wait in develop's table or on a row branch.
-          $sources = @([pscustomobject]@{ source = 'develop'; file = 'rivet/runtime/windows/rows/table.json' })
-          foreach ($line in @(git ls-remote --heads origin)) {
-            $branch = ($line -split "`t")[1] -replace '^refs/heads/', ''
-            if (-not ($branch -like 'feat/row-*' -or $branch -like 'feat/rows-*') -or $branch -like 'feat/row-pdb-*') { continue }
-            git fetch --quiet --depth 1 origin $branch
-            if ($LASTEXITCODE -ne 0) { continue }
-            $file = Join-Path $feeds ("table-" + ($branch -replace '[^A-Za-z0-9.]+', '-') + ".json")
-            git show "FETCH_HEAD:rivet/runtime/windows/rows/table.json" | Set-Content $file
-            if ($LASTEXITCODE -eq 0) { $sources += [pscustomobject]@{ source = $branch; file = $file } }
-          }
-          $open = @(gh issue list --state open --label browser-rows --limit 100 --json title | ConvertFrom-Json | ForEach-Object title)
-          $seen = @{}
-          $rechecks = foreach ($source in $sources) {
-            foreach ($row in @((Get-Content -Raw $source.file | ConvertFrom-Json).rows)) {
-              $mark = $row.made_without_pdb
-              if (-not $mark) { continue }
-              $browser = $row.frame.browser
-              $version = $row.frame.version
-              if ($seen["$browser $version"]) { continue }
-              $seen["$browser $version"] = $true
-              # A confirmation waits for review, and a difference waits on its issue.
-              $slug = "$($browser -replace ' ','-')-$version".ToLower()
-              git ls-remote --exit-code --heads origin "feat/row-pdb-$slug" | Out-Null
-              if ($LASTEXITCODE -eq 0) { continue }
-              if ($open -contains "Row differs from its PDB: $browser $version") { continue }
-              $url = ./.github/scripts/rows/fetch-symbols.ps1 -Browser $browser -Key $mark.pdb_key -Out unused -ResolveOnly
-              curl.exe -fsSL -r 0-0 -o NUL $url
-              if ($LASTEXITCODE -ne 0) { "$browser $version still has no PDB."; continue }
-              [pscustomobject]@{ browser = $browser; version = $version; channel = $mark.channel; download = $mark.download; recheck = $source.source }
-            }
-          }
           $global:LASTEXITCODE = 0
-          $builds = @(@($builds) + @($rechecks) | Where-Object { $_ -and $_ -isnot [string] } | Select-Object -First ([int]$env:MOST_PER_RUN))
+          $builds = @(@($builds) | Where-Object { $_ -and $_ -isnot [string] } | Select-Object -First ([int]$env:MOST_PER_RUN))
           # Through the pipeline: -InputObject would wrap the whole list as one element of another list.
           $json = if ($builds.Count) { $builds | ConvertTo-Json -Compress -AsArray } else { "[]" }
           "builds=$json" >> $env:GITHUB_OUTPUT
@@ -263,7 +239,7 @@ jobs:
           name: row-tools
           path: tools
 
-      - name: Get the build and its symbols
+      - name: Get the build
         id: build
         run: |
           trap { Add-Content (Join-Path $env:RUNNER_TEMP failure.txt) "Get the build: $_"; break }
@@ -272,114 +248,50 @@ jobs:
             -Channel "${{ matrix.build.channel }}" -Download "${{ matrix.build.download }}" `
             -Out (Join-Path $env:RUNNER_TEMP "browser") -Output $env:GITHUB_OUTPUT
 
-      - name: Download the symbols of this build and of the row before it
-        id: symbols
-        env:
-          RECHECK: ${{ matrix.build.recheck }}
+      - name: Get the build of the row before it
+        id: prior
         run: |
-          trap { Add-Content (Join-Path $env:RUNNER_TEMP failure.txt) "Download the symbols: $_"; break }
+          trap { Add-Content (Join-Path $env:RUNNER_TEMP failure.txt) "Get the prior build: $_"; break }
           $browser = "${{ matrix.build.browser }}"
           $version = "${{ matrix.build.version }}"
           $temp = $env:RUNNER_TEMP
           $prior = Join-Path $temp "prior.json"
-          $tables = @("--table", "rivet/runtime/windows/rows/table.json")
-          $before = $version
-          if ($env:RECHECK) {
-            # The row made without its PDB, from where it is kept, and the prior row it was made from.
-            $stored = Join-Path $temp "stored-table.json"
-            if ($env:RECHECK -eq 'develop') {
-              Copy-Item rivet/runtime/windows/rows/table.json $stored
-            } else {
-              git fetch --quiet --depth 1 origin $env:RECHECK
-              if ($LASTEXITCODE -ne 0) { throw "Could not fetch $env:RECHECK" }
-              git show "FETCH_HEAD:rivet/runtime/windows/rows/table.json" | Set-Content $stored
-              if ($LASTEXITCODE -ne 0) { throw "$env:RECHECK has no table" }
-            }
-            $row = @((Get-Content -Raw $stored | ConvertFrom-Json).rows) |
-              Where-Object { $_.frame.browser -eq $browser -and $_.frame.version -eq $version } | Select-Object -First 1
-            if (-not $row.made_without_pdb) { throw "$env:RECHECK holds no row of $browser $version made without its PDB" }
-            $before = $row.made_without_pdb.prior_version
-            $tables += @("--table", $stored)
-          }
-          ./tools/rivet-rows.exe prior $browser $before @tables | Set-Content $prior
+          ./tools/rivet-rows.exe prior $browser $version --table rivet/runtime/windows/rows/table.json | Set-Content $prior
           if ($LASTEXITCODE -ne 0) { throw "rivet-rows found no prior row for $browser $version" }
-          $priorRow = Get-Content -Raw $prior | ConvertFrom-Json
-          $priorVersion = $priorRow.frame.version
-          $priorKey = $null
-          foreach ($file in @($tables | Where-Object { $_ -ne '--table' })) {
-            if (-not $priorKey) { $priorKey = (Get-Content -Raw $file | ConvertFrom-Json).symbols."$browser $priorVersion" }
-          }
-          if (-not $priorKey) { throw "The table holds no symbol key for the prior row $browser $priorVersion. Add it to rows/table.json with chrome-builds pdb-key." }
-          $newKey = ./tools/chrome-builds.exe pdb-key "${{ steps.build.outputs.module }}"
-          if ($LASTEXITCODE -ne 0) { throw "chrome-builds could not read the symbol key of the new module" }
-          # The prior row's PDB names what the row is made from, so without it nothing is made.
-          ./.github/scripts/rows/fetch-symbols.ps1 -Browser $browser -Key $priorKey -Out (Join-Path $temp "prior.pdb")
+          $priorVersion = (Get-Content -Raw $prior | ConvertFrom-Json).frame.version
+          # The prior build's own module gives what its row was made from: its function starts,
+          # its class names and the instructions the methods compare with the new build.
+          $found = Join-Path $temp "prior-build.txt"
+          $fetch = @{ Browser = $browser; Version = $priorVersion; Out = (Join-Path $temp "prior-browser"); Output = $found }
           try {
-            ./.github/scripts/rows/fetch-symbols.ps1 -Browser $browser -Key ($newKey -split '/')[1] -Out (Join-Path $temp "new.pdb")
-            "no_pdb=false" >> $env:GITHUB_OUTPUT
-          } catch [System.IO.FileNotFoundException] {
-            if ($env:RECHECK) { throw }
-            "::warning::$($_.Exception.Message). The row is made from the fingerprints of the $browser $priorVersion row."
-            "no_pdb=true" >> $env:GITHUB_OUTPUT
-            # The prior build gives the fingerprints when the prior row stored none, and in any case
-            # tells which prior addresses are function starts, so a match elsewhere does not count.
-            $found = Join-Path $temp "prior-build.txt"
-            $fetch = @{ Browser = $browser; Version = $priorVersion; Out = (Join-Path $temp "prior-browser"); Output = $found }
-            try {
-              ./.github/scripts/rows/fetch-browser.ps1 @fetch -Channel "${{ matrix.build.channel }}"
-            } catch {
-              if ("${{ matrix.build.channel }}" -eq 'stable') { throw "The symbol server has no PDB for $browser $version, and the prior build $priorVersion could not be fetched for its fingerprints: $_" }
-              ./.github/scripts/rows/fetch-browser.ps1 @fetch -Channel stable
-            }
-            $priorModule = (Get-Content $found | Where-Object { $_ -like 'module=*' } | Select-Object -First 1) -replace '^module=', ''
-            $priorModuleKey = ./tools/chrome-builds.exe pdb-key $priorModule
-            if (($priorModuleKey -split '/')[1] -ne $priorKey) { throw "The fetched $browser $priorVersion is not the build the prior row was made for" }
-            "prior_module=$priorModule" >> $env:GITHUB_OUTPUT
+            ./.github/scripts/rows/fetch-browser.ps1 @fetch -Channel "${{ matrix.build.channel }}"
+          } catch {
+            if ("${{ matrix.build.channel }}" -eq 'stable') { throw "The prior build $browser $priorVersion could not be fetched: $_" }
+            ./.github/scripts/rows/fetch-browser.ps1 @fetch -Channel stable
           }
+          $priorModule = (Get-Content $found | Where-Object { $_ -like 'module=*' } | Select-Object -First 1) -replace '^module=', ''
+          "module=$priorModule" >> $env:GITHUB_OUTPUT
 
       - name: Make the row
         id: made
         env:
-          NO_PDB: ${{ steps.symbols.outputs.no_pdb }}
-          PRIOR_MODULE: ${{ steps.symbols.outputs.prior_module }}
-          RECHECK: ${{ matrix.build.recheck }}
-          CHANNEL: ${{ matrix.build.channel }}
-          DOWNLOAD: ${{ matrix.build.download }}
+          PRIOR_MODULE: ${{ steps.prior.outputs.module }}
         run: |
           trap { Add-Content (Join-Path $env:RUNNER_TEMP failure.txt) "Make the row: $_"; break }
           $temp = $env:RUNNER_TEMP
-          $browser = "${{ matrix.build.browser }}"
-          $version = "${{ matrix.build.version }}"
-          if ($env:NO_PDB -eq 'true') {
-            # Every function is looked for by its fingerprint, and one that does not match exactly
-            # one place leaves the row for review. Offsets, slots and sizes are read as below.
-            ./tools/chrome-builds.exe find "$temp/prior.json" "$temp/prior.pdb" $env:PRIOR_MODULE "${{ steps.build.outputs.module }}" $version $env:CHANNEL "$env:DOWNLOAD" "$temp/row.json" "$temp/report.json"
-            $code = $LASTEXITCODE
-            if ($code -ne 0 -and $code -ne 3) { throw "chrome-builds find exited with $code" }
-          } else {
-            ./tools/chrome-builds.exe port "$temp/prior.json" "$temp/prior.pdb" "$temp/new.pdb" "${{ steps.build.outputs.module }}" $version "$temp/row.json" "$temp/report.json"
-            $code = $LASTEXITCODE
-            if ($code -ne 0 -and $code -ne 3) { throw "chrome-builds port exited with $code; report.json says why" }
-          }
-          if ($env:RECHECK) {
-            # The PDB is out now: the row made from it must agree with the row made without it.
-            ./tools/chrome-builds.exe pdb-check "$temp/stored-table.json" $browser $version "$temp/row.json" | Tee-Object "$temp/differences.txt"
-            $check = $LASTEXITCODE
-            if ($check -ne 0 -and $check -ne 4) { throw "chrome-builds pdb-check exited with $check" }
-            "checked=$(if ($check -eq 0) { 'agree' } else { 'differ' })" >> $env:GITHUB_OUTPUT
-            "for_review=recheck" >> $env:GITHUB_OUTPUT
-            Get-Content "$temp/report.json"
-            exit 0
-          }
-          # Fingerprints let a Rivet find these functions in a later build that has no row yet. A row
-          # whose addresses cannot all be fingerprinted is still a good row, just without them. A row
-          # made without its PDB that is not vouched for still holds prior addresses, which would
-          # fingerprint the wrong code, so it gets none.
-          if ($env:NO_PDB -eq 'true' -and $code -ne 0) {
-            "A row made without its PDB that needs review gets no fingerprints."
-          } else {
+          # Every function is looked for by its fingerprint and the methods that read the prior
+          # build next to the new one. Offsets, slots and sizes are read from the new module.
+          ./tools/chrome-builds.exe find "$temp/prior.json" $env:PRIOR_MODULE "${{ steps.build.outputs.module }}" "${{ matrix.build.version }}" "$temp/row.json" "$temp/report.json"
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -and $code -ne 3) { throw "chrome-builds find exited with $code; report.json says why" }
+          # Fingerprints, read from this build's own module at the places the row holds, let the
+          # next build's row start from this one. A row that needs review may still hold a prior
+          # address, which would fingerprint the wrong code, so it gets none.
+          if ($code -eq 0) {
             ./tools/chrome-builds.exe fingerprint "$temp/row.json" "${{ steps.build.outputs.module }}" "$temp/row.json"
             if ($LASTEXITCODE -ne 0) { "The row has no fingerprints." }
+          } else {
+            "A row that needs review gets no fingerprints."
           }
           "for_review=$($code -eq 3)".ToLower() >> $env:GITHUB_OUTPUT
           Get-Content "$temp/report.json"
@@ -398,8 +310,8 @@ jobs:
           Set-Content (Join-Path $temp "test-key.txt") $env:RIVET_TABLE_PUBLIC_KEY
           $env:LOCALAPPDATA = Join-Path $temp "local"
           New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
-          Set-Content "$temp/part.json" '{"schema":1,"sequence":0,"symbols":{},"rows":[]}'
-          ./tools/chrome-builds.exe table-add "$temp/part.json" "$temp/row.json" "${{ steps.build.outputs.module }}"
+          Set-Content "$temp/part.json" '{"schema":1,"sequence":0,"rows":[]}'
+          ./tools/chrome-builds.exe table-add "$temp/part.json" "$temp/row.json"
           ./tools/chrome-builds.exe table-sign "$temp/part.json" "$temp/test.bin"
           Push-Location rivet
           cargo build -p rivet -p rivet-runtime-windows
@@ -453,59 +365,7 @@ jobs:
             ${{ runner.temp }}/session/features/traces/**/*.log
             ${{ runner.temp }}/session/features/*/*.png
             ${{ runner.temp }}/session/features/profiles/*/Crashpad/reports/*.dmp
-            ${{ runner.temp }}/differences.txt
           retention-days: 30
-
-      - name: Tell a person that a row made without its PDB differs from it
-        if: steps.made.outputs.checked == 'differ' && !inputs.trial
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RECHECK: ${{ matrix.build.recheck }}
-        run: |
-          $temp = $env:RUNNER_TEMP
-          $browser = "${{ matrix.build.browser }}"
-          $version = "${{ matrix.build.version }}"
-          $reasons = Join-Path $temp "differences-reasons.txt"
-          Set-Content $reasons "The row in $env:RECHECK was made from fingerprints, and the row its PDB gives differs from it:"
-          Get-Content "$temp/differences.txt" | Add-Content $reasons
-          ./.github/scripts/rows/report-failure.ps1 `
-            -Title "Row differs from its PDB: $browser $version" `
-            -Reasons $reasons -Files "${{ steps.files.outputs.artifact-url }}"
-
-      - name: Confirm a row made without its PDB
-        if: steps.made.outputs.checked == 'agree' && !inputs.trial
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RECHECK: ${{ matrix.build.recheck }}
-        run: |
-          $temp = $env:RUNNER_TEMP
-          $browser = "${{ matrix.build.browser }}"
-          $version = "${{ matrix.build.version }}"
-          git config user.name "rivet-browser-rows"
-          git config user.email "rivet-browser-rows@users.noreply.github.com"
-          # A row on its own branch is confirmed there. A row in develop is confirmed by a pull request.
-          if ($env:RECHECK -eq 'develop') {
-            $branch = "feat/row-pdb-$($browser -replace ' ','-')-$version".ToLower()
-            git switch -c $branch
-          } else {
-            $branch = $env:RECHECK
-            git fetch --quiet --depth 1 origin $branch
-            git switch -c $branch FETCH_HEAD
-          }
-          ./tools/chrome-builds.exe pdb-check rivet/runtime/windows/rows/table.json $browser $version "$temp/row.json"
-          if ($LASTEXITCODE -ne 0) { throw "chrome-builds pdb-check exited with $LASTEXITCODE on $branch" }
-          git add rivet/runtime/windows/rows/table.json
-          git commit -m "Fix: Confirm the row of $browser $version with its PDB"
-          git push origin "HEAD:$branch"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $note = "The row of $browser $version was made from fingerprints because its PDB was not published. The PDB is out now, the row made from it agrees, and the mark is removed in run $env:GITHUB_RUN_ID."
-          if ($env:RECHECK -eq 'develop') {
-            gh pr create --base develop --head $branch --title "Fix: Confirm the row of $browser $version with its PDB" --body $note
-            gh workflow run test.yml --ref $branch
-          } else {
-            gh pr comment $branch --body $note
-            $global:LASTEXITCODE = 0
-          }
 
       - name: Tell a person that this build failed
         if: failure() && !inputs.trial
@@ -530,15 +390,12 @@ jobs:
           git config user.name "rivet-browser-rows"
           git config user.email "rivet-browser-rows@users.noreply.github.com"
           git switch -c $branch
-          ./tools/chrome-builds.exe table-add rivet/runtime/windows/rows/table.json "$temp/row.json" "${{ steps.build.outputs.module }}"
+          ./tools/chrome-builds.exe table-add rivet/runtime/windows/rows/table.json "$temp/row.json"
           git add rivet/runtime/windows/rows/table.json
           git commit -m "Feat: Propose a row for ${{ matrix.build.browser }} ${{ matrix.build.version }}"
           git push -u origin $branch
           $report = Get-Content -Raw "$temp/report.json" | ConvertFrom-Json
-          $body = "The generator could not vouch for this row, so it was not published.`n`n"
-          if ($report.made_without_pdb) {
-            $body += "The symbol server had no PDB for this build, so the row was made from the fingerprints of the $($report.prior_version) row: $($report.fingerprinted.Count) of $($report.addresses) addresses matched exactly one place. When the PDB appears, the row job makes the row again from it and compares the two.`n`n"
-          }
+          $body = "The generator could not vouch for this row, so it was not published. It was made from the $($report.prior_version) row: $($report.fingerprinted.Count) of $($report.addresses) addresses matched exactly one place by fingerprint, and $($report.settled.Count) were settled by two methods.`n`n"
           $body += (($report.review | ForEach-Object { "- $_" }) -join "`n")
           if ($report.switched_off.Count -gt 0) {
             $body += "`n`nThese features are off in this row, because a value they need could not be read from this build:`n`n"
@@ -621,3 +478,37 @@ jobs:
           git push -u origin $branch
           gh pr create --base develop --head $branch --title "Feat: Record rows published by the table job" --body "These rows are already published in the signed table and passed the row proof in run $env:GITHUB_RUN_ID. Merging adds them to the table compiled into the next Rivet."
           gh workflow run test.yml --ref $branch
+
+  score:
+    name: Score the generator against verified rows
+    # A measurement: it needs no signing key, and it publishes, proposes and reports nothing.
+    if: github.event.inputs.score != ''
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the row tools
+        working-directory: rivet
+        run: cargo build --release -p rivet-platform-windows -p rivet-runtime-windows --bins
+
+      - name: Make each row without symbols and compare it with its verified row
+        env:
+          SCORE: ${{ github.event.inputs.score }}
+        run: |
+          $pairs = if ($env:SCORE -eq 'default') { @() } else { @($env:SCORE -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+          ./scripts/tests/row-score.ps1 `
+            -Rows rivet/target/release/rivet-rows.exe -Generator rivet/target/release/chrome-builds.exe `
+            -Table rivet/runtime/windows/rows/table.json -Pairs $pairs -Fetch `
+            -Work (Join-Path $env:RUNNER_TEMP "score")
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: row-score
+          path: ${{ runner.temp }}/score/*.json
+          retention-days: 30

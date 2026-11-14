@@ -1,19 +1,20 @@
 //! Makes the supported-build row of a new browser build from the row of a prior build.
 //!
 //! Chromium's source changes little between two builds of a milestone, but every address moves.
-//! So each address of the prior row is named through the prior build's public symbols, the same
-//! decorated names are looked up in the new build's symbols, and the instruction bytes that guard
-//! each hook are read again from the new module. Values that are not addresses (member offsets,
+//! Each address of the prior row is found again in the new module by its fingerprint, the first
+//! instructions of the function without their displacements, or by a slot of a class table that
+//! holds such a function. What a fingerprint does not pin down is settled by `row_resolve`, which
+//! takes a place only where two independent methods agree. The instruction bytes that guard each
+//! hook are then read again from the new module. Values that are not addresses (member offsets,
 //! table slots, object sizes) are read again from the new module where `row_recipe` has a recipe
-//! for them, and a recipe that fails stops the row. The rest are carried over. They have no public
-//! symbols, so a row that crosses a milestone lists each of them and is never published without a
-//! person's review, and every row must still pass on the real browser.
+//! for them, or from the instructions that use them. No browser's debug symbols are read: the
+//! verified prior row, its fingerprints and the two modules are all the generator has.
 //!
 //! A row is plain data here, in the form the runtime writes: a `usize` is a `0x` string, and bytes
-//! are bare hex. A value this code cannot explain stops the row: it goes to review rather than to
-//! people's browsers, and the runtime's own prologue checks stand behind that.
+//! are bare hex. A value this code cannot explain stops the row or turns its feature off: it never
+//! reaches people's browsers, and the runtime's own prologue checks stand behind that.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -25,22 +26,6 @@ use crate::row_resolve;
 const LOWEST_ADDRESS: u64 = 0x10_0000;
 /// The address a build records for what it does not have.
 const ABSENT: u64 = 0x7FFF_0000;
-/// How far below an address its naming symbol may lie: a table slot or an instruction in a function.
-const NEAREST_SYMBOL: u32 = 0x2000;
-
-/// One symbol: its address in the module and its decorated name.
-pub type Symbol = (u32, String);
-
-/// Removes what the linker adds to a decorated name, which differs from build to build.
-pub fn stable_name(name: &str) -> &str {
-    let name = name.trim_end_matches('\0');
-    let name = match name.strip_prefix(".weak.") {
-        Some(rest) => rest.split(".default.").next().unwrap_or(rest),
-        None => name,
-    };
-    name.split(".llvm.").next().unwrap_or(name)
-}
-
 /// What the generator found, for the person or job that decides what to do with the row.
 #[derive(Debug, Default, Serialize)]
 pub struct PortReport {
@@ -53,10 +38,6 @@ pub struct PortReport {
     pub review: Vec<String>,
     /// Addresses with several possible new places, settled by an independent check.
     pub settled: Vec<String>,
-    /// Addresses inside a symbol rather than at its start, moved by the same distance.
-    pub interior: Vec<String>,
-    /// Addresses found through private symbols, since no public one covers them.
-    pub private: Vec<String>,
     pub bytes_changed: Vec<String>,
     pub slots_moved: Vec<String>,
     /// Values that are not addresses, read again from the new module by their recipes.
@@ -65,8 +46,6 @@ pub struct PortReport {
     pub carried: Vec<String>,
     /// Optional parts the new build could not supply. The runtime does without them.
     pub left_out: Vec<String>,
-    /// The new build had no symbols, so every address was looked for by the prior row's fingerprints.
-    pub made_without_pdb: bool,
     /// Addresses a fingerprint found in exactly one place of the new build.
     pub fingerprinted: Vec<String>,
     /// Values that are Rivet's settings rather than facts about the build, kept from the prior row.
@@ -138,56 +117,6 @@ pub fn addresses_of(row: &Value) -> BTreeSet<u32> {
         }
     });
     found
-}
-
-/// Names each address: all the names of the nearest symbol at or below it, which are many where
-/// the linker folded identical functions, and how far above that symbol it lies.
-pub fn name_addresses(
-    targets: &BTreeSet<u32>,
-    sorted_symbols: &[Symbol],
-) -> BTreeMap<u32, (u32, Vec<String>)> {
-    let mut named = BTreeMap::new();
-    for target in targets {
-        let end = sorted_symbols.partition_point(|(address, _)| address <= target);
-        let Some((nearest, _)) = end.checked_sub(1).map(|at| &sorted_symbols[at]) else {
-            continue;
-        };
-        if target - nearest > NEAREST_SYMBOL {
-            continue;
-        }
-        let start = sorted_symbols.partition_point(|(address, _)| address < nearest);
-        let names = sorted_symbols[start..end]
-            .iter()
-            .map(|(_, name)| stable_name(name).to_owned())
-            .collect();
-        named.insert(*target, (target - nearest, names));
-    }
-    named
-}
-
-/// The names to keep from the new build's symbols.
-pub fn wanted_names(named: &BTreeMap<u32, (u32, Vec<String>)>) -> HashSet<String> {
-    named
-        .values()
-        .flat_map(|(_, names)| names.iter().cloned())
-        .collect()
-}
-
-/// Each place an address may have moved to, with how many of its names say so, most votes first.
-fn candidates(
-    names: &[String],
-    distance: u32,
-    new: &HashMap<String, Vec<u32>>,
-) -> Vec<(u32, usize)> {
-    let mut votes: BTreeMap<u32, usize> = BTreeMap::new();
-    for name in names {
-        for address in new.get(name).map_or(&[][..], Vec::as_slice) {
-            *votes.entry(address + distance).or_default() += 1;
-        }
-    }
-    let mut votes: Vec<_> = votes.into_iter().collect();
-    votes.sort_by_key(|(address, count)| (std::cmp::Reverse(*count), *address));
-    votes
 }
 
 /// A function's instructions, read as far as this needs them.
@@ -622,49 +551,6 @@ fn usize_at(row: &Value, path: &str) -> Option<u64> {
     read_address(at_path(row, path))
 }
 
-/// Everything the new build supplies.
-pub struct NewBuild<'a> {
-    pub version: &'a str,
-    pub pe: &'a PeFile<'a>,
-    pub symbols: &'a HashMap<String, Vec<u32>>,
-    /// Where each address with no public name went, found through private symbols.
-    pub private: &'a BTreeMap<u32, u32>,
-}
-
-/// Settles an address the names disagree on. Folded functions share names across builds, so the
-/// names alone can point at a function the new build no longer folds with the wanted one. The
-/// instructions that row checks for it say which of the places is meant, and a table slot that
-/// must hold it says the same.
-fn settle(target: u32, choices: &[(u32, usize)], build: &Value, pe: &PeFile) -> Option<u32> {
-    let mut remaining: Vec<u32> = choices.iter().map(|(address, _)| *address).collect();
-    let mut guards = vec![];
-    collect_guards(build, &mut guards);
-    for (address, bytes) in guards {
-        if address != target {
-            continue;
-        }
-        let wanted = x64::shape(&bytes)?;
-        remaining.retain(|place| {
-            pe.read(*place, bytes.len())
-                .and_then(x64::shape)
-                .is_some_and(|shape| shape == wanted)
-        });
-    }
-    if remaining.len() == 1 {
-        return Some(remaining[0]);
-    }
-    // The linker folds functions with the same code under one name, and a new build can fold them
-    // into two groups. Short functions read to their end show that any of the places does the same.
-    let code: Vec<_> = remaining
-        .iter()
-        .map(|place| whole_function(pe, *place))
-        .collect();
-    let first = code.first()?.as_ref()?;
-    code.iter()
-        .all(|other| other.as_ref() == Some(first))
-        .then(|| remaining[0])
-}
-
 /// The bytes of a function short enough to read to its end: its first `ret` with no branch before.
 pub(crate) fn whole_function(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
     let bytes = pe.read(address, 48)?;
@@ -968,52 +854,11 @@ fn read_rounded_corners(build: &mut Value, pe: &PeFile, report: &mut PortReport)
     build["split"]["set_rounded_corners_parity"] = write_address(start + 13);
 }
 
-/// Addresses read from instructions above, which no symbol names.
+/// Addresses read from instructions above, which no fingerprint finds.
 const READ_FROM_CODE: &[&str] = &[
     "split.set_rounded_corners_changed",
     "split.set_rounded_corners_parity",
 ];
-
-fn read_from_code_targets(build: &Value) -> Vec<u32> {
-    READ_FROM_CODE
-        .iter()
-        .filter_map(|path| usize_at(build, path))
-        .map(|value| value as u32)
-        .collect()
-}
-
-/// The code addresses a row holds that no public symbol starts at, which need private symbols.
-pub fn unnamed_code(
-    prior: &Value,
-    named: &BTreeMap<u32, (u32, Vec<String>)>,
-    pe_of_new: &PeFile,
-) -> Vec<u32> {
-    let read = read_from_code_targets(&prior["build"]);
-    let mut out = vec![];
-    for (target, (distance, _)) in named {
-        // The prior module is gone by now. Code and data keep their sections from build to build.
-        if *distance != 0 && !read.contains(target) && pe_of_new.is_code(*target) {
-            out.push(*target);
-        }
-    }
-    out
-}
-
-/// Makes the new row. `prior` is `{frame, build}`, as the runtime writes it.
-pub fn port_row(
-    prior: &Value,
-    named: &BTreeMap<u32, (u32, Vec<String>)>,
-    new: &NewBuild,
-) -> (Value, PortReport) {
-    let (row, mut report) = begin_row(prior, new.version, true);
-    let mut moved: BTreeMap<u32, u32> = BTreeMap::new();
-    let targets = addresses_of(&row);
-    report.addresses = targets.len();
-    port_by_name(prior, &row, named, new, &targets, &mut moved, &mut report);
-    let (mut row, mut report) = finish_row(row, &moved, new.pe, report);
-    settle_carried(&mut row, &mut report);
-    (row, report)
-}
 
 /// Settles each value no recipe or instruction read from the new build. A value the runtime finds
 /// by reflection is left out of the row. A value the runtime does not read in this row is written
@@ -1112,10 +957,6 @@ fn settle_carried(row: &mut Value, report: &mut PortReport) {
 /// row; without it they are read from the new build later, each with its own review line.
 fn begin_row(prior: &Value, version: &str, carries: bool) -> (Value, PortReport) {
     let mut row = prior.clone();
-    if let Some(object) = row.as_object_mut() {
-        // The mark tells how the prior row was made, not this one.
-        object.remove(WITHOUT_PDB);
-    }
     let prior_version = prior["frame"]["version"]
         .as_str()
         .unwrap_or_default()
@@ -1215,73 +1056,6 @@ fn command_targets(prior: &Value, version: &str) -> BTreeMap<u32, i64> {
     match address {
         Some(address) if id == same => BTreeMap::from([(address as u32, id as i64)]),
         _ => BTreeMap::new(),
-    }
-}
-
-/// Finds each address of a row through the public names of both builds.
-fn port_by_name(
-    prior: &Value,
-    row: &Value,
-    named: &BTreeMap<u32, (u32, Vec<String>)>,
-    new: &NewBuild,
-    targets: &BTreeSet<u32>,
-    moved: &mut BTreeMap<u32, u32>,
-    report: &mut PortReport,
-) {
-    for target in targets {
-        let Some((distance, names)) = named.get(target) else {
-            continue;
-        };
-        // No public name covers this function: the distance from the nearest one means nothing,
-        // since another build lays those functions out differently.
-        if *distance != 0
-            && new.pe.is_code(*target)
-            && !read_from_code_targets(&prior["build"]).contains(target)
-        {
-            match new.private.get(target) {
-                Some(place) => {
-                    moved.insert(*target, *place);
-                    report.private.push(format!("{target:#x} -> {place:#x}"));
-                }
-                None => report.review.push(format!(
-                    "{target:#x} lies in a function with no name in both builds"
-                )),
-            }
-            continue;
-        }
-        let choices = candidates(names, *distance, new.symbols);
-        let place = match choices.as_slice() {
-            [] => None,
-            [(only, _)] => Some(*only),
-            many => {
-                let settled = settle(*target, many, &row["build"], new.pe);
-                let place = settled
-                    .or_else(|| by_slot(*target, many, &row["build"], new.pe, named, new.symbols));
-                match place {
-                    Some(place) => report
-                        .settled
-                        .push(format!("{target:#x} -> {place:#x} of {many:x?}")),
-                    None => {
-                        // Most folded names still fold together, so the largest group is the likely
-                        // place, and a person looks at it.
-                        report.review.push(format!(
-                            "{target:#x} has several places: {many:x?}, first of {:?}",
-                            &names[..names.len().min(3)]
-                        ));
-                    }
-                }
-                place.or(Some(many[0].0))
-            }
-        };
-        if let Some(place) = place {
-            if *distance != 0 {
-                report.interior.push(format!(
-                    "{target:#x} = {}+{distance:#x} -> {place:#x}",
-                    names[0]
-                ));
-            }
-            moved.insert(*target, place);
-        }
     }
 }
 
@@ -1499,7 +1273,7 @@ pub(crate) fn find_table(pe: &PeFile, slot: u32, function: u32) -> Vec<u32> {
 }
 
 /// Makes the row of a build that has no row from the fingerprints of a verified row of the same
-/// milestone, without symbols. Each address must match exactly one place, no two addresses may
+/// milestone, from the new module alone. Each address must match exactly one place, no two addresses may
 /// share one, and every function start and table slot is then checked again in the new module the
 /// way a ported row is. Any doubt is an error with its reasons, and then the runtime changes
 /// nothing in the browser.
@@ -1514,10 +1288,13 @@ pub fn find_row(prior: &Value, version: &str, pe: &PeFile) -> Result<Value, Vec<
     Ok(row)
 }
 
-/// Makes a candidate row for a build whose symbols are not published, from `stored`, the
-/// fingerprints of the prior row's addresses in the prior build. An address is taken where its
-/// fingerprint matches exactly one place. Offsets, slots and sizes with a recipe are read again
-/// from the new module exactly as for a row made from symbols.
+/// Makes a candidate row for a new build from `stored`, the fingerprints of the prior row's
+/// addresses in the prior build. An address is taken where its fingerprint matches exactly one
+/// place. Offsets, slots and sizes with a recipe are read again from the new module.
+///
+/// `classes` names the views class of each class table of the prior row, as `prior_classes` reads
+/// them. The new row records the names of the tables it placed, by the path of each value, so the
+/// next row starts from them.
 ///
 /// `prior_pe` is the prior row's own module, when the caller has it. A fingerprint taken at a
 /// function start its exception table lists then counts only places the new module's exception
@@ -1536,7 +1313,6 @@ pub fn find_candidate(
     pe: &PeFile,
 ) -> (Value, PortReport) {
     let (mut row, mut report) = begin_row(prior, version, prior_pe.is_none());
-    report.made_without_pdb = true;
     let prior_starts = prior_pe.map(PeFile::function_starts).unwrap_or_default();
     let targets = fingerprint_targets(prior);
     report.addresses = targets.len();
@@ -1691,8 +1467,8 @@ pub fn find_candidate(
                 .iter()
                 .map(|(target, (_, want))| (*target, want.clone()))
                 .collect();
-            // The tables the prior build's public symbols name after a class are the tables of
-            // views classes the slot shift compares.
+            // The tables a class name was confirmed for in the prior build are the tables of views
+            // classes the slot shift compares.
             let views: BTreeSet<u32> = classes.keys().copied().collect();
             let resolution =
                 row_resolve::resolve(prior_pe, pe, &moved, &asked, &table_targets, &views);
@@ -1726,7 +1502,9 @@ pub fn find_candidate(
     if let Some(object) = row.as_object_mut() {
         // They describe the prior build, so they would mislead in this row.
         object.remove("fingerprints");
+        object.remove(CLASSES);
     }
+    record_classes(prior, &mut row, classes, &moved);
     if let Some(prior_pe) = prior_pe {
         read_carried(prior, &mut row, &moved, &followed, prior_pe, pe, &mut report);
     }
@@ -1914,170 +1692,82 @@ fn read_carried(
     }
 }
 
-/// The key of a row made without its build's symbols. It holds what the row job needs to make the
-/// row again from the symbols once they are published, and to compare the two. The runtime reads
-/// only `frame` and `build`, so the mark changes nothing in a browser.
-pub const WITHOUT_PDB: &str = "made_without_pdb";
+/// The key of a row that names the views class of each of its class tables, by the path of the
+/// value that holds the table, as `{"build.layout.frame_vtable": "BrowserFrameViewWin"}`. The
+/// runtime reads only `frame` and `build`, so the names change nothing in a browser.
+pub const CLASSES: &str = "classes";
 
-/// Marks a row made from fingerprints with the symbol key of its module, the prior row it was made
-/// from, and how the row job fetches the build again.
-pub fn mark_without_pdb(
-    row: &mut Value,
-    pdb_key: &str,
-    prior_version: &str,
-    channel: &str,
-    download: &str,
-) {
-    row[WITHOUT_PDB] = json!({
-        "pdb_key": pdb_key,
-        "prior_version": prior_version,
-        "channel": channel,
-        "download": download,
-    });
-}
-
-/// Where a row made from fingerprints differs from the row the build's own symbols give. A value
-/// the fingerprint row left out is not a difference, since the runtime does without it.
-pub fn differences_from_pdb_row(found: &Value, from_pdb: &Value) -> Vec<String> {
-    fn walk(path: &str, found: &Value, pdb: &Value, out: &mut Vec<String>) {
-        match (found, pdb) {
-            (Value::Null, _) => {}
-            (Value::Object(left), Value::Object(right)) => {
-                for (key, value) in left {
-                    let other = right.get(key).unwrap_or(&Value::Null);
-                    walk(&format!("{path}.{key}"), value, other, out);
-                }
-            }
-            (Value::Array(left), Value::Array(right)) if left.len() == right.len() => {
-                for (index, (a, b)) in left.iter().zip(right).enumerate() {
-                    walk(&format!("{path}[{index}]"), a, b, out);
-                }
-            }
-            _ if found != pdb => {
-                out.push(format!(
-                    "{path}: {found} from fingerprints, {pdb} from the PDB"
-                ));
-            }
-            _ => {}
+/// The path of every address a row holds, the frame entry's included, as `build.layout.frame_vtable`
+/// or `frame.frame_view_vtable`.
+fn address_paths(row: &Value) -> Vec<(String, u32)> {
+    let mut out = Vec::new();
+    let mut note = |path: &str, value: &mut Value| {
+        if READ_FROM_CODE.iter().any(|field| path.ends_with(field)) {
+            return;
         }
-    }
-    let mut out = vec![];
-    for part in ["frame", "build"] {
-        walk(part, &found[part], &from_pdb[part], &mut out);
-    }
+        if let Some(address) = read_address(value).filter(|value| is_address(*value)) {
+            out.push((path.to_owned(), address as u32));
+        }
+    };
+    let mut build = row["build"].clone();
+    walk_addresses("build", &mut build, &mut note);
+    let mut frame = frame_addresses(&row["frame"]);
+    walk_addresses("frame", &mut frame, &mut note);
     out
 }
 
-/// Compares the marked row of `browser` `version` in `table` with the row made from the build's
-/// symbols. When they agree the mark is removed, since the symbols now vouch for the row. The
-/// differences are returned, and the table is left as it was when there are any.
-pub fn check_against_pdb(
-    table: &mut Value,
-    browser: &str,
-    version: &str,
-    from_pdb: &Value,
-) -> Result<Vec<String>, String> {
-    let row = table["rows"]
-        .as_array_mut()
-        .ok_or("the table has no rows")?
-        .iter_mut()
-        .find(|row| row["frame"]["browser"] == browser && row["frame"]["version"] == version)
-        .ok_or_else(|| format!("the table has no row for {browser} {version}"))?;
-    if row.get(WITHOUT_PDB).is_none() {
-        return Err(format!(
-            "the row of {browser} {version} was not made without its PDB"
-        ));
-    }
-    let differences = differences_from_pdb_row(row, from_pdb);
-    if differences.is_empty() {
-        if let Some(object) = row.as_object_mut() {
-            object.remove(WITHOUT_PDB);
-        }
-    }
-    Ok(differences)
-}
-
-/// The views class each class table of the prior row is named after by the prior build's public
-/// symbols, for the tables found again by their class name. A table whose symbols name two classes
-/// is left out.
-pub fn class_names(named: &BTreeMap<u32, (u32, Vec<String>)>) -> BTreeMap<u32, String> {
+/// The views class of each class table of the prior row, from the build alone. A name the prior
+/// row records for the table is taken when it gives exactly that table in the prior module, and
+/// a table with no such name is named by the class name its metadata holds, read back from the
+/// prior module by `row_class`. Either way the name is the one the class's `BEGIN_METADATA` gives
+/// in Chromium's source, and a table no name gives alone has none.
+pub fn prior_classes(prior: &Value, prior_pe: &PeFile) -> BTreeMap<u32, String> {
+    let recorded = prior[CLASSES].as_object();
     let mut out = BTreeMap::new();
-    for (target, (distance, names)) in named {
-        if *distance != 0 {
+    let mut tried = BTreeSet::new();
+    for (path, address) in address_paths(prior) {
+        if prior_pe.is_code(address) || out.contains_key(&address) {
             continue;
         }
-        let classes: BTreeSet<&str> = names
-            .iter()
-            .filter_map(|name| crate::row_class::class_of_table_symbol(stable_name(name)))
-            .collect();
-        if let [only] = classes.into_iter().collect::<Vec<_>>()[..] {
-            out.insert(*target, only.to_owned());
+        let name = recorded
+            .and_then(|names| names.get(&path))
+            .and_then(Value::as_str)
+            .filter(|name| crate::row_class::names_table(prior_pe, name, address))
+            .map(str::to_owned);
+        let name = match name {
+            Some(name) => Some(name),
+            None if tried.insert(address) => {
+                crate::row_class::class_name_of_table(prior_pe, address)
+            }
+            None => None,
+        };
+        if let Some(name) = name {
+            out.insert(address, name);
         }
     }
     out
 }
 
-/// Adds to each review line that starts with a prior address the public name that address lies
-/// in, from the prior build's symbols, so a person sees which function was not found.
-pub fn name_review_lines(review: &mut [String], named: &BTreeMap<u32, (u32, Vec<String>)>) {
-    for line in review {
-        let Some(digits) = line.strip_prefix("0x") else {
-            continue;
-        };
-        let end = digits
-            .find(|c: char| !c.is_ascii_hexdigit())
-            .unwrap_or(digits.len());
-        let Ok(address) = u32::from_str_radix(&digits[..end], 16) else {
-            continue;
-        };
-        if let Some((distance, names)) = named.get(&address) {
-            if let Some(name) = names.first() {
-                line.push_str(&format!(" ({name}+{distance:#x} in the prior build)"));
-            }
+/// Writes into the new row the class name of each class table it placed, by the path of each value
+/// that holds the table.
+fn record_classes(
+    prior: &Value,
+    row: &mut Value,
+    classes: &BTreeMap<u32, String>,
+    moved: &BTreeMap<u32, u32>,
+) {
+    let mut names = serde_json::Map::new();
+    for (path, address) in address_paths(prior) {
+        if let Some(name) = classes
+            .get(&address)
+            .filter(|_| moved.contains_key(&address))
+        {
+            names.insert(path, Value::String(name.clone()));
         }
     }
-}
-
-/// A folded function that fills a known table slot is the one in that slot of the new table.
-fn by_slot(
-    target: u32,
-    choices: &[(u32, usize)],
-    build: &Value,
-    pe: &PeFile,
-    named: &BTreeMap<u32, (u32, Vec<String>)>,
-    symbols: &HashMap<String, Vec<u32>>,
-) -> Option<u32> {
-    for (vtable_path, slot_path, function_path) in VTABLE_SLOTS {
-        if usize_at(build, function_path) != Some(u64::from(target)) {
-            continue;
-        }
-        let vtable = usize_at(build, vtable_path)? as u32;
-        let slot = usize_at(build, slot_path)? as u32;
-        let (distance, names) = named.get(&vtable)?;
-        let [(new_vtable, _)] = candidates(names, *distance, symbols)[..] else {
-            continue;
-        };
-        let held = pe.pointer_rva(new_vtable + slot * 8)?;
-        if choices.iter().any(|(place, _)| *place == held) {
-            return Some(held);
-        }
+    if !names.is_empty() {
+        row[CLASSES] = Value::Object(names);
     }
-    // The classes of hidden buttons keep the function of one known slot.
-    let slot = usize_at(build, "toolbar.theme_slot")? as u32;
-    for pair in build["toolbar"]["hidden"].as_array()? {
-        if read_address(&pair[1]) != Some(u64::from(target)) {
-            continue;
-        }
-        let (distance, names) = named.get(&(read_address(&pair[0])? as u32))?;
-        let [(new_vtable, _)] = candidates(names, *distance, symbols)[..] else {
-            continue;
-        };
-        let held = pe.pointer_rva(new_vtable + slot * 8)?;
-        if choices.iter().any(|(place, _)| *place == held) {
-            return Some(held);
-        }
-    }
-    None
 }
 
 /// The frame entry keeps plain numbers. The walk over a row reads `0x` strings.
@@ -2148,59 +1838,136 @@ fn check_frame_slot(frame: &mut Value, pe: &PeFile, report: &mut PortReport) {
     }
 }
 
-/// The start of the public name of `views::View::ConvertPointToScreen(const View*, gfx::Point*)`:
-/// a static function returning nothing. The other overload returns the point and is named `SA?AV`.
-pub const SCREEN_ORIGIN_NAME: &str = "?ConvertPointToScreen@View@views@@SAX";
-
-/// How many bytes of that function's start the runtime compares before it ever calls it.
-const SCREEN_ORIGIN_BYTES: usize = 12;
-
-/// Whether a public name is the one `screen_origin` is found by.
-pub fn is_screen_origin_name(name: &str) -> bool {
-    stable_name(name).starts_with(SCREEN_ORIGIN_NAME)
-}
-
-/// The first whole instructions of a function, at least `SCREEN_ORIGIN_BYTES` long.
-fn function_start(pe: &PeFile, address: u32) -> Option<Vec<u8>> {
-    if !pe.is_code(address) {
-        return None;
-    }
-    let window = pe.read(address, 32)?;
-    let (ends, _) = x64::boundaries(window, SCREEN_ORIGIN_BYTES);
-    let end = *ends.iter().find(|end| **end >= SCREEN_ORIGIN_BYTES)?;
-    Some(window[..end].to_vec())
-}
-
-/// Adds `screen_origin`, `[address, first bytes]` of `views::View::ConvertPointToScreen`, to a row
-/// whose prior row had none, by the function's public name in the new build. A prior row that had
-/// it was ported with every other address. A build with no single place for the name goes without
-/// it, and the runtime keeps placing bubbles from the window's monitor, so the row is not stopped.
-pub fn seed_screen_origin(row: &mut Value, places: &[u32], pe: &PeFile, report: &mut PortReport) {
+/// Leaves `screen_origin`, `[address, first bytes]` of `views::View::ConvertPointToScreen`, out of a
+/// row whose prior row had none. A prior row that had it was found again with every other address.
+/// The runtime then keeps placing bubbles from the window's monitor, so the row is not stopped.
+pub fn leave_out_screen_origin(row: &mut Value, report: &mut PortReport) {
     if row["build"]["screen_origin"].is_array() {
         return;
     }
-    let mut places = places.to_vec();
-    places.sort_unstable();
-    places.dedup();
-    let found = match places.as_slice() {
-        [only] => function_start(pe, *only).map(|bytes| (*only, bytes)),
-        _ => None,
-    };
-    match found {
-        Some((address, bytes)) => {
-            row["build"]["screen_origin"] =
-                json!([write_address(u64::from(address)), hex_text(&bytes)]);
-            report.derived.push(format!(
-                "build.screen_origin: {SCREEN_ORIGIN_NAME} at {address:#x}"
-            ));
+    row["build"]["screen_origin"] = Value::Null;
+    report
+        .left_out
+        .push("build.screen_origin: the prior row has none".to_owned());
+}
+
+/// The group a value of a row is scored in: its feature, or the window, whose parts cannot be off.
+const WINDOW: &str = "window";
+
+/// How one feature of a row made without debug symbols compares with the verified row of the same
+/// build, value by value.
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+pub struct FeatureScore {
+    /// Values the made row holds exactly as the verified row does.
+    pub equal: usize,
+    /// Values the made row holds differently, with both. Any is a wrong value.
+    pub different: Vec<String>,
+    /// The made row turns the feature off, so none of its values is used.
+    pub off: bool,
+    /// Values the made row does not hold or does not use: the runtime finds them by reflection,
+    /// does not read them in this build, or the prior row did not have them.
+    pub not_held: Vec<String>,
+}
+
+/// The score of a made row against its answer key: each feature's comparison, and the review lines
+/// that stop the row.
+#[derive(Debug, Default, Serialize)]
+pub struct RowScore {
+    pub browser: String,
+    pub version: String,
+    pub prior_version: String,
+    pub features: BTreeMap<String, FeatureScore>,
+    pub review: Vec<String>,
+}
+
+impl RowScore {
+    /// How many values were found but differ from the verified row. Must be zero.
+    pub fn wrong(&self) -> usize {
+        self.features
+            .values()
+            .map(|score| score.different.len())
+            .sum()
+    }
+}
+
+/// Every value a row part holds that is not a list or object, by its path.
+fn leaves(path: &str, value: &Value, out: &mut BTreeMap<String, Value>) {
+    match value {
+        Value::Object(object) => {
+            for (key, item) in object {
+                let next = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                leaves(&next, item, out);
+            }
         }
-        None => {
-            row["build"]["screen_origin"] = Value::Null;
-            report.left_out.push(format!(
-                "build.screen_origin: no single readable function named {SCREEN_ORIGIN_NAME}: {places:x?}"
-            ));
+        Value::Array(items) if !items.is_empty() => {
+            for (index, item) in items.iter().enumerate() {
+                leaves(&format!("{path}[{index}]"), item, out);
+            }
+        }
+        _ => {
+            out.insert(path.to_owned(), value.clone());
         }
     }
+}
+
+/// Compares a row made from a prior row with the row people verified for the same build. A value of
+/// a feature the made row turns off is not compared, since the runtime does not use it. A value the
+/// made row leaves out, or writes as zero because this build does not read it, is listed as not
+/// held. Every other value must be equal, and one that differs is listed with both values.
+pub fn score_row(made: &Value, report: &PortReport, verified: &Value) -> RowScore {
+    let off: BTreeSet<&str> = made[crate::row_features::SWITCHED_OFF]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter_map(|entry| entry["feature"].as_str())
+        .collect();
+    let unused: BTreeSet<&str> = report
+        .unused
+        .iter()
+        .chain(&report.reflected)
+        .filter_map(|line| line.split(": ").next())
+        .collect();
+    let mut score = RowScore {
+        browser: report.browser.clone(),
+        version: report.version.clone(),
+        prior_version: report.prior_version.clone(),
+        review: report.review.clone(),
+        ..RowScore::default()
+    };
+    for part in ["frame", "build"] {
+        let (mut want, mut have) = (BTreeMap::new(), BTreeMap::new());
+        leaves("", &verified[part], &mut want);
+        leaves("", &made[part], &mut have);
+        for (path, value) in want {
+            let feature = match part {
+                "build" => {
+                    crate::row_features::feature_of(&path).map_or(WINDOW, |feature| feature.name)
+                }
+                _ => WINDOW,
+            };
+            let entry = score.features.entry(feature.to_owned()).or_default();
+            if off.contains(feature) {
+                entry.off = true;
+                continue;
+            }
+            let shown = format!("{part}.{path}");
+            match have.get(&path) {
+                Some(found) if *found == value => entry.equal += 1,
+                None | Some(Value::Null) => entry.not_held.push(shown),
+                Some(_) if unused.iter().any(|unused| path.starts_with(unused)) => {
+                    entry.not_held.push(shown)
+                }
+                Some(found) => entry
+                    .different
+                    .push(format!("{shown}: made {found}, verified {value}")),
+            }
+        }
+    }
+    score
 }
 
 /// The review items for the parts of the prior row that only a person writes today. A row made
@@ -2276,58 +2043,33 @@ mod tests {
         })
     }
 
-    fn symbols_old() -> Vec<Symbol> {
-        [
-            (0x200000, "vt"),
-            (0x200100, "bounds"),
-            (0x200200, "hwnd"),
-            (0x200300, "paint"),
-        ]
-        .map(|(address, name)| (address, name.to_owned()))
-        .to_vec()
-    }
-
-    fn places(rows: &[(&str, &[u32])]) -> HashMap<String, Vec<u32>> {
-        rows.iter()
-            .map(|(name, list)| ((*name).to_owned(), list.to_vec()))
-            .collect()
-    }
-
     fn pointer(rva: u32) -> [u8; 8] {
         (IMAGE_BASE + u64::from(rva)).to_le_bytes()
     }
 
+    /// Places the prior row's addresses where `moved` says, as the fingerprints and `row_resolve`
+    /// would, and settles the rest of the row the way every new row is settled.
     fn port(
         prior: &Value,
-        new: &[(&str, &[u32])],
+        moved: &[(u32, u32)],
         code: &[(u32, &[u8])],
         version: &str,
     ) -> (Value, PortReport) {
-        let mut targets = addresses_of(&prior["build"]);
-        for key in ["frame_view_vtable", "client_view_bounds", "hwnd_for_view"] {
-            targets.insert(prior["frame"][key].as_u64().unwrap() as u32);
-        }
-        let named = name_addresses(&targets, &symbols_old());
         let bytes = module(code);
         let pe = PeFile::parse(&bytes).unwrap();
-        let symbols = places(new);
-        port_row(
-            prior,
-            &named,
-            &NewBuild {
-                version,
-                pe: &pe,
-                symbols: &symbols,
-                private: &BTreeMap::new(),
-            },
-        )
+        let (row, mut report) = begin_row(prior, version, true);
+        report.addresses = addresses_of(&row["build"]).len();
+        let moved: BTreeMap<u32, u32> = moved.iter().copied().collect();
+        let (mut row, mut report) = finish_row(row, &moved, &pe, report);
+        settle_carried(&mut row, &mut report);
+        (row, report)
     }
 
-    const NEW_SYMBOLS: &[(&str, &[u32])] = &[
-        ("vt", &[0x101000]),
-        ("bounds", &[0x101100]),
-        ("hwnd", &[0x101200]),
-        ("paint", &[0x101300]),
+    const NEW_PLACES: &[(u32, u32)] = &[
+        (0x200000, 0x101000),
+        (0x200100, 0x101100),
+        (0x200200, 0x101200),
+        (0x200300, 0x101300),
     ];
 
     fn new_code() -> Vec<(u32, Vec<u8>)> {
@@ -2345,47 +2087,9 @@ mod tests {
     }
 
     #[test]
-    fn nfr3_screen_origin_is_found_by_its_public_name_in_the_new_build() {
-        // push rsi; push rdi; sub rsp, 0x28; mov rsi, rdx; mov rdi, rcx; call.
-        let start = hex("56574883ec284889d64889cfe800000000").unwrap();
-        let bytes = module(&[(0x101400, start.as_slice())]);
-        let pe = PeFile::parse(&bytes).unwrap();
-        let mut row = prior();
-        let mut report = PortReport::default();
-        seed_screen_origin(&mut row, &[0x101400, 0x101400], &pe, &mut report);
-        assert_eq!(
-            row["build"]["screen_origin"],
-            json!(["0x101400", "56574883ec284889d64889cf"])
-        );
-        assert!(report.review.is_empty() && report.left_out.is_empty());
-        // A row that already has it keeps the place the port gave it.
-        seed_screen_origin(&mut row, &[0x101500], &pe, &mut report);
-        assert_eq!(row["build"]["screen_origin"][0], "0x101400");
-        // No name, or two places for it, leaves the part out without stopping the row.
-        for places in [&[][..], &[0x101400, 0x101500][..]] {
-            let mut row = prior();
-            let mut report = PortReport::default();
-            seed_screen_origin(&mut row, places, &pe, &mut report);
-            assert!(row["build"]["screen_origin"].is_null());
-            assert_eq!(report.left_out.len(), 1);
-            assert!(report.review.is_empty());
-        }
-        // Only the in-place overload, which returns nothing, is the one.
-        assert!(is_screen_origin_name(
-            "?ConvertPointToScreen@View@views@@SAXPEBV12@PEAVPoint@gfx@@@Z"
-        ));
-        assert!(!is_screen_origin_name(
-            "?ConvertPointToScreen@View@views@@SA?AVPoint@gfx@@PEBV12@AEBV34@@Z"
-        ));
-        assert!(!is_screen_origin_name(
-            "?ConvertRectToScreen@View@views@@SAXPEBV12@PEAVRect@gfx@@@Z"
-        ));
-    }
-
-    #[test]
-    fn nfr3_a_new_row_takes_addresses_by_name_and_bytes_from_the_new_module() {
+    fn nfr3_a_new_row_takes_the_found_places_and_bytes_from_the_new_module() {
         let code = new_code();
-        let (row, report) = port(&prior(), NEW_SYMBOLS, &code_refs(&code), "1.0.0.2");
+        let (row, report) = port(&prior(), NEW_PLACES, &code_refs(&code), "1.0.0.2");
         assert_eq!(report.review, Vec::<String>::new());
         assert_eq!(row["build"]["version"], json!([1, 0, 0, 2]));
         assert_eq!(row["frame"]["version"], "1.0.0.2");
@@ -2402,14 +2106,14 @@ mod tests {
     }
 
     #[test]
-    fn nfr3_a_name_the_new_build_lacks_stops_the_row() {
+    fn nfr3_an_address_with_no_new_place_stops_the_row() {
         let code = new_code();
-        let symbols: Vec<_> = NEW_SYMBOLS
+        let places: Vec<_> = NEW_PLACES
             .iter()
-            .filter(|(name, _)| *name != "paint")
+            .filter(|(prior, _)| *prior != 0x200300)
             .copied()
             .collect();
-        let (_, report) = port(&prior(), &symbols, &code_refs(&code), "1.0.0.2");
+        let (_, report) = port(&prior(), &places, &code_refs(&code), "1.0.0.2");
         assert!(
             report
                 .review
@@ -2428,7 +2132,7 @@ mod tests {
         // A wrong prior value shows that the new row does not copy it.
         prior["build"]["toolbar"]["dev"] = json!({"inspect": 1, "console": 2, "colours": []});
         let code = new_code();
-        let (row, report) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "158.0.8127.36");
+        let (row, report) = port(&prior, NEW_PLACES, &code_refs(&code), "158.0.8127.36");
         assert_eq!(row["build"]["toolbar"]["dev"]["inspect"], 40023);
         assert_eq!(row["build"]["toolbar"]["dev"]["console"], 40005);
         assert!(
@@ -2444,11 +2148,11 @@ mod tests {
             .expect("the other values still cross the milestone");
         assert!(!milestone.contains("toolbar.dev.console"), "{milestone}");
         // A milestone whose header was not read offers no command rather than the prior one.
-        let (row, _) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "199.0.1.1");
+        let (row, _) = port(&prior, NEW_PLACES, &code_refs(&code), "199.0.1.1");
         assert_eq!(row["build"]["toolbar"]["dev"]["inspect"], 0);
         // A row that never offered the developer bar keeps offering none.
         prior["build"]["toolbar"]["dev"] = json!({"inspect": 0, "console": 0, "colours": []});
-        let (row, _) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "158.0.8127.36");
+        let (row, _) = port(&prior, NEW_PLACES, &code_refs(&code), "158.0.8127.36");
         assert_eq!(row["build"]["toolbar"]["dev"]["console"], 0);
     }
 
@@ -2473,7 +2177,7 @@ mod tests {
     #[test]
     fn nfr6_a_feature_with_an_unread_value_is_off_for_that_build() {
         let code = new_code();
-        let (row, report) = port(&prior_with_features(), NEW_SYMBOLS, &code_refs(&code), "2.0.0.1");
+        let (row, report) = port(&prior_with_features(), NEW_PLACES, &code_refs(&code), "2.0.0.1");
         // Nothing holds the rest of the row back.
         assert_eq!(report.review, Vec::<String>::new());
         assert!(report.carried.is_empty(), "{:?}", report.carried);
@@ -2508,7 +2212,7 @@ mod tests {
             json!({"host_view": "0x38", "page_area": "0x0", "contents_container": "0xd8"});
         prior["build"]["toolbar"]["get_widget_slot"] = json!("0xa");
         let code = new_code();
-        let (row, report) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "2.0.0.1");
+        let (row, report) = port(&prior, NEW_PLACES, &code_refs(&code), "2.0.0.1");
         assert_eq!(report.review, Vec::<String>::new());
         assert!(report.carried.is_empty(), "{:?}", report.carried);
         assert_eq!(report.reflected.len(), 5, "{:?}", report.reflected);
@@ -2528,7 +2232,7 @@ mod tests {
         let mut prior = prior_with_features();
         prior["build"]["layout"] = json!({"view_bounds_offset": "0x1c8"});
         let code = new_code();
-        let (row, report) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "2.0.0.1");
+        let (row, report) = port(&prior, NEW_PLACES, &code_refs(&code), "2.0.0.1");
         assert_eq!(report.carried, ["layout.view_bounds_offset"]);
         assert!(
             report.review.iter().any(|line| line.contains("milestone")
@@ -2543,7 +2247,7 @@ mod tests {
     #[test]
     fn nfr6_a_row_within_its_milestone_turns_nothing_off() {
         let code = new_code();
-        let (row, report) = port(&prior_with_features(), NEW_SYMBOLS, &code_refs(&code), "1.0.0.2");
+        let (row, report) = port(&prior_with_features(), NEW_PLACES, &code_refs(&code), "1.0.0.2");
         assert_eq!(report.review, Vec::<String>::new());
         assert!(report.switched_off.is_empty());
         assert_eq!(row["build"]["split"]["supported"], true);
@@ -2553,7 +2257,7 @@ mod tests {
     #[test]
     fn nfr3_a_row_that_crosses_a_milestone_stops_for_review() {
         let code = new_code();
-        let (_, report) = port(&prior(), NEW_SYMBOLS, &code_refs(&code), "2.0.0.1");
+        let (_, report) = port(&prior(), NEW_PLACES, &code_refs(&code), "2.0.0.1");
         assert!(
             report.review.iter().any(|line| line.contains("milestone")),
             "{:?}",
@@ -2567,61 +2271,12 @@ mod tests {
             .into_iter()
             .filter(|(rva, _)| *rva != 0x101008)
             .collect();
-        let (_, report) = port(&prior(), NEW_SYMBOLS, &code_refs(&code), "1.0.0.2");
+        let (_, report) = port(&prior(), NEW_PLACES, &code_refs(&code), "1.0.0.2");
         assert!(
             report
                 .review
                 .iter()
                 .any(|line| line.contains("does not hold")),
-            "{:?}",
-            report.review
-        );
-    }
-
-    #[test]
-    fn nfr3_folded_names_that_stay_apart_are_settled_by_the_guard_or_stop_the_row() {
-        let mut code = new_code();
-        code.push((0x101400, hex("565755534883ec584889ce48").unwrap()));
-        let two: &[u32] = &[0x101300, 0x101400];
-        let symbols: Vec<_> = NEW_SYMBOLS
-            .iter()
-            .map(|(name, list)| {
-                if *name == "paint" {
-                    (*name, two)
-                } else {
-                    (*name, *list)
-                }
-            })
-            .collect();
-        let (row, report) = port(&prior(), &symbols, &code_refs(&code), "1.0.0.2");
-        assert_eq!(row["build"]["toolbar"]["paint"], "0x101300");
-        assert_eq!(report.settled.len(), 1);
-        assert!(report.review.is_empty(), "{:?}", report.review);
-        // Two places with the same start cannot be told apart.
-        let mut same = new_code();
-        same.push((0x101400, hex("415741564155415456575553").unwrap()));
-        let (_, report) = port(&prior(), &symbols, &code_refs(&same), "1.0.0.2");
-        assert!(
-            report
-                .review
-                .iter()
-                .any(|line| line.contains("several places")),
-            "{:?}",
-            report.review
-        );
-    }
-
-    #[test]
-    fn nfr3_a_function_with_no_public_name_is_not_moved_by_distance() {
-        let mut prior = prior();
-        prior["build"]["toolbar"]["inside"] = json!("0x200340");
-        let code = new_code();
-        let (_, report) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "1.0.0.2");
-        assert!(
-            report
-                .review
-                .iter()
-                .any(|line| line.contains("no name in both")),
             "{:?}",
             report.review
         );
@@ -2634,7 +2289,7 @@ mod tests {
         prior["build"]["toolbar"]["paint_prologue"] = json!("41574156565755534881ecb8000000");
         let mut code = new_code();
         code[2].1 = hex("4156565755534881eca00000004889ce0000").unwrap();
-        let (row, report) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "1.0.0.2");
+        let (row, report) = port(&prior, NEW_PLACES, &code_refs(&code), "1.0.0.2");
         assert_eq!(
             row["build"]["toolbar"]["paint_prologue"],
             "4156565755534881eca0000000"
@@ -2643,36 +2298,9 @@ mod tests {
     }
 
     #[test]
-    fn nfr3_stable_name_drops_what_the_linker_adds() {
-        assert_eq!(stable_name("??1GURL@@QEAA@XZ\0"), "??1GURL@@QEAA@XZ");
-        assert_eq!(stable_name("?F@@YAXXZ.llvm.123456"), "?F@@YAXXZ");
-        assert_eq!(
-            stable_name(".weak.??_7BrowserView@@6B@.default.?RejectPromise@@"),
-            "??_7BrowserView@@6B@"
-        );
-    }
-
-    #[test]
     fn nfr3_addresses_are_told_from_offsets_and_the_absent_marker() {
         let row = json!({"a": "0x10", "b": "0xfffff", "c": "0x100000", "d": ["0x7fff0000", "0x4fb01f0"], "e": 1234567, "f": "0xabcd_not"});
         assert_eq!(addresses_of(&row), BTreeSet::from([0x100000, 0x4fb01f0]));
-    }
-
-    #[test]
-    fn nfr3_an_address_inside_a_table_is_named_by_the_table_below_it() {
-        let symbols: Vec<Symbol> = vec![
-            (0x1000, "other".into()),
-            (0x2000, "??_7Table@@6B@".into()),
-            (0x2000, "alias".into()),
-            (0x9000, "far".into()),
-        ];
-        let named = name_addresses(&BTreeSet::from([0x2000, 0x2250, 0x8000]), &symbols);
-        assert_eq!(
-            named[&0x2000],
-            (0, vec!["??_7Table@@6B@".to_owned(), "alias".to_owned()])
-        );
-        assert_eq!(named[&0x2250].0, 0x250);
-        assert!(!named.contains_key(&0x8000));
     }
 
     #[test]
@@ -3075,10 +2703,9 @@ mod tests {
     }
 
     #[test]
-    fn nfr6_a_build_without_symbols_gets_a_row_from_the_prior_builds_fingerprints() {
+    fn nfr6_a_new_build_gets_a_row_from_the_prior_rows_fingerprints_alone() {
         let (row, report) = candidate(&prints_of_prior(), &shifted_code(0x2000, 0x44), "1.0.0.3");
         assert!(report.review.is_empty(), "{:?}", report.review);
-        assert!(report.made_without_pdb);
         assert_eq!(report.fingerprinted.len(), 4, "{:?}", report.fingerprinted);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         assert_eq!(row["frame"]["frame_view_vtable"], 0x103000);
@@ -3183,64 +2810,6 @@ mod tests {
     }
 
     #[test]
-    fn nfr6_a_row_made_without_its_pdb_is_checked_against_the_pdb_row() {
-        let (mut row, _) = candidate(&prints_of_prior(), &shifted_code(0x2000, 0x44), "1.0.0.3");
-        mark_without_pdb(&mut row, "ABC1", "1.0.0.2", "stable", "");
-        assert_eq!(row[WITHOUT_PDB]["prior_version"], "1.0.0.2");
-        let mut from_pdb = row.clone();
-        from_pdb.as_object_mut().unwrap().remove(WITHOUT_PDB);
-        // A part the fingerprint row left out is no difference.
-        row["build"]["screen_origin"] = Value::Null;
-        from_pdb["build"]["screen_origin"] = json!(["0x103400", "5657"]);
-        let table = json!({"rows": [row]});
-        let mut agreed = table.clone();
-        assert_eq!(
-            check_against_pdb(&mut agreed, "B", "1.0.0.3", &from_pdb).unwrap(),
-            Vec::<String>::new()
-        );
-        assert!(agreed["rows"][0].get(WITHOUT_PDB).is_none());
-        // A different address is a difference, and the row keeps its mark.
-        from_pdb["build"]["toolbar"]["paint"] = json!("0x103310");
-        let mut differs = table.clone();
-        let differences = check_against_pdb(&mut differs, "B", "1.0.0.3", &from_pdb).unwrap();
-        assert_eq!(differences.len(), 1, "{differences:?}");
-        assert!(
-            differences[0].starts_with("build.toolbar.paint:"),
-            "{differences:?}"
-        );
-        assert_eq!(differs, table);
-        // A row made from symbols has nothing to check.
-        let mut plain = json!({"rows": [from_pdb.clone()]});
-        assert!(check_against_pdb(&mut plain, "B", "1.0.0.3", &from_pdb).is_err());
-    }
-
-    #[test]
-    fn nfr6_a_row_made_from_a_marked_prior_does_not_inherit_the_mark() {
-        let mut prior = prior();
-        mark_without_pdb(&mut prior, "ABC1", "1.0.0.0", "stable", "");
-        let code = new_code();
-        let (row, _) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "1.0.0.2");
-        assert!(row.get(WITHOUT_PDB).is_none());
-    }
-
-    #[test]
-    fn nfr6_a_review_line_names_the_prior_function_it_is_about() {
-        let named = BTreeMap::from([(0x101300, (0x10, vec!["?Paint@V@@".to_owned()]))]);
-        let mut review = vec![
-            "0x101300 matches no place".to_owned(),
-            "0x101400: no fingerprint".to_owned(),
-            "the milestone changed".to_owned(),
-        ];
-        name_review_lines(&mut review, &named);
-        assert_eq!(
-            review[0],
-            "0x101300 matches no place (?Paint@V@@+0x10 in the prior build)"
-        );
-        assert_eq!(review[1], "0x101400: no fingerprint");
-        assert_eq!(review[2], "the milestone changed");
-    }
-
-    #[test]
     fn nfr3_an_address_that_is_neither_code_nor_a_table_gets_no_fingerprints() {
         let bytes = module(&code_refs(&shifted_code(0, 0x10)));
         let pe = PeFile::parse(&bytes).unwrap();
@@ -3250,5 +2819,92 @@ mod tests {
         let error = add_fingerprints(&mut row, &pe).unwrap_err();
         assert!(error.contains("0x1f0000"), "{error}");
         assert!(row.get("fingerprints").is_none());
+    }
+
+    #[test]
+    fn nfr3_a_prior_row_without_screen_origin_gives_a_row_without_it() {
+        let mut row = prior();
+        let mut report = PortReport::default();
+        leave_out_screen_origin(&mut row, &mut report);
+        assert!(row["build"]["screen_origin"].is_null());
+        assert_eq!(report.left_out.len(), 1);
+        assert!(report.review.is_empty());
+        // A row that has it keeps the place it was found at.
+        row["build"]["screen_origin"] = json!(["0x101400", "5657"]);
+        leave_out_screen_origin(&mut row, &mut report);
+        assert_eq!(row["build"]["screen_origin"][0], "0x101400");
+    }
+
+    #[test]
+    fn nfr6_a_new_row_records_the_class_names_of_the_tables_it_placed() {
+        let mut prior = verified_row();
+        // A name the prior row recorded is not carried: only names confirmed now are written.
+        prior[CLASSES] = json!({"build.toolbar.stale": "Stale"});
+        let classes = BTreeMap::from([(0x101000, "BrowserFrameViewWin".to_owned())]);
+        let bytes = module(&code_refs(&shifted_code(0x2000, 0x44)));
+        let pe = PeFile::parse(&bytes).unwrap();
+        let (row, report) =
+            find_candidate(&prior, &prints_of_prior(), None, &classes, "1.0.0.3", &pe);
+        assert!(report.review.is_empty(), "{:?}", report.review);
+        assert_eq!(
+            row[CLASSES],
+            json!({"frame.frame_view_vtable": "BrowserFrameViewWin"})
+        );
+        // With no confirmed name the row records none.
+        let (row, _) = find_candidate(
+            &prior,
+            &prints_of_prior(),
+            None,
+            &BTreeMap::new(),
+            "1.0.0.3",
+            &pe,
+        );
+        assert!(row.get(CLASSES).is_none());
+    }
+
+    #[test]
+    fn nfr6_every_address_of_a_row_is_known_by_its_path() {
+        let paths = address_paths(&verified_row());
+        assert!(paths.contains(&("frame.frame_view_vtable".to_owned(), 0x101000)));
+        assert!(paths.contains(&("build.toolbar.paint".to_owned(), 0x101300)));
+        assert!(paths.contains(&("build.tabs.signatures[0][0]".to_owned(), 0x101300)));
+        // Offsets and the absent marker are not addresses.
+        assert!(!paths.iter().any(|(path, _)| path.ends_with("view_layer")));
+        assert!(!paths.iter().any(|(path, _)| path.ends_with("missing")));
+    }
+
+    #[test]
+    fn nfr6_a_made_row_is_scored_value_by_value_against_the_verified_row() {
+        let (made, report) = candidate(&prints_of_prior(), &shifted_code(0x2000, 0x44), "1.0.0.3");
+        let mut verified = made.clone();
+        let score = score_row(&made, &report, &verified);
+        assert_eq!(score.wrong(), 0);
+        assert!(score.features[WINDOW].equal > 0);
+        // A value found at another place than the verified one is wrong.
+        verified["build"]["toolbar"]["paint"] = json!("0x103310");
+        let score = score_row(&made, &report, &verified);
+        assert_eq!(score.wrong(), 1, "{:?}", score.features);
+        let wrong: Vec<&String> = score.features.values().flat_map(|f| &f.different).collect();
+        assert!(
+            wrong[0].starts_with("build.toolbar.paint: made"),
+            "{wrong:?}"
+        );
+        // A value the made row does not hold is not wrong.
+        let mut made_less = made.clone();
+        made_less["build"]["toolbar"]
+            .as_object_mut()
+            .unwrap()
+            .remove("paint");
+        let score = score_row(&made_less, &report, &verified);
+        assert_eq!(score.wrong(), 0);
+        // A feature the made row turns off is not compared at all.
+        let mut off = made.clone();
+        off[crate::row_features::SWITCHED_OFF] = json!([{"feature": "split view", "values": []}]);
+        let mut split = verified.clone();
+        split["build"]["split"] = json!({"supported": true, "outline_member": "0x40"});
+        off["build"]["split"] = json!({"supported": false, "outline_member": "0x0"});
+        let score = score_row(&off, &report, &split);
+        assert!(score.features["split view"].off);
+        assert!(score.features["split view"].different.is_empty());
     }
 }
