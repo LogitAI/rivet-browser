@@ -1057,10 +1057,17 @@ pub fn resolve(
                     }
                     let from = prior_callers.get(&target);
                     if let (Some(list), Some(from)) = (&want.candidates, from) {
+                        // A known caller is a call from a function known in both builds, the same
+                        // kind of fact as the calls into it, so it is never counted beside them and
+                        // the fingerprint's places only limit where it may point.
                         let given = by_known_callers(&mut new, &known, from, list);
-                        answers.extend(fingerprint_agrees(&given, Some(list.as_slice())));
                         for place in given {
-                            answers.push((Method::KnownCaller, place));
+                            let seen = answers
+                                .iter()
+                                .any(|(method, at)| *method == Method::CallsInto && *at == place);
+                            if !seen {
+                                answers.push((Method::KnownCaller, place));
+                            }
                         }
                     }
                     if let Some(place) = by_command.get(&target).copied() {
@@ -1676,15 +1683,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn nfr6_a_drawing_helper_is_found_by_the_call_from_its_caller() {
+    fn nfr6_a_drawing_helper_is_not_placed_by_its_caller_alone() {
         // The caller, as a frame view's paint calls `DrawColor`, is known in both builds, and of
-        // the two places the helper's fingerprint matched, its new body calls one.
+        // the two places the helper's fingerprint matched, its new body calls one. That call is the
+        // same kind of fact as the calls into it, and the fingerprint matched both places, so it is
+        // one method and the helper waits for a second one.
         let resolution = run_known_caller(None);
-        assert_eq!(resolution.places.get(&OLD_TARGET), Some(&NEW_TARGETS[0]));
-        assert_eq!(
-            resolution.settled,
-            ["0x101100 -> 0x103100 by its fingerprint and a known caller"]
-        );
+        assert!(resolution.places.is_empty(), "{:?}", resolution.places);
+        assert!(resolution.settled.is_empty(), "{:?}", resolution.settled);
     }
 
     #[test]
