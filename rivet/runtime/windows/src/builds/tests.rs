@@ -916,8 +916,6 @@ fn fr13_every_build_that_shows_a_second_view_records_the_same_chromium_functions
             "size",
             "add_child",
             "set_contents",
-            "vparent",
-            "vchildren",
             "dtor_slot",
         ] {
             assert!(
@@ -1635,5 +1633,34 @@ fn nfr6_a_table_row_carries_the_page_tools_and_bubble_anchor_of_its_prior_row() 
             0x1234560,
             &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF][..]
         ))
+    );
+}
+
+/// The parent and children of a view follow from its bounds by the member order of `views::View`.
+/// Every row that recorded them by hand agrees, so the rule replaces them.
+#[test]
+fn nfr6_a_views_parent_and_children_are_not_row_values() {
+    let mut seen = 0;
+    for build in compiled() {
+        let Some(row) = build.app_window.as_ref() else {
+            continue;
+        };
+        assert_eq!(
+            crate::features::app_window::view_fields(build),
+            Some((row.view_parent, row.view_children)),
+            "{} {:?}",
+            build.browser,
+            build.version
+        );
+        seen += 1;
+    }
+    assert!(seen >= 5, "{seen}");
+    // A row the bounds offset of which moves gives the parent and children of that build.
+    let mut moved = crate::row_data::RowValue::to_row(&CHROME_157_38);
+    moved["layout"]["view_bounds_offset"] = serde_json::json!("0x1d0");
+    let moved = <Build as crate::row_data::RowValue>::from_row(&moved).unwrap();
+    assert_eq!(
+        crate::features::app_window::view_fields(&moved),
+        Some((0x1A0, 0x1A8))
     );
 }

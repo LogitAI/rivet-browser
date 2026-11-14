@@ -139,7 +139,9 @@ pub struct AppWindow {
     pub detach_prologue: &'static [u8],
     pub insert: Option<usize>,
     pub insert_prologue: &'static [u8],
-    /// A `views::View` keeps its parent at this offset and its children vector right after it.
+    /// A `views::View` keeps its parent at this offset and its children vector right after it. Kept
+    /// for runtimes that read them from the row; this runtime takes both from the layout's bounds
+    /// offset, by the member order of `views::View`.
     pub view_parent: usize,
     pub view_children: usize,
     /// `operator new(size)`, `views::WebView::WebView(this, context)` and the object's size.

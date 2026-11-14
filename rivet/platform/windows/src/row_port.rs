@@ -1012,6 +1012,9 @@ pub fn port_row(
 /// build.
 fn settle_carried(row: &mut Value, report: &mut PortReport) {
     use crate::row_features::{self, Clear, RowFeature};
+    report
+        .derived
+        .extend(crate::row_recipe::follow(&mut row["build"]));
     if !report.must_check {
         return;
     }
