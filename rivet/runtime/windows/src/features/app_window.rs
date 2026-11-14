@@ -12,7 +12,22 @@ use crate::builds::AppWindow;
 
 /// An address or value of the app window, as an RVA of the browser module where it is a function.
 pub(crate) fn recorded(name: &str) -> Option<usize> {
-    switched(name).or_else(|| checked_row().and_then(|row| row_value(row, name)))
+    switched(name).or_else(|| match name {
+        "vparent" | "vchildren" => {
+            checked_row()?;
+            let (parent, children) = view_fields(crate::builds::current()?)?;
+            Some(if name == "vparent" { parent } else { children })
+        }
+        _ => checked_row().and_then(|row| row_value(row, name)),
+    })
+}
+
+/// Where a view of `build` keeps its parent and its children. They follow from where it keeps its
+/// bounds by the member order of `views::View`, so they are not values of the build's row.
+pub(crate) fn view_fields(build: &crate::builds::Build) -> Option<(usize, usize)> {
+    use crate::chromium::view::View;
+    let parent = View::parent_offset(build.layout.view_bounds_offset)?;
+    Some((parent, View::children_offset(parent)))
 }
 
 /// A value named in the test profile's `rivet-spike.txt`.
@@ -121,8 +136,6 @@ pub(crate) fn row_value(row: &AppWindow, name: &str) -> Option<usize> {
         "kind" => Some(row.browser_type),
         "detach" => row.detach,
         "insert" => row.insert,
-        "vparent" => Some(row.view_parent),
-        "vchildren" => Some(row.view_children),
         "new" => Some(row.operator_new),
         "ctor" => Some(row.web_view_ctor),
         "size" => Some(row.web_view_size),

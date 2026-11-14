@@ -71,6 +71,20 @@ pub struct PortReport {
     pub fingerprinted: Vec<String>,
     /// Values that are Rivet's settings rather than facts about the build, kept from the prior row.
     pub settings: Vec<String>,
+    /// Features this row turns off, each with the values that could not be read for it. The row
+    /// clears those values, so none of the prior build reaches a browser.
+    pub switched_off: Vec<String>,
+    /// Values the runtime does not read in this row, written as zero, with the reason.
+    pub unused: Vec<String>,
+    /// Whether every carried value must be settled: the milestone changed, or values were read.
+    #[serde(skip)]
+    must_check: bool,
+    /// The milestone change, when there is one and nothing read the carried values.
+    #[serde(skip)]
+    milestone: Option<String>,
+    /// Why each value that was tried could not be read.
+    #[serde(skip)]
+    unread: BTreeMap<String, String>,
 }
 
 fn is_address(value: u64) -> bool {
@@ -986,7 +1000,78 @@ pub fn port_row(
     let targets = addresses_of(&row);
     report.addresses = targets.len();
     port_by_name(prior, &row, named, new, &targets, &mut moved, &mut report);
-    finish_row(row, &moved, new.pe, report)
+    let (mut row, mut report) = finish_row(row, &moved, new.pe, report);
+    settle_carried(&mut row, &mut report);
+    (row, report)
+}
+
+/// Settles each value no recipe or instruction read from the new build. A value the runtime does
+/// not read in this row is written as zero. A value of a feature the runtime can do without turns
+/// that feature off for this build and is cleared, so the rest of the row is not held back by it.
+/// Any other value stops the row with its reason, since no feature may run on a value of another
+/// build.
+fn settle_carried(row: &mut Value, report: &mut PortReport) {
+    use crate::row_features::{self, Clear, RowFeature};
+    report
+        .derived
+        .extend(crate::row_recipe::follow(&mut row["build"]));
+    if !report.must_check {
+        return;
+    }
+    let mut left = Vec::new();
+    let mut off: BTreeMap<&'static str, (&'static RowFeature, Vec<String>)> = BTreeMap::new();
+    for path in std::mem::take(&mut report.carried) {
+        if let Some(why) = row_features::unused(&row["build"], &path) {
+            row_features::clear(&mut row["build"], &path, Clear::Zero);
+            report.unused.push(format!("{path}: {why}"));
+            report.unread.remove(&path);
+        } else if let Some(feature) = row_features::feature_of(&path) {
+            row_features::clear(&mut row["build"], &path, feature.clear);
+            off.entry(feature.name)
+                .or_insert((feature, Vec::new()))
+                .1
+                .push(path);
+        } else {
+            left.push(path);
+        }
+    }
+    let mut entries = Vec::new();
+    for (name, (feature, paths)) in off {
+        row_features::switch_off(&mut row["build"], feature);
+        let reasons: Vec<String> = paths
+            .iter()
+            .map(|path| match report.unread.remove(path) {
+                Some(reason) => format!("{path} {reason}"),
+                None => format!("{path} has no recipe"),
+            })
+            .collect();
+        report
+            .switched_off
+            .push(format!("{name} is off: {}", reasons.join("; ")));
+        entries.push(json!({"feature": name, "values": paths}));
+    }
+    if !entries.is_empty() {
+        row[row_features::SWITCHED_OFF] = json!(entries);
+    }
+    let mut unchecked = Vec::new();
+    for path in &left {
+        match report.unread.remove(path) {
+            Some(reason) => report.review.push(format!("{path} {reason}")),
+            None => unchecked.push(path.clone()),
+        }
+    }
+    if !unchecked.is_empty() {
+        let head = report
+            .milestone
+            .clone()
+            .unwrap_or_else(|| "values were not read".to_owned());
+        report.review.push(format!(
+            "{head}: {} values have no recipe and were carried over unchecked: {}",
+            unchecked.len(),
+            unchecked.join(", ")
+        ));
+    }
+    report.carried = left;
 }
 
 /// A copy of the prior row with the new version, and frame addresses in the `0x` form. `carries`
@@ -1020,13 +1105,14 @@ fn begin_row(prior: &Value, version: &str, carries: bool) -> (Value, PortReport)
             .review
             .push(format!("{} is not a four part version", version));
     }
+    write_command_ids(&mut row, version, &mut report);
     report.carried = crate::row_recipe::without_recipe(&prior["build"]);
     report.settings = crate::row_recipe::settings(&prior["build"]);
-    if carries && prior_version.split('.').next() != version.split('.').next() {
-        report.review.push(format!(
-            "the milestone changed from {prior_version} to {version}: {} values have no recipe and were carried over unchecked: {}",
-            report.carried.len(),
-            report.carried.join(", ")
+    let milestone_changed = prior_version.split('.').next() != version.split('.').next();
+    report.must_check = !carries || milestone_changed;
+    if carries && milestone_changed {
+        report.milestone = Some(format!(
+            "the milestone changed from {prior_version} to {version}"
         ));
     }
     row["build"]["version"] = json!(parts);
@@ -1035,6 +1121,42 @@ fn begin_row(prior: &Value, version: &str, carries: bool) -> (Value, PortReport)
     let frame_as_addresses = frame_addresses(&row["frame"]);
     row["frame_addresses"] = frame_as_addresses;
     (row, report)
+}
+
+/// Writes Chromium's public command ids into a row from the table read from Chromium's source,
+/// for runtimes that still read them from the row. They are never carried from the prior row: a
+/// milestone the table does not know gets zero, which offers no command. A prior row with zero
+/// never had the developer bar checked, so it keeps zero.
+fn write_command_ids(row: &mut Value, version: &str, report: &mut PortReport) {
+    let browser = row["build"]["browser"].as_str().unwrap_or_default();
+    // Chrome, Edge and Brave carry their Chromium milestone as the first part of their version.
+    let milestone = matches!(browser, "Google Chrome" | "Microsoft Edge" | "Brave")
+        .then(|| version.split('.').next()?.parse::<u16>().ok())
+        .flatten();
+    let ids = milestone.and_then(crate::command_ids::dev_tools);
+    let Some(dev) = row["build"]["toolbar"]["dev"].as_object_mut() else {
+        return;
+    };
+    for (key, id) in [
+        ("inspect", ids.map(|ids| ids.0)),
+        ("console", ids.map(|ids| ids.1)),
+    ] {
+        let Some(prior) = dev.get(key).and_then(Value::as_u64) else {
+            continue;
+        };
+        let value = if prior == 0 { 0 } else { id.unwrap_or(0) };
+        dev.insert(key.to_owned(), json!(value));
+        report.derived.push(match (prior == 0, id) {
+            (true, _) => format!("toolbar.dev.{key}: 0, the prior row offers no developer bar"),
+            (false, Some(id)) => format!(
+                "toolbar.dev.{key}: {id}, from chrome_command_ids.h at Chromium {}",
+                milestone.unwrap_or_default()
+            ),
+            (false, None) => format!(
+                "toolbar.dev.{key}: 0, no command id is read for this build's Chromium milestone"
+            ),
+        });
+    }
 }
 
 /// Finds each address of a row through the public names of both builds.
@@ -1522,6 +1644,7 @@ pub fn find_candidate(
     if let Some(prior_pe) = prior_pe {
         read_carried(prior, &mut row, &moved, &followed, prior_pe, pe, &mut report);
     }
+    settle_carried(&mut row, &mut report);
     (row, report)
 }
 
@@ -1552,8 +1675,8 @@ fn value_at_mut<'a>(value: &'a mut Value, path: &str) -> Option<&'a mut Value> {
 
 /// Reads each value the recipes leave, a member offset, slot, size or id, from the instructions
 /// that use it in the prior build's functions and the same instructions in the new build. A value
-/// that cannot be read keeps a review line with the reason and stays listed as carried, so the row
-/// is never published with a value of the prior build.
+/// that cannot be read keeps its reason and stays listed as carried, and `settle_carried` decides
+/// what it does to the row, so the row is never published with a value of the prior build.
 fn read_carried(
     prior: &Value,
     row: &mut Value,
@@ -1621,18 +1744,19 @@ fn read_carried(
                 });
             }
             Err(reason) => {
-                report.review.push(format!(
-                    "{} was not read from the new build: {reason}",
-                    reading.path
-                ));
+                report.unread.insert(
+                    reading.path.clone(),
+                    format!("was not read from the new build: {reason}"),
+                );
                 report.carried.push(reading.path);
             }
         }
     }
     for path in unreadable {
-        report
-            .review
-            .push(format!("{path} is not a number this generator can read"));
+        report.unread.insert(
+            path.clone(),
+            "is not a number this generator can read".to_owned(),
+        );
         report.carried.push(path);
     }
 }
@@ -2121,6 +2245,111 @@ mod tests {
             "{:?}",
             report.review
         );
+    }
+
+    #[test]
+    fn nfr6_a_command_id_is_not_a_row_value() {
+        let mut prior = prior();
+        prior["build"]["browser"] = json!("Google Chrome");
+        prior["frame"]["version"] = json!("157.0.8103.39");
+        // A wrong prior value shows that the new row does not copy it.
+        prior["build"]["toolbar"]["dev"] = json!({"inspect": 1, "console": 2, "colours": []});
+        let code = new_code();
+        let (row, report) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "158.0.8127.36");
+        assert_eq!(row["build"]["toolbar"]["dev"]["inspect"], 40023);
+        assert_eq!(row["build"]["toolbar"]["dev"]["console"], 40005);
+        assert!(
+            !report.carried.iter().any(|path| path.starts_with("toolbar.dev.inspect")
+                || path.starts_with("toolbar.dev.console")),
+            "{:?}",
+            report.carried
+        );
+        let milestone = report
+            .review
+            .iter()
+            .find(|line| line.contains("milestone"))
+            .expect("the other values still cross the milestone");
+        assert!(!milestone.contains("toolbar.dev.console"), "{milestone}");
+        // A milestone whose header was not read offers no command rather than the prior one.
+        let (row, _) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "199.0.1.1");
+        assert_eq!(row["build"]["toolbar"]["dev"]["inspect"], 0);
+        // A row that never offered the developer bar keeps offering none.
+        prior["build"]["toolbar"]["dev"] = json!({"inspect": 0, "console": 0, "colours": []});
+        let (row, _) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "158.0.8127.36");
+        assert_eq!(row["build"]["toolbar"]["dev"]["console"], 0);
+    }
+
+    /// A prior row whose values that are not addresses all belong to features the runtime can do
+    /// without, or are not read in this row.
+    fn prior_with_features() -> Value {
+        let mut prior = prior();
+        let toolbar = prior["build"]["toolbar"].as_object_mut().unwrap();
+        toolbar.remove("view_layer");
+        toolbar.remove("colours");
+        toolbar.insert(
+            "dev".to_owned(),
+            json!({"colours": [[321, 4280953905u32], [1597, 0]]}),
+        );
+        prior["build"]["split"] = json!({"supported": true, "outline_member": "0x40"});
+        prior["build"]["omnibox"] = json!({"match_size": "0x820"});
+        prior["build"]["tabs"]["tab_at"] = json!("0x200300");
+        prior["build"]["tabs"]["tab_collection"] = json!("0x30");
+        prior
+    }
+
+    #[test]
+    fn nfr6_a_feature_with_an_unread_value_is_off_for_that_build() {
+        let code = new_code();
+        let (row, report) = port(&prior_with_features(), NEW_SYMBOLS, &code_refs(&code), "2.0.0.1");
+        // Nothing holds the rest of the row back.
+        assert_eq!(report.review, Vec::<String>::new());
+        assert!(report.carried.is_empty(), "{:?}", report.carried);
+        let build = &row["build"];
+        // Each feature with a value of the prior build is off, and the value is gone.
+        assert_eq!(build["split"]["supported"], false);
+        assert_eq!(build["split"]["outline_member"], "0x0");
+        assert!(build["omnibox"].is_null());
+        assert_eq!(build["toolbar"]["dev"]["colours"], json!([]));
+        let off: Vec<&str> = row[crate::row_features::SWITCHED_OFF]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["feature"].as_str().unwrap())
+            .collect();
+        assert_eq!(off, ["address suggestions", "developer colours", "split view"]);
+        assert_eq!(report.switched_off.len(), 3, "{:?}", report.switched_off);
+        // A value this build does not use is written as zero, and no feature goes off for it.
+        assert_eq!(build["tabs"]["tab_collection"], "0x0");
+        assert_eq!(report.unused.len(), 1, "{:?}", report.unused);
+        // The addresses of the row still move to the new build.
+        assert_eq!(build["tabs"]["tab_at"], "0x101300");
+    }
+
+    #[test]
+    fn nfr6_a_value_the_window_cannot_do_without_still_stops_the_row() {
+        let mut prior = prior_with_features();
+        prior["build"]["layout"] = json!({"view_bounds_offset": "0x1c8"});
+        let code = new_code();
+        let (row, report) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "2.0.0.1");
+        assert_eq!(report.carried, ["layout.view_bounds_offset"]);
+        assert!(
+            report.review.iter().any(|line| line.contains("milestone")
+                && line.ends_with("carried over unchecked: layout.view_bounds_offset")),
+            "{:?}",
+            report.review
+        );
+        // The features it could do without are still off.
+        assert_eq!(row["build"]["split"]["supported"], false);
+    }
+
+    #[test]
+    fn nfr6_a_row_within_its_milestone_turns_nothing_off() {
+        let code = new_code();
+        let (row, report) = port(&prior_with_features(), NEW_SYMBOLS, &code_refs(&code), "1.0.0.2");
+        assert_eq!(report.review, Vec::<String>::new());
+        assert!(report.switched_off.is_empty());
+        assert_eq!(row["build"]["split"]["supported"], true);
+        assert!(row.get(crate::row_features::SWITCHED_OFF).is_none());
     }
 
     #[test]

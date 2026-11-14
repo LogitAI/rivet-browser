@@ -3,8 +3,6 @@
 use super::*;
 
 pub(super) const DEV_CHROME_156: DevMode = DevMode {
-    inspect: 40023,
-    console: 40005,
     colours: &[
         (0x13C, DEV_GROUND),
         (1590, DEV_GROUND),

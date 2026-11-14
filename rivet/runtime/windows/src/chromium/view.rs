@@ -24,6 +24,13 @@ impl View {
         (bounds_offset >= 0x30).then(|| bounds_offset - 0x30)
     }
 
+    /// Where a view keeps its children, from where it keeps its parent: `children_`, a
+    /// `std::vector` of views, comes right after `parent_` in `ui/views/view.h`. The view walk of
+    /// `reflect` finds the same pair at run time, each child naming the view 8 bytes before its list.
+    pub(crate) const fn children_offset(parent_offset: usize) -> usize {
+        parent_offset + 8
+    }
+
     pub(crate) const fn at(address: usize) -> Self {
         Self(address)
     }
