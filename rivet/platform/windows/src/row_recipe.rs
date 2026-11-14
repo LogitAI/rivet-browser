@@ -452,8 +452,14 @@ pub fn follow(build: &mut Value) -> Vec<String> {
 }
 
 /// Values Rivet chooses rather than reads from a build, such as how long it waits before it opens
-/// a new tab. The row carries them for the runtime, so they are kept from the prior row.
-pub const SETTINGS: &[&str] = &["tabs.new_tab_delay_ms"];
+/// a new tab, how far its toolbar starts after the browser view's edge to leave room for Rivet's
+/// toggle button, and the DIPs it adds to the top inset it reports. The row carries them for the
+/// runtime, so they are kept from the prior row.
+pub const SETTINGS: &[&str] = &[
+    "tabs.new_tab_delay_ms",
+    "vertical.toolbar_leading",
+    "layout.top_inset_adjust",
+];
 
 /// Lists of `[id, colour]` pairs: the id is a value of the build, and the colour is Rivet's choice.
 pub const ID_COLOUR_PAIRS: &[&str] = &["toolbar.dev.colours"];
@@ -740,6 +746,15 @@ mod tests {
                 "toolbar.dev.colours[0][0]",
                 "toolbar.dev.colours[1][0]"
             ]
+        );
+        let chosen = json!({
+            "vertical": {"toolbar_leading": 26, "toolbar_in_view": "0x60"},
+            "layout": {"top_inset_adjust": 0},
+        });
+        assert_eq!(without_recipe(&chosen), vec!["vertical.toolbar_in_view"]);
+        assert_eq!(
+            settings(&chosen),
+            vec!["vertical.toolbar_leading", "layout.top_inset_adjust"]
         );
         assert_eq!(
             settings(&build),
