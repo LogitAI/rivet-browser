@@ -18,7 +18,9 @@ search() {
         echo "error: git grep could not search for $1" >&2
         return 2
     fi
-    printf '%s' "$found"
+    # The script that runs this test names it, and the name is not a reader.
+    printf '%s' "$found" | grep -v 'no-pdb\.test\.sh'
+    return 0
 }
 
 # A symbol server, the variable that names one, or the path a PDB is asked for by.
