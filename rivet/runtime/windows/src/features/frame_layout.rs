@@ -129,6 +129,30 @@ pub(crate) fn needs_top_inset(build: &Build) -> Needs {
     Needs::targets(vec![Target::new("top inset", build.layout.top_inset, &[])])
 }
 
+/// The frame view's class table: the row's, read again from the window's live frame view.
+fn frame_table() -> usize {
+    use crate::chromium::live_tables;
+    live_tables::table(bv().frame_vtable, live_tables::found().frame)
+}
+
+/// The caption buttons' class table, settled with the live buttons' as `frame_table` is.
+fn caption_table() -> usize {
+    use crate::chromium::live_tables;
+    live_tables::table(bv().caption_vtable, live_tables::found().caption)
+}
+
+/// The corner wedges' class table, settled with the live wedges' as `frame_table` is.
+fn corner_table() -> usize {
+    use crate::chromium::live_tables;
+    live_tables::table(bv().corner_vtable, live_tables::found().corner)
+}
+
+/// The browser view's class table, settled with the live browser view's as `frame_table` is.
+fn browser_view_table() -> usize {
+    use crate::chromium::live_tables;
+    live_tables::table(bv().browser_view_view_vtable, live_tables::found().browser_view)
+}
+
 fn recorded_image() -> Result<Image, String> {
     image::recorded().ok_or_else(|| "this browser build is not supported yet".to_owned())
 }
@@ -394,7 +418,7 @@ unsafe extern "system" fn corner_paint(view: *const c_void, canvas: *const c_voi
 }
 
 unsafe fn install_corner_paint(image: &Image) -> Result<(), String> {
-    let slot_rva = bv().corner_vtable + bv().on_paint_slot * 8;
+    let slot_rva = corner_table() + bv().on_paint_slot * 8;
     if !image.has(bv().corner_paint, bv().corner_paint_prologue) {
         return Err("this browser build has no recorded corner paint".into());
     }
@@ -420,7 +444,7 @@ pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
         return Err("this browser build has no verified colour provider layout".into());
     }
     let image = recorded_image()?;
-    let slot_rva = bv().frame_vtable + bv().on_paint_slot * 8;
+    let slot_rva = frame_table() + bv().on_paint_slot * 8;
     if !image.points_to(slot_rva, bv().on_paint) {
         return Err("this browser build has no recorded frame paint".into());
     }
@@ -765,7 +789,7 @@ pub unsafe fn install_caption_paint() -> Result<(), String> {
         return Err("this browser build has no verified colour provider layout".into());
     }
     let image = recorded_image()?;
-    let slot_rva = bv().caption_vtable + bv().caption_paint_slot * 8;
+    let slot_rva = caption_table() + bv().caption_paint_slot * 8;
     if !image.points_to(slot_rva, bv().caption_paint)
         || !image.has(bv().caption_paint, bv().caption_paint_prologue)
         || !image.has(bv().get_color_provider, bv().get_color_provider_prologue)
@@ -805,7 +829,7 @@ pub unsafe fn install_caption_height(height: CaptionHeight) -> Result<(), String
         return Ok(());
     }
     let image = recorded_image()?;
-    let slot_rva = bv().caption_vtable + bv().caption_size_slot * 8;
+    let slot_rva = caption_table() + bv().caption_size_slot * 8;
     if !image.points_to(slot_rva, bv().caption_size) {
         return Err("this browser build has no recorded caption button size".into());
     }
@@ -851,7 +875,7 @@ pub unsafe fn install_top_inset(extra: ExtraTop) -> Result<(), String> {
         return Ok(());
     }
     let image = recorded_image()?;
-    let slot_rva = bv().frame_vtable + bv().top_inset_slot * 8;
+    let slot_rva = frame_table() + bv().top_inset_slot * 8;
     if !image.points_to(slot_rva, bv().top_inset) {
         return Err("this browser build has no recorded top inset".into());
     }
@@ -903,7 +927,7 @@ unsafe fn clip_panel(frame: *mut c_void) {
     };
     let base = image.base;
     let Some(index) =
-        (0..0x100).find(|index| *browser.add(*index) == base + bv().browser_view_view_vtable)
+        (0..0x100).find(|index| *browser.add(*index) == base + browser_view_table())
     else {
         return;
     };
@@ -1052,7 +1076,7 @@ pub unsafe fn install_caption_layout(height: CaptionHeight) -> Result<(), String
         return Ok(());
     }
     let image = recorded_image()?;
-    let slot_rva = bv().frame_vtable + bv().layout_slot * 8;
+    let slot_rva = frame_table() + bv().layout_slot * 8;
     if !image.points_to(slot_rva, bv().layout) {
         return Err("this browser build has no recorded frame layout".into());
     }

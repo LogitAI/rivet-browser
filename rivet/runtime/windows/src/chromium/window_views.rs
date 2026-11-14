@@ -438,6 +438,50 @@ pub(crate) unsafe fn walk_views_once(window: windows_sys::Win32::Foundation::HWN
     });
 }
 
+/// Reads the class tables of `window`'s views from the live views once per process: the browser
+/// view the view walk found, its frame view and the frame view's caption buttons and corners. The
+/// walk's result is reused when the worker thread already has it. Reads memory only.
+pub(crate) unsafe fn read_tables(
+    window: windows_sys::Win32::Foundation::HWND,
+) -> crate::chromium::live_tables::Tables {
+    use crate::chromium::live_tables;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
+    let known = live_tables::found();
+    if known != live_tables::Tables::default() {
+        return known;
+    }
+    let (Some(live), Some(build), Some(image)) =
+        (live(), fingerprint(), crate::chromium::image::recorded())
+    else {
+        return known;
+    };
+    let handler = GetWindowLongPtrW(window, GWLP_USERDATA) as usize;
+    let found = crate::chromium::reflect::find_cached(
+        &live.ranges,
+        handler,
+        std::time::Duration::from_millis(300),
+        build,
+    );
+    let Ok((found, _)) = found else {
+        return known;
+    };
+    let Some(browser_view) = found.browser_view else {
+        return known;
+    };
+    let ranges = live.ranges;
+    // A class table lies in read-only data and its first slot holds code.
+    let is_table = |table: usize| {
+        table >= ranges.rdata.0
+            && table < ranges.rdata.1
+            && live
+                .word(table)
+                .is_some_and(|slot| slot >= ranges.text.0 && slot < ranges.text.1)
+    };
+    let tables = live_tables::note(live, browser_view, found.parent, image.base, &is_table);
+    crate::trace::trace(&format!("window views: class tables from live views {tables:x?}"));
+    tables
+}
+
 /// The browser module's fingerprint, which keys what the view walk found.
 fn fingerprint() -> Option<(u32, u32)> {
     let image = crate::chromium::image::recorded()?;
