@@ -36,6 +36,15 @@ pub(crate) fn chromium_milestone(browser: &str, version: [u16; 4]) -> Option<u16
     }
 }
 
+/// The DevTools inspect and console command ids of a build, from Chromium's public header for its
+/// milestone, or zero for each when that milestone's header was not read. They are not values of
+/// the build's row.
+pub(crate) fn dev_tools(browser: &str, version: [u16; 4]) -> (u32, u32) {
+    chromium_milestone(browser, version)
+        .and_then(rivet_platform_windows::command_ids::dev_tools)
+        .unwrap_or((0, 0))
+}
+
 /// Whether a browser keeps Chromium's command ids without public source to confirm it. Brave
 /// publishes its changes and adds its own ids only from 56000, so it keeps Chromium's. Edge, Whale
 /// and Samsung Internet take the value of their Chromium milestone, which needs a regression check
@@ -148,6 +157,16 @@ mod tests {
         assert!(move_tab_to_new_window("Samsung Internet", [30, 0, 4, 29]).is_err());
         assert!(move_tab_to_new_window("Naver Whale", [5, 40, 1, 1]).is_err());
         assert!(move_tab_to_new_window("Opera", [130, 0, 1, 1]).is_err());
+    }
+
+    #[test]
+    fn nfr6_a_command_id_is_not_a_row_value() {
+        // The developer commands follow the build's Chromium milestone, whatever its row holds.
+        assert_eq!(dev_tools("Google Chrome", [159, 0, 8154, 6]), (40023, 40005));
+        assert_eq!(dev_tools("Microsoft Edge", [157, 0, 4341, 46]), (40023, 40005));
+        // A milestone whose header was not read offers no command.
+        assert_eq!(dev_tools("Google Chrome", [149, 0, 1, 1]), (0, 0));
+        assert_eq!(dev_tools("Samsung Internet", [30, 0, 4, 29]), (0, 0));
     }
 
     #[test]
