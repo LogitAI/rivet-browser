@@ -930,10 +930,17 @@ pub fn resolve(
                     if let Some(place) = by_reference(&followed, target) {
                         answers.push((Method::References, place));
                     }
-                    let candidates = match &want.candidates {
+                    let mut candidates = match &want.candidates {
                         Some(list) => list.clone(),
                         None => table_candidates(&old, &new, &known, target),
                     };
+                    // The table a class name gives is also compared slot by slot, which checks
+                    // its structure apart from the name.
+                    if let Some(place) = by_class.get(&target) {
+                        if !candidates.contains(place) {
+                            candidates.push(*place);
+                        }
+                    }
                     let mut slots = by_slots(&old, &new, &known, target, &candidates);
                     if let Some(place) = by_class.get(&target).copied() {
                         answers.push((Method::ClassName, place));
