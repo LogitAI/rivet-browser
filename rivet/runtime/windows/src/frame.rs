@@ -2867,6 +2867,12 @@ fn attach_steps() -> Vec<Step<Attach>> {
             false,
             Some("rivet: not attaching to this browser"),
         ),
+        // The class tables of the frame view, its caption buttons and corners and the browser view
+        // are read from the window's live views before the features that replace their slots.
+        Step::Setup(|attach| unsafe {
+            crate::chromium::window_views::read_tables(attach.window);
+            true
+        }),
         feature(
             Feature::FrameColour,
             frame_layout::needs_colour,
