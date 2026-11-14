@@ -67,6 +67,8 @@ pub struct PeFile<'a> {
     sections: Vec<(u32, u32, u32)>,
     code_sections: Vec<(u32, u32)>,
     exception_directory: (u32, u32),
+    /// What `row_class` reads from the whole code once, kept for its later questions.
+    pub(crate) code_index: std::cell::OnceCell<crate::row_class::CodeIndex>,
 }
 
 fn u16_at(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -136,6 +138,7 @@ impl<'a> PeFile<'a> {
             sections,
             code_sections,
             exception_directory,
+            code_index: std::cell::OnceCell::new(),
         })
     }
 

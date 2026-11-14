@@ -100,43 +100,78 @@ fn rip_use(bytes: &[u8], rva: u32) -> Option<RipUse> {
     })
 }
 
-/// Every RIP-relative `lea` or `mov` in the code whose target is one of `targets`.
-fn rip_uses(pe: &PeFile, targets: &BTreeSet<u32>) -> Vec<RipUse> {
-    let mut found = Vec::new();
-    for (base, bytes, is_code) in pe.sections() {
-        if !is_code {
-            continue;
-        }
-        for at in 0..bytes.len().saturating_sub(7) {
-            if let Some(found_use) = rip_use(&bytes[at..at + 7], base + at as u32) {
-                if targets.contains(&found_use.target) {
-                    found.push(found_use);
+/// Every RIP-relative `lea` and `mov` and every direct `call` and `jmp` of a module's code, sorted
+/// by what they point at. The code of a browser is hundreds of megabytes and each class name asks
+/// about it many times, so it is read once and each question is a search in the sorted lists.
+#[derive(Debug, Default)]
+pub struct CodeIndex {
+    uses: Vec<RipUse>,
+    /// (target, site, whether it is a jump).
+    branches: Vec<(u32, u32, bool)>,
+}
+
+impl CodeIndex {
+    fn of<'p>(pe: &'p PeFile<'_>) -> &'p CodeIndex {
+        pe.code_index.get_or_init(|| {
+            let mut index = CodeIndex::default();
+            for (base, bytes, is_code) in pe.sections() {
+                if !is_code {
+                    continue;
+                }
+                for at in 0..bytes.len() {
+                    let rva = base + at as u32;
+                    if let Some(found) = bytes.get(at..at + 7).and_then(|raw| rip_use(raw, rva)) {
+                        index.uses.push(found);
+                    }
+                    if matches!(bytes[at], 0xE8 | 0xE9) {
+                        if let Some(raw) = bytes.get(at + 1..at + 5) {
+                            let rel = i32::from_le_bytes(raw.try_into().expect("four bytes"));
+                            let target = i64::from(rva) + 5 + i64::from(rel);
+                            // Only a branch into code can be one into a function.
+                            if let Some(target) =
+                                u32::try_from(target).ok().filter(|target| pe.is_code(*target))
+                            {
+                                index.branches.push((target, rva, bytes[at] == 0xE9));
+                            }
+                        }
+                    }
                 }
             }
-        }
+            index.uses.sort_unstable_by_key(|each| (each.target, each.at));
+            index.branches.sort_unstable();
+            index
+        })
     }
+}
+
+/// Every RIP-relative `lea` or `mov` in the code whose target is one of `targets`, in the order
+/// of where they are.
+fn rip_uses(pe: &PeFile, targets: &BTreeSet<u32>) -> Vec<RipUse> {
+    let index = CodeIndex::of(pe);
+    let mut found = Vec::new();
+    for target in targets {
+        let from = index.uses.partition_point(|each| each.target < *target);
+        found.extend(index.uses[from..].iter().take_while(|each| each.target == *target).copied());
+    }
+    found.sort_unstable_by_key(|each: &RipUse| each.at);
     found
 }
 
-/// Every direct `call` or `jmp` into one of `targets`, as (site, whether it is a jump).
+/// Every direct `call` or `jmp` into one of `targets`, as (site, whether it is a jump), in the
+/// order of where they are.
 fn branches_into(pe: &PeFile, targets: &BTreeSet<u32>) -> Vec<(u32, bool)> {
+    let index = CodeIndex::of(pe);
     let mut found = Vec::new();
-    for (base, bytes, is_code) in pe.sections() {
-        if !is_code {
-            continue;
-        }
-        for at in 0..bytes.len().saturating_sub(5) {
-            if !matches!(bytes[at], 0xE8 | 0xE9) {
-                continue;
-            }
-            let rel = i32::from_le_bytes(bytes[at + 1..at + 5].try_into().expect("in range"));
-            let site = base + at as u32;
-            let target = i64::from(site) + 5 + i64::from(rel);
-            if u32::try_from(target).is_ok_and(|target| targets.contains(&target)) {
-                found.push((site, bytes[at] == 0xE9));
-            }
-        }
+    for target in targets {
+        let from = index.branches.partition_point(|each| each.0 < *target);
+        found.extend(
+            index.branches[from..]
+                .iter()
+                .take_while(|each| each.0 == *target)
+                .map(|each| (each.1, each.2)),
+        );
     }
+    found.sort_unstable();
     found
 }
 
