@@ -60,6 +60,14 @@ function Resolve-Edge {
 $url = switch ($Browser) {
     'Google Chrome' { Resolve-Chrome }
     'Microsoft Edge' { Resolve-Edge }
+    'Brave' {
+        # Brave's feed lists only new builds, but every release keeps its installer on GitHub under
+        # the tag of the version without its Chromium milestone, so an earlier build is found too.
+        if ($Download) { $Download } else {
+            $tag = 'v' + (($Version -split '\.', 2)[1])
+            "https://github.com/brave/brave-browser/releases/download/$tag/BraveBrowserStandaloneSilentSetup.exe"
+        }
+    }
     default {
         if (-not $Download) { throw "The feed names no installer for $Browser $Version yet." }
         $Download
@@ -106,7 +114,18 @@ if ($Browser -eq 'Brave') {
         }
         throw "Brave's installer exited with 0, but no place holds brave.exe and $Version\chrome.dll after 10 minutes. Under BraveSoftware: $(@($seen) -join '; ')"
     }
-    $unpacked = $installed
+    # The files are copied out and Brave is removed again, so a second build, such as the one
+    # before it, can be installed on the same runner.
+    $unpacked = Join-Path $Out 'files'
+    New-Item -ItemType Directory -Force $unpacked | Out-Null
+    Copy-Item $installed $unpacked -Recurse -Force
+    $remover = Join-Path $installed "$Version\Installer\setup.exe"
+    $level = if ($installed -like "$env:LOCALAPPDATA*") { @() } else { @('--system-level') }
+    if (Test-Path $remover) {
+        Start-Process $remover -ArgumentList (@('--uninstall', '--force-uninstall') + $level) -Wait | Out-Null
+    }
+    Remove-Item (Split-Path $installed -Parent) -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $installed) { throw "Brave $Version could not be removed from $installed after its files were copied" }
 } else {
     7z x $package "-o$unpacked" -y | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "7-Zip could not unpack $url" }
