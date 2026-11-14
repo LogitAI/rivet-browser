@@ -1,25 +1,14 @@
-//! Adds a Chromium build to Rivet's supported-build table from the build's public symbols.
+//! Makes and publishes rows of Rivet's supported-build table. No browser's debug symbols are read:
+//! a new row comes from the verified prior row, its fingerprints, the prior module and the new one.
 //!
-//! `chrome-builds pdb-key <module>` prints the symbol-server path of the module's PDB.
-//! `chrome-builds extract <module> <pdb-directory> <browser> <version> <table> [frame-class]`
-//! resolves the layout hook's addresses with DbgHelp, checks them against the module file and
-//! updates the table. The frame class is `BrowserFrameViewWin` unless the browser builds its
-//! windows from a subclass of it.
-//! `chrome-builds port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json>`
-//! makes a whole row for a new build from the row of a prior build, and exits 3 when the row needs
-//! a person's review.
-//! `chrome-builds find <prior-row.json> <prior.pdb> <prior-module|-> <new-module> <version> <channel> <download> <row.json> <report.json>`
-//! makes a candidate row for a new build whose PDB is not published, from the fingerprints of the
-//! prior row: those it stored, or else those read now from the prior build's module. It marks the
-//! row as made without its PDB and exits 3 when the row needs a person's review.
-//! `chrome-builds pdb-check <table.json> <browser> <version> <pdb-row.json>` compares a row made
-//! without its PDB with the row its PDB gives. It removes the mark when they agree and exits 4,
-//! printing each difference, when they do not.
+//! `chrome-builds find <prior-row.json> <prior-module> <new-module> <version> <row.json> <report.json>`
+//! makes a candidate row for a new build and exits 3 when the row needs a person's review.
+//! `chrome-builds fingerprint <row.json> <module> <row-out.json>` adds the fingerprints of a row's
+//! functions, read from its own module, so the next build's row can start from them.
 //! `chrome-builds pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json>`
 //! prints the builds that have no row yet, most urgent first.
 //! `chrome-builds table-key` prints a new signing key pair.
-//! `chrome-builds table-add <table.json> <row.json> <module>` puts a row into a table, with the
-//! symbol key the next build's row will need.
+//! `chrome-builds table-add <table.json> <row.json>` puts a row into a table.
 //! `chrome-builds table-read <signed-file> <out.json>` writes out a table that verifies under
 //! `RIVET_TABLE_PUBLIC_KEY`.
 //! `chrome-builds table-merge <table.json> <part.json>...` adds the rows of other tables to a table.
@@ -30,72 +19,24 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use rivet_platform_windows::chrome_build::{self, ChromeBuild, PeFile};
-use rivet_platform_windows::row_port::{self, NewBuild};
+use rivet_platform_windows::chrome_build::{self, PeFile};
+use rivet_platform_windows::row_port::{self, PortReport};
 use rivet_platform_windows::{row_watch, signed_table};
-
-/// How many bytes of `views::HWNDForView` the runtime compares before patching.
-const PROLOGUE: usize = 15;
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let result = match arguments.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        ["pdb-key", module] => pdb_key(Path::new(module)),
-        ["names", pdb, needles @ ..] => names(Path::new(pdb), needles),
-        ["near", pdb, addresses @ ..] => near(Path::new(pdb), addresses),
-        ["extract", module, pdbs, browser, version, table] => extract(
-            Path::new(module),
-            Path::new(pdbs),
-            browser,
-            version,
-            Path::new(table),
-            "BrowserFrameViewWin",
-        ),
-        ["extract", module, pdbs, browser, version, table, class] => {
-            extract(Path::new(module), Path::new(pdbs), browser, version, Path::new(table), class)
-        }
-        ["port", prior, old_pdb, new_pdb, module, version, row, report] => {
-            return match port(
-                Path::new(prior),
-                Path::new(old_pdb),
-                Path::new(new_pdb),
-                Path::new(module),
-                version,
-                Path::new(row),
-                Path::new(report),
-            ) {
-                Ok(true) => ExitCode::SUCCESS,
-                Ok(false) => ExitCode::from(3),
-                Err(error) => {
-                    eprintln!("chrome-builds: {error}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        ["find", prior, old_pdb, old_module, module, version, channel, download, row, report] => {
+        ["find", prior, prior_module, module, version, row, report] => {
             return match find(
                 Path::new(prior),
-                Path::new(old_pdb),
-                old_module,
+                Path::new(prior_module),
                 Path::new(module),
                 version,
-                channel,
-                download,
                 Path::new(row),
                 Path::new(report),
             ) {
                 Ok(true) => ExitCode::SUCCESS,
                 Ok(false) => ExitCode::from(3),
-                Err(error) => {
-                    eprintln!("chrome-builds: {error}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        ["pdb-check", table, browser, version, row] => {
-            return match pdb_check(Path::new(table), browser, version, Path::new(row)) {
-                Ok(true) => ExitCode::SUCCESS,
-                Ok(false) => ExitCode::from(4),
                 Err(error) => {
                     eprintln!("chrome-builds: {error}");
                     ExitCode::FAILURE
@@ -114,7 +55,7 @@ fn main() -> ExitCode {
             println!("private {private}");
             println!("public {public}");
         }),
-        ["table-add", table, row, module] => table_add(Path::new(table), Path::new(row), Path::new(module)),
+        ["table-add", table, row] => table_add(Path::new(table), Path::new(row)),
         ["table-read", signed, out] => table_read(Path::new(signed), Path::new(out)),
         ["table-merge", table, parts @ ..] => table_merge(Path::new(table), parts),
         ["table-sign", table, signed] => table_sign(Path::new(table), Path::new(signed), None),
@@ -124,7 +65,7 @@ fn main() -> ExitCode {
         ["table-withdraw", published, signed, builds @ ..] if !builds.is_empty() => {
             table_withdraw(Path::new(published), Path::new(signed), builds)
         }
-        _ => Err("usage: chrome-builds pdb-key <module> | extract <module> <pdb-directory> <browser> <version> <table> [frame-class] | port <prior-row.json> <prior.pdb> <new.pdb> <new-module> <version> <row.json> <report.json> | find <prior-row.json> <prior.pdb> <prior-module|-> <new-module> <version> <channel> <download> <row.json> <report.json> | pdb-check <table.json> <browser> <version> <pdb-row.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> [row.json] | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> <module> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
+        _ => Err("usage: chrome-builds find <prior-row.json> <prior-module> <new-module> <version> <row.json> <report.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> [row.json] | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -135,246 +76,92 @@ fn main() -> ExitCode {
     }
 }
 
-/// Prints the address and decorated name of every public symbol whose name holds one of the needles.
-fn names(pdb: &Path, needles: &[&str]) -> Result<(), String> {
-    symbols::publics(pdb, &mut |address, name| {
-        if needles.iter().any(|needle| name.contains(needle)) {
-            println!("{address:08X} {name}");
-        }
-    })
-}
-
-/// Prints, for each address in hex, the public symbol that starts at or just before it.
-fn near(pdb: &Path, addresses: &[&str]) -> Result<(), String> {
-    let wanted: Vec<u32> = addresses
-        .iter()
-        .filter_map(|text| u32::from_str_radix(text.trim_start_matches("0x"), 16).ok())
-        .collect();
-    let mut best: Vec<Option<(u32, String)>> = vec![None; wanted.len()];
-    symbols::publics(pdb, &mut |address, name| {
-        for (slot, target) in wanted.iter().enumerate() {
-            if address <= *target && best[slot].as_ref().is_none_or(|(at, _)| address > *at) {
-                best[slot] = Some((address, name.to_owned()));
-            }
-        }
-    })?;
-    for (target, found) in wanted.iter().zip(best) {
-        match found {
-            Some((at, name)) => println!("{target:08X} is {:#x} past {at:08X} {name}", target - at),
-            None => println!("{target:08X} has no symbol before it"),
-        }
-    }
-    Ok(())
-}
-
 fn read(path: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|error| format!("could not read {}: {error}", path.display()))
 }
 
-fn port(
-    prior: &Path,
-    old_pdb: &Path,
-    new_pdb: &Path,
+/// Makes the row of `version` from the prior row, the prior row's own module and the new module.
+fn make(
+    prior: &serde_json::Value,
+    prior_module: &Path,
     module: &Path,
     version: &str,
-    row_path: &Path,
-    report_path: &Path,
-) -> Result<bool, String> {
-    let prior: serde_json::Value = serde_json::from_slice(&read(prior)?)
-        .map_err(|error| format!("the prior row is not JSON: {error}"))?;
-    let bytes = read(module)?;
-    let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
-    let mut old = Vec::new();
-    symbols::publics(old_pdb, &mut |address, name| {
-        old.push((address, name.to_owned()))
-    })?;
-    old.sort();
-    // The frame entry keeps plain numbers.
-    let mut targets = row_port::addresses_of(&prior["build"]);
-    for key in ["frame_view_vtable", "client_view_bounds", "hwnd_for_view"] {
-        targets.extend(prior["frame"][key].as_u64().map(|value| value as u32));
+) -> Result<(serde_json::Value, PortReport), String> {
+    let prior_bytes = read(prior_module)?;
+    let prior_pe =
+        PeFile::parse(&prior_bytes).ok_or("the prior module is not a 64-bit PE image")?;
+    // A module of another build would give fingerprints and class names of the wrong functions.
+    let start = prior["frame"]["hwnd_for_view"]
+        .as_u64()
+        .and_then(|address| u32::try_from(address).ok());
+    let prologue = prior["frame"]["hwnd_for_view_prologue"]
+        .as_str()
+        .and_then(chrome_build::hex);
+    match (start, prologue) {
+        (Some(start), Some(prologue))
+            if prior_pe.read(start, prologue.len()) == Some(prologue.as_slice()) => {}
+        _ => return Err("the prior module is not the build of the prior row".into()),
     }
-    let named = row_port::name_addresses(&targets, &old);
-    let wanted = row_port::wanted_names(&named);
-    drop(old);
-    let mut new = std::collections::HashMap::<String, Vec<u32>>::new();
-    // `views::View::ConvertPointToScreen` is found by its own name, for a prior row without it.
-    let mut screen_origin = Vec::new();
-    symbols::publics(new_pdb, &mut |address, name| {
-        if row_port::is_screen_origin_name(name) {
-            screen_origin.push(address);
+    // The fingerprints the prior row stored were read from this module when the row was made.
+    // A row stored without them gets them from the module now.
+    let prints = match prior["fingerprints"].as_object() {
+        Some(stored) => stored.clone(),
+        None => {
+            let (prints, missing) = row_port::fingerprints_of(prior, &prior_pe);
+            if !missing.is_empty() {
+                println!(
+                    "the prior build gives no fingerprint for {}",
+                    missing.join(", ")
+                );
+            }
+            prints
         }
-        let name = row_port::stable_name(name);
-        if wanted.contains(name) {
-            new.entry(name.to_owned()).or_default().push(address);
-        }
-    })?;
-    let unnamed = row_port::unnamed_code(&prior, &named, &pe);
-    let names = symbols::private_names(old_pdb, &unnamed)?;
-    let places = symbols::private_places(new_pdb, &names.values().cloned().collect::<Vec<_>>())?;
-    let private = names
-        .iter()
-        .filter_map(
-            |(address, name)| match places.get(name).map(Vec::as_slice) {
-                Some([place]) => Some((*address, *place)),
-                _ => None,
-            },
-        )
-        .collect();
-    let (mut row, mut report) = row_port::port_row(
-        &prior,
-        &named,
-        &NewBuild {
-            version,
-            pe: &pe,
-            symbols: &new,
-            private: &private,
-        },
-    );
-    row_port::seed_screen_origin(&mut row, &screen_origin, &pe, &mut report);
-    report.review.extend(row_port::hand_only_review(&prior));
-    let text = |value: &dyn erased::Json| value.pretty();
-    std::fs::write(row_path, text(&row)).map_err(|error| error.to_string())?;
-    std::fs::write(report_path, text(&report)).map_err(|error| error.to_string())?;
+    };
+    // No class names yet: a class table is found by its fingerprint and the other methods.
+    let classes = std::collections::BTreeMap::new();
+    let bytes = read(module)?;
+    let pe = PeFile::parse(&bytes).ok_or("the new module is not a 64-bit PE image")?;
+    let (mut row, mut report) =
+        row_port::find_candidate(prior, &prints, Some(&prior_pe), &classes, version, &pe);
+    row_port::leave_out_screen_origin(&mut row, &mut report);
+    report.review.extend(row_port::hand_only_review(prior));
     println!(
-        "{} {}: {} of {} addresses, {} for review",
-        report.browser,
-        report.version,
-        report.mapped,
-        report.addresses,
-        report.review.len()
+        "exception tables: {} function starts in the prior build, {} in the new one; {} class tables named",
+        prior_pe.function_starts().len(),
+        pe.function_starts().len(),
+        classes.len()
     );
-    Ok(report.review.is_empty())
+    Ok((row, report))
 }
 
-/// Makes a candidate row for a build with no published PDB from the prior row's fingerprints. The
-/// prior PDB names each prior address, so a person sees which function a review line is about.
-#[allow(clippy::too_many_arguments)]
+/// Makes a candidate row for a new build. True when nothing needs a person's review.
 fn find(
     prior_path: &Path,
-    old_pdb: &Path,
-    old_module: &str,
+    prior_module: &Path,
     module: &Path,
     version: &str,
-    channel: &str,
-    download: &str,
     row_path: &Path,
     report_path: &Path,
 ) -> Result<bool, String> {
     let prior = json_file(prior_path)?;
-    let stored = prior["fingerprints"].as_object();
-    let prior_bytes = match old_module {
-        "-" => None,
-        path => Some(read(Path::new(path))?),
-    };
-    let prior_pe = match &prior_bytes {
-        Some(bytes) => {
-            Some(PeFile::parse(bytes).ok_or("the prior module is not a 64-bit PE image")?)
-        }
-        None => None,
-    };
-    let prints = match (stored, &prior_pe) {
-        (Some(stored), None) => stored.clone(),
-        (None, None) => {
-            return Err("the prior row has no fingerprints, and no prior module was given to read them from".into());
-        }
-        (_, Some(pe)) => {
-            // Fingerprints read from another build would find the wrong functions.
-            let start = prior["frame"]["hwnd_for_view"]
-                .as_u64()
-                .and_then(|address| u32::try_from(address).ok());
-            let prologue = prior["frame"]["hwnd_for_view_prologue"]
-                .as_str()
-                .and_then(chrome_build::hex);
-            match (start, prologue) {
-                (Some(start), Some(prologue))
-                    if pe.read(start, prologue.len()) == Some(prologue.as_slice()) => {}
-                _ => return Err("the prior module is not the build of the prior row".into()),
-            }
-            match stored {
-                Some(stored) => stored.clone(),
-                None => {
-                    let (prints, missing) = row_port::fingerprints_of(&prior, pe);
-                    if !missing.is_empty() {
-                        println!(
-                            "the prior build gives no fingerprint for {}",
-                            missing.join(", ")
-                        );
-                    }
-                    prints
-                }
-            }
-        }
-    };
-    // A fingerprint taken at a function start counts only function starts of the new build, and
-    // what fingerprints leave open is looked for by reading the prior build next to the new one.
-    let prior_starts = prior_pe
-        .as_ref()
-        .map(PeFile::function_starts)
-        .unwrap_or_default();
-    let mut old = Vec::new();
-    symbols::publics(old_pdb, &mut |address, name| {
-        old.push((address, name.to_owned()))
-    })?;
-    old.sort();
-    let mut targets = row_port::addresses_of(&prior["build"]);
-    for key in ["frame_view_vtable", "client_view_bounds", "hwnd_for_view"] {
-        targets.extend(prior["frame"][key].as_u64().map(|value| value as u32));
-    }
-    let named = row_port::name_addresses(&targets, &old);
-    drop(old);
-    let bytes = read(module)?;
-    let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
-    // A class table of a views class is also found again by the class name its symbol gives.
-    let classes = row_port::class_names(&named);
-    let (mut row, mut report) =
-        row_port::find_candidate(&prior, &prints, prior_pe.as_ref(), &classes, version, &pe);
-    // No symbols name `screen_origin` here: a prior row without it gives a row without it.
-    row_port::seed_screen_origin(&mut row, &[], &pe, &mut report);
-    report.review.extend(row_port::hand_only_review(&prior));
-    row_port::name_review_lines(&mut report.review, &named);
-    let key = pe
-        .pdb_key()
-        .ok_or("the new module has no CodeView record")?;
-    row_port::mark_without_pdb(&mut row, &key, &report.prior_version, channel, download);
+    let (row, report) = make(&prior, prior_module, module, version)?;
     let text = |value: &dyn erased::Json| value.pretty();
     std::fs::write(row_path, text(&row)).map_err(|error| error.to_string())?;
     std::fs::write(report_path, text(&report)).map_err(|error| error.to_string())?;
     println!(
-        "exception tables: {} function starts in the prior build, {} in the new one",
-        prior_starts.len(),
-        pe.function_starts().len()
-    );
-    println!(
-        "{} {} without its PDB: {} of {} addresses found by fingerprint, {} settled by two methods, {} values read, {} carried, {} for review",
+        "{} {} from {}: {} of {} addresses found by fingerprint, {} settled by two methods, {} values read, {} carried, {} features off, {} for review",
         report.browser,
         report.version,
+        report.prior_version,
         report.fingerprinted.len(),
         report.addresses,
         report.settled.len(),
         report.derived.len(),
         report.carried.len(),
+        report.switched_off.len(),
         report.review.len()
     );
     Ok(report.review.is_empty())
-}
-
-/// Compares a row made without its PDB with the row the PDB gives, and removes the mark when they
-/// agree.
-fn pdb_check(table_path: &Path, browser: &str, version: &str, row: &Path) -> Result<bool, String> {
-    let mut table = json_file(table_path)?;
-    let from_pdb = json_file(row)?;
-    let differences = row_port::check_against_pdb(&mut table, browser, version, &from_pdb)?;
-    for line in &differences {
-        println!("{line}");
-    }
-    if !differences.is_empty() {
-        return Ok(false);
-    }
-    let text = serde_json::to_string_pretty(&table).map_err(|error| error.to_string())? + "\n";
-    std::fs::write(table_path, text).map_err(|error| error.to_string())?;
-    println!("{browser} {version}: the row made from fingerprints agrees with its PDB");
-    Ok(true)
 }
 
 mod erased {
@@ -417,18 +204,9 @@ fn pending(
     Ok(())
 }
 
-fn table_add(table_path: &Path, row: &Path, module: &Path) -> Result<(), String> {
+fn table_add(table_path: &Path, row: &Path) -> Result<(), String> {
     let row = json_file(row)?;
     let mut table = json_file(table_path)?;
-    let bytes = read(module)?;
-    let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
-    let key = pe.pdb_key().ok_or("the image has no CodeView record")?;
-    let name = format!(
-        "{} {}",
-        row["frame"]["browser"].as_str().unwrap_or_default(),
-        row["frame"]["version"].as_str().unwrap_or_default()
-    );
-    table["symbols"][name] = key.into();
     signed_table::upsert_row(&mut table, row)?;
     let text = serde_json::to_string_pretty(&table).map_err(|error| error.to_string())? + "\n";
     std::fs::write(table_path, text).map_err(|error| error.to_string())
@@ -511,373 +289,6 @@ fn table_withdraw(published: &Path, signed: &Path, builds: &[&str]) -> Result<()
         table["rows"].as_array().map_or(0, Vec::len)
     );
     Ok(())
-}
-
-fn pdb_key(module: &Path) -> Result<(), String> {
-    let bytes = read(module)?;
-    let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
-    let key = pe.pdb_key().ok_or("the image has no CodeView record")?;
-    let pdb = format!(
-        "{}.pdb",
-        module
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or("bad module name")?
-    );
-    println!("{pdb}/{key}/{pdb}");
-    Ok(())
-}
-
-fn extract(
-    module: &Path,
-    pdbs: &Path,
-    browser: &str,
-    version: &str,
-    table_path: &Path,
-    frame_class: &str,
-) -> Result<(), String> {
-    let bytes = read(module)?;
-    let pe = PeFile::parse(&bytes).ok_or("not a 64-bit PE image")?;
-    let symbols = symbols::Session::open(module, pdbs)?;
-    // The function is declared on `BrowserFrameViewWin` whichever subclass builds the windows.
-    let client_view_bounds = symbols.address("BrowserFrameViewWin::GetBoundsForClientView")?;
-    let hwnd_for_view = symbols.address("views::HWNDForView")?;
-    // The class has several vtables because of multiple inheritance. Exactly one of them holds
-    // the client-view bounds function.
-    let (frame_view_vtable, client_view_slot) = symbols
-        .vtables(frame_class)?
-        .into_iter()
-        .find_map(|vtable| Some((vtable, pe.vtable_slot(vtable, client_view_bounds)?)))
-        .ok_or("no vtable of the frame class holds GetBoundsForClientView")?;
-    let prologue = pe
-        .read(hwnd_for_view, PROLOGUE)
-        .ok_or("views::HWNDForView is outside the image")?;
-    let build = ChromeBuild {
-        browser: browser.into(),
-        version: version.into(),
-        module: module
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or("bad module name")?
-            .into(),
-        frame_view_vtable,
-        client_view_slot,
-        client_view_bounds,
-        hwnd_for_view,
-        hwnd_for_view_prologue: prologue.iter().map(|byte| format!("{byte:02x}")).collect(),
-    };
-    let text = std::fs::read_to_string(table_path).unwrap_or_else(|_| "[]".into());
-    let mut table = chrome_build::builds(&text);
-    chrome_build::upsert(&mut table, build.clone());
-    let text = serde_json::to_string_pretty(&table).map_err(|error| error.to_string())? + "\n";
-    std::fs::write(table_path, text)
-        .map_err(|error| format!("could not write {}: {error}", table_path.display()))?;
-    println!(
-        "{}",
-        serde_json::to_string(&build).map_err(|error| error.to_string())?
-    );
-    Ok(())
-}
-
-#[cfg(windows)]
-mod symbols {
-    use std::collections::{BTreeMap, HashMap};
-    use std::os::windows::ffi::OsStrExt;
-    use std::path::Path;
-
-    use windows_sys::Win32::System::Diagnostics::Debug::{
-        SymCleanup, SymEnumSymbolsW, SymFromAddrW, SymFromNameW, SymInitializeW, SymLoadModuleExW,
-        SymSetOptions, SYMBOL_INFOW, SYMOPT_UNDNAME,
-    };
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
-
-    /// The base the module is loaded at for symbol lookups. Results are reported as RVAs.
-    const BASE: u64 = 0x1_8000_0000;
-    /// Accept a PDB whose age differs from the image, which Google's symbol server serves.
-    const SYMOPT_LOAD_ANYTHING: u32 = 0x40;
-
-    fn wide(path: &Path) -> Vec<u16> {
-        path.as_os_str().encode_wide().chain(Some(0)).collect()
-    }
-
-    /// Where a PDB opened on its own is placed: wide enough for every browser's module.
-    const IMAGE_SIZE: u32 = 0x2000_0000;
-    /// Reads only the linker's public names, which are decorated and stable between builds.
-    const SYMOPT_PUBLICS_ONLY: u32 = 0x4000;
-
-    /// Visits every public symbol of a PDB, with its address in the module and its decorated name.
-    pub fn publics(pdb: &Path, visit: &mut dyn FnMut(u32, &str)) -> Result<(), String> {
-        unsafe extern "system" fn each(
-            info: *const SYMBOL_INFOW,
-            _size: u32,
-            context: *const core::ffi::c_void,
-        ) -> i32 {
-            let info = &*info;
-            let visit = &mut *(context as *mut &mut dyn FnMut(u32, &str));
-            let name = std::slice::from_raw_parts(info.Name.as_ptr(), info.NameLen as usize);
-            if let Ok(address) = u32::try_from(info.Address - BASE) {
-                visit(address, &String::from_utf16_lossy(name));
-            }
-            1
-        }
-        unsafe {
-            SymSetOptions(SYMOPT_LOAD_ANYTHING | SYMOPT_PUBLICS_ONLY);
-            if SymInitializeW(GetCurrentProcess(), std::ptr::null(), 0) == 0 {
-                return Err("DbgHelp could not start".into());
-            }
-            let base = SymLoadModuleExW(
-                GetCurrentProcess(),
-                std::ptr::null_mut(),
-                wide(pdb).as_ptr(),
-                std::ptr::null(),
-                BASE,
-                IMAGE_SIZE,
-                std::ptr::null(),
-                0,
-            );
-            if base == 0 {
-                SymCleanup(GetCurrentProcess());
-                return Err(format!("DbgHelp could not load {}", pdb.display()));
-            }
-            let mask: Vec<u16> = "*".encode_utf16().chain(Some(0)).collect();
-            let mut visit = visit;
-            let done = SymEnumSymbolsW(
-                GetCurrentProcess(),
-                BASE,
-                mask.as_ptr(),
-                Some(each),
-                (&raw mut visit).cast(),
-            );
-            SymCleanup(GetCurrentProcess());
-            if done == 0 {
-                return Err(format!("DbgHelp could not list {}", pdb.display()));
-            }
-        }
-        Ok(())
-    }
-
-    fn load_all(pdb: &Path) -> Result<(), String> {
-        unsafe {
-            SymSetOptions(SYMOPT_LOAD_ANYTHING | SYMOPT_UNDNAME);
-            if SymInitializeW(GetCurrentProcess(), std::ptr::null(), 0) == 0 {
-                return Err("DbgHelp could not start".into());
-            }
-            let base = SymLoadModuleExW(
-                GetCurrentProcess(),
-                std::ptr::null_mut(),
-                wide(pdb).as_ptr(),
-                std::ptr::null(),
-                BASE,
-                IMAGE_SIZE,
-                std::ptr::null(),
-                0,
-            );
-            if base == 0 {
-                SymCleanup(GetCurrentProcess());
-                return Err(format!("DbgHelp could not load {}", pdb.display()));
-            }
-        }
-        Ok(())
-    }
-
-    /// The function that starts at each address, from the PDB's private symbols.
-    pub fn private_names(pdb: &Path, addresses: &[u32]) -> Result<BTreeMap<u32, String>, String> {
-        load_all(pdb)?;
-        let mut names = BTreeMap::new();
-        for address in addresses {
-            unsafe {
-                // SYMBOL_INFOW ends in the name, whose room the caller provides.
-                let mut storage = vec![0u64; (std::mem::size_of::<SYMBOL_INFOW>() + 2048) / 8];
-                let info = storage.as_mut_ptr().cast::<SYMBOL_INFOW>();
-                (*info).SizeOfStruct = std::mem::size_of::<SYMBOL_INFOW>() as u32;
-                (*info).MaxNameLen = 1000;
-                let mut distance = 0u64;
-                if SymFromAddrW(
-                    GetCurrentProcess(),
-                    BASE + u64::from(*address),
-                    &mut distance,
-                    info,
-                ) != 0
-                    && distance == 0
-                {
-                    let name =
-                        std::slice::from_raw_parts((*info).Name.as_ptr(), (*info).NameLen as usize);
-                    names.insert(
-                        *address,
-                        String::from_utf16_lossy(name)
-                            .trim_end_matches(['\0', ' '])
-                            .to_owned(),
-                    );
-                }
-            }
-        }
-        unsafe { SymCleanup(GetCurrentProcess()) };
-        Ok(names)
-    }
-
-    /// Where each function name lies, from the PDB's private symbols.
-    pub fn private_places(
-        pdb: &Path,
-        names: &[String],
-    ) -> Result<HashMap<String, Vec<u32>>, String> {
-        unsafe extern "system" fn each(
-            info: *const SYMBOL_INFOW,
-            _size: u32,
-            context: *const core::ffi::c_void,
-        ) -> i32 {
-            let info = &*info;
-            let found = &mut *(context as *mut Vec<(String, u32)>);
-            let name = std::slice::from_raw_parts(info.Name.as_ptr(), info.NameLen as usize);
-            if let Ok(address) = u32::try_from(info.Address - BASE) {
-                found.push((String::from_utf16_lossy(name), address));
-            }
-            1
-        }
-        load_all(pdb)?;
-        let mut places: HashMap<String, Vec<u32>> = HashMap::new();
-        for name in names {
-            let mask: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-            let mut found: Vec<(String, u32)> = Vec::new();
-            unsafe {
-                SymEnumSymbolsW(
-                    GetCurrentProcess(),
-                    BASE,
-                    mask.as_ptr(),
-                    Some(each),
-                    (&raw mut found).cast(),
-                );
-            }
-            let mut exact: Vec<u32> = found
-                .into_iter()
-                .filter(|(other, _)| other.trim_end_matches(['\0', ' ']) == name)
-                .map(|(_, place)| place)
-                .collect();
-            exact.sort_unstable();
-            exact.dedup();
-            places.insert(name.clone(), exact);
-        }
-        unsafe { SymCleanup(GetCurrentProcess()) };
-        Ok(places)
-    }
-
-    pub struct Session;
-
-    impl Session {
-        pub fn open(module: &Path, pdbs: &Path) -> Result<Self, String> {
-            unsafe {
-                SymSetOptions(SYMOPT_UNDNAME | SYMOPT_LOAD_ANYTHING);
-                if SymInitializeW(GetCurrentProcess(), wide(pdbs).as_ptr(), 0) == 0 {
-                    return Err("DbgHelp could not start".into());
-                }
-                let base = SymLoadModuleExW(
-                    GetCurrentProcess(),
-                    std::ptr::null_mut(),
-                    wide(module).as_ptr(),
-                    std::ptr::null(),
-                    BASE,
-                    0,
-                    std::ptr::null(),
-                    0,
-                );
-                if base == 0 {
-                    return Err("DbgHelp could not load the module's symbols".into());
-                }
-            }
-            Ok(Self)
-        }
-
-        pub fn address(&self, name: &str) -> Result<u32, String> {
-            let name_wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-            unsafe {
-                let mut info: SYMBOL_INFOW = std::mem::zeroed();
-                info.SizeOfStruct = std::mem::size_of::<SYMBOL_INFOW>() as u32;
-                if SymFromNameW(GetCurrentProcess(), name_wide.as_ptr(), &mut info) == 0 {
-                    return Err(format!("the symbols have no {name}"));
-                }
-                u32::try_from(info.Address - BASE).map_err(|_| format!("{name} is out of range"))
-            }
-        }
-
-        pub fn vtables(&self, class: &str) -> Result<Vec<u32>, String> {
-            unsafe extern "system" fn visit(
-                info: *const SYMBOL_INFOW,
-                _size: u32,
-                context: *const core::ffi::c_void,
-            ) -> i32 {
-                let info = &*info;
-                let found = &mut *(context as *mut Vec<(String, u64)>);
-                let name = std::slice::from_raw_parts(info.Name.as_ptr(), info.NameLen as usize);
-                found.push((String::from_utf16_lossy(name), info.Address));
-                1
-            }
-            let mask: Vec<u16> = format!("{class}::*")
-                .encode_utf16()
-                .chain(Some(0))
-                .collect();
-            let mut found: Vec<(String, u64)> = Vec::new();
-            unsafe {
-                SymEnumSymbolsW(
-                    GetCurrentProcess(),
-                    BASE,
-                    mask.as_ptr(),
-                    Some(visit),
-                    &mut found as *mut _ as *const _,
-                );
-            }
-            let vtables: Vec<u32> = found
-                .into_iter()
-                .filter(|(name, _)| {
-                    name.trim_end_matches(['\0', ' ']) == format!("{class}::`vftable'")
-                })
-                .filter_map(|(_, address)| u32::try_from(address - BASE).ok())
-                .collect();
-            if vtables.is_empty() {
-                return Err(format!("the symbols have no {class} vtable"));
-            }
-            Ok(vtables)
-        }
-    }
-
-    impl Drop for Session {
-        fn drop(&mut self) {
-            unsafe { SymCleanup(GetCurrentProcess()) };
-        }
-    }
-}
-
-#[cfg(not(windows))]
-mod symbols {
-    use std::path::Path;
-
-    pub fn publics(_pdb: &Path, _visit: &mut dyn FnMut(u32, &str)) -> Result<(), String> {
-        Err("symbol extraction needs Windows DbgHelp".into())
-    }
-    pub fn private_names(
-        _pdb: &Path,
-        _addresses: &[u32],
-    ) -> Result<std::collections::BTreeMap<u32, String>, String> {
-        Err("symbol extraction needs Windows DbgHelp".into())
-    }
-    pub fn private_places(
-        _pdb: &Path,
-        _names: &[String],
-    ) -> Result<std::collections::HashMap<String, Vec<u32>>, String> {
-        Err("symbol extraction needs Windows DbgHelp".into())
-    }
-
-    pub struct Session;
-
-    impl Session {
-        pub fn open(_module: &Path, _pdbs: &Path) -> Result<Self, String> {
-            Err("symbol extraction needs Windows DbgHelp".into())
-        }
-        pub fn address(&self, _name: &str) -> Result<u32, String> {
-            unreachable!()
-        }
-        pub fn vtables(&self, _class: &str) -> Result<Vec<u32>, String> {
-            unreachable!()
-        }
-    }
 }
 
 /// Refuses a browser that did not pass every feature check, so it is never listed as supported.

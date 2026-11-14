@@ -366,15 +366,6 @@ pub fn class_tables(pe: &PeFile, name: &str) -> BTreeSet<u32> {
     found
 }
 
-/// The class a public table symbol names, as `??_7EdgeBrowserFrameViewWin@@6BLayerDelegate@ui@@@`
-/// names `EdgeBrowserFrameViewWin`. The class name its metadata holds has no namespace.
-pub fn class_of_table_symbol(symbol: &str) -> Option<&str> {
-    let rest = symbol.strip_prefix("??_7")?;
-    let name = rest.split('@').next()?;
-    (!name.is_empty() && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
-        .then_some(name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,18 +506,5 @@ mod tests {
         assert!(other.unwrap_err().contains("in the prior build"));
         let missing = crate::row_resolve::class_place(&prior, &new, 0x2400, "CustomFloatingCorner");
         assert!(missing.is_err());
-    }
-
-    #[test]
-    fn nfr6_a_table_symbol_names_its_class() {
-        assert_eq!(
-            class_of_table_symbol("??_7EdgeBrowserFrameViewWin@@6BLayerDelegate@ui@@@"),
-            Some("EdgeBrowserFrameViewWin")
-        );
-        assert_eq!(
-            class_of_table_symbol("??_7VerticalTabStripStateControllerImpl@tabs@@6B@"),
-            Some("VerticalTabStripStateControllerImpl")
-        );
-        assert_eq!(class_of_table_symbol("?Layout@BrowserView@@UEAAXXZ"), None);
     }
 }

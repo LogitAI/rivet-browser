@@ -2,9 +2,8 @@
 //! new ones.
 //!
 //! Each entry records where one build keeps the frame view's client-view bounds function. The
-//! runtime only patches a loaded module that matches an entry exactly. The `chrome-builds` tool
-//! fills entries from Google's public symbols, so a new browser release needs a data change, not
-//! a code change.
+//! runtime only patches a loaded module that matches an entry exactly, so a new browser release
+//! needs a data change, not a code change.
 
 use serde::{Deserialize, Serialize};
 
@@ -61,13 +60,12 @@ pub fn hex(value: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// A PE image read from a file, with enough structure to map RVAs and find its debug record.
+/// A PE image read from a file, with enough structure to map RVAs and find its functions.
 pub struct PeFile<'a> {
     bytes: &'a [u8],
     image_base: u64,
     sections: Vec<(u32, u32, u32)>,
     code_sections: Vec<(u32, u32)>,
-    debug_directory: (u32, u32),
     exception_directory: (u32, u32),
 }
 
@@ -103,11 +101,6 @@ impl<'a> PeFile<'a> {
             return None;
         }
         let image_base = u64_at(bytes, optional + 24)?;
-        // Data directory 6 is the debug directory.
-        let debug_directory = (
-            u32_at(bytes, optional + 112 + 48)?,
-            u32_at(bytes, optional + 116 + 48)?,
-        );
         // Data directory 3 is the exception table, which lists where functions start.
         let exception_directory = (
             u32_at(bytes, optional + 112 + 24)?,
@@ -142,7 +135,6 @@ impl<'a> PeFile<'a> {
             image_base,
             sections,
             code_sections,
-            debug_directory,
             exception_directory,
         })
     }
@@ -189,32 +181,6 @@ impl<'a> PeFile<'a> {
     pub fn pointer_rva(&self, rva: u32) -> Option<u32> {
         let value = u64_at(self.bytes, self.offset(rva)?)?;
         u32::try_from(value.checked_sub(self.image_base)?).ok()
-    }
-
-    /// The symbol-server key of the image's PDB: GUID and age from its CodeView record.
-    pub fn pdb_key(&self) -> Option<String> {
-        let (directory, size) = self.debug_directory;
-        for index in 0..size / 28 {
-            let entry = self.offset(directory + index * 28)?;
-            // Type 2 is CodeView.
-            if u32_at(self.bytes, entry + 12)? != 2 {
-                continue;
-            }
-            let record = u32_at(self.bytes, entry + 24)? as usize;
-            if self.bytes.get(record..record + 4)? != b"RSDS" {
-                return None;
-            }
-            let guid = self.bytes.get(record + 4..record + 20)?;
-            let age = u32_at(self.bytes, record + 20)?;
-            let tail: String = guid[8..].iter().map(|byte| format!("{byte:02X}")).collect();
-            return Some(format!(
-                "{:08X}{:04X}{:04X}{tail}{age:X}",
-                u32_at(guid, 0)?,
-                u16_at(guid, 4)?,
-                u16_at(guid, 6)?,
-            ));
-        }
-        None
     }
 
     /// The start of every function the exception table lists. A function that needs no unwind
@@ -286,23 +252,6 @@ mod tests {
         bytes.extend_from_slice(section);
         bytes.resize(0x200 + 0x1000, 0);
         bytes
-    }
-
-    #[test]
-    fn nfr3_reads_the_symbol_server_key_of_an_image() {
-        let mut section = vec![0u8; 0x100];
-        section[12..16].copy_from_slice(&2u32.to_le_bytes());
-        section[24..28].copy_from_slice(&0x240u32.to_le_bytes());
-        section[0x40..0x44].copy_from_slice(b"RSDS");
-        let guid = [
-            0x51, 0x19, 0x13, 0x7b, 0xa2, 0x33, 0x0f, 0x9e, 0x4c, 0x4c, 0x44, 0x20, 0x50, 0x44,
-            0x42, 0x2e,
-        ];
-        section[0x44..0x54].copy_from_slice(&guid);
-        section[0x54..0x58].copy_from_slice(&1u32.to_le_bytes());
-        let bytes = image(&section);
-        let pe = PeFile::parse(&bytes).unwrap();
-        assert_eq!(pe.pdb_key().unwrap(), "7B13195133A29E0F4C4C44205044422E1");
     }
 
     #[test]

@@ -161,7 +161,7 @@ pub fn brave_candidates(releases: &Value) -> Vec<Candidate> {
 
 /// What still needs a row, most urgent first: what people have now, then what stable is about to
 /// serve, then beta, which brings the next milestone weeks ahead and gives a person time to review
-/// what symbols cannot show. A version older than every row and not served is history, not news.
+/// what the generator cannot read. A version older than every row and not served is history, not news.
 pub fn pending(candidates: Vec<Candidate>, known: &BTreeSet<(String, String)>) -> Vec<Candidate> {
     let mut newest_known: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
     for (browser, version) in known {
