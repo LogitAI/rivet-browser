@@ -174,7 +174,7 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
         return;
     }
     let row = &crate::builds::get().side_panel;
-    let page = area.bounds(row.page_area).map(|bounds| *bounds);
+    let page = area.page().map(|bounds| *bounds);
     let Some(page_right) = page.map(|page| page[0] + page[2]) else {
         return;
     };
@@ -182,7 +182,7 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
         let Some(side_panel) = area.bounds(offset) else {
             continue;
         };
-        if let Some(contents) = area.bounds(row.contents_container) {
+        if let Some(contents) = area.contents() {
             float_over(&mut *contents, &mut *side_panel, page_right);
         }
         if let Some(outline) = area.bounds(row.contents_outline) {

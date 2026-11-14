@@ -117,6 +117,16 @@ impl PageArea<'_> {
         self.bounds.of(view)
     }
 
+    /// The bounds the layout gave the view of the pages, found by its class name or the row.
+    pub(crate) unsafe fn contents(&mut self) -> Option<*mut [i32; 4]> {
+        self.bounds(crate::chromium::window_views::contents_field())
+    }
+
+    /// The bounds the layout gave the area below the top row, found by its class name or the row.
+    pub(crate) unsafe fn page(&mut self) -> Option<*mut [i32; 4]> {
+        self.bounds(crate::chromium::window_views::page_area_field())
+    }
+
     /// The bounds the layout gave every view it placed, where the source can list them.
     pub(crate) unsafe fn all_bounds(&mut self) -> Vec<(usize, *mut [i32; 4])> {
         let views = self.bounds.views();
@@ -166,9 +176,10 @@ pub(crate) unsafe fn run(
     HOST_VIEWS.with(|views| views.borrow_mut().insert(window as isize, host));
     // A layout without the recorded page container is traced once, which shows where it keeps it.
     static DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    let unknown = row().contents_container != crate::builds::ABSENT
+    let contents = crate::chromium::window_views::contents_field();
+    let unknown = contents != crate::builds::ABSENT
         && bounds
-            .of(*(this.cast::<u8>().add(row().contents_container) as *const usize))
+            .of(*(this.cast::<u8>().add(contents) as *const usize))
             .is_none()
         && crate::trace::tracing()
         && !DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed);
@@ -182,7 +193,7 @@ pub(crate) unsafe fn run(
         window,
         rail: 0,
     };
-    if let Some(page) = area.bounds(row().page_area) {
+    if let Some(page) = area.page() {
         let page = *page;
         AREAS.with(|areas| {
             areas
@@ -191,8 +202,12 @@ pub(crate) unsafe fn run(
         });
     }
     let traced = |area: &mut PageArea| {
-        [row().page_area, row().contents_container, row().toolbar]
-            .map(|offset| area.bounds(offset).map(|bounds| *bounds))
+        [
+            crate::chromium::window_views::page_area_field(),
+            crate::chromium::window_views::contents_field(),
+            row().toolbar,
+        ]
+        .map(|offset| area.bounds(offset).map(|bounds| *bounds))
     };
     let before = traced(&mut area);
     for step in STEPS {
@@ -252,10 +267,7 @@ pub(crate) unsafe fn install() -> Result<(), String> {
 /// the browser's layout works on.
 unsafe fn host_of(window: HWND) -> Option<usize> {
     let frame = frame_layout::frame_view(window)?;
-    let at = frame + crate::builds::get().layout.frame_browser_window_offset;
-    readable(at, 8)
-        .then(|| *(at as *const usize))
-        .filter(|view| *view != 0)
+    crate::chromium::window_views::frame_browser_view(frame, None)
 }
 
 /// Lays the browser view out again, which runs the patched layout. A window the layout has not run

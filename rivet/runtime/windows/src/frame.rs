@@ -2810,6 +2810,8 @@ pub unsafe fn attach(window: HWND) -> bool {
             layout_dpi(window)
         ));
         crate::features::control::serve(window);
+        // The window's views are found by their class names from here on, on a worker thread.
+        crate::chromium::window_views::walk_views_once(window);
     } else {
         crate::features::look::first_look(window, crate::features::look::FirstLook::AttachFailed);
     }

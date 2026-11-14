@@ -888,12 +888,13 @@ unsafe fn clip_panel(frame: *mut c_void) {
     let Some((set_layer, set_radius, set_masks)) = PANEL_LAYER.get() else {
         return;
     };
-    // BrowserFrameViewWin holds BrowserView's BrowserWindow subobject at +0x340.
-    let browser_window =
-        *(frame.cast::<u8>().add(bv().frame_browser_window_offset) as *const *mut u8);
-    if browser_window.is_null() {
+    // The frame view keeps BrowserView's BrowserWindow subobject in its tracker of the browser view.
+    let Some(browser_window) =
+        crate::chromium::window_views::frame_browser_view(frame as usize, None)
+            .map(|view| view as *mut u8)
+    else {
         return;
-    }
+    };
     let browser = browser_window
         .sub(bv().browser_window_in_view)
         .cast::<usize>();

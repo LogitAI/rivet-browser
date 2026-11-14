@@ -421,7 +421,7 @@ pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) 
         return;
     }
     let row = &crate::builds::get().side_panel;
-    let Some(contents) = area.bounds(row.contents_container) else {
+    let Some(contents) = area.contents() else {
         crate::trace::trace_changed(
             "bar layout",
             "address bar: the layout has no page container",
