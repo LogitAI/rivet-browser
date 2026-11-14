@@ -22,9 +22,11 @@
 //! - for the class table of a views class, its class name: `row_class` reads the table from the
 //!   name the class's `ui::metadata` holds, and the same reading must give the prior table in the
 //!   prior build;
-//! - its fingerprint: a place a class table gives, by its class name or by a slot, that is one of
-//!   the places the fingerprint matched. Those methods do not search among the fingerprint's
-//!   places, so the two agree independently.
+//! - its command id: for a function a browser command runs first, the case of the command's public
+//!   id in the browser's command switch, read by `row_command` the same way in both builds;
+//! - its fingerprint: a place a class table or a command id gives that is one of the places the
+//!   fingerprint matched. Those methods do not search among the fingerprint's places, so the two
+//!   agree independently.
 //!
 //! Anything else stays unresolved with its reason, and its row goes to a person.
 
@@ -732,6 +734,7 @@ pub enum Method {
     ClassName,
     Fingerprint,
     SlotShift,
+    Command,
 }
 
 impl fmt::Display for Method {
@@ -746,6 +749,7 @@ impl fmt::Display for Method {
             Method::ClassName => "its class name",
             Method::Fingerprint => "its fingerprint",
             Method::SlotShift => "its slot shift",
+            Method::Command => "its command id",
         })
     }
 }
@@ -809,6 +813,12 @@ pub struct Wanted {
     pub candidates: Option<Vec<u32>>,
     /// For a class table, the views class the prior build's public symbol names it after.
     pub class: Option<String>,
+    /// For a function a browser command runs first, the command's public id.
+    pub command: Option<i64>,
+    /// Places the fingerprint matched that the exception table does not list as function starts.
+    /// They name no place alone, but a place another method finds among them is one the
+    /// fingerprint agrees with.
+    pub loose: Vec<u32>,
 }
 
 /// The class table a views class name gives in the new build, once the same reading gives the
@@ -933,6 +943,30 @@ pub fn resolve(
         }
     }
 
+    // A command id gives a function from both builds alone, so it is read once.
+    let mut by_command = BTreeMap::new();
+    let commands: Vec<(u32, i64)> = wanted
+        .iter()
+        .filter(|(_, want)| want.kind == Kind::Function)
+        .filter_map(|(target, want)| Some((*target, want.command?)))
+        .collect();
+    if !commands.is_empty() {
+        let old_switches = crate::row_command::switches(old_pe);
+        let new_switches = crate::row_command::switches(new_pe);
+        for (target, id) in commands {
+            let old = (old_pe, old_switches.as_slice());
+            let new = (new_pe, new_switches.as_slice());
+            match crate::row_command::command_place_in(old, new, target, id) {
+                Ok(place) => {
+                    by_command.insert(target, place);
+                }
+                Err(reason) => {
+                    class_reasons.insert(target, reason);
+                }
+            }
+        }
+    }
+
     let mut pending: BTreeSet<u32> = wanted.keys().copied().collect();
     for _ in 0..ROUNDS {
         let followed = follow(&mut old, &mut new, &known);
@@ -974,6 +1008,17 @@ pub fn resolve(
                     }
                     if let Some(place) = by_text(&texts_of[&target], &users) {
                         answers.push((Method::Text, place));
+                    }
+                    if let Some(place) = by_command.get(&target).copied() {
+                        answers.push((Method::Command, place));
+                        let matched = want
+                            .candidates
+                            .as_ref()
+                            .is_some_and(|candidates| candidates.contains(&place))
+                            || want.loose.contains(&place);
+                        if matched {
+                            answers.push((Method::Fingerprint, place));
+                        }
                     }
                 }
                 Kind::Table => {
@@ -1374,6 +1419,8 @@ pub(crate) mod tests {
                 kind: Kind::Function,
                 candidates: Some(NEW_TARGETS.to_vec()),
                 class: None,
+                command: None,
+                loose: Vec::new(),
             },
         )]);
         resolve(
@@ -1495,6 +1542,8 @@ pub(crate) mod tests {
                 kind: Kind::Function,
                 candidates: None,
                 class: None,
+                command: None,
+                loose: Vec::new(),
             },
         )]);
         let tables = BTreeSet::from([VIEW_TABLE, OTHER_VIEW_TABLE]);
