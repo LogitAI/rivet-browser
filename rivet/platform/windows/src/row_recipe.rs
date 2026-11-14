@@ -438,7 +438,8 @@ pub fn settings(build: &Value) -> Vec<String> {
 }
 
 /// Every number of a row below the address range that no recipe reads: member offsets, slots,
-/// sizes, ids and constants that a port can only carry over. Rivet's own settings are not listed.
+/// sizes, ids and constants that a port can only carry over. Rivet's own settings and Chromium's
+/// public command ids are not listed.
 pub fn without_recipe(build: &Value) -> Vec<String> {
     fn walk(path: &str, value: &Value, out: &mut Vec<String>) {
         match value {
@@ -492,6 +493,7 @@ pub fn without_recipe(build: &Value) -> Vec<String> {
             && !path.starts_with("version[")
             && !FIELDS.iter().any(|field| field.path == path)
             && !SETTINGS.contains(&path.as_str())
+            && !crate::command_ids::ROW_PATHS.contains(&path.as_str())
     });
     out
 }
@@ -682,8 +684,7 @@ mod tests {
             vec![
                 "tabs.tab_contents",
                 "toolbar.dev.colours[0][0]",
-                "toolbar.dev.colours[1][0]",
-                "toolbar.dev.console"
+                "toolbar.dev.colours[1][0]"
             ]
         );
         assert_eq!(

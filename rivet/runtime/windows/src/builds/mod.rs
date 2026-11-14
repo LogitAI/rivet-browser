@@ -618,13 +618,10 @@ pub struct Layout {
 row_struct! {
 /// What a build needs to show a page in developer mode.
 pub struct DevMode {
-    /// The browser's own commands the developer bar runs, as `WM_COMMAND` ids, or zero when the build
-    /// has none. They are the commands of the Ctrl+Shift+C and Ctrl+Shift+J keys, read from the
-    /// browser's accelerator table.
-    pub inspect: u32,
-    pub console: u32,
     /// Colour ids of this build and the colours the row takes in developer mode, as `0xAARRGGBB`.
     /// An id that `colours` does not hold is asked of the provider first, like the ones that it does.
+    /// A build with no colours has no developer bar. The bar's browser commands are Chromium's
+    /// public command ids, which come from `browsers::chromium::commands`, not from the row.
     pub colours: &'static [(i32, u32)],
     /// `gfx::Font::Font(this, &name, size)` and `gfx::FontList::FontList(this, &font)`, which build
     /// the monospace font of the address. A build without them keeps the address in its own font.
@@ -636,8 +633,6 @@ pub struct DevMode {
 }
 
 const UNCHECKED_DEV: DevMode = DevMode {
-    inspect: 0,
-    console: 0,
     colours: &[],
     font_new: ABSENT,
     font_new_prologue: &[0],

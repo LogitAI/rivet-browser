@@ -6,6 +6,7 @@
 
 pub mod background;
 pub mod chrome_build;
+pub mod command_ids;
 pub mod control;
 pub mod focus;
 pub mod hold;

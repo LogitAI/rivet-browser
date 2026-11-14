@@ -633,11 +633,16 @@ fn fr3_a_build_with_tabs_checks_only_functions_it_has() {
 #[test]
 fn fr11_developer_commands_are_those_of_the_devtools_keys() {
     for build in [&CHROME, &EDGE, &BRAVE, &BRAVE_63] {
-        let dev = &build.toolbar.dev;
-        assert_eq!((dev.console, dev.inspect), (40005, 40023));
+        assert!(!build.toolbar.dev.colours.is_empty());
+        assert_eq!(
+            crate::features::dev_page::dev_commands(build),
+            (40023, 40005)
+        );
     }
     // A build that was never checked offers no command and no bar.
-    assert_eq!(UNCHECKED_TOOLBAR.dev.inspect, 0);
+    for build in [&WHALE, &SAMSUNG, &CHROME_150] {
+        assert_eq!(crate::features::dev_page::dev_commands(build), (0, 0));
+    }
 }
 
 #[test]

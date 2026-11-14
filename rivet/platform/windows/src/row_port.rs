@@ -1020,6 +1020,7 @@ fn begin_row(prior: &Value, version: &str, carries: bool) -> (Value, PortReport)
             .review
             .push(format!("{} is not a four part version", version));
     }
+    write_command_ids(&mut row, version, &mut report);
     report.carried = crate::row_recipe::without_recipe(&prior["build"]);
     report.settings = crate::row_recipe::settings(&prior["build"]);
     if carries && prior_version.split('.').next() != version.split('.').next() {
@@ -1035,6 +1036,42 @@ fn begin_row(prior: &Value, version: &str, carries: bool) -> (Value, PortReport)
     let frame_as_addresses = frame_addresses(&row["frame"]);
     row["frame_addresses"] = frame_as_addresses;
     (row, report)
+}
+
+/// Writes Chromium's public command ids into a row from the table read from Chromium's source,
+/// for runtimes that still read them from the row. They are never carried from the prior row: a
+/// milestone the table does not know gets zero, which offers no command. A prior row with zero
+/// never had the developer bar checked, so it keeps zero.
+fn write_command_ids(row: &mut Value, version: &str, report: &mut PortReport) {
+    let browser = row["build"]["browser"].as_str().unwrap_or_default();
+    // Chrome, Edge and Brave carry their Chromium milestone as the first part of their version.
+    let milestone = matches!(browser, "Google Chrome" | "Microsoft Edge" | "Brave")
+        .then(|| version.split('.').next()?.parse::<u16>().ok())
+        .flatten();
+    let ids = milestone.and_then(crate::command_ids::dev_tools);
+    let Some(dev) = row["build"]["toolbar"]["dev"].as_object_mut() else {
+        return;
+    };
+    for (key, id) in [
+        ("inspect", ids.map(|ids| ids.0)),
+        ("console", ids.map(|ids| ids.1)),
+    ] {
+        let Some(prior) = dev.get(key).and_then(Value::as_u64) else {
+            continue;
+        };
+        let value = if prior == 0 { 0 } else { id.unwrap_or(0) };
+        dev.insert(key.to_owned(), json!(value));
+        report.derived.push(match (prior == 0, id) {
+            (true, _) => format!("toolbar.dev.{key}: 0, the prior row offers no developer bar"),
+            (false, Some(id)) => format!(
+                "toolbar.dev.{key}: {id}, from chrome_command_ids.h at Chromium {}",
+                milestone.unwrap_or_default()
+            ),
+            (false, None) => format!(
+                "toolbar.dev.{key}: 0, no command id is read for this build's Chromium milestone"
+            ),
+        });
+    }
 }
 
 /// Finds each address of a row through the public names of both builds.
@@ -2121,6 +2158,38 @@ mod tests {
             "{:?}",
             report.review
         );
+    }
+
+    #[test]
+    fn nfr6_a_command_id_is_not_a_row_value() {
+        let mut prior = prior();
+        prior["build"]["browser"] = json!("Google Chrome");
+        prior["frame"]["version"] = json!("157.0.8103.39");
+        // A wrong prior value shows that the new row does not copy it.
+        prior["build"]["toolbar"]["dev"] = json!({"inspect": 1, "console": 2, "colours": []});
+        let code = new_code();
+        let (row, report) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "158.0.8127.36");
+        assert_eq!(row["build"]["toolbar"]["dev"]["inspect"], 40023);
+        assert_eq!(row["build"]["toolbar"]["dev"]["console"], 40005);
+        assert!(
+            !report.carried.iter().any(|path| path.starts_with("toolbar.dev.inspect")
+                || path.starts_with("toolbar.dev.console")),
+            "{:?}",
+            report.carried
+        );
+        let milestone = report
+            .review
+            .iter()
+            .find(|line| line.contains("milestone"))
+            .expect("the other values still cross the milestone");
+        assert!(!milestone.contains("toolbar.dev.console"), "{milestone}");
+        // A milestone whose header was not read offers no command rather than the prior one.
+        let (row, _) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "199.0.1.1");
+        assert_eq!(row["build"]["toolbar"]["dev"]["inspect"], 0);
+        // A row that never offered the developer bar keeps offering none.
+        prior["build"]["toolbar"]["dev"] = json!({"inspect": 0, "console": 0, "colours": []});
+        let (row, _) = port(&prior, NEW_SYMBOLS, &code_refs(&code), "158.0.8127.36");
+        assert_eq!(row["build"]["toolbar"]["dev"]["console"], 0);
     }
 
     #[test]
