@@ -1020,12 +1020,9 @@ fn slide_of(window: HWND) -> f32 {
         .unwrap_or(0.0)
 }
 
-/// Where the page panel begins, in device-independent pixels. Chromium's own vertical tab strip
-/// keeps its width at the left even while the appbar is hidden, because the browser offers no way
-/// to take it out of the layout, so the page cannot begin before it ends.
+/// Where the page panel begins, in device-independent pixels.
 fn page_x(window: HWND) -> i32 {
-    let leading = layout_of(window).leading();
-    crate::features::vertical_tabs::layout_width(window).map_or(leading, |strip| leading.max(strip))
+    layout_of(window).leading()
 }
 
 /// Converts client pixels to device-independent pixels of the appbar's own coordinates: below the
@@ -1080,7 +1077,6 @@ pub(crate) fn appbar_settings(window: HWND) -> (i32, bool) {
 /// Sets the appbar width as a drag of its edge would.
 pub(crate) unsafe fn set_appbar_width(window: HWND, width: i32) {
     if edit_layout(window, |layout| layout.set_width(width)) {
-        sync_strip(window);
         update_appbar(window);
         relayout(window);
     }
@@ -2017,17 +2013,9 @@ unsafe fn toggle_message() -> u32 {
     RegisterWindowMessageW(wide(TOGGLE_MESSAGE).as_ptr())
 }
 
-/// Makes Chromium's tab strip, which the appbar covers, as wide as the appbar: nothing while the
-/// appbar is hidden.
-unsafe fn sync_strip(window: HWND) {
-    let layout = layout_of(window);
-    crate::features::vertical_tabs::set_strip_override(window, layout.strip());
-}
-
 /// Lays the browser out again, now that the appbar's width or mode changed, and redraws.
 unsafe fn relayout(window: HWND) {
     // The frame view lays out again on request, which also works for a maximized window.
-    crate::features::vertical_tabs::invalidate_strip(window);
     if frame_layout::relayout(window) {
         if is_waiting(window) {
             crate::trace::trace("attach: asked the frame view to lay out again");
@@ -2144,7 +2132,6 @@ unsafe fn toggle_appbar(window: HWND) {
     let before = frame_layout::panel_bounds(window).map(|panel| panel.x);
     edit_layout(window, |layout| layout.toggle());
     crate::trace::trace(&format!("appbar: hidden {}", layout_of(window).collapsed));
-    sync_strip(window);
     SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
     KillTimer(window, PEEK_TIMER);
     relayout(window);
@@ -2404,7 +2391,6 @@ unsafe fn apply_drag(window: HWND) {
     let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
     if edit_layout(window, |layout| layout.set_width(wanted)) {
         crate::trace::trace(&format!("appbar: width {}", layout_of(window).side));
-        sync_strip(window);
         // The appbar takes its new width before the browser lays the page out, so what the
         // browser exposes is only ever ground or appbar, never the appbar's old surface over a
         // page that has already moved.
@@ -2470,17 +2456,6 @@ pub(crate) unsafe fn open_later(window: HWND, contents: usize, url: String, dela
 
 unsafe fn group_probe_message() -> u32 {
     RegisterWindowMessageW(wide("RivetGroupProbe").as_ptr())
-}
-
-unsafe fn vertical_tabs_message() -> u32 {
-    RegisterWindowMessageW(wide("RivetVerticalTabs").as_ptr())
-}
-
-fn report_vertical_tabs(controller: usize) {
-    let windows: Vec<isize> = APPBARS.with(|appbars| appbars.borrow().keys().copied().collect());
-    for window in windows {
-        unsafe { PostMessageW(window as HWND, vertical_tabs_message(), controller, 0) };
-    }
 }
 
 /// The windows of this process that show the Rivet frame. Call it on the browser UI thread.
@@ -2826,8 +2801,6 @@ unsafe fn call_browser(window: HWND, message: u32, wparam: WPARAM, lparam: LPARA
 /// What the attach sequence carries from one step to the next.
 struct Attach {
     window: HWND,
-    /// Whether the browser's own vertical tab strip was reported to the appbar.
-    vertical_tabs: bool,
 }
 
 fn caption_row_height(window: HWND) -> Option<i32> {
@@ -2934,15 +2907,8 @@ fn attach_steps() -> Vec<Step<Attach>> {
             if let Some(path) = trace_file("rivet-nav.log") {
                 crate::trace::set_trace(path);
             }
-            let hide = trace_file("rivet-hide-tab-strip.log");
-            if let Some(path) = hide {
-                crate::trace::set_trace(path);
-                if let Err(error) = crate::features::vertical_tabs::hide_tab_strip_everywhere() {
-                    crate::trace::trace(&format!("hide failed: {error}"));
-                }
-            }
-            // The trace switch only switches the trace on. The toolbar and the
-            // vertical-tab frame are what the top row needs, so they never depend on it.
+            // The trace switch only switches the trace on. What the top row needs never
+            // depends on it.
             if crate::trace::tracing() {
                 crate::trace::trace_crashes();
             }
@@ -2979,21 +2945,6 @@ fn attach_steps() -> Vec<Step<Attach>> {
             false,
             None,
         ),
-        feature(
-            Feature::VerticalTabs,
-            crate::features::vertical_tabs::needs,
-            |attach| unsafe {
-                let installed = crate::features::vertical_tabs::install(report_vertical_tabs);
-                if let Err(error) = &installed {
-                    crate::trace::trace(&format!("unavailable: {error}"));
-                }
-                attach.vertical_tabs = installed.is_ok();
-                installed
-            },
-            OnFailure::Continue,
-            false,
-            None,
-        ),
         Step::Setup(|_| {
             crate::features::app_window::install_features();
             true
@@ -3015,11 +2966,6 @@ fn attach_steps() -> Vec<Step<Attach>> {
                 500,
                 None,
             );
-            if attach.vertical_tabs {
-                for controller in crate::features::vertical_tabs::reported() {
-                    PostMessageW(window, vertical_tabs_message(), controller, 0);
-                }
-            }
             if let Err(error) = taskbar::apply(window as isize, runtime_directory().as_deref()) {
                 log(&format!(
                     "rivet: could not set the taskbar identity: {error}"
@@ -3070,10 +3016,7 @@ unsafe fn create_appbar(window: HWND) {
     }
     // Without the layout hook the browser would draw underneath the appbar, so an unknown
     // browser build keeps working without Rivet instead.
-    let mut attach = Attach {
-        window,
-        vertical_tabs: false,
-    };
+    let mut attach = Attach { window };
     crate::feature::run(&attach_steps(), &mut attach, log);
 }
 
@@ -3090,7 +3033,6 @@ unsafe fn compose_appbar(window: HWND) -> bool {
     APPBARS.with(|appbars| appbars.borrow_mut().insert(window as isize, appbar));
     install_keyboard_hook();
     load_persisted(window);
-    sync_strip(window);
     APPBAR_STATE.with(|states| {
         states
             .borrow_mut()
@@ -3629,12 +3571,8 @@ fn reserved_width(window: HWND, bounds: frame_layout::Rect) -> Option<i32> {
                 update_appbar(window);
             }
         }
-        // The scale is recorded above for both tab layouts. The strip is only subtracted here.
         let leading = layout_of(window).leading();
         LAID_LEADING.with(|all| all.borrow_mut().insert(window as isize, leading));
-        if let Some(strip) = crate::features::vertical_tabs::layout_width(window) {
-            return Some(crate::reserved_for_strip(leading, strip));
-        }
         Some(leading)
     }
 }
@@ -4275,7 +4213,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             {
                 end_drag(window);
                 if edit_layout(window, |layout| layout.set_width(APPBAR_WIDTH)) {
-                    sync_strip(window);
                     relayout(window);
                 }
             }
@@ -4370,7 +4307,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             crate::features::link_preview::forget(window);
             crate::features::page_links::forget(window);
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
-            crate::features::vertical_tabs::forget(window);
             crate::features::tab_strip::forget(window);
             frame_layout::forget_view(window);
             crate::features::widgets::forget(window);
@@ -4756,10 +4692,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 crate::features::tabs::probe_group(window);
             }
             update_appbar(window);
-            0
-        }
-        _ if message == vertical_tabs_message() => {
-            crate::features::vertical_tabs::offer(window, wparam);
             0
         }
         _ if message == attach_message() => {

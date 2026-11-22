@@ -391,7 +391,10 @@ mod tests {
             assert_eq!(read.to_row(), row, "{} {:?}", build.browser, build.version);
             assert_eq!(read.version, build.version);
             assert_eq!(read.toolbar.get_color, build.toolbar.get_color);
-            assert_eq!(read.toolbar.get_color_bytes, build.toolbar.get_color_bytes);
+            assert_eq!(
+                read.layout.layout_immediately_prologue,
+                build.layout.layout_immediately_prologue
+            );
             assert_eq!(read.layout.caption_ink_ids, build.layout.caption_ink_ids);
         }
     }
@@ -435,6 +438,11 @@ mod tests {
         let mut row = builds::CHROME.to_row();
         row["toolbar"]["added_later"] = json!("0x1234");
         assert!(builds::Build::from_row(&row).is_ok());
+        // So does a row from an older generator, with values no runtime reads any more.
+        row["toolbar"]["get_color_bytes"] = json!("41574156");
+        row["layout"]["top_inset_adjust"] = json!(-12);
+        row["split"]["view_size"] = json!("0x1d0");
+        assert!(builds::Build::from_row(&row).is_ok());
     }
 
     #[test]
@@ -445,7 +453,7 @@ mod tests {
             Some("0x")
         );
         assert!(row["layout"]["caption_ink_ids"][0].is_number());
-        let bytes = row["toolbar"]["get_color_bytes"].as_str().unwrap();
+        let bytes = row["layout"]["layout_immediately_prologue"].as_str().unwrap();
         assert!(!bytes.starts_with("0x") && bytes.len() % 2 == 0);
         assert!(row["version"][0].is_number());
     }

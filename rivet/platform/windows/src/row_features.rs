@@ -58,18 +58,6 @@ pub const ROW_FEATURES: &[RowFeature] = &[
         checks: &["split", "split-"],
     },
     RowFeature {
-        name: "vertical tabs",
-        paths: &[
-            "vertical.update_collapse_action",
-            "vertical.browser_offset",
-            "vertical.mode_offset",
-            "vertical.width_offset",
-        ],
-        off: &[Off::Flag("vertical.supported")],
-        clear: Clear::Zero,
-        checks: &[],
-    },
-    RowFeature {
         name: "sidebar",
         paths: &[
             "side_panel.color_source",
@@ -127,27 +115,6 @@ pub const ROW_FEATURES: &[RowFeature] = &[
         checks: &["sidebar", "sidebar-", "fullscreen-sidebar"],
     },
     RowFeature {
-        // The vertical tab controller's functions and class tables. Only
-        // `features/vertical_tabs.rs` reads them, and only once its targets are all recorded.
-        name: "vertical tabs",
-        paths: &[
-            "vertical.slot",
-            "vertical.should_display",
-            "vertical.destructor",
-            "vertical.browser_view_for_browser",
-            "vertical.hwnd_for_view",
-            "vertical.notify_mode_changed",
-            "vertical.browser_view_view_vtable",
-            "vertical.region_preferred_size",
-            "vertical.region_preferred_size_slot",
-            "vertical.region_minimum_size",
-            "vertical.invalidate_layout",
-        ],
-        off: &[Off::Flag("vertical.supported")],
-        clear: Clear::Absent,
-        checks: &[],
-    },
-    RowFeature {
         name: "app window",
         paths: &["app_window."],
         off: &[Off::Part("app_window")],
@@ -162,19 +129,28 @@ pub const ROW_FEATURES: &[RowFeature] = &[
         checks: &["address-suggest", "security-chip"],
     },
     RowFeature {
+        // DevTools on a chosen panel and the link under the pointer. Without them DevTools opens
+        // as the browser opens it, and a long press on a link stays a click.
+        name: "page tools",
+        paths: &["page_tools."],
+        off: &[Off::Part("page_tools")],
+        clear: Clear::Zero,
+        checks: &["link-preview"],
+    },
+    RowFeature {
+        // Without it a bubble keeps the place the browser gives it.
+        name: "bubble anchor",
+        paths: &["bubble_anchor"],
+        off: &[Off::Part("bubble_anchor")],
+        clear: Clear::Zero,
+        checks: &["permission-bubble", "password-bubble"],
+    },
+    RowFeature {
         // An empty list is a build without developer colours, whose page keeps the browser's own.
         name: "developer colours",
         paths: &["toolbar.dev.colours"],
         off: &[],
         clear: Clear::Empty,
-        checks: &["dev-row"],
-    },
-    RowFeature {
-        // Font functions recorded beside the developer colours. No runtime calls them.
-        name: "developer colours",
-        paths: &["toolbar.dev.font_list_new", "toolbar.dev.font_new"],
-        off: &[],
-        clear: Clear::Absent,
         checks: &["dev-row"],
     },
     RowFeature {
@@ -242,6 +218,8 @@ pub enum When {
     Absent(&'static str),
     /// A flag that is false.
     False(&'static str),
+    /// A flag that is not true: false, null or missing.
+    NotTrue(&'static str),
 }
 
 pub const UNUSED_WHEN: &[UnusedWhen] = &[
@@ -264,6 +242,15 @@ pub const UNUSED_WHEN: &[UnusedWhen] = &[
         paths: &["vertical.should_draw_tab_strip"],
         when: When::False("vertical.detour_strip"),
         why: "the build does not leave its tab strip out by a detour",
+    },
+    UnusedWhen {
+        paths: &[
+            "side_panel.layout_vtable",
+            "side_panel.proposed_slot",
+            "side_panel.proposed",
+        ],
+        when: When::NotTrue("side_panel.old_layout"),
+        why: "a Rivet window is an app window, laid out by the app layout class, not the tabbed one",
     },
 ];
 
@@ -313,6 +300,7 @@ pub fn unused(build: &Value, path: &str) -> Option<&'static str> {
                         at(build, address).is_some_and(|value| !is_recorded(value))
                     }
                     When::False(flag) => at(build, flag).and_then(Value::as_bool) == Some(false),
+                    When::NotTrue(flag) => at(build, flag).and_then(Value::as_bool) != Some(true),
                 }
         })
         .map(|rule| rule.why)
@@ -425,7 +413,7 @@ mod tests {
 
     #[test]
     fn nfr6_every_row_value_of_a_feature_has_one_switch() {
-        assert_eq!(feature_of("split.view_size").unwrap().name, "split view");
+        assert_eq!(feature_of("split.flex_layout_host").unwrap().name, "split view");
         assert_eq!(
             feature_of("toolbar.dev.colours[3][0]").unwrap().name,
             "developer colours"
@@ -480,6 +468,46 @@ mod tests {
         });
         assert!(unused(&build, "tabs.tab_collection").is_none());
         assert!(unused(&build, "vertical.toolbar_in_view").is_none());
+    }
+
+    #[test]
+    fn nfr6_page_tools_and_the_bubble_anchor_are_switched_off_as_parts() {
+        assert_eq!(
+            feature_of("page_tools.toggle_devtools[0]").unwrap().name,
+            "page tools"
+        );
+        assert_eq!(feature_of("bubble_anchor[1]").unwrap().name, "bubble anchor");
+        let mut build = json!({
+            "page_tools": {"update_target_url": ["0x2f475d0", "41574156"]},
+            "bubble_anchor": ["0xaa72dc0", "41574156"],
+            "omnibox": {"match_size": "0x1c8"},
+        });
+        turn_off(&mut build, "page tools");
+        turn_off(&mut build, "bubble anchor");
+        assert!(build["page_tools"].is_null());
+        assert!(build["bubble_anchor"].is_null());
+        assert_eq!(build["omnibox"]["match_size"], "0x1c8");
+        let row = json!({"switched_off": [{"feature": "bubble anchor"}]});
+        let excused = excused_checks(&row);
+        assert_eq!(excuses(&excused, "permission-bubble"), Some("bubble anchor"));
+        assert_eq!(excuses(&excused, "security-chip"), None);
+    }
+
+    #[test]
+    fn nfr6_the_tabbed_layout_is_not_a_value_of_a_build_without_the_old_layout() {
+        let build = json!({"side_panel": {"old_layout": null, "proposed": "0x13c8310"}});
+        for path in [
+            "side_panel.layout_vtable",
+            "side_panel.proposed_slot",
+            "side_panel.proposed",
+        ] {
+            assert!(unused(&build, path).is_some(), "{path}");
+        }
+        assert!(unused(&json!({"side_panel": {}}), "side_panel.proposed").is_some());
+        // An old-layout build lays out every window with the class its row records.
+        let old = json!({"side_panel": {"old_layout": true, "proposed": "0x13c8310"}});
+        assert!(unused(&old, "side_panel.proposed").is_none());
+        assert!(unused(&old, "side_panel.layout_vtable").is_none());
     }
 
     #[test]

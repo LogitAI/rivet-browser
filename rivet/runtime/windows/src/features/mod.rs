@@ -31,6 +31,5 @@ pub(crate) mod tab_list;
 pub(crate) mod tab_strip;
 pub(crate) mod tabs;
 pub(crate) mod tick_gate;
-pub(crate) mod vertical_tabs;
 pub(crate) mod widgets;
 pub(crate) mod window_corners;
