@@ -168,8 +168,14 @@ mod tests {
     #[test]
     fn nfr6_a_command_id_is_not_a_row_value() {
         // The developer commands follow the build's Chromium milestone, whatever its row holds.
-        assert_eq!(dev_tools("Google Chrome", [159, 0, 8154, 6]), (40023, 40005));
-        assert_eq!(dev_tools("Microsoft Edge", [157, 0, 4341, 46]), (40023, 40005));
+        assert_eq!(
+            dev_tools("Google Chrome", [159, 0, 8154, 6]),
+            (40023, 40005)
+        );
+        assert_eq!(
+            dev_tools("Microsoft Edge", [157, 0, 4341, 46]),
+            (40023, 40005)
+        );
         // A milestone whose header was not read offers no command.
         assert_eq!(dev_tools("Google Chrome", [149, 0, 1, 1]), (0, 0));
         assert_eq!(dev_tools("Samsung Internet", [30, 0, 4, 29]), (0, 0));

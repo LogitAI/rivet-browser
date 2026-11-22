@@ -909,10 +909,7 @@ pub(crate) unsafe fn on_page_area(area: &mut PageArea) {
             let animation = area.bounds(bv().side_panel_animation);
             let outline = area.bounds(bv().contents_outline);
             let panel_view = area.field(bv().side_panel);
-            let page = area
-                .page()
-                .map(|bounds| *bounds)
-                .unwrap_or([0; 4]);
+            let page = area.page().map(|bounds| *bounds).unwrap_or([0; 4]);
             // The page starts where the browser's vertical tab list ends.
             let left = area
                 .bounds(bv().vertical_tabs)

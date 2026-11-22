@@ -205,7 +205,11 @@ fn read_body(pe: &PeFile, ranges: &BTreeMap<u32, u32>, start: u32) -> Vec<Step> 
         if instruction.length == 0 || instruction.length > rest.len() {
             break;
         }
-        steps.push(step(&rest[..instruction.length], &instruction, start + at as u32));
+        steps.push(step(
+            &rest[..instruction.length],
+            &instruction,
+            start + at as u32,
+        ));
         at += instruction.length;
     }
     steps
@@ -275,7 +279,10 @@ fn named_sites(steps: &[Step]) -> HashMap<Vec<u8>, Vec<u32>> {
 
 /// Pairs what the two bodies of one function point at: sites named the same way, which each body
 /// has the same number of, in order.
-fn pair_sites(old: &HashMap<Vec<u8>, Vec<u32>>, new: &HashMap<Vec<u8>, Vec<u32>>) -> Vec<(u32, u32)> {
+fn pair_sites(
+    old: &HashMap<Vec<u8>, Vec<u32>>,
+    new: &HashMap<Vec<u8>, Vec<u32>>,
+) -> Vec<(u32, u32)> {
     let mut pairs = Vec::new();
     for (key, targets) in old {
         if let Some(others) = new.get(key).filter(|others| others.len() == targets.len()) {
@@ -423,7 +430,8 @@ fn calls_into(side: &Side, wanted: &BTreeSet<u32>) -> BTreeMap<u32, BTreeSet<u32
             if !matches!(bytes[at], 0xE8 | 0xE9) {
                 continue;
             }
-            let distance = i32::from_le_bytes([bytes[at + 1], bytes[at + 2], bytes[at + 3], bytes[at + 4]]);
+            let distance =
+                i32::from_le_bytes([bytes[at + 1], bytes[at + 2], bytes[at + 3], bytes[at + 4]]);
             let site = base + at as u32;
             let Ok(target) = u32::try_from(i64::from(site) + 5 + i64::from(distance)) else {
                 continue;
@@ -666,11 +674,14 @@ fn shared_slots(pe: &PeFile, table: u32, other: u32) -> u32 {
 /// it shares about as many inherited slots with it. What a class takes from its bases is a fact of
 /// the tables apart from the class's name, so it checks the table a name gives.
 fn by_sibling(old: &Side, new: &Side, pairs: &[(u32, u32)], target: u32, candidate: u32) -> bool {
-    pairs.iter().filter(|(from, _)| *from != target).any(|(from, to)| {
-        let before = shared_slots(old.pe, target, *from);
-        let after = shared_slots(new.pe, candidate, *to);
-        before >= SIBLING_LEAST && after * 10 >= before * 8 && after * 8 <= before * 10
-    })
+    pairs
+        .iter()
+        .filter(|(from, _)| *from != target)
+        .any(|(from, to)| {
+            let before = shared_slots(old.pe, target, *from);
+            let after = shared_slots(new.pe, candidate, *to);
+            before >= SIBLING_LEAST && after * 10 >= before * 8 && after * 8 <= before * 10
+        })
 }
 
 /// Tables of the new build that hold, near the same slot, a function the old table holds and
@@ -768,7 +779,8 @@ fn functions_using(side: &Side, texts: &BTreeSet<Vec<u8>>) -> BTreeMap<Vec<u8>, 
             {
                 continue;
             }
-            let distance = i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+            let distance =
+                i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
             let site = base + at as u32;
             let Ok(target) = u32::try_from(i64::from(site) + 4 + i64::from(distance)) else {
                 continue;
@@ -1169,10 +1181,9 @@ pub fn resolve(
                 Ok((place, methods)) => {
                     known.insert(target, place);
                     resolution.places.insert(target, place);
-                    resolution.settled.push(format!(
-                        "{target:#x} -> {place:#x} by {}",
-                        names(&methods)
-                    ));
+                    resolution
+                        .settled
+                        .push(format!("{target:#x} -> {place:#x} by {}", names(&methods)));
                     resolution.reasons.remove(&target);
                     pending.remove(&target);
                     found_any = true;
@@ -1245,7 +1256,8 @@ fn use_of(step: &Step, wanted: i64, slot: bool) -> Option<Operand> {
         return None;
     }
     if slot {
-        return (step.indirect && step.displacement == Some(wanted)).then_some(Operand::Displacement);
+        return (step.indirect && step.displacement == Some(wanted))
+            .then_some(Operand::Displacement);
     }
     if step.displacement == Some(wanted) {
         Some(Operand::Displacement)
@@ -1270,9 +1282,13 @@ fn read_value(
     if prior == 0 {
         return Err("zero is used too widely in code to be told apart".to_owned());
     }
-    let wanted = if slot { prior.checked_mul(8) } else { Some(prior) }
-        .and_then(|value| i64::try_from(value).ok())
-        .ok_or_else(|| format!("{prior:#x} is too large to be an operand"))?;
+    let wanted = if slot {
+        prior.checked_mul(8)
+    } else {
+        Some(prior)
+    }
+    .and_then(|value| i64::try_from(value).ok())
+    .ok_or_else(|| format!("{prior:#x} is too large to be an operand"))?;
     let mut found: Vec<(u64, u32)> = Vec::new();
     let mut uses = 0;
     for (from, to) in pairs {
@@ -1286,7 +1302,10 @@ fn read_value(
             };
             uses += 1;
             let key = &old_keys[index];
-            let rank = old_keys[..index].iter().filter(|other| *other == key).count();
+            let rank = old_keys[..index]
+                .iter()
+                .filter(|other| *other == key)
+                .count();
             let count = old_keys.iter().filter(|other| *other == key).count();
             let theirs: Vec<usize> = new_keys
                 .iter()
@@ -1367,7 +1386,11 @@ pub fn read_values(
     for (path, prior) in values {
         let section = path.split('.').next().unwrap_or_default();
         let name = path.rsplit('.').next().unwrap_or_default();
-        let slot = name.split('[').next().unwrap_or_default().ends_with("_slot");
+        let slot = name
+            .split('[')
+            .next()
+            .unwrap_or_default()
+            .ends_with("_slot");
         let pairs = pairs_of.get(section).map_or(&[][..], Vec::as_slice);
         readings.push(Reading {
             path: path.clone(),
@@ -1573,7 +1596,10 @@ pub(crate) mod tests {
         let alone = decide(&answers[..1], None).unwrap_err();
         assert!(alone.starts_with("only its class name found it"), "{alone}");
         // A place that is not one of the fingerprint's places gets no agreement from it.
-        assert_eq!(fingerprint_agrees(&BTreeSet::from([0x11b5_3000]), Some(candidates)), None);
+        assert_eq!(
+            fingerprint_agrees(&BTreeSet::from([0x11b5_3000]), Some(candidates)),
+            None
+        );
         // A table slot that gives two places gives the fingerprint nothing to agree with.
         let both: BTreeSet<u32> = candidates.iter().copied().collect();
         assert_eq!(fingerprint_agrees(&both, Some(candidates)), None);
@@ -1595,7 +1621,10 @@ pub(crate) mod tests {
         let resolution = run(&new_module(NEW_TARGETS[0]), false);
         assert!(resolution.places.is_empty());
         let reason = &resolution.reasons[&OLD_TARGET];
-        assert!(reason.starts_with("only calls into it found it"), "{reason}");
+        assert!(
+            reason.starts_with("only calls into it found it"),
+            "{reason}"
+        );
     }
 
     const VIEW_TARGET: u32 = 0x105000;
@@ -1682,12 +1711,18 @@ pub(crate) mod tests {
         let alone = run_views([true, true], &[VIEW_TABLE]);
         assert!(alone.places.is_empty());
         let reason = &alone.reasons[&VIEW_TARGET];
-        assert!(reason.starts_with("only its table slot found it"), "{reason}");
+        assert!(
+            reason.starts_with("only its table slot found it"),
+            "{reason}"
+        );
         // A second table that lines the slot up another way confirms nothing.
         let apart = run_views([true, false], &[VIEW_TABLE, OTHER_VIEW_TABLE]);
         assert!(apart.places.is_empty());
         let reason = &apart.reasons[&VIEW_TARGET];
-        assert!(reason.starts_with("only its table slot found it"), "{reason}");
+        assert!(
+            reason.starts_with("only its table slot found it"),
+            "{reason}"
+        );
     }
 
     /// push rbx; mov ebx, 5; xor eax, eax; call `first`; [call `second`;] nop; pop rbx; ret: a
@@ -1756,7 +1791,10 @@ pub(crate) mod tests {
     fn nfr6_a_place_outside_the_fingerprint_matches_is_refused() {
         let answers = [(Method::CallsInto, 0x103300), (Method::TableSlot, 0x103300)];
         let refused = decide(&answers, Some(&NEW_TARGETS[..])).unwrap_err();
-        assert!(refused.contains("not one of its fingerprint's places"), "{refused}");
+        assert!(
+            refused.contains("not one of its fingerprint's places"),
+            "{refused}"
+        );
         let (place, methods) = decide(&answers, None).unwrap();
         assert_eq!(place, 0x103300);
         assert_eq!(methods.len(), 2);
@@ -1767,8 +1805,11 @@ pub(crate) mod tests {
         // Two classes of one base hold the base's functions in the same slots. Edge 157's caption
         // button table was named by its class, and what it shares with the frame's table checks it.
         let functions: Vec<u32> = (0..12u32).map(|n| 0x101400 + 0x10 * n).collect();
-        let mut parts: Vec<(u32, Vec<u8>)> =
-            functions.iter().enumerate().map(|(n, at)| (*at, small(n as u8))).collect();
+        let mut parts: Vec<(u32, Vec<u8>)> = functions
+            .iter()
+            .enumerate()
+            .map(|(n, at)| (*at, small(n as u8)))
+            .collect();
         let mut own = functions.clone();
         own[10] = 0x101600;
         own[11] = 0x101610;
@@ -1776,7 +1817,12 @@ pub(crate) mod tests {
         parts.push((0x101610, small(41)));
         // A table of other functions throughout shares nothing.
         let other: Vec<u32> = (0..12u32).map(|n| 0x101700 + 0x10 * n).collect();
-        parts.extend(other.iter().enumerate().map(|(n, at)| (*at, small(50 + n as u8))));
+        parts.extend(
+            other
+                .iter()
+                .enumerate()
+                .map(|(n, at)| (*at, small(50 + n as u8))),
+        );
         parts.push((0x200100, table(&functions)));
         parts.push((0x200300, table(&own)));
         parts.push((0x200500, table(&other)));
@@ -1790,5 +1836,4 @@ pub(crate) mod tests {
         // The known table itself is no check of its own place.
         assert!(!by_sibling(&old, &new, &pairs, 0x200100, 0x200100));
     }
-
 }

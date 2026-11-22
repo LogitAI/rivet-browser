@@ -91,7 +91,9 @@ pub(crate) fn frame_view<M: Memory>(
     browser_view: usize,
     parent: usize,
 ) -> Option<usize> {
-    let holder = memory.word(browser_view + parent).filter(|holder| *holder != 0)?;
+    let holder = memory
+        .word(browser_view + parent)
+        .filter(|holder| *holder != 0)?;
     let frames: Vec<usize> = children(memory, holder, parent + 8)
         .into_iter()
         .filter(|child| *child != browser_view)
@@ -240,7 +242,8 @@ mod tests {
                 self.words.insert(child + PARENT, parent);
             }
             self.words.insert(parent + PARENT + 8, list);
-            self.words.insert(parent + PARENT + 16, list + children.len() * 8);
+            self.words
+                .insert(parent + PARENT + 16, list + children.len() * 8);
         }
     }
 
@@ -271,7 +274,11 @@ mod tests {
         tree.view(NON_CLIENT, BASE + 0x100_1000, "NonClientView");
         tree.view(BROWSER, BASE + 0x100_2000, BROWSER_VIEW);
         tree.view(FRAME, BASE + 0x100_3000, frame_name);
-        tree.view(CONTAINER, BASE + 0x100_4000, "WindowsCaptionButtonContainer");
+        tree.view(
+            CONTAINER,
+            BASE + 0x100_4000,
+            "WindowsCaptionButtonContainer",
+        );
         for (button, table) in BUTTONS.iter().zip(button_tables) {
             tree.view(*button, table, CAPTION_BUTTON);
         }
@@ -309,7 +316,10 @@ mod tests {
         assert_eq!((tables.frame, tables.caption), (None, None));
         // The walk starts only from a view named as the browser view.
         let tree = window("BrowserFrameViewWin", [BASE + 0x100_5000; 3]);
-        assert_eq!(tables_of(&tree, FRAME, PARENT, &is_table), Tables::default());
+        assert_eq!(
+            tables_of(&tree, FRAME, PARENT, &is_table),
+            Tables::default()
+        );
     }
 
     #[test]

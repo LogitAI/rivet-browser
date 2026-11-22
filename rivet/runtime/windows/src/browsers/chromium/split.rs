@@ -81,10 +81,7 @@ pub(crate) fn needs(build: &Build) -> Needs {
 /// the Sidebar left, and the toolbar follows the active page.
 pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) {
     let row = &crate::builds::get().side_panel;
-    if let (Some(toolbar), Some(contents)) = (
-        area.bounds(row.toolbar),
-        area.contents(),
-    ) {
+    if let (Some(toolbar), Some(contents)) = (area.bounds(row.toolbar), area.contents()) {
         if area.rail == 0 && active_is_split(area.window) {
             if let Some(page) = area.page() {
                 fill_area(&mut *contents, &*page);

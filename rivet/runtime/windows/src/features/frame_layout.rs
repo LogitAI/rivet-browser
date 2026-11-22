@@ -150,7 +150,10 @@ fn corner_table() -> usize {
 /// The browser view's class table, settled with the live browser view's as `frame_table` is.
 fn browser_view_table() -> usize {
     use crate::chromium::live_tables;
-    live_tables::table(bv().browser_view_view_vtable, live_tables::found().browser_view)
+    live_tables::table(
+        bv().browser_view_view_vtable,
+        live_tables::found().browser_view,
+    )
 }
 
 fn recorded_image() -> Result<Image, String> {
@@ -926,8 +929,7 @@ unsafe fn clip_panel(frame: *mut c_void) {
         return;
     };
     let base = image.base;
-    let Some(index) =
-        (0..0x100).find(|index| *browser.add(*index) == base + browser_view_table())
+    let Some(index) = (0..0x100).find(|index| *browser.add(*index) == base + browser_view_table())
     else {
         return;
     };

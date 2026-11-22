@@ -1071,7 +1071,11 @@ fn nfr3_chromium_157_rows_record_the_members_that_moved() {
         assert_eq!(build.tabs.browser_in_view, 0x558, "{name}");
         assert_eq!(build.side_panel.browser_offset, 0x558, "{name}");
         assert_eq!(build.layout.view_bounds_offset, 0x1C8, "{name}");
-        assert_eq!(build.layout.frame_browser_window_offset, Some(0x338), "{name}");
+        assert_eq!(
+            build.layout.frame_browser_window_offset,
+            Some(0x338),
+            "{name}"
+        );
         assert_eq!(build.layout.caption_container_offset, 0x3C0, "{name}");
         assert_eq!(
             (build.layout.top_inset_slot, build.layout.caption_paint_slot),

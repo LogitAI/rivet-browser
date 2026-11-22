@@ -140,13 +140,17 @@ fn is_listing_parent<M: Memory>(memory: &M, view: usize, parent: usize) -> bool 
 }
 
 fn children<M: Memory>(memory: &M, view: usize, field: usize) -> Vec<usize> {
-    let (Some(begin), Some(end)) = (memory.word(view + field), memory.word(view + field + 8)) else {
+    let (Some(begin), Some(end)) = (memory.word(view + field), memory.word(view + field + 8))
+    else {
         return Vec::new();
     };
     if begin == 0 || end < begin || (end - begin) % 8 != 0 || (end - begin) / 8 > 256 {
         return Vec::new();
     }
-    (begin..end).step_by(8).filter_map(|at| memory.word(at)).collect()
+    (begin..end)
+        .step_by(8)
+        .filter_map(|at| memory.word(at))
+        .collect()
 }
 
 /// The root of the view tree `view` is in: the view whose parent is null.
@@ -339,7 +343,12 @@ impl Slot {
     }
 
     fn known(&self, row: Option<usize>) -> Option<usize> {
-        match self.value.lock().unwrap_or_else(|error| error.into_inner()).0 {
+        match self
+            .value
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .0
+        {
             Settled::Known(known) => known,
             Settled::Unknown => row,
         }
@@ -373,10 +382,14 @@ pub(crate) unsafe fn host_field(layout: usize) -> Option<usize> {
     };
     let host = HOST.get(recorded(row.host_view), || fields().map(|found| found.host));
     PAGE_AREA.get(recorded(row.page_area), || {
-        fields().map(|found| found.page_area).filter(|fields| !fields.is_empty())
+        fields()
+            .map(|found| found.page_area)
+            .filter(|fields| !fields.is_empty())
     });
     CONTENTS.get(recorded(row.contents_container), || {
-        fields().map(|found| found.contents).filter(|fields| !fields.is_empty())
+        fields()
+            .map(|found| found.contents)
+            .filter(|fields| !fields.is_empty())
     });
     host
 }
@@ -402,9 +415,7 @@ pub(crate) unsafe fn frame_browser_view(frame: usize, host: Option<usize>) -> Op
     let field = FRAME.get(row, || {
         live().and_then(|live| frame_fields(live, frame, host, parent_field()))
     })?;
-    live()?
-        .word(frame + field)
-        .filter(|view| *view != 0)
+    live()?.word(frame + field).filter(|view| *view != 0)
 }
 
 /// Starts the view walk of `reflect` from `window`'s own `HWNDMessageHandler`, once per process, on
@@ -478,7 +489,9 @@ pub(crate) unsafe fn read_tables(
                 .is_some_and(|slot| slot >= ranges.text.0 && slot < ranges.text.1)
     };
     let tables = live_tables::note(live, browser_view, found.parent, image.base, &is_table);
-    crate::trace::trace(&format!("window views: class tables from live views {tables:x?}"));
+    crate::trace::trace(&format!(
+        "window views: class tables from live views {tables:x?}"
+    ));
     tables
 }
 
@@ -678,7 +691,10 @@ mod tests {
             frame_fields(&memory, FRAME, None, Some(PARENT)),
             Some(vec![0x340, 0x348])
         );
-        assert_eq!(frame_fields(&memory, FRAME, Some(OTHER), Some(PARENT)), None);
+        assert_eq!(
+            frame_fields(&memory, FRAME, Some(OTHER), Some(PARENT)),
+            None
+        );
         assert_eq!(frame_fields(&memory, FRAME, None, None), None);
     }
 
