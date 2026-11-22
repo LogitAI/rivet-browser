@@ -48,8 +48,15 @@ pub fn load_target(pe: &PeFile, at: u32) -> Option<(u32, bool)> {
         code_at = u32::try_from(i64::from(code_at) + skip as i64 + 5 + i64::from(rel)).ok()?;
     }
     let code = pe.read(code_at, 128)?;
-    let at = (0..code.len() - 7).find(|&i| {
-        code[i] == 0x48 && matches!(code[i + 1], 0x8D | 0x8B) && code[i + 2] == 0x05
+    // A function with a guarded stack frame first loads the stack cookie and mixes it with the
+    // stack pointer (`xor rax, rsp`). That load is not the function's result.
+    let at = (0..code.len() - 10).find(|&i| {
+        // Any 64-bit register: a function with a stack frame keeps its result in one it saved
+        // and moves it to `rax` at the end.
+        code[i] & 0xFB == 0x48
+            && matches!(code[i + 1], 0x8D | 0x8B)
+            && code[i + 2] & 0xC7 == 0x05
+            && code[i + 7..i + 10] != [0x48, 0x31, 0xE0]
     })?;
     let rel = i32::from_le_bytes(code[at + 3..at + 7].try_into().ok()?);
     let target = u32::try_from(i64::from(code_at) + at as i64 + 7 + i64::from(rel)).ok()?;
@@ -218,7 +225,7 @@ fn getters(pe: &PeFile, ranges: &BTreeMap<u32, u32>, found: (u32, bool)) -> BTre
     let loads = rip_uses(pe, &BTreeSet::from([found.0]));
     let mut getters: BTreeSet<u32> = loads
         .iter()
-        .filter(|each| each.register == 0 && each.word == found.1)
+        .filter(|each| each.word == found.1)
         .filter_map(|each| enclosing(ranges, each.at))
         .filter(|function| load_target(pe, *function) == Some(found))
         .collect();
@@ -359,8 +366,38 @@ fn stores_in(pe: &PeFile, start: u32, end: u32) -> Vec<Store> {
     stores
 }
 
-/// The table each constructor that writes `provider` writes at the start of the same object.
-fn first_tables(pe: &PeFile, ranges: &BTreeMap<u32, u32>, provider: u32) -> BTreeSet<u32> {
+/// The tables a constructor leaves in the object it writes `around` into, in the order of where
+/// they go. A constructor of a derived class writes over the tables of its bases, so the last
+/// store at each place counts.
+fn object_tables(stores: &[Store], around: &Store) -> Vec<(i64, u32)> {
+    let mut last: BTreeMap<i64, u32> = BTreeMap::new();
+    for store in stores.iter().filter(|store| store.base == around.base) {
+        last.insert(store.offset, store.table);
+    }
+    // Without the table at the object's start the places cannot be counted.
+    if !last.contains_key(&0) {
+        return Vec::new();
+    }
+    last.into_iter().collect()
+}
+
+/// A class name and which of its object's tables is meant: `BrowserView` is the table at the start
+/// of the object, `BrowserView#6` the seventh in the order of where they go. A class with several
+/// bases has a table for each, and the order of the bases is the class's own declaration.
+fn name_and_order(name: &str) -> (&str, usize) {
+    match name.split_once('#') {
+        Some((bare, order)) => (bare, order.parse().unwrap_or(usize::MAX)),
+        None => (name, 0),
+    }
+}
+
+/// The table each constructor that writes `provider` leaves at place `order` of the same object.
+fn tables_beside(
+    pe: &PeFile,
+    ranges: &BTreeMap<u32, u32>,
+    provider: u32,
+    order: usize,
+) -> BTreeSet<u32> {
     let writers: BTreeSet<u32> = rip_uses(pe, &BTreeSet::from([provider]))
         .iter()
         .filter(|each| !each.word)
@@ -370,32 +407,33 @@ fn first_tables(pe: &PeFile, ranges: &BTreeMap<u32, u32>, provider: u32) -> BTre
     for writer in writers {
         let stores = stores_in(pe, writer, ranges[&writer]);
         for written in stores.iter().filter(|store| store.table == provider) {
-            let first = stores
-                .iter()
-                .filter(|store| {
-                    store.base == written.base && store.offset == 0 && store.table != provider
-                })
-                .min_by_key(|store| store.index.abs_diff(written.index));
-            if let Some(first) = first {
-                found.insert(first.table);
+            let tables = object_tables(&stores, written);
+            // The provider's own table must be what the constructor leaves at its place.
+            if !tables.iter().any(|(at, table)| *at == written.offset && *table == provider) {
+                continue;
+            }
+            if let Some((_, table)) = tables.get(order) {
+                found.insert(*table);
             }
         }
     }
     found
 }
 
-/// The class tables of the views class `name` in `pe`, each the table at the start of its
-/// objects. More than one means the name does not tell one class table, and the caller takes none.
+/// The class tables of the views class `name` in `pe`, each the table at the place the name gives
+/// in its objects. More than one means the name does not tell one class table, and the caller
+/// takes none.
 pub fn class_tables(pe: &PeFile, name: &str) -> BTreeSet<u32> {
+    let (bare, order) = name_and_order(name);
     let ranges = pe.function_ranges();
     let mut found = BTreeSet::new();
-    for each in statics_of(pe, &ranges, name) {
+    for each in statics_of(pe, &ranges, bare) {
         let getters = getters(pe, &ranges, each);
-        if getters.is_empty() {
+        if getters.is_empty() || getters.len() > CALLERS_MOST {
             continue;
         }
         for provider in tables_holding(pe, &getters) {
-            found.extend(first_tables(pe, &ranges, provider));
+            found.extend(tables_beside(pe, &ranges, provider, order));
         }
     }
     found
@@ -461,27 +499,32 @@ fn body_of(pe: &PeFile, ranges: &BTreeMap<u32, u32>, start: u32) -> (Vec<u32>, V
     (loads, callees)
 }
 
-/// The metadata statics a class table's objects reach: each constructor that writes the table at
-/// the start of an object also writes other tables into it, and the second slot of the
-/// `ui::metadata::MetaDataProvider` table among them returns the class's static, as `getters` reads.
-fn statics_of_table(pe: &PeFile, ranges: &BTreeMap<u32, u32>, table: u32) -> BTreeSet<(u32, bool)> {
+/// The metadata statics a class table's objects reach, and the table's place among the object's
+/// tables: each constructor that writes the table into an object also writes other tables into it,
+/// and the second slot of the `ui::metadata::MetaDataProvider` table among them returns the class's
+/// static, as `getters` reads. Constructors that put the table at different places give no place.
+fn statics_of_table(
+    pe: &PeFile,
+    ranges: &BTreeMap<u32, u32>,
+    table: u32,
+) -> (BTreeSet<(u32, bool)>, Option<usize>) {
     let writers: BTreeSet<u32> = rip_uses(pe, &BTreeSet::from([table]))
         .iter()
         .filter(|each| !each.word)
         .filter_map(|each| enclosing(ranges, each.at))
         .collect();
     let mut found = BTreeSet::new();
+    let mut orders = BTreeSet::new();
     for writer in writers {
         let stores = stores_in(pe, writer, ranges[&writer]);
-        for first in stores
-            .iter()
-            .filter(|store| store.table == table && store.offset == 0)
-        {
-            for other in stores.iter().filter(|store| {
-                store.base == first.base && store.offset != 0 && store.table != table
-            }) {
-                let Some(getter) = pe.pointer_rva(other.table + 8).filter(|at| pe.is_code(*at))
-                else {
+        for written in stores.iter().filter(|store| store.table == table) {
+            let tables = object_tables(&stores, written);
+            let Some(order) = tables.iter().position(|(_, each)| *each == table) else {
+                continue;
+            };
+            orders.insert(order);
+            for (_, other) in tables.iter().filter(|(_, other)| *other != table) {
+                let Some(getter) = pe.pointer_rva(other + 8).filter(|at| pe.is_code(*at)) else {
                     continue;
                 };
                 if let Some(each) = load_target(pe, getter).filter(|(at, _)| !pe.is_code(*at)) {
@@ -490,7 +533,8 @@ fn statics_of_table(pe: &PeFile, ranges: &BTreeMap<u32, u32>, table: u32) -> BTr
             }
         }
     }
-    found
+    let order = (orders.len() == 1).then(|| orders.into_iter().next()).flatten();
+    (found, order)
 }
 
 /// The names the code that fills a metadata static loads, nearest first: the texts that the
@@ -534,7 +578,13 @@ fn names_of_static(
 pub fn class_name_of_table(pe: &PeFile, table: u32) -> Option<String> {
     let ranges = pe.function_ranges();
     let mut by_depth: Vec<Vec<String>> = Vec::new();
-    for each in statics_of_table(pe, &ranges, table) {
+    let (statics, order) = statics_of_table(pe, &ranges, table);
+    let order = order?;
+    let placed = |name: &str| match order {
+        0 => name.to_owned(),
+        order => format!("{name}#{order}"),
+    };
+    for each in statics {
         for (depth, names) in names_of_static(pe, &ranges, each).into_iter().enumerate() {
             if by_depth.len() <= depth {
                 by_depth.resize(depth + 1, Vec::new());
@@ -549,6 +599,7 @@ pub fn class_name_of_table(pe: &PeFile, table: u32) -> Option<String> {
             if tried.len() >= NAMES_MOST {
                 return None;
             }
+            let name = placed(&name);
             if tried.insert(name.clone()) && class_tables(pe, &name) == BTreeSet::from([table]) {
                 confirmed.insert(name);
             }
@@ -739,4 +790,31 @@ mod tests {
         let pe = PeFile::parse(&code).unwrap();
         assert_eq!(identifier_at(&pe, 0x2100), None);
     }
+    #[test]
+    fn nfr6_a_table_past_the_start_of_its_object_is_named_with_its_place() {
+        // A class with several bases has a table for each. The row's table of `BrowserView` is the
+        // seventh in Edge 156, and a name without the place would give the first.
+        assert_eq!(name_and_order("BrowserView#6"), ("BrowserView", 6));
+        assert_eq!(name_and_order("BrowserView"), ("BrowserView", 0));
+        let store = |table, offset| Store { index: 0, table, base: 6, offset };
+        let stores = [store(0x10, 0), store(0x20, 8), store(0x30, 0x1f8), store(0x11, 0)];
+        // A derived constructor's later store at a place replaces the base's.
+        assert_eq!(object_tables(&stores, &stores[1]), [(0, 0x11), (8, 0x20), (0x1f8, 0x30)]);
+        // An object whose first table is not seen gives no places.
+        assert!(object_tables(&stores[1..3], &stores[1]).is_empty());
+    }
+
+    #[test]
+    fn nfr6_the_stack_cookie_is_not_a_functions_result() {
+        // sub rsp; mov rax, [rip+cookie]; xor rax, rsp; mov [rsp+0x28], rax; mov rsi, [rip+static]
+        let mut code = vec![0x48, 0x83, 0xEC, 0x30];
+        code.extend([0x48, 0x8B, 0x05, 0x00, 0x10, 0x00, 0x00, 0x48, 0x31, 0xE0]);
+        code.extend([0x48, 0x89, 0x44, 0x24, 0x28]);
+        code.extend([0x48, 0x8B, 0x35, 0x00, 0x20, 0x00, 0x00]);
+        code.resize(160, 0xCC);
+        let bytes = module(&[(0x1000, code)], &[(0x1000, 0x10a0)]);
+        let pe = PeFile::parse(&bytes).unwrap();
+        assert_eq!(load_target(&pe, 0x1000), Some((0x1000 + 26 + 0x2000, true)));
+    }
+
 }
