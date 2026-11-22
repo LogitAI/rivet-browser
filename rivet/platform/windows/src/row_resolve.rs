@@ -56,6 +56,8 @@ const FOLLOW_LIMIT: usize = 4000;
 /// How many slots of a class table are read at most.
 const TABLE_SLOTS: u32 = 512;
 /// How many slots of a class table are compared to tell one table from another.
+/// How many slots a table must share with a known one before the sharing tells anything.
+const SIBLING_LEAST: u32 = 8;
 const TABLE_SEEN: u32 = 0x80;
 /// How many slots on each side of a slot are compared to line two tables up.
 const ALIGN_REACH: u32 = 6;
@@ -648,6 +650,29 @@ fn by_slots(
     passing
 }
 
+/// How many of a table's first slots hold the very function another table of the same build holds
+/// in that slot. Classes that share a base share the base's functions they do not replace.
+fn shared_slots(pe: &PeFile, table: u32, other: u32) -> u32 {
+    (0..TABLE_SEEN)
+        .map_while(|slot| {
+            let slot = i64::from(slot);
+            Some((entry(pe, table, slot)?, entry(pe, other, slot)?))
+        })
+        .filter(|(left, right)| left == right)
+        .count() as u32
+}
+
+/// Whether `candidate` stands to a table known in both builds as `target` did in the prior build:
+/// it shares about as many inherited slots with it. What a class takes from its bases is a fact of
+/// the tables apart from the class's name, so it checks the table a name gives.
+fn by_sibling(old: &Side, new: &Side, pairs: &[(u32, u32)], target: u32, candidate: u32) -> bool {
+    pairs.iter().filter(|(from, _)| *from != target).any(|(from, to)| {
+        let before = shared_slots(old.pe, target, *from);
+        let after = shared_slots(new.pe, candidate, *to);
+        before >= SIBLING_LEAST && after * 10 >= before * 8 && after * 8 <= before * 10
+    })
+}
+
 /// Tables of the new build that hold, near the same slot, a function the old table holds and
 /// whose place is known.
 fn table_candidates(old: &Side, new: &Side, known: &BTreeMap<u32, u32>, target: u32) -> Vec<u32> {
@@ -772,6 +797,7 @@ pub enum Method {
     SlotShift,
     Command,
     KnownCaller,
+    Sibling,
 }
 
 impl fmt::Display for Method {
@@ -788,6 +814,7 @@ impl fmt::Display for Method {
             Method::SlotShift => "its slot shift",
             Method::Command => "its command id",
             Method::KnownCaller => "a known caller",
+            Method::Sibling => "the slots it shares with a known table",
         })
     }
 }
@@ -1104,6 +1131,9 @@ pub fn resolve(
                     let mut slots = by_slots(&old, &new, &known, target, &candidates);
                     if let Some(place) = by_class.get(&target).copied() {
                         answers.push((Method::ClassName, place));
+                        if by_sibling(&old, &new, &table_pairs, target, place) {
+                            answers.push((Method::Sibling, place));
+                        }
                         let given = BTreeSet::from([place]);
                         answers.extend(fingerprint_agrees(&given, want.candidates.as_deref()));
                         // Several tables holding the same slots is no answer of their own; the
@@ -1115,6 +1145,28 @@ pub fn resolve(
                     for place in slots {
                         answers.push((Method::Slots, place));
                     }
+                }
+            }
+            // A function may start with a jump over a few bytes to its body, and the exception
+            // table then lists the body as a start of its own. A method that names the body means
+            // the function another method names by its real start.
+            let starts: Vec<u32> = answers.iter().map(|(_, place)| *place).collect();
+            for (_, place) in &mut answers {
+                let start = starts.iter().copied().find(|start| {
+                    *start < *place
+                        && *place - *start <= 16
+                        && new.pe.read(*start, 5).is_some_and(|head| {
+                            head[0] == 0xE9
+                                && i64::from(*start)
+                                    + 5
+                                    + i64::from(i32::from_le_bytes(
+                                        head[1..5].try_into().expect("four bytes"),
+                                    ))
+                                    == i64::from(*place)
+                        })
+                });
+                if let Some(start) = start {
+                    *place = start;
                 }
             }
             match decide(&answers, want.candidates.as_deref()) {
@@ -1734,4 +1786,33 @@ pub(crate) mod tests {
         assert_eq!(methods.len(), 2);
         assert_eq!(decide(&[], None).unwrap_err(), "no method found it");
     }
+    #[test]
+    fn nfr6_a_table_a_class_name_gives_is_checked_by_the_slots_it_shares_with_a_known_table() {
+        // Two classes of one base hold the base's functions in the same slots. Edge 157's caption
+        // button table was named by its class, and what it shares with the frame's table checks it.
+        let functions: Vec<u32> = (0..12u32).map(|n| 0x101400 + 0x10 * n).collect();
+        let mut parts: Vec<(u32, Vec<u8>)> =
+            functions.iter().enumerate().map(|(n, at)| (*at, small(n as u8))).collect();
+        let mut own = functions.clone();
+        own[10] = 0x101600;
+        own[11] = 0x101610;
+        parts.push((0x101600, small(40)));
+        parts.push((0x101610, small(41)));
+        // A table of other functions throughout shares nothing.
+        let other: Vec<u32> = (0..12u32).map(|n| 0x101700 + 0x10 * n).collect();
+        parts.extend(other.iter().enumerate().map(|(n, at)| (*at, small(50 + n as u8))));
+        parts.push((0x200100, table(&functions)));
+        parts.push((0x200300, table(&own)));
+        parts.push((0x200500, table(&other)));
+        let bytes = module(&parts, &[]);
+        let pe = PeFile::parse(&bytes).unwrap();
+        assert_eq!(shared_slots(&pe, 0x200300, 0x200100), 10);
+        let (old, new) = (Side::new(&pe), Side::new(&pe));
+        let pairs = [(0x200100, 0x200100)];
+        assert!(by_sibling(&old, &new, &pairs, 0x200300, 0x200300));
+        assert!(!by_sibling(&old, &new, &pairs, 0x200300, 0x200500));
+        // The known table itself is no check of its own place.
+        assert!(!by_sibling(&old, &new, &pairs, 0x200100, 0x200100));
+    }
+
 }
