@@ -831,9 +831,6 @@ const READ_FROM_CODE: &[&str] = &[
 /// build.
 fn settle_carried(row: &mut Value, report: &mut PortReport) {
     use crate::row_features::{self, Clear, RowFeature};
-    report
-        .derived
-        .extend(crate::row_recipe::follow(&mut row["build"]));
     let mut off: BTreeMap<&'static str, (&'static RowFeature, Vec<String>)> = BTreeMap::new();
     for (path, reason) in std::mem::take(&mut report.off_values) {
         if let Some(feature) = row_features::feature_of(&path) {

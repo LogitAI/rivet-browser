@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) const DEV_CHROME_156: DevMode = DevMode {
+const DEV_CHROME_156: DevMode = DevMode {
     colours: &[
         (0x13C, DEV_GROUND),
         (1590, DEV_GROUND),
@@ -29,21 +29,6 @@ pub(super) const DEV_CHROME_156: DevMode = DevMode {
         (1055, DEV_ICON_HOT),
         (1056, DEV_ICON),
     ],
-    ..UNCHECKED_DEV
-};
-
-/// Chrome 156.0.8078.74, whose font functions are read from its public symbols and checked against
-/// the module file.
-const DEV_CHROME_156_74: DevMode = DevMode {
-    font_new: 0x02F7_2AE0, // ??0Font@gfx@@QEAA@AEBV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@H@Z
-    font_new_prologue: &[
-        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2,
-    ],
-    font_list_new: 0x02F7_27D0, // ??0FontList@gfx@@QEAA@AEBVFont@1@@Z
-    font_list_new_prologue: &[
-        0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE,
-    ],
-    ..DEV_CHROME_156
 };
 
 pub static CHROME: Build = Build {
@@ -59,10 +44,6 @@ pub static CHROME: Build = Build {
         get_widget_slot: Some(11),
         dev: DEV_CHROME_156,
         get_color: 0x04AA24F0,
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x00D5_64A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x0315_C7C0, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
@@ -255,7 +236,6 @@ pub static CHROME: Build = Build {
         flex_layout: 0x054FCC60, // views::FlexLayout::CalculateProposedLayout
         flex_layout_host: 0x38,
         location_bar_vtable: 0x0FE86BE8, // LocationBarView primary vtable
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0A20_5410,
@@ -381,7 +361,6 @@ pub static CHROME: Build = Build {
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E],
-        top_inset_adjust: 0,
     },
 };
 
@@ -407,8 +386,6 @@ pub static CHROME_156_74: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x5A1E310,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x12, 0xD5, 0x21, 0xFE,
@@ -461,12 +438,8 @@ pub static CHROME_156_74: Build = Build {
     version: [156, 0, 8078, 74],
     toolbar: Toolbar {
         get_widget_slot: Some(11),
-        dev: DEV_CHROME_156_74,
+        dev: DEV_CHROME_156,
         get_color: 0x0535_9A80,
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x02F4_6B00, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x02F4_8CE0, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
@@ -659,7 +632,6 @@ pub static CHROME_156_74: Build = Build {
         flex_layout: 0x0522_E1B0, // views::FlexLayout::CalculateProposedLayout
         flex_layout_host: 0x38,
         location_bar_vtable: 0x0FCF_8EF0, // LocationBarView primary vtable
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x09FC_3C40,
@@ -785,21 +757,7 @@ pub static CHROME_156_74: Build = Build {
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E],
-        top_inset_adjust: 0,
     },
-};
-
-/// Chrome 156.0.8078.80's font functions, found by name in its public symbols and unverified.
-const DEV_CHROME_156_80: DevMode = DevMode {
-    font_new: 0x02FC_50E0, // ??0Font@gfx@@QEAA@AEBV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@H@Z
-    font_new_prologue: &[
-        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2,
-    ],
-    font_list_new: 0x02FC_4DD0, // ??0FontList@gfx@@QEAA@AEBVFont@1@@Z
-    font_list_new_prologue: &[
-        0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE,
-    ],
-    ..DEV_CHROME_156
 };
 
 /// Google Chrome 156.0.8078.80, ported by name from the 156.0.8078.74 row with this build's own public
@@ -827,8 +785,6 @@ pub static CHROME_156_80: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x59FC170,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0xB2, 0x85, 0x20, 0xFE,
@@ -881,12 +837,8 @@ pub static CHROME_156_80: Build = Build {
     version: [156, 0, 8078, 80],
     toolbar: Toolbar {
         get_widget_slot: Some(11),
-        dev: DEV_CHROME_156_80,
+        dev: DEV_CHROME_156,
         get_color: 0x052B_06D0,
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x02F9_C1F0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x02F9_E210, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
@@ -1079,7 +1031,6 @@ pub static CHROME_156_80: Build = Build {
         flex_layout: 0x051C_9140, // views::FlexLayout::CalculateProposedLayout
         flex_layout_host: 0x38,
         location_bar_vtable: 0x0FCF_3E30, // LocationBarView primary vtable
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x09FB_8F00,
@@ -1205,11 +1156,10 @@ pub static CHROME_156_80: Build = Build {
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E],
-        top_inset_adjust: 0,
     },
 };
 
-/// Chrome 157.0.8103.38's font functions and colour ids, found by name in its public symbols and
+/// Chrome 157.0.8103.38's colour ids, found by name in its public symbols and
 /// in its colour id tables. Unverified.
 const DEV_CHROME_157_38: DevMode = DevMode {
     colours: &[
@@ -1238,15 +1188,6 @@ const DEV_CHROME_157_38: DevMode = DevMode {
         (1062, DEV_ICON_HOT),
         (1063, DEV_ICON),
     ],
-    font_new: 0x0323_9230, // ??0Font@gfx@@QEAA@AEBV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@H@Z
-    font_new_prologue: &[
-        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2,
-    ],
-    font_list_new: 0x0323_8F10, // ??0FontList@gfx@@QEAA@AEBVFont@1@@Z
-    font_list_new_prologue: &[
-        0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE,
-    ],
-    ..DEV_CHROME_156
 };
 
 /// Google Chrome 157.0.8103.38, ported by name from the 156.0.8078.80 row with this build's own public
@@ -1275,8 +1216,6 @@ pub static CHROME_157_38: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x5E75E90,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x82, 0xB1, 0x05, 0xFE,
@@ -1331,10 +1270,6 @@ pub static CHROME_157_38: Build = Build {
         get_widget_slot: Some(11),
         dev: DEV_CHROME_157_38,
         get_color: 0x0454_F050,
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x00E1_3BC0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x0321_2390, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
@@ -1527,7 +1462,6 @@ pub static CHROME_157_38: Build = Build {
         flex_layout: 0x0545_7A60, // views::FlexLayout::CalculateProposedLayout
         flex_layout_host: 0x38,
         location_bar_vtable: 0x1015_9FB0, // LocationBarView primary vtable
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0A89_FA40,
@@ -1653,7 +1587,6 @@ pub static CHROME_157_38: Build = Build {
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
         caption_ink_ids: &[0x673, 0x674, 0x675],
-        top_inset_adjust: 0,
     },
 };
 
@@ -1724,6 +1657,5 @@ pub static CHROME_150: Build = Build {
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
         caption_ink_ids: &[1593, 1594, 1595],
-        top_inset_adjust: 0,
     },
 };

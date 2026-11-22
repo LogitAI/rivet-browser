@@ -1,10 +1,8 @@
 //! Rows for Microsoft Edge builds.
 
-use super::chrome::DEV_CHROME_156;
 use super::*;
 
-/// Edge 156.0.4314.50. Its colour ids sit 88 to 101 above Chrome's. The font functions are read from
-/// its public symbols and checked against the module file.
+/// Edge 156.0.4314.50. Its colour ids sit 88 to 101 above Chrome's.
 const DEV_EDGE_156: DevMode = DevMode {
     colours: &[
         (316, DEV_GROUND),
@@ -36,15 +34,6 @@ const DEV_EDGE_156: DevMode = DevMode {
         (2351, DEV_ICON),
         (3009, 0),
     ],
-    font_new: 0x0267_058C, // ??0Font@gfx@@QEAA@AEBV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@H@Z
-    font_new_prologue: &[
-        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2,
-    ],
-    font_list_new: 0x02B0_FDCE, // ??0FontList@gfx@@QEAA@AEBVFont@1@@Z
-    font_list_new_prologue: &[
-        0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE,
-    ],
-    ..DEV_CHROME_156
 };
 
 pub static EDGE: Build = Build {
@@ -60,10 +49,6 @@ pub static EDGE: Build = Build {
         get_widget_slot: Some(10),
         dev: DEV_EDGE_156,
         get_color: 0x0100309E,
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89,
-            0xD7, 0x48,
-        ],
         content_window_for_hwnd: 0x026A4DC6, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x028C8D78, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "updateicon anchor visible", // the address field, icons and bubble anchors are not recorded for Edge yet
@@ -254,7 +239,6 @@ pub static EDGE: Build = Build {
         flex_layout: 0x0100A8E0, // ?CalculateProposedLayout@FlexLayout@views
         flex_layout_host: 0x38,
         location_bar_vtable: 0x11874078, // ??_7LocationBarView@@6BLayerDelegate@ui@@@
-        view_size: 0x1D0,                // Chrome value, not checked on Edge
         signatures: &[
             (
                 0x0A40C036,
@@ -385,6 +369,5 @@ pub static EDGE: Build = Build {
         browser_window_in_view: 0x1F8, // BrowserWindow subobject distance from the BrowserView, read by GetBrowserView
         caption_paint_prologue: &[0xE9, 0x01, 0x00, 0x00, 0x00, 0xCC, 0x41, 0x57],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E], // Chrome value, not checked on Edge
-        top_inset_adjust: 0,
     },
 };

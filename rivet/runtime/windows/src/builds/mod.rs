@@ -102,7 +102,6 @@ pub struct Omnibox {
     pub controller_published_result: usize,
     pub input_new: usize,
     pub input_drop: usize,
-    pub input_size: usize,
     pub input_prevent_inline: usize,
     pub input_omit_asynchronous: usize,
     pub start: usize,
@@ -139,11 +138,6 @@ pub struct AppWindow {
     pub detach_prologue: &'static [u8],
     pub insert: Option<usize>,
     pub insert_prologue: &'static [u8],
-    /// A `views::View` keeps its parent at this offset and its children vector right after it. Kept
-    /// for runtimes that read them from the row; this runtime takes both from the layout's bounds
-    /// offset, by the member order of `views::View`.
-    pub view_parent: usize,
-    pub view_children: usize,
     /// `operator new(size)`, `views::WebView::WebView(this, context)` and the object's size.
     pub operator_new: usize,
     pub operator_new_prologue: &'static [u8],
@@ -195,7 +189,6 @@ pub struct Toolbar {
     /// `ui::ColorProvider::GetColor(this, id)`. A provider makes a colour the first time it is asked
     /// for it, so one that was never asked for is asked for before its value is replaced.
     pub get_color: usize,
-    pub get_color_bytes: &'static [u8],
     /// `views::DesktopWindowTreeHostWin::GetContentWindowForHWND` and
     /// `views::Widget::GetWidgetForNativeWindow`.
     pub content_window_for_hwnd: usize,
@@ -427,8 +420,6 @@ pub struct Split {
     pub flex_layout_host: usize,
     /// The primary vtable of `LocationBarView`, which tells the top row's container among all hosts.
     pub location_bar_vtable: usize,
-    /// Where a view keeps its size, two ints.
-    pub view_size: usize,
     /// The first instructions of the functions the split and group calls need.
     pub signatures: &'static [(usize, &'static [u8])],
 }
@@ -614,11 +605,6 @@ pub struct Layout {
     /// Colour ids `WindowsCaptionButton::PaintButtonContents` reads for its glyphs: active, inactive
     /// and on the toolbar. Ids shift between milestones.
     pub caption_ink_ids: &'static [i32],
-    /// Added to the top inset a Rivet window reports, in DIPs. Chrome's client area begins at the top
-    /// of the frame in its one-row layout, whatever the inset says, so Rivet's extra title height only
-    /// reaches the caption buttons. Brave's client area begins at the inset, which would leave the
-    /// page lower than the row, so its extra cancels out.
-    pub top_inset_adjust: i32,
 }
 }
 
@@ -630,22 +616,10 @@ pub struct DevMode {
     /// A build with no colours has no developer bar. The bar's browser commands are Chromium's
     /// public command ids, which come from `browsers::chromium::commands`, not from the row.
     pub colours: &'static [(i32, u32)],
-    /// `gfx::Font::Font(this, &name, size)` and `gfx::FontList::FontList(this, &font)`, which build
-    /// the monospace font of the address. A build without them keeps the address in its own font.
-    pub font_new: usize,
-    pub font_new_prologue: &'static [u8],
-    pub font_list_new: usize,
-    pub font_list_new_prologue: &'static [u8],
 }
 }
 
-const UNCHECKED_DEV: DevMode = DevMode {
-    colours: &[],
-    font_new: ABSENT,
-    font_new_prologue: &[0],
-    font_list_new: ABSENT,
-    font_list_new_prologue: &[0],
-};
+const UNCHECKED_DEV: DevMode = DevMode { colours: &[] };
 
 const DEV_GROUND: u32 = 0xFF2A_2C31;
 const DEV_RULE: u32 = 0xFF17_181B;
@@ -663,7 +637,6 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     skip: "",
     toolbar_layout: ABSENT,
     get_color: ABSENT,
-    get_color_bytes: &[0],
 };
 
 const UNCHECKED_VERTICALTABS: VerticalTabs = VerticalTabs {
@@ -783,7 +756,6 @@ const UNCHECKED_SPLIT: Split = Split {
     flex_layout: ABSENT,
     flex_layout_host: 0,
     location_bar_vtable: ABSENT,
-    view_size: 0,
     signatures: &[],
 };
 
@@ -883,7 +855,6 @@ const UNCHECKED_LAYOUT: Layout = Layout {
     browser_window_in_view: 0,
     caption_paint_prologue: &[0],
     caption_ink_ids: &[],
-    top_inset_adjust: 0,
 };
 
 /// Why a row leaves a feature off though it may record some of its addresses. A feature whose

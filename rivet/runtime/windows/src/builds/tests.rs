@@ -646,44 +646,6 @@ fn fr11_developer_commands_are_those_of_the_devtools_keys() {
 }
 
 #[test]
-fn fr11_edge_156_developer_font_functions_match_the_installed_build() {
-    let path = r"C:\Program Files (x86)\Microsoft\Edge\Application\156.0.4314.50\msedge.dll";
-    let Ok(file) = std::fs::read(path) else {
-        return;
-    };
-    let dev = &EDGE.toolbar.dev;
-    for (name, rva, prologue) in [
-        ("font", dev.font_new, dev.font_new_prologue),
-        ("font list", dev.font_list_new, dev.font_list_new_prologue),
-    ] {
-        assert_eq!(
-            file_bytes(&file, rva, prologue.len()).as_deref(),
-            Some(prologue),
-            "{name} prologue does not match msedge.dll"
-        );
-    }
-}
-
-#[test]
-fn fr11_chrome_156_74_developer_font_functions_match_the_installed_build() {
-    let path = r"C:\Program Files\Google\Chrome\Application\156.0.8078.74\chrome.dll";
-    let Ok(file) = std::fs::read(path) else {
-        return;
-    };
-    let dev = &CHROME_156_74.toolbar.dev;
-    for (name, rva, prologue) in [
-        ("font", dev.font_new, dev.font_new_prologue),
-        ("font list", dev.font_list_new, dev.font_list_new_prologue),
-    ] {
-        assert_eq!(
-            file_bytes(&file, rva, prologue.len()).as_deref(),
-            Some(prologue),
-            "{name}"
-        );
-    }
-}
-
-#[test]
 fn fr9_samsung_split_records_only_the_calls_it_verified() {
     let row = &SAMSUNG.split;
     assert!(!row.supported && row.split_adds_active && row.split_vector_ends_by_pointer);
@@ -1107,8 +1069,8 @@ fn nfr3_chromium_157_rows_record_the_members_that_moved() {
         let row = build.app_window.as_ref().unwrap();
         assert_eq!(row.web_view_size, 0x520, "{name}");
         assert_eq!(
-            (row.view_parent, row.view_children),
-            (0x198, 0x1A0),
+            crate::features::app_window::view_fields(build),
+            Some((0x198, 0x1A0)),
             "{name}"
         );
     }
@@ -1224,11 +1186,6 @@ fn check_brave_toolbar_hooks(brave: &Build) {
         return;
     };
     for (name, rva, prologue) in [
-        (
-            "colour",
-            brave.toolbar.get_color,
-            brave.toolbar.get_color_bytes,
-        ),
         (
             "view invalidation",
             brave.vertical.invalidate_layout,
@@ -1611,17 +1568,22 @@ fn nfr6_a_table_row_carries_the_page_tools_and_bubble_anchor_of_its_prior_row() 
 }
 
 /// The parent and children of a view follow from its bounds by the member order of `views::View`.
-/// Every row that recorded them by hand agrees, so the rule replaces them.
+/// Every row that once recorded them by hand held these values, so the rule replaced them.
 #[test]
 fn nfr6_a_views_parent_and_children_are_not_row_values() {
     let mut seen = 0;
     for build in compiled() {
-        let Some(row) = build.app_window.as_ref() else {
+        if build.app_window.is_none() {
             continue;
+        }
+        let expected = match build.layout.view_bounds_offset {
+            0x1C8 => (0x198, 0x1A0),
+            0x1C0 => (0x190, 0x198),
+            other => panic!("{} keeps a view's bounds at {other:#x}", build.browser),
         };
         assert_eq!(
             crate::features::app_window::view_fields(build),
-            Some((row.view_parent, row.view_children)),
+            Some(expected),
             "{} {:?}",
             build.browser,
             build.version
@@ -1629,6 +1591,10 @@ fn nfr6_a_views_parent_and_children_are_not_row_values() {
         seen += 1;
     }
     assert!(seen >= 5, "{seen}");
+    // The row holds neither value.
+    let row = crate::row_data::RowValue::to_row(&CHROME_157_38);
+    assert!(row["app_window"].get("view_parent").is_none());
+    assert!(row["app_window"].get("view_children").is_none());
     // A row the bounds offset of which moves gives the parent and children of that build.
     let mut moved = crate::row_data::RowValue::to_row(&CHROME_157_38);
     moved["layout"]["view_bounds_offset"] = serde_json::json!("0x1d0");

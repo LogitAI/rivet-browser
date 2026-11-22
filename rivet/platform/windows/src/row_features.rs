@@ -170,14 +170,6 @@ pub const ROW_FEATURES: &[RowFeature] = &[
         checks: &["dev-row"],
     },
     RowFeature {
-        // Font functions recorded beside the developer colours. No runtime calls them.
-        name: "developer colours",
-        paths: &["toolbar.dev.font_list_new", "toolbar.dev.font_new"],
-        off: &[],
-        clear: Clear::Absent,
-        checks: &["dev-row"],
-    },
-    RowFeature {
         name: "frame colour",
         paths: &["layout.frame_ids", "layout.caption_ink_ids"],
         off: &[Off::Flag("layout.provider_verified")],
@@ -425,7 +417,7 @@ mod tests {
 
     #[test]
     fn nfr6_every_row_value_of_a_feature_has_one_switch() {
-        assert_eq!(feature_of("split.view_size").unwrap().name, "split view");
+        assert_eq!(feature_of("split.flex_layout_host").unwrap().name, "split view");
         assert_eq!(
             feature_of("toolbar.dev.colours[3][0]").unwrap().name,
             "developer colours"

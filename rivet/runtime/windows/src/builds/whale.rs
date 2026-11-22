@@ -41,8 +41,6 @@ pub static WHALE: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x50,
             0x44, 0x89,
         ],
-        view_parent: 0x190,
-        view_children: 0x198,
         operator_new: 0x3E4AB40,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xEB, 0x0F, 0x48, 0x8B, 0xCB,
@@ -289,7 +287,6 @@ pub static WHALE: Build = Build {
         flex_layout: crate::builds::ABSENT,
         flex_layout_host: 0,
         location_bar_vtable: crate::builds::ABSENT,
-        view_size: 0,
         signatures: &[
             (
                 0x0819_0FB0,

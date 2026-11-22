@@ -1,6 +1,5 @@
 //! Rows for Brave builds.
 
-use super::chrome::DEV_CHROME_156;
 use super::*;
 
 /// Brave's colour ids sit 17 above Chrome's from 574 on.
@@ -31,7 +30,6 @@ const DEV_BRAVE_156: DevMode = DevMode {
         (1072, DEV_ICON_HOT),
         (1073, DEV_ICON),
     ],
-    ..DEV_CHROME_156
 };
 
 /// Brave 156.1.98.62 (Chromium 156.0.8078.74). Brave publishes its symbols, so this row is filled from
@@ -52,10 +50,6 @@ pub static BRAVE: Build = Build {
         get_widget_slot: Some(11),
         dev: DEV_BRAVE_156,
         get_color: 0x06A9A890, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x02EE93A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x02EEBD70, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
@@ -202,7 +196,6 @@ pub static BRAVE: Build = Build {
         flex_layout: 0x067B5A30, // ?CalculateProposedLayout@FlexLayout@views
         flex_layout_host: 0x38,
         location_bar_vtable: ABSENT,
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0B4E1CF0,
@@ -298,7 +291,6 @@ pub static BRAVE: Build = Build {
         frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
-        top_inset_adjust: -12,
         provider_verified: true,
     },
 };
@@ -327,8 +319,6 @@ pub static BRAVE_63: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x6F4DE00,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0xD2, 0xCB, 0x22, 0xFE,
@@ -383,10 +373,6 @@ pub static BRAVE_63: Build = Build {
         get_widget_slot: Some(11),
         dev: DEV_BRAVE_156,
         get_color: 0x06A5CB00, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x02F353F0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x02F37C00, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
@@ -533,7 +519,6 @@ pub static BRAVE_63: Build = Build {
         flex_layout: 0x06746FC0, // ?CalculateProposedLayout@FlexLayout@views
         flex_layout_host: 0x38,
         location_bar_vtable: 0x11133840, // ??_7LocationBarView@@6BLayerDelegate@ui@@@, found statically and unverified
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0B49DD10,
@@ -666,7 +651,6 @@ pub static BRAVE_63: Build = Build {
         frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
-        top_inset_adjust: 0, // Chromium's own GetTopInset, as on Chrome
         provider_verified: true,
     },
 };
@@ -700,7 +684,6 @@ const DEV_BRAVE_157: DevMode = DevMode {
         (1079, DEV_ICON_HOT),
         (1080, DEV_ICON),
     ],
-    ..DEV_CHROME_156
 };
 
 /// Brave 157.1.99.55 (Chromium 157.0.8103.39), ported by name from the 156.1.98.63 row with this
@@ -729,8 +712,6 @@ pub static BRAVE_157_55: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x73F5220,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x02, 0x5B, 0x09, 0xFE,
@@ -785,10 +766,6 @@ pub static BRAVE_157_55: Build = Build {
         get_widget_slot: Some(11),
         dev: DEV_BRAVE_157,
         get_color: 0x05B6CB30, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x00D6A480, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x03153E70, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
@@ -935,7 +912,6 @@ pub static BRAVE_157_55: Build = Build {
         flex_layout: 0x069ED3B0, // ?CalculateProposedLayout@FlexLayout@views
         flex_layout_host: 0x38,
         location_bar_vtable: 0x115CC710, // ??_7LocationBarView@@6BLayerDelegate@ui@@@, found statically and unverified
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0BDD3650,
@@ -1068,7 +1044,6 @@ pub static BRAVE_157_55: Build = Build {
         frame_browser_window_offset: Some(0x338),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x684, 0x685, 0x686],
-        top_inset_adjust: 0, // Chromium's own GetTopInset, as on Chrome
         provider_verified: true,
     },
 };
