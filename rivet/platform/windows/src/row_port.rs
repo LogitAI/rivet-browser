@@ -1845,6 +1845,9 @@ pub struct FeatureScore {
     /// Values no method placed in the new build, so the made row still shows the prior build's and
     /// a review line stops the row. Not a wrong value: the row is not published.
     pub not_found: Vec<String>,
+    /// Values the made row holds exactly as the prior row did although the verified row differs:
+    /// nothing read them again. Wrong only in a row no review line stops.
+    pub carried: Vec<String>,
     /// The made row turns the feature off, so none of its values is used.
     pub off: bool,
     /// Values the made row does not hold or does not use: the runtime finds them by reflection,
@@ -1864,13 +1867,25 @@ pub struct RowScore {
 }
 
 impl RowScore {
-    /// How many values were found but differ from the verified row. Must be zero.
+    /// How many values were found but differ from the verified row, with the values carried from
+    /// the prior build when no review line stops the row. Must be zero.
     pub fn wrong(&self) -> usize {
         self.features
             .values()
-            .map(|score| score.different.len())
+            .map(|score| match self.review.is_empty() {
+                true => score.different.len() + score.carried.len(),
+                false => score.different.len(),
+            })
             .sum()
     }
+}
+
+/// The address a value was read at: the function of a prologue, or the first item of a pair.
+fn read_at(path: &str) -> Option<String> {
+    if let Some(function) = path.strip_suffix("_prologue") {
+        return Some(function.to_owned());
+    }
+    path.strip_suffix("[1]").map(|pair| format!("{pair}[0]"))
 }
 
 /// Every value a row part holds that is not a list or object, by its path.
@@ -1902,7 +1917,7 @@ fn leaves(path: &str, value: &Value, out: &mut BTreeMap<String, Value>) {
 /// made row leaves out, or writes as zero because this build does not read it, is listed as not
 /// held. A value a review line reports as having no new place is listed as not found. Every other
 /// value must be equal, and one that differs is listed with both values.
-pub fn score_row(made: &Value, report: &PortReport, verified: &Value) -> RowScore {
+pub fn score_row(made: &Value, report: &PortReport, verified: &Value, prior: &Value) -> RowScore {
     let off: BTreeSet<&str> = made[crate::row_features::SWITCHED_OFF]
         .as_array()
         .map_or(&[][..], Vec::as_slice)
@@ -1933,8 +1948,9 @@ pub fn score_row(made: &Value, report: &PortReport, verified: &Value) -> RowScor
         ..RowScore::default()
     };
     for part in ["frame", "build"] {
-        let (mut want, mut have) = (BTreeMap::new(), BTreeMap::new());
+        let (mut want, mut have, mut before) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
         leaves("", &verified[part], &mut want);
+        leaves("", &prior[part], &mut before);
         leaves("", &made[part], &mut have);
         for (path, value) in want {
             let feature = match part {
@@ -1956,6 +1972,15 @@ pub fn score_row(made: &Value, report: &PortReport, verified: &Value) -> RowScor
                     entry.not_held.push(shown)
                 }
                 Some(_) if unplaced.contains(&shown) => entry.not_found.push(shown),
+                // Bytes read at an address with no new place say nothing about the new build.
+                Some(_) if read_at(&shown).is_some_and(|at| unplaced.contains(&at)) => {
+                    entry.not_found.push(shown)
+                }
+                // A part the generator could not confirm is declined, which is not a wrong value.
+                Some(Value::Bool(false)) => entry.not_found.push(shown),
+                Some(found) if before.get(&path) == Some(found) => entry
+                    .carried
+                    .push(format!("{shown}: carried {found}, verified {value}")),
                 Some(found) => entry
                     .different
                     .push(format!("{shown}: made {found}, verified {value}")),
@@ -2930,12 +2955,12 @@ mod tests {
     fn nfr6_a_made_row_is_scored_value_by_value_against_the_verified_row() {
         let (made, report) = candidate(&prints_of_prior(), &shifted_code(0x2000, 0x44), "1.0.0.3");
         let mut verified = made.clone();
-        let score = score_row(&made, &report, &verified);
+        let score = score_row(&made, &report, &verified, &json!({}));
         assert_eq!(score.wrong(), 0);
         assert!(score.features[WINDOW].equal > 0);
         // A value found at another place than the verified one is wrong.
         verified["build"]["toolbar"]["paint"] = json!("0x103310");
-        let score = score_row(&made, &report, &verified);
+        let score = score_row(&made, &report, &verified, &json!({}));
         assert_eq!(score.wrong(), 1, "{:?}", score.features);
         let wrong: Vec<&String> = score.features.values().flat_map(|f| &f.different).collect();
         assert!(
@@ -2948,16 +2973,32 @@ mod tests {
         stopped
             .review
             .push("no new place for .toolbar.paint 0x101300".into());
-        let score = score_row(&made, &stopped, &verified);
+        let score = score_row(&made, &stopped, &verified, &json!({}));
         assert_eq!(score.wrong(), 0, "{:?}", score.features);
         assert_eq!(score.features[WINDOW].not_found, ["build.toolbar.paint"]);
+        // Bytes read at that address are not found either.
+        let mut bytes = verified.clone();
+        bytes["build"]["toolbar"]["paint_prologue"] = json!("4883ec28");
+        let mut read = made.clone();
+        read["build"]["toolbar"]["paint_prologue"] = json!("cccccccc");
+        let score = score_row(&read, &stopped, &bytes, &json!({}));
+        assert_eq!(score.wrong(), 0, "{:?}", score.features);
+        // A value kept from the prior row is wrong only when nothing stops the row.
+        let mut kept = verified.clone();
+        kept["build"]["toolbar"]["paint"] = made["build"]["toolbar"]["paint"].clone();
+        kept["build"]["toolbar"]["slot"] = json!(7);
+        let mut carried = made.clone();
+        carried["build"]["toolbar"]["slot"] = json!(8);
+        let before = json!({"build": {"toolbar": {"slot": 8}}});
+        assert_eq!(score_row(&carried, &report, &kept, &before).wrong(), 1);
+        assert_eq!(score_row(&carried, &stopped, &kept, &before).wrong(), 0);
         // A value the made row does not hold is not wrong.
         let mut made_less = made.clone();
         made_less["build"]["toolbar"]
             .as_object_mut()
             .unwrap()
             .remove("paint");
-        let score = score_row(&made_less, &report, &verified);
+        let score = score_row(&made_less, &report, &verified, &json!({}));
         assert_eq!(score.wrong(), 0);
         // A feature the made row turns off is not compared at all.
         let mut off = made.clone();
@@ -2965,7 +3006,7 @@ mod tests {
         let mut split = verified.clone();
         split["build"]["split"] = json!({"supported": true, "outline_member": "0x40"});
         off["build"]["split"] = json!({"supported": false, "outline_member": "0x0"});
-        let score = score_row(&off, &report, &split);
+        let score = score_row(&off, &report, &split, &json!({}));
         assert!(score.features["split view"].off);
         assert!(score.features["split view"].different.is_empty());
     }

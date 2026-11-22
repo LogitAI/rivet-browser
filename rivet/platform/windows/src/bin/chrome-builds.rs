@@ -199,7 +199,7 @@ fn score(
         .ok_or("the verified row has no frame version")?
         .to_owned();
     let (row, report) = make(&prior, prior_module, module, &version)?;
-    let score = row_port::score_row(&row, &report, &verified);
+    let score = row_port::score_row(&row, &report, &verified, &prior);
     std::fs::write(
         out,
         serde_json::to_string_pretty(&score).map_err(|error| error.to_string())? + "\n",
@@ -212,14 +212,18 @@ fn score(
     for (feature, each) in &score.features {
         let state = if each.off { "off" } else { "on" };
         println!(
-            "  {feature}: {state}, {} equal, {} wrong, {} not found, {} not held",
+            "  {feature}: {state}, {} equal, {} wrong, {} carried, {} not found, {} not held",
             each.equal,
             each.different.len(),
+            each.carried.len(),
             each.not_found.len(),
             each.not_held.len()
         );
         for line in &each.different {
             println!("    wrong: {line}");
+        }
+        for line in &each.carried {
+            println!("    carried: {line}");
         }
     }
     if !score.review.is_empty() {
