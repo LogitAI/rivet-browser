@@ -163,7 +163,7 @@ fn nfr3_every_row_names_one_module_and_version() {
 fn nfr3_chrome_150_checks_only_the_frame_hooks() {
     assert_eq!(CHROME_150.version, [150, 0, 7871, 187]);
     assert_eq!(CHROME_150.toolbar.skip, "toolbar");
-    assert!(!CHROME_150.vertical.supported && !CHROME_150.tabs.supported);
+    assert!(!CHROME_150.tabs.supported);
     assert_ne!(CHROME_150.layout.frame_vtable, CHROME.layout.frame_vtable);
     // Colour ids and View member offsets moved between milestones 150 and 156.
     assert_eq!(CHROME_150.layout.caption_ink_ids, &[1593, 1594, 1595]);
@@ -191,8 +191,7 @@ fn nfr3_whale_maps_only_the_frame_hooks() {
     assert_eq!(WHALE.module, "whale.dll");
     assert_eq!(WHALE.version, [5, 39, 412, 57]);
     assert!(
-        !WHALE.vertical.supported
-            && WHALE.tabs.supported
+        WHALE.tabs.supported
             && !WHALE.tabs.groups
             && !WHALE.split.supported
     );
@@ -269,8 +268,7 @@ fn nfr3_brave_156_frame_hooks_match_the_installed_build() {
 
 fn check_brave_frame_hooks(brave: &Build) {
     assert!(
-        brave.vertical.supported
-            && brave.tabs.supported
+        brave.tabs.supported
             && !brave.tabs.groups
             && brave.navigation.supported
     );
@@ -505,7 +503,7 @@ fn fr10_edge_side_panel_row_matches_the_installed_build() {
 }
 
 #[test]
-fn fr12_brave_156_toolbar_and_vertical_tab_hooks_match_the_installed_build() {
+fn fr12_brave_156_toolbar_hooks_match_the_installed_build() {
     check_brave_toolbar_hooks(&BRAVE);
     check_brave_toolbar_hooks(&BRAVE_63);
 }
@@ -516,8 +514,7 @@ fn nfr3_samsung_frame_and_tab_hooks_match_the_installed_build() {
     assert_eq!(SAMSUNG.version, [30, 0, 4, 29]);
     assert_eq!(SAMSUNG.toolbar.skip, "toolbar");
     assert!(
-        !SAMSUNG.vertical.supported
-            && SAMSUNG.tabs.supported
+        SAMSUNG.tabs.supported
             && !SAMSUNG.tabs.groups
             && !SAMSUNG.split.supported
     );
@@ -642,44 +639,6 @@ fn fr11_developer_commands_are_those_of_the_devtools_keys() {
     // A build that was never checked offers no command and no bar.
     for build in [&WHALE, &SAMSUNG, &CHROME_150] {
         assert_eq!(crate::features::dev_page::dev_commands(build), (0, 0));
-    }
-}
-
-#[test]
-fn fr11_edge_156_developer_font_functions_match_the_installed_build() {
-    let path = r"C:\Program Files (x86)\Microsoft\Edge\Application\156.0.4314.50\msedge.dll";
-    let Ok(file) = std::fs::read(path) else {
-        return;
-    };
-    let dev = &EDGE.toolbar.dev;
-    for (name, rva, prologue) in [
-        ("font", dev.font_new, dev.font_new_prologue),
-        ("font list", dev.font_list_new, dev.font_list_new_prologue),
-    ] {
-        assert_eq!(
-            file_bytes(&file, rva, prologue.len()).as_deref(),
-            Some(prologue),
-            "{name} prologue does not match msedge.dll"
-        );
-    }
-}
-
-#[test]
-fn fr11_chrome_156_74_developer_font_functions_match_the_installed_build() {
-    let path = r"C:\Program Files\Google\Chrome\Application\156.0.8078.74\chrome.dll";
-    let Ok(file) = std::fs::read(path) else {
-        return;
-    };
-    let dev = &CHROME_156_74.toolbar.dev;
-    for (name, rva, prologue) in [
-        ("font", dev.font_new, dev.font_new_prologue),
-        ("font list", dev.font_list_new, dev.font_list_new_prologue),
-    ] {
-        assert_eq!(
-            file_bytes(&file, rva, prologue.len()).as_deref(),
-            Some(prologue),
-            "{name}"
-        );
     }
 }
 
@@ -1106,11 +1065,8 @@ fn nfr3_chromium_157_rows_record_the_members_that_moved() {
         );
         let row = build.app_window.as_ref().unwrap();
         assert_eq!(row.web_view_size, 0x520, "{name}");
-        assert_eq!(
-            (row.view_parent, row.view_children),
-            (0x198, 0x1A0),
-            "{name}"
-        );
+        let fields = crate::features::app_window::view_fields(build);
+        assert_eq!(fields, Some((0x198, 0x1A0)), "{name}");
     }
     // Chromium 157 dropped one side panel entry. Brave keeps its own four.
     assert_eq!(
@@ -1220,37 +1176,6 @@ fn check_brave_toolbar_hooks(brave: &Build) {
             CHROME.layout.caption_ink_ids[2] + 17
         ]
     );
-    let Some(file) = brave_dll(brave) else {
-        return;
-    };
-    for (name, rva, prologue) in [
-        (
-            "colour",
-            brave.toolbar.get_color,
-            brave.toolbar.get_color_bytes,
-        ),
-        (
-            "view invalidation",
-            brave.vertical.invalidate_layout,
-            brave.vertical.invalidate_layout_prologue,
-        ),
-        (
-            "region minimum size",
-            brave.vertical.region_minimum_size,
-            brave.vertical.region_minimum_prologue,
-        ),
-        (
-            "controller destructor",
-            brave.vertical.destructor,
-            brave.vertical.destructor_prologue,
-        ),
-    ] {
-        assert_eq!(
-            file_bytes(&file, rva, prologue.len()).as_deref(),
-            Some(prologue),
-            "{name} prologue does not match Brave's chrome.dll"
-        );
-    }
 }
 
 #[test]
@@ -1259,11 +1184,7 @@ fn nfr3_chrome_156_74_hooks_match_the_installed_build() {
     let Ok(file) = std::fs::read(path) else {
         return;
     };
-    let (layout, vertical, split) = (
-        &CHROME_156_74.layout,
-        &CHROME_156_74.vertical,
-        &CHROME_156_74.split,
-    );
+    let (layout, split) = (&CHROME_156_74.layout, &CHROME_156_74.split);
     for (name, rva, prologue) in [
         ("frame paint", layout.on_paint, layout.on_paint_prologue),
         (
@@ -1275,11 +1196,6 @@ fn nfr3_chrome_156_74_hooks_match_the_installed_build() {
             "colour provider",
             layout.get_color_provider,
             layout.get_color_provider_prologue,
-        ),
-        (
-            "destructor",
-            vertical.destructor,
-            vertical.destructor_prologue,
         ),
         (
             "rounded corners",
@@ -1304,7 +1220,6 @@ fn nfr3_recorded_addresses_lie_inside_a_plausible_image() {
             build.tabs.tab_count,
             build.split.add_to_new_split,
             build.side_panel.show,
-            build.vertical.slot,
             build.navigation.open_url,
         ] {
             // A feature the row leaves unchecked records no address.
@@ -1611,17 +1526,22 @@ fn nfr6_a_table_row_carries_the_page_tools_and_bubble_anchor_of_its_prior_row() 
 }
 
 /// The parent and children of a view follow from its bounds by the member order of `views::View`.
-/// Every row that recorded them by hand agrees, so the rule replaces them.
+/// Every row that once recorded them by hand held these values, so the rule replaced them.
 #[test]
 fn nfr6_a_views_parent_and_children_are_not_row_values() {
     let mut seen = 0;
     for build in compiled() {
-        let Some(row) = build.app_window.as_ref() else {
+        if build.app_window.is_none() {
             continue;
+        }
+        let expected = match build.layout.view_bounds_offset {
+            0x1C8 => (0x198, 0x1A0),
+            0x1C0 => (0x190, 0x198),
+            other => panic!("{} keeps a view's bounds at {other:#x}", build.browser),
         };
         assert_eq!(
             crate::features::app_window::view_fields(build),
-            Some((row.view_parent, row.view_children)),
+            Some(expected),
             "{} {:?}",
             build.browser,
             build.version
@@ -1629,6 +1549,10 @@ fn nfr6_a_views_parent_and_children_are_not_row_values() {
         seen += 1;
     }
     assert!(seen >= 5, "{seen}");
+    // The row holds neither value.
+    let row = crate::row_data::RowValue::to_row(&CHROME_157_38);
+    assert!(row["app_window"].get("view_parent").is_none());
+    assert!(row["app_window"].get("view_children").is_none());
     // A row the bounds offset of which moves gives the parent and children of that build.
     let mut moved = crate::row_data::RowValue::to_row(&CHROME_157_38);
     moved["layout"]["view_bounds_offset"] = serde_json::json!("0x1d0");

@@ -21,14 +21,14 @@
 //! | C. Page address and title | page_bar, control, command_bar, link_rules | DevTools target info (`Pages`) |
 //! | D. Security level and page info | address_bar, omnibox | DevTools security state, then build values |
 //! | E. New, close, select and restore a tab | tabs, control, tab_list | command ids and DevTools |
-//! | F. Tab order and groups | tabs, tab_list, vertical_tabs | build values, reflection to read |
+//! | F. Tab order and groups | tabs, tab_list | build values, reflection to read |
 //! | G. Split view and the second page view | split, split_grid, second_view | build values, reflection for bounds |
 //! | H. Infobars per pane | pane_infobar | reflection |
 //! | I. Mini window out and back | mini_window | command id out, build values back |
 //! | J. App window without a tab strip | app_window, tab_strip | build values |
 //! | K. Address suggestions | omnibox | build values |
 //! | L. Frame, caption and paint | frame_layout, look, widgets | build values, reflection to find views |
-//! | M. Vertical tabs, side panel, bubbles, DevTools | vertical_tabs, side_panel, bubble_anchor, dev_tools | command ids, reflection, build values |
+//! | M. Side panel, bubbles, DevTools | side_panel, bubble_anchor, dev_tools | command ids, reflection, build values |
 //!
 //! Only the traits of groups A, C and I (`TabMoves`, for the Mini Window's opening) exist so far.
 //! A trait is added when the first feature that needs it moves, never before.

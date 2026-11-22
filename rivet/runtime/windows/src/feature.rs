@@ -30,8 +30,6 @@ pub(crate) enum Feature {
     Split,
     /// The layout of the pages of a split view.
     SplitLayout,
-    /// The browser's own vertical tab strip, reported to the appbar.
-    VerticalTabs,
     /// The browser's tab strip is left out of the layout.
     TabStrip,
 }
@@ -47,7 +45,6 @@ impl Feature {
             Feature::TopInset => "top_inset",
             Feature::Split => "split",
             Feature::SplitLayout => "split_layout",
-            Feature::VerticalTabs => "vertical_tabs",
             Feature::TabStrip => "tab_strip",
         }
     }
@@ -290,11 +287,6 @@ mod tests {
             ("sidebar", crate::features::side_panel::needs, |b| {
                 b.side_panel.supported
             }),
-            (
-                "vertical tabs",
-                crate::features::vertical_tabs::needs,
-                |b| b.vertical.supported,
-            ),
         ]
     }
 
@@ -325,12 +317,6 @@ mod tests {
     #[test]
     fn nfr3_a_feature_switched_off_with_addresses_names_its_reason() {
         let edge = &builds::EDGE;
-        let vertical = crate::features::vertical_tabs::needs(edge);
-        assert!(vertical.targets.iter().all(Target::recorded));
-        assert_eq!(
-            vertical.unavailable().as_deref(),
-            Some("vertical tabs are not checked on Edge yet")
-        );
         let sidebar = crate::features::side_panel::needs(edge);
         assert!(sidebar.targets.iter().any(Target::recorded));
         assert!(sidebar
@@ -368,7 +354,7 @@ mod tests {
 
     type NeedsOf = fn(&Build) -> Needs;
 
-    fn all_needs() -> [(Feature, NeedsOf); 7] {
+    fn all_needs() -> [(Feature, NeedsOf); 6] {
         use crate::features::{frame_layout, split, tab_strip};
         [
             (Feature::FrameLayout, frame_layout::needs_layout),
@@ -377,7 +363,6 @@ mod tests {
             (Feature::CaptionLayout, frame_layout::needs_caption_layout),
             (Feature::Split, split::needs),
             (Feature::TabStrip, tab_strip::needs),
-            (Feature::VerticalTabs, crate::features::vertical_tabs::needs),
         ]
     }
 
@@ -399,17 +384,13 @@ mod tests {
             "caption_layout",
             "split",
         ];
-        assert_eq!(
-            names(&builds::CHROME),
-            [&chromium[..], &["vertical_tabs"]].concat()
-        );
+        assert_eq!(names(&builds::CHROME), chromium);
         assert_eq!(
             names(&builds::BRAVE),
             [
                 "frame_layout",
                 "caption_paint",
-                "caption_layout",
-                "vertical_tabs"
+                "caption_layout"
             ]
         );
         assert_eq!(names(&builds::EDGE), chromium);

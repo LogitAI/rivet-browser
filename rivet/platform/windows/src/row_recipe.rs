@@ -75,53 +75,6 @@ pub const FIELDS: &[Field] = &[
         }],
     },
     Field {
-        path: "toolbar.paint_slot",
-        recipes: &[
-            Recipe::Slot {
-                vtable: "toolbar.browser_widget_vtable",
-                function: "toolbar.paint",
-            },
-            Recipe::Slot {
-                vtable: "toolbar.plain_widget_vtable",
-                function: "toolbar.paint",
-            },
-        ],
-    },
-    Field {
-        path: "toolbar.layout_slot",
-        recipes: &[
-            Recipe::Slot {
-                vtable: "toolbar.browser_widget_vtable",
-                function: "toolbar.layout",
-            },
-            Recipe::Slot {
-                vtable: "toolbar.plain_widget_vtable",
-                function: "toolbar.layout",
-            },
-        ],
-    },
-    Field {
-        path: "toolbar.active_web_contents_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "toolbar.browser_delegate_vtable",
-            function: "toolbar.active_web_contents",
-        }],
-    },
-    Field {
-        path: "toolbar.web_contents_title_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "toolbar.web_contents_vtable",
-            function: "toolbar.web_contents_title",
-        }],
-    },
-    Field {
-        path: "toolbar.infobar_layout_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "toolbar.infobar_vtable",
-            function: "toolbar.infobar_layout",
-        }],
-    },
-    Field {
         path: "side_panel.proposed_slot",
         recipes: &[Recipe::Slot {
             vtable: "side_panel.layout_vtable",
@@ -161,20 +114,6 @@ pub const FIELDS: &[Field] = &[
         recipes: &[Recipe::Slot {
             vtable: "layout.caption_vtable",
             function: "layout.caption_paint",
-        }],
-    },
-    Field {
-        path: "location_bar.slot",
-        recipes: &[Recipe::Slot {
-            vtable: "location_bar.vtable",
-            function: "location_bar.function",
-        }],
-    },
-    Field {
-        path: "location_bar.preferred_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "location_bar.vtable",
-            function: "location_bar.preferred",
         }],
     },
 ];
@@ -415,55 +354,11 @@ pub fn derive_row(build: &mut Value, pe: &PeFile) -> Derived {
     derived
 }
 
-/// Values that follow from another value of the row by the member order of a public Chromium
-/// class, as (path, the value it follows, the distance). `ui/views/view.h` declares `parent_`,
-/// then `children_`, then the members up to `bounds_`, 0x30 bytes after `parent_`. The runtime
-/// takes them the same way, so they are written from the value they follow and never carried.
-pub const FOLLOWS: &[(&str, &str, i64)] = &[
-    ("app_window.view_parent", "layout.view_bounds_offset", -0x30),
-    (
-        "app_window.view_children",
-        "layout.view_bounds_offset",
-        -0x28,
-    ),
-];
-
-/// Writes each value of `FOLLOWS` the row has from the value it follows.
-pub fn follow(build: &mut Value) -> Vec<String> {
-    let mut read = Vec::new();
-    for (path, from, by) in FOLLOWS {
-        let Some(base) = number(at_path(build, from)).filter(|base| *base >= 0x30) else {
-            continue;
-        };
-        let (parent, key) = path.split_once('.').expect("a path has a parent");
-        let Some(old) = number(&build[parent][key]) else {
-            continue;
-        };
-        let value = (base as i64 + by) as u64;
-        let is_string = build[parent][key].is_string();
-        build[parent][key] = if is_string {
-            Value::String(format!("{value:#x}"))
-        } else {
-            json!(value)
-        };
-        read.push(if old == value {
-            format!("{path}: {value:#x}, from {from}")
-        } else {
-            format!("{path}: {old:#x} -> {value:#x}, from {from}")
-        });
-    }
-    read
-}
-
 /// Values Rivet chooses rather than reads from a build, such as how long it waits before it opens
-/// a new tab, how far its toolbar starts after the browser view's edge to leave room for Rivet's
-/// toggle button, and the DIPs it adds to the top inset it reports. The row carries them for the
-/// runtime, so they are kept from the prior row.
-pub const SETTINGS: &[&str] = &[
-    "tabs.new_tab_delay_ms",
-    "vertical.toolbar_leading",
-    "layout.top_inset_adjust",
-];
+/// a new tab and how far its toolbar starts after the browser view's edge to leave room for
+/// Rivet's toggle button. The row carries them for the runtime, so they are kept from the prior
+/// row.
+pub const SETTINGS: &[&str] = &["tabs.new_tab_delay_ms", "vertical.toolbar_leading"];
 
 /// Lists of `[id, colour]` pairs: the id is a value of the build, and the colour is Rivet's choice.
 pub const ID_COLOUR_PAIRS: &[&str] = &["toolbar.dev.colours"];
@@ -540,7 +435,6 @@ pub fn without_recipe(build: &Value) -> Vec<String> {
             && !FIELDS.iter().any(|field| field.path == path)
             && !SETTINGS.contains(&path.as_str())
             && !crate::command_ids::ROW_PATHS.contains(&path.as_str())
-            && !FOLLOWS.iter().any(|(follows, _, _)| follows == path)
     });
     out
 }
@@ -690,21 +584,32 @@ mod tests {
             (0x10_8100, second.as_slice()),
         ]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let mut build = json!({
-            "toolbar": {
-                "browser_widget_vtable": "0x108000", "plain_widget_vtable": "0x108100",
-                "paint": "0x101100", "paint_slot": "0x1",
+        let build = json!({
+            "layout": {
+                "frame_vtable": "0x108000", "caption_vtable": "0x108100",
+                "layout": "0x101100", "layout_slot": "0x1",
             }
         });
-        let derived = derive_row(&mut build, &pe);
-        assert!(
-            derived
-                .failed
-                .iter()
-                .any(|line| line.starts_with("toolbar.paint_slot: its recipes disagree")),
-            "{:?}",
-            derived.failed
-        );
+        // No value of a row has two recipes today, so the rule is checked on a field made here.
+        let field = Field {
+            path: "layout.layout_slot",
+            recipes: &[
+                Recipe::Slot {
+                    vtable: "layout.frame_vtable",
+                    function: "layout.layout",
+                },
+                Recipe::Slot {
+                    vtable: "layout.caption_vtable",
+                    function: "layout.layout",
+                },
+            ],
+        };
+        match derive_field(&field, &build, &pe) {
+            Outcome::Failed(reason) => {
+                assert!(reason.starts_with("its recipes disagree"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -718,23 +623,6 @@ mod tests {
             without_recipe(&build),
             vec!["layout.caption_container_offset", "layout.frame_ids"]
         );
-    }
-
-    #[test]
-    fn nfr6_a_views_parent_and_children_follow_its_bounds() {
-        let mut build = json!({
-            "layout": {"view_bounds_offset": "0x1c0"},
-            "app_window": {"view_parent": "0x198", "view_children": "0x1a0"},
-        });
-        assert_eq!(without_recipe(&build), vec!["layout.view_bounds_offset"]);
-        let read = follow(&mut build);
-        assert_eq!(build["app_window"]["view_parent"], "0x190");
-        assert_eq!(build["app_window"]["view_children"], "0x198");
-        assert_eq!(read.len(), 2, "{read:?}");
-        // A row without the app window part gets none.
-        let mut bare = json!({"layout": {"view_bounds_offset": "0x1c8"}, "app_window": null});
-        assert!(follow(&mut bare).is_empty());
-        assert!(bare["app_window"].is_null());
     }
 
     #[test]
@@ -753,13 +641,9 @@ mod tests {
         );
         let chosen = json!({
             "vertical": {"toolbar_leading": 26, "toolbar_in_view": "0x60"},
-            "layout": {"top_inset_adjust": 0},
         });
         assert_eq!(without_recipe(&chosen), vec!["vertical.toolbar_in_view"]);
-        assert_eq!(
-            settings(&chosen),
-            vec!["vertical.toolbar_leading", "layout.top_inset_adjust"]
-        );
+        assert_eq!(settings(&chosen), vec!["vertical.toolbar_leading"]);
         assert_eq!(
             settings(&build),
             vec![

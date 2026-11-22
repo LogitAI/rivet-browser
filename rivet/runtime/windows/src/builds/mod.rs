@@ -102,7 +102,6 @@ pub struct Omnibox {
     pub controller_published_result: usize,
     pub input_new: usize,
     pub input_drop: usize,
-    pub input_size: usize,
     pub input_prevent_inline: usize,
     pub input_omit_asynchronous: usize,
     pub start: usize,
@@ -139,11 +138,6 @@ pub struct AppWindow {
     pub detach_prologue: &'static [u8],
     pub insert: Option<usize>,
     pub insert_prologue: &'static [u8],
-    /// A `views::View` keeps its parent at this offset and its children vector right after it. Kept
-    /// for runtimes that read them from the row; this runtime takes both from the layout's bounds
-    /// offset, by the member order of `views::View`.
-    pub view_parent: usize,
-    pub view_children: usize,
     /// `operator new(size)`, `views::WebView::WebView(this, context)` and the object's size.
     pub operator_new: usize,
     pub operator_new_prologue: &'static [u8],
@@ -195,7 +189,6 @@ pub struct Toolbar {
     /// `ui::ColorProvider::GetColor(this, id)`. A provider makes a colour the first time it is asked
     /// for it, so one that was never asked for is asked for before its value is replaced.
     pub get_color: usize,
-    pub get_color_bytes: &'static [u8],
     /// `views::DesktopWindowTreeHostWin::GetContentWindowForHWND` and
     /// `views::Widget::GetWidgetForNativeWindow`.
     pub content_window_for_hwnd: usize,
@@ -209,45 +202,10 @@ pub struct Toolbar {
 }
 
 row_struct! {
-/// Values for `vertical_tabs.rs`.
+/// Values for `tab_strip.rs`, which takes the tab strip out of a Rivet window's layout. A row keeps
+/// them under `vertical`, the name of the experiment they first served.
 pub struct VerticalTabs {
-    /// Whether this build has been checked for this feature. When it is false the feature is left alone.
-    pub supported: bool,
-    /// The vtable slot of `VerticalTabStripStateControllerImpl::ShouldDisplayVerticalTabs`.
-    pub slot: usize,
-    pub should_display: usize,
-    /// `BrowserView::GetBrowserViewForBrowser`.
-    pub browser_view_for_browser: usize,
-    /// `views::HWNDForView`.
-    pub hwnd_for_view: usize,
-    /// `VerticalTabStripStateController::NotifyModeChanged`.
-    pub notify_mode_changed: usize,
-    /// `VerticalTabStripStateControllerImpl::UpdateCollapseActionItem`.
-    pub update_collapse_action: usize,
-    pub destructor: usize,
-    pub destructor_prologue: &'static [u8],
-    /// Where the controller keeps its browser, its mode and its strip width.
-    pub browser_offset: usize,
-    pub mode_offset: usize,
-    pub width_offset: usize,
-    /// `BrowserView`'s vtable for its `views::View` base. The browser view is reached through another
-    /// base, so the view base is found by this vtable before asking for the window.
-    pub browser_view_view_vtable: usize,
-    /// `VerticalTabStripRegionView::CalculatePreferredSize`, and the vtable slot that holds it.
-    pub region_preferred_size: usize,
-    pub region_preferred_size_slot: usize,
-    /// `views::View::InvalidateLayout`, with the first bytes that identify it in this build.
-    pub invalidate_layout: usize,
-    pub invalidate_layout_prologue: &'static [u8],
-    /// `VerticalTabStripRegionView::GetMinimumSize`. The browser lays the page out after at least
-    /// this width, 126 DIPs while the strip is expanded, however little the strip asks for, so a
-    /// hidden appbar would leave that much of the frame bare. The class is final, so callers reach
-    /// the function directly and its vtable slot is never used. Rivet detours the function instead:
-    /// its first instructions are copied to a trampoline and replaced by a jump to Rivet's version.
-    pub region_minimum_size: usize,
-    /// `push rsi; push rdi; sub rsp, 0x28; mov rsi, rdx; mov rdi, rcx; mov qword ptr [rdx], 0`.
-    pub region_minimum_prologue: &'static [u8],
-    /// `BrowserView::ShouldDrawTabStrip` and its first bytes, for the tab strip experiment.
+    /// `BrowserView::ShouldDrawTabStrip` and its first bytes.
     pub should_draw_tab_strip: usize,
     pub should_draw_tab_strip_prologue: &'static [u8],
     /// `Browser::SupportsWindowFeature(browser, feature, check)`, for builds whose layout has the tab
@@ -427,8 +385,6 @@ pub struct Split {
     pub flex_layout_host: usize,
     /// The primary vtable of `LocationBarView`, which tells the top row's container among all hosts.
     pub location_bar_vtable: usize,
-    /// Where a view keeps its size, two ints.
-    pub view_size: usize,
     /// The first instructions of the functions the split and group calls need.
     pub signatures: &'static [(usize, &'static [u8])],
 }
@@ -614,11 +570,6 @@ pub struct Layout {
     /// Colour ids `WindowsCaptionButton::PaintButtonContents` reads for its glyphs: active, inactive
     /// and on the toolbar. Ids shift between milestones.
     pub caption_ink_ids: &'static [i32],
-    /// Added to the top inset a Rivet window reports, in DIPs. Chrome's client area begins at the top
-    /// of the frame in its one-row layout, whatever the inset says, so Rivet's extra title height only
-    /// reaches the caption buttons. Brave's client area begins at the inset, which would leave the
-    /// page lower than the row, so its extra cancels out.
-    pub top_inset_adjust: i32,
 }
 }
 
@@ -630,22 +581,10 @@ pub struct DevMode {
     /// A build with no colours has no developer bar. The bar's browser commands are Chromium's
     /// public command ids, which come from `browsers::chromium::commands`, not from the row.
     pub colours: &'static [(i32, u32)],
-    /// `gfx::Font::Font(this, &name, size)` and `gfx::FontList::FontList(this, &font)`, which build
-    /// the monospace font of the address. A build without them keeps the address in its own font.
-    pub font_new: usize,
-    pub font_new_prologue: &'static [u8],
-    pub font_list_new: usize,
-    pub font_list_new_prologue: &'static [u8],
 }
 }
 
-const UNCHECKED_DEV: DevMode = DevMode {
-    colours: &[],
-    font_new: ABSENT,
-    font_new_prologue: &[0],
-    font_list_new: ABSENT,
-    font_list_new_prologue: &[0],
-};
+const UNCHECKED_DEV: DevMode = DevMode { colours: &[] };
 
 const DEV_GROUND: u32 = 0xFF2A_2C31;
 const DEV_RULE: u32 = 0xFF17_181B;
@@ -663,29 +602,9 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     skip: "",
     toolbar_layout: ABSENT,
     get_color: ABSENT,
-    get_color_bytes: &[0],
 };
 
 const UNCHECKED_VERTICALTABS: VerticalTabs = VerticalTabs {
-    supported: false,
-    slot: 0,
-    should_display: ABSENT,
-    browser_view_for_browser: ABSENT,
-    hwnd_for_view: ABSENT,
-    notify_mode_changed: ABSENT,
-    update_collapse_action: ABSENT,
-    destructor: ABSENT,
-    destructor_prologue: &[0],
-    browser_offset: 0,
-    mode_offset: 0,
-    width_offset: 0,
-    browser_view_view_vtable: ABSENT,
-    region_preferred_size: ABSENT,
-    region_preferred_size_slot: 0,
-    invalidate_layout: ABSENT,
-    invalidate_layout_prologue: &[0],
-    region_minimum_size: ABSENT,
-    region_minimum_prologue: &[0],
     should_draw_tab_strip: ABSENT,
     should_draw_tab_strip_prologue: &[0],
     window_feature: ABSENT,
@@ -783,7 +702,6 @@ const UNCHECKED_SPLIT: Split = Split {
     flex_layout: ABSENT,
     flex_layout_host: 0,
     location_bar_vtable: ABSENT,
-    view_size: 0,
     signatures: &[],
 };
 
@@ -883,21 +801,18 @@ const UNCHECKED_LAYOUT: Layout = Layout {
     browser_window_in_view: 0,
     caption_paint_prologue: &[0],
     caption_ink_ids: &[],
-    top_inset_adjust: 0,
 };
 
 /// Why a row leaves a feature off though it may record some of its addresses. A feature whose
 /// addresses are all missing needs no reason of its own.
 pub fn unchecked_reason(build: &Build, feature: &str) -> &'static str {
     match (build.browser, feature) {
-        ("Microsoft Edge", "vertical tabs") => "vertical tabs are not checked on Edge yet",
         ("Microsoft Edge", "sidebar") => "the only panel Edge registers has no page behind it, so the Sidebar has nothing to show on Edge",
         ("Samsung Internet", "split view") => {
             "split view is not checked on Samsung Internet: its split call stops inside the tab collection"
         }
         (_, "split view") => "split view is not checked on this browser build",
         (_, "sidebar") => "the Sidebar is not checked on this browser build",
-        (_, "vertical tabs") => "vertical tabs are not checked on this browser build",
         (_, "opening addresses") => "opening addresses is not checked on this browser build",
         _ => "tab control is not checked on this browser build",
     }

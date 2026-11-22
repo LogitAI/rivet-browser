@@ -1,6 +1,5 @@
 //! Rows for Brave builds.
 
-use super::chrome::DEV_CHROME_156;
 use super::*;
 
 /// Brave's colour ids sit 17 above Chrome's from 574 on.
@@ -31,7 +30,6 @@ const DEV_BRAVE_156: DevMode = DevMode {
         (1072, DEV_ICON_HOT),
         (1073, DEV_ICON),
     ],
-    ..DEV_CHROME_156
 };
 
 /// Brave 156.1.98.62 (Chromium 156.0.8078.74). Brave publishes its symbols, so this row is filled from
@@ -52,42 +50,12 @@ pub static BRAVE: Build = Build {
         get_widget_slot: Some(11),
         dev: DEV_BRAVE_156,
         get_color: 0x06A9A890, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x02EE93A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x02EEBD70, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: ABSENT,
     },
     vertical: VerticalTabs {
-        supported: true,
-        slot: 0x11066E60, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
-        should_display: 0x039AC440, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x00365C40, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x03BF81A0,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0B4B7890, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x02916550, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
-        destructor: 0x02A3E050, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
-        destructor_prologue: &[
-            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x1112C600, // the browser view vtable
-        region_preferred_size: 0x0CF05490, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x11131130, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
-        invalidate_layout: 0x05CB4A60,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0CF05400, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
         should_draw_tab_strip: 0x0661FA10, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
         detour_strip: false,
@@ -202,7 +170,6 @@ pub static BRAVE: Build = Build {
         flex_layout: 0x067B5A30, // ?CalculateProposedLayout@FlexLayout@views
         flex_layout_host: 0x38,
         location_bar_vtable: ABSENT,
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0B4E1CF0,
@@ -298,7 +265,6 @@ pub static BRAVE: Build = Build {
         frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
-        top_inset_adjust: -12,
         provider_verified: true,
     },
 };
@@ -327,8 +293,6 @@ pub static BRAVE_63: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x6F4DE00,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0xD2, 0xCB, 0x22, 0xFE,
@@ -383,42 +347,12 @@ pub static BRAVE_63: Build = Build {
         get_widget_slot: Some(11),
         dev: DEV_BRAVE_156,
         get_color: 0x06A5CB00, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x02F353F0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x02F37C00, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x01378F50, // ?Layout@ToolbarView, found statically and unverified
     },
     vertical: VerticalTabs {
-        supported: true,
-        slot: 0x11024BD8, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
-        should_display: 0x039C3900, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x00227A40, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x03C06C50,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0B4738F0, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x029F0BE0, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
-        destructor: 0x02B00B60, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
-        destructor_prologue: &[
-            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x110EA540, // the browser view vtable
-        region_preferred_size: 0x0CEC7C70, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x110EF070, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
-        invalidate_layout: 0x05A276E0,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0CEC7BE0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
         should_draw_tab_strip: 0x065EAD20, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
         detour_strip: false,
@@ -533,7 +467,6 @@ pub static BRAVE_63: Build = Build {
         flex_layout: 0x06746FC0, // ?CalculateProposedLayout@FlexLayout@views
         flex_layout_host: 0x38,
         location_bar_vtable: 0x11133840, // ??_7LocationBarView@@6BLayerDelegate@ui@@@, found statically and unverified
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0B49DD10,
@@ -666,7 +599,6 @@ pub static BRAVE_63: Build = Build {
         frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
-        top_inset_adjust: 0, // Chromium's own GetTopInset, as on Chrome
         provider_verified: true,
     },
 };
@@ -700,7 +632,6 @@ const DEV_BRAVE_157: DevMode = DevMode {
         (1079, DEV_ICON_HOT),
         (1080, DEV_ICON),
     ],
-    ..DEV_CHROME_156
 };
 
 /// Brave 157.1.99.55 (Chromium 157.0.8103.39), ported by name from the 156.1.98.63 row with this
@@ -729,8 +660,6 @@ pub static BRAVE_157_55: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x73F5220,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x02, 0x5B, 0x09, 0xFE,
@@ -785,42 +714,12 @@ pub static BRAVE_157_55: Build = Build {
         get_widget_slot: Some(11),
         dev: DEV_BRAVE_157,
         get_color: 0x05B6CB30, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x00D6A480, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x03153E70, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x011E0460, // ?Layout@ToolbarView, found statically and unverified
     },
     vertical: VerticalTabs {
-        supported: true,
-        slot: 0x11501450, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
-        should_display: 0x03CC0CB0, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x00363EB0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x03EABEE0,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0B7ABF10, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x02A4CCE0, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
-        destructor: 0x02C793A0, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
-        destructor_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x89,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x11598D50, // the browser view vtable
-        region_preferred_size: 0x0B5116A0, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x1159D840, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
-        invalidate_layout: 0x05B46EF0,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0B511610, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
         should_draw_tab_strip: 0x06A93F30, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
         detour_strip: false,
@@ -935,7 +834,6 @@ pub static BRAVE_157_55: Build = Build {
         flex_layout: 0x069ED3B0, // ?CalculateProposedLayout@FlexLayout@views
         flex_layout_host: 0x38,
         location_bar_vtable: 0x115CC710, // ??_7LocationBarView@@6BLayerDelegate@ui@@@, found statically and unverified
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0BDD3650,
@@ -1068,7 +966,6 @@ pub static BRAVE_157_55: Build = Build {
         frame_browser_window_offset: Some(0x338),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x684, 0x685, 0x686],
-        top_inset_adjust: 0, // Chromium's own GetTopInset, as on Chrome
         provider_verified: true,
     },
 };
