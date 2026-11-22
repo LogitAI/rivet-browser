@@ -162,6 +162,23 @@ pub const ROW_FEATURES: &[RowFeature] = &[
         checks: &["address-suggest", "security-chip"],
     },
     RowFeature {
+        // DevTools on a chosen panel and the link under the pointer. Without them DevTools opens
+        // as the browser opens it, and a long press on a link stays a click.
+        name: "page tools",
+        paths: &["page_tools."],
+        off: &[Off::Part("page_tools")],
+        clear: Clear::Zero,
+        checks: &["link-preview"],
+    },
+    RowFeature {
+        // Without it a bubble keeps the place the browser gives it.
+        name: "bubble anchor",
+        paths: &["bubble_anchor"],
+        off: &[Off::Part("bubble_anchor")],
+        clear: Clear::Zero,
+        checks: &["permission-bubble", "password-bubble"],
+    },
+    RowFeature {
         // An empty list is a build without developer colours, whose page keeps the browser's own.
         name: "developer colours",
         paths: &["toolbar.dev.colours"],
@@ -484,6 +501,29 @@ mod tests {
         });
         assert!(unused(&build, "tabs.tab_collection").is_none());
         assert!(unused(&build, "vertical.toolbar_in_view").is_none());
+    }
+
+    #[test]
+    fn nfr6_page_tools_and_the_bubble_anchor_are_switched_off_as_parts() {
+        assert_eq!(
+            feature_of("page_tools.toggle_devtools[0]").unwrap().name,
+            "page tools"
+        );
+        assert_eq!(feature_of("bubble_anchor[1]").unwrap().name, "bubble anchor");
+        let mut build = json!({
+            "page_tools": {"update_target_url": ["0x2f475d0", "41574156"]},
+            "bubble_anchor": ["0xaa72dc0", "41574156"],
+            "omnibox": {"match_size": "0x1c8"},
+        });
+        turn_off(&mut build, "page tools");
+        turn_off(&mut build, "bubble anchor");
+        assert!(build["page_tools"].is_null());
+        assert!(build["bubble_anchor"].is_null());
+        assert_eq!(build["omnibox"]["match_size"], "0x1c8");
+        let row = json!({"switched_off": [{"feature": "bubble anchor"}]});
+        let excused = excused_checks(&row);
+        assert_eq!(excuses(&excused, "permission-bubble"), Some("bubble anchor"));
+        assert_eq!(excuses(&excused, "security-chip"), None);
     }
 
     #[test]
