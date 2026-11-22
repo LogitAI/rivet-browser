@@ -1029,6 +1029,10 @@ pub fn resolve(
                 Kind::Function => {
                     if let Some(place) = followed.get(target) {
                         answers.push((Method::CallsInto, place));
+                        // The call is a fact of the caller's code and the fingerprint one of the
+                        // bytes at the place, so a place both give has two kinds of evidence.
+                        let given = BTreeSet::from([place]);
+                        answers.extend(fingerprint_agrees(&given, want.candidates.as_deref()));
                     }
                     let calls = &expected[&target];
                     let candidates: Vec<u32> = match &want.candidates {
@@ -1467,6 +1471,10 @@ pub(crate) mod tests {
     }
 
     fn run(new_bytes: &[u8], known_table: bool) -> Resolution {
+        run_with(new_bytes, known_table, Some(NEW_TARGETS.to_vec()))
+    }
+
+    fn run_with(new_bytes: &[u8], known_table: bool, candidates: Option<Vec<u32>>) -> Resolution {
         let old_bytes = old_module();
         let old = PeFile::parse(&old_bytes).unwrap();
         let new = PeFile::parse(new_bytes).unwrap();
@@ -1478,7 +1486,7 @@ pub(crate) mod tests {
             OLD_TARGET,
             Wanted {
                 kind: Kind::Function,
-                candidates: Some(NEW_TARGETS.to_vec()),
+                candidates,
                 class: None,
                 command: None,
                 loose: Vec::new(),
@@ -1540,10 +1548,26 @@ pub(crate) mod tests {
 
     #[test]
     fn nfr6_one_method_alone_does_not_place_a_function() {
-        let resolution = run(&new_module(NEW_TARGETS[0]), false);
+        // The fingerprint matched no place, so the paired call site stands alone.
+        let resolution = run_with(&new_module(NEW_TARGETS[0]), false, None);
         assert!(resolution.places.is_empty());
         let reason = &resolution.reasons[&OLD_TARGET];
         assert!(reason.starts_with("only calls into it found it"), "{reason}");
+        // A place outside the fingerprint's places gets no agreement from it either.
+        let resolution = run_with(&new_module(NEW_TARGETS[0]), false, Some(vec![NEW_TARGETS[1]]));
+        assert!(resolution.places.is_empty(), "{:?}", resolution.settled);
+    }
+
+    #[test]
+    fn nfr6_a_paired_call_site_and_the_fingerprint_place_a_function_together() {
+        // Edge 156 has functions whose bytes match in two or three places. The call a known
+        // function makes is a fact of the caller, the bytes one of the place, and they agree.
+        let resolution = run(&new_module(NEW_TARGETS[0]), false);
+        assert_eq!(resolution.places.get(&OLD_TARGET), Some(&NEW_TARGETS[0]));
+        assert_eq!(
+            resolution.settled,
+            ["0x101100 -> 0x103100 by calls into it and its fingerprint"]
+        );
     }
 
     const VIEW_TARGET: u32 = 0x105000;
