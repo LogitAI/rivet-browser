@@ -1068,11 +1068,8 @@ fn nfr3_chromium_157_rows_record_the_members_that_moved() {
         );
         let row = build.app_window.as_ref().unwrap();
         assert_eq!(row.web_view_size, 0x520, "{name}");
-        assert_eq!(
-            crate::features::app_window::view_fields(build),
-            Some((0x198, 0x1A0)),
-            "{name}"
-        );
+        let fields = crate::features::app_window::view_fields(build);
+        assert_eq!(fields, Some((0x198, 0x1A0)), "{name}");
     }
     // Chromium 157 dropped one side panel entry. Brave keeps its own four.
     assert_eq!(

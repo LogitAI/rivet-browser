@@ -223,13 +223,64 @@ pub(crate) unsafe fn run(
 
 /// Whether the row records the browser's layout. That alone decides the patch: the page area
 /// serves the address bar, the split and the Sidebar, so a build whose Sidebar is off still moves
-/// its page with the browser's own layout.
+/// its page with the browser's own layout. A row that does without the layout holds no address
+/// for it, or zero.
 pub(crate) fn layout_recorded(layout_vtable: usize, proposed: usize) -> bool {
-    layout_vtable != crate::builds::ABSENT && proposed != crate::builds::ABSENT
+    let recorded = |address: usize| address != crate::builds::ABSENT && address != 0;
+    recorded(layout_vtable) && recorded(proposed)
 }
 
-/// Patches the layout once per process. Without the recorded layout nothing here runs.
+/// Whether the patched layouts are enough for a caller, from what each patch answered. `tabbed`
+/// is the patch of the layout the row's Sidebar part records, and `app` makes the patch of an app
+/// window's own layout class.
+///
+/// Where the build has an app layout class, a Rivet window is laid out by it alone, so the bar of
+/// an app window needs only that patch and the tabbed one may be missing. A caller that asks for
+/// any window takes the tabbed patch as before, and the app patch where the row has no tabbed
+/// layout. An old-layout build lays out every window with the one class its row records, so
+/// nothing changes there: the tabbed patch is needed, and an app window needs both.
+pub(crate) fn relied_on(
+    app_window: bool,
+    old_layout: bool,
+    tabbed: Result<(), String>,
+    app: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    match (app_window, old_layout) {
+        (true, true) => tabbed.and_then(|()| app()),
+        (true, false) => app(),
+        (false, true) => tabbed,
+        (false, false) => tabbed.or_else(|error| app().map_err(|_| error)),
+    }
+}
+
+fn old_layout() -> bool {
+    row().old_layout == Some(true)
+}
+
+/// Whether a layout of this process is patched, so the page area steps run after it.
+fn patched() -> bool {
+    original() != 0 || crate::browsers::chromium::layout::app_layout_patched()
+}
+
+/// Patches the layout of the page area once per process, for a caller that asks for any window:
+/// the layout the row records, or else the app window's own.
 pub(crate) unsafe fn install() -> Result<(), String> {
+    relied_on(false, old_layout(), install_tabbed(), || {
+        crate::features::omnibox::install_app_layout()
+    })
+}
+
+/// Patches the layout that lays out an app window, once per process. The tabbed layout is patched
+/// too where the row records it, and only an old-layout build needs it.
+pub(crate) unsafe fn install_for_app_window() -> Result<(), String> {
+    relied_on(true, old_layout(), install_tabbed(), || {
+        crate::features::omnibox::install_app_layout()
+    })
+}
+
+/// Patches the layout the row records, once per process. Without the recorded layout nothing
+/// here runs.
+unsafe fn install_tabbed() -> Result<(), String> {
     const MISSING: &str = "this browser build has no recorded layout for the Sidebar";
     if !layout_recorded(row().layout_vtable, row().proposed) {
         return Err(MISSING.into());
@@ -271,12 +322,12 @@ unsafe fn host_of(window: HWND) -> Option<usize> {
 }
 
 /// Lays the browser view out again, which runs the patched layout. A window the layout has not run
-/// for yet is found through its frame view. Does nothing while the layout is not patched.
+/// for yet is found through its frame view. Does nothing while no layout is patched.
 pub(crate) unsafe fn relayout(window: HWND) {
     let Some(image) = image::recorded() else {
         return;
     };
-    if original() == 0 {
+    if !patched() {
         return;
     }
     let base = image.base;
@@ -318,9 +369,8 @@ unsafe fn window_position(view: usize) -> [i32; 2] {
 }
 
 pub(crate) unsafe fn remember_own_area(window: HWND, view: usize) {
-    if crate::builds::get().side_panel.proposed != crate::builds::ABSENT
-        && area_top(window).is_some()
-    {
+    // A patched layout already recorded the area, whichever layout class ran.
+    if area_top(window).is_some() {
         return;
     }
     let [x, y] = window_position(view);
@@ -364,6 +414,48 @@ mod tests {
         assert!(layout_recorded(0x0E18_0BE0, 0x013C_8310));
         assert!(!layout_recorded(crate::builds::ABSENT, 0x013C_8310));
         assert!(!layout_recorded(0x0E18_0BE0, crate::builds::ABSENT));
+        // A row made for a build whose tabbed layout was not found holds zero or no address.
+        assert!(!layout_recorded(0, 0x013C_8310));
+        assert!(!layout_recorded(0x0E18_0BE0, 0));
+    }
+
+    fn missing() -> Result<(), String> {
+        Err("no tabbed layout".into())
+    }
+
+    fn no_app() -> Result<(), String> {
+        Err("no app layout".into())
+    }
+
+    #[test]
+    fn fr12_an_app_window_is_laid_out_without_the_tabbed_layout() {
+        // The row has no tabbed layout, and the app window's own layout class is patched.
+        assert_eq!(relied_on(true, false, missing(), || Ok(())), Ok(()));
+        // The tabbed patch alone never lays out an app window.
+        assert_eq!(relied_on(true, false, Ok(()), no_app), Err("no app layout".into()));
+        // The Sidebar's callers go on with either patch, and name the tabbed one when both fail.
+        assert_eq!(relied_on(false, false, missing(), || Ok(())), Ok(()));
+        assert_eq!(relied_on(false, false, missing(), no_app), Err("no tabbed layout".into()));
+    }
+
+    #[test]
+    fn fr12_a_recorded_tabbed_layout_does_not_ask_for_the_app_patch() {
+        fn never() -> Result<(), String> {
+            panic!("the app layout was patched")
+        }
+        assert_eq!(relied_on(false, false, Ok(()), never), Ok(()));
+        assert_eq!(relied_on(false, true, Ok(()), never), Ok(()));
+    }
+
+    #[test]
+    fn fr10_an_old_layout_build_still_needs_the_layout_its_row_records() {
+        // One class lays out every window of such a build, so the app patch is no substitute.
+        let no_tabbed = Err("no tabbed layout".to_owned());
+        assert_eq!(relied_on(true, true, missing(), || Ok(())), no_tabbed);
+        assert_eq!(relied_on(false, true, missing(), || Ok(())), no_tabbed);
+        // An app window of such a build needs both, as before.
+        assert_eq!(relied_on(true, true, Ok(()), no_app), Err("no app layout".into()));
+        assert_eq!(relied_on(true, true, Ok(()), || Ok(())), Ok(()));
     }
 
     #[test]

@@ -566,8 +566,7 @@ unsafe fn ensure_layout(window: HWND) {
     if !DONE.with(|done| done.borrow_mut().insert(window as isize)) {
         return;
     }
-    let installed = crate::hooks::page_area::install()
-        .and_then(|()| crate::features::omnibox::install_app_layout());
+    let installed = crate::hooks::page_area::install_for_app_window();
     let reason = installed.as_ref().err().cloned().unwrap_or_default();
     match offset_for(installed, crate::features::second_view::available()) {
         Offset::Layout => {

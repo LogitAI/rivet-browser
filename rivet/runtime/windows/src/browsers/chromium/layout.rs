@@ -108,6 +108,11 @@ pub(crate) unsafe extern "system" fn proposed_layout(
 
 static APP_ORIGINAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// Whether the app window's layout is patched in this process.
+pub(crate) fn app_layout_patched() -> bool {
+    APP_ORIGINAL.load(std::sync::atomic::Ordering::Acquire) != 0
+}
+
 /// Takes the place of `BrowserViewAppLayoutImpl::CalculateProposedLayout`, the layout of an app
 /// window, which keeps its views where the tabbed layout keeps them.
 unsafe extern "system" fn app_proposed_layout(
