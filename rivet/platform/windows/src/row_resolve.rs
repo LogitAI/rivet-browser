@@ -857,6 +857,56 @@ fn by_neighbours(old: &Lengths, new: &Lengths, target: u32) -> Option<u32> {
     }
 }
 
+/// How many callers must agree on a place, how many are a crowd, and how many are read.
+const VOTERS_LEAST: usize = 3;
+const VOTERS_CROWD: usize = 8;
+const VOTERS_MOST: usize = 400;
+
+/// The place of a function by the functions that call it. Each caller is placed by its own
+/// neighbours, apart from every other caller, and must make as many direct calls and jumps in both
+/// builds. The call that went to the function in the prior build then goes to its new place. One
+/// caller is one vote, and the place stands when at least `VOTERS_LEAST` callers name it and at
+/// most one in ten names another. Returns the place and its votes.
+fn by_callers(
+    old: &mut Side,
+    new: &mut Side,
+    lengths: (&Lengths, &Lengths),
+    callers: &BTreeSet<u32>,
+    target: u32,
+) -> Option<(u32, usize)> {
+    let mut votes: BTreeMap<u32, usize> = BTreeMap::new();
+    for caller in callers.iter().take(VOTERS_MOST) {
+        let Some(place) = by_neighbours(lengths.0, lengths.1, *caller) else {
+            continue;
+        };
+        let before: Vec<u32> = old
+            .body(*caller)
+            .iter()
+            .filter_map(|step| step.call)
+            .collect();
+        let after: Vec<u32> = new
+            .body(place)
+            .iter()
+            .filter_map(|step| step.call)
+            .collect();
+        if before.len() != after.len() {
+            continue;
+        }
+        let named: BTreeSet<u32> = before
+            .iter()
+            .zip(&after)
+            .filter(|(from, _)| **from == target)
+            .map(|(_, to)| *to)
+            .collect();
+        if let [only] = named.iter().copied().collect::<Vec<_>>()[..] {
+            *votes.entry(only).or_default() += 1;
+        }
+    }
+    let all: usize = votes.values().sum();
+    let (place, most) = votes.into_iter().max_by_key(|(_, count)| *count)?;
+    (most >= VOTERS_LEAST && (all - most) * 10 <= all).then_some((place, most))
+}
+
 /// Which method gave a place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Method {
@@ -873,6 +923,8 @@ pub enum Method {
     KnownCaller,
     Sibling,
     Neighbours,
+    Callers,
+    Crowd,
 }
 
 impl fmt::Display for Method {
@@ -891,6 +943,8 @@ impl fmt::Display for Method {
             Method::KnownCaller => "a known caller",
             Method::Sibling => "the slots it shares with a known table",
             Method::Neighbours => "the lengths of the functions beside it",
+            Method::Callers => "the same call in several placed callers",
+            Method::Crowd => "the number of callers that agree",
         })
     }
 }
@@ -1068,12 +1122,7 @@ pub fn resolve(
     let callers = calls_into(&new, &called);
     // The prior build's callers of each wanted function with fingerprint places, for the method of
     // a known caller.
-    let with_candidates: BTreeSet<u32> = wanted
-        .iter()
-        .filter(|(_, want)| want.kind == Kind::Function && want.candidates.is_some())
-        .map(|(target, _)| *target)
-        .collect();
-    let prior_callers = calls_into(&old, &with_candidates);
+    let prior_callers = calls_into(&old, &functions.iter().copied().collect());
 
     // A class name gives a table from the build alone, so it is read once.
     let mut by_class = BTreeMap::new();
@@ -1187,6 +1236,33 @@ pub fn resolve(
                             || want.loose.contains(&place);
                         if matched {
                             answers.push((Method::Fingerprint, place));
+                        }
+                    }
+                    let voted = from.and_then(|callers| {
+                        let lengths = (&old_lengths, &new_lengths);
+                        by_callers(&mut old, &mut new, lengths, callers, target)
+                    });
+                    if let Some((place, votes)) = voted {
+                        // Callers placed by their neighbours are another fact than the calls
+                        // followed from known functions, but the same kind, so beside those they
+                        // add only what the fingerprint and their number say.
+                        let followed = answers.iter().any(|(method, at)| {
+                            matches!(method, Method::CallsInto | Method::KnownCaller)
+                                && *at == place
+                        });
+                        if !followed {
+                            answers.push((Method::Callers, place));
+                        }
+                        let matched = want
+                            .candidates
+                            .as_ref()
+                            .is_some_and(|candidates| candidates.contains(&place))
+                            || want.loose.contains(&place);
+                        if matched {
+                            answers.push((Method::Fingerprint, place));
+                        }
+                        if votes >= VOTERS_CROWD {
+                            answers.push((Method::Crowd, place));
                         }
                     }
                     if let Some(place) = by_command.get(&target).copied() {
@@ -1949,5 +2025,50 @@ pub(crate) mod tests {
         let old = Lengths::new(&starts(0x1000, &[0x10; 10]));
         let new = Lengths::new(&starts(0x2000, &[0x10; 8]));
         assert_eq!(by_neighbours(&old, &new, 0x1000), None);
+    }
+    #[test]
+    fn nfr6_a_function_is_placed_by_the_call_several_placed_callers_make() {
+        // Twelve functions of twelve lengths, the first `calling` of which call the target, which
+        // comes last. The new build has one more function in front.
+        let build = |shift: u32, calling: usize, target: u32| -> Vec<u8> {
+            let mut parts = Vec::new();
+            let mut ranges = Vec::new();
+            let mut at = 0x100000;
+            if shift > 0 {
+                parts.push((at, vec![0xC3]));
+                ranges.push((at, at + shift));
+                at += shift;
+            }
+            for index in 0..12u32 {
+                let length = 0x10 + index * 4;
+                let mut body = Vec::new();
+                if (index as usize) < calling {
+                    body.extend(call(at, target));
+                }
+                body.push(0xC3);
+                parts.push((at, body));
+                ranges.push((at, at + length));
+                at += length;
+            }
+            parts.push((target, vec![0xC3]));
+            ranges.push((target, target + 0x10));
+            module(&parts, &ranges)
+        };
+        let place = |calling: usize| -> Option<(u32, usize)> {
+            let (old_bytes, new_bytes) =
+                (build(0, calling, 0x100300), build(0x40, calling, 0x100380));
+            let old_pe = PeFile::parse(&old_bytes).unwrap();
+            let new_pe = PeFile::parse(&new_bytes).unwrap();
+            let lengths = (
+                &Lengths::new(&old_pe.function_starts()),
+                &Lengths::new(&new_pe.function_starts()),
+            );
+            let (mut old, mut new) = (Side::new(&old_pe), Side::new(&new_pe));
+            let callers = calls_into(&old, &BTreeSet::from([0x100300]));
+            by_callers(&mut old, &mut new, lengths, &callers[&0x100300], 0x100300)
+        };
+        assert_eq!(place(3), Some((0x100380, 3)));
+        // Two callers are too few to stand.
+        assert_eq!(place(2), None);
     }
 }
