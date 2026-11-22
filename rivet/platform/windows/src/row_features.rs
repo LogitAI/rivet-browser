@@ -58,18 +58,6 @@ pub const ROW_FEATURES: &[RowFeature] = &[
         checks: &["split", "split-"],
     },
     RowFeature {
-        name: "vertical tabs",
-        paths: &[
-            "vertical.update_collapse_action",
-            "vertical.browser_offset",
-            "vertical.mode_offset",
-            "vertical.width_offset",
-        ],
-        off: &[Off::Flag("vertical.supported")],
-        clear: Clear::Zero,
-        checks: &[],
-    },
-    RowFeature {
         name: "sidebar",
         paths: &[
             "side_panel.color_source",
@@ -125,27 +113,6 @@ pub const ROW_FEATURES: &[RowFeature] = &[
         off: &[Off::Flag("side_panel.supported")],
         clear: Clear::Absent,
         checks: &["sidebar", "sidebar-", "fullscreen-sidebar"],
-    },
-    RowFeature {
-        // The vertical tab controller's functions and class tables. Only
-        // `features/vertical_tabs.rs` reads them, and only once its targets are all recorded.
-        name: "vertical tabs",
-        paths: &[
-            "vertical.slot",
-            "vertical.should_display",
-            "vertical.destructor",
-            "vertical.browser_view_for_browser",
-            "vertical.hwnd_for_view",
-            "vertical.notify_mode_changed",
-            "vertical.browser_view_view_vtable",
-            "vertical.region_preferred_size",
-            "vertical.region_preferred_size_slot",
-            "vertical.region_minimum_size",
-            "vertical.invalidate_layout",
-        ],
-        off: &[Off::Flag("vertical.supported")],
-        clear: Clear::Absent,
-        checks: &[],
     },
     RowFeature {
         name: "app window",

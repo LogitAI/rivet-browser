@@ -56,32 +56,6 @@ pub static BRAVE: Build = Build {
         toolbar_layout: ABSENT,
     },
     vertical: VerticalTabs {
-        supported: true,
-        slot: 0x11066E60, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
-        should_display: 0x039AC440, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x00365C40, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x03BF81A0,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0B4B7890, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x02916550, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
-        destructor: 0x02A3E050, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
-        destructor_prologue: &[
-            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x1112C600, // the browser view vtable
-        region_preferred_size: 0x0CF05490, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x11131130, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
-        invalidate_layout: 0x05CB4A60,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0CF05400, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
         should_draw_tab_strip: 0x0661FA10, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
         detour_strip: false,
@@ -379,32 +353,6 @@ pub static BRAVE_63: Build = Build {
         toolbar_layout: 0x01378F50, // ?Layout@ToolbarView, found statically and unverified
     },
     vertical: VerticalTabs {
-        supported: true,
-        slot: 0x11024BD8, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
-        should_display: 0x039C3900, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x00227A40, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x03C06C50,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0B4738F0, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x029F0BE0, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
-        destructor: 0x02B00B60, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
-        destructor_prologue: &[
-            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x110EA540, // the browser view vtable
-        region_preferred_size: 0x0CEC7C70, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x110EF070, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
-        invalidate_layout: 0x05A276E0,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0CEC7BE0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
         should_draw_tab_strip: 0x065EAD20, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
         detour_strip: false,
@@ -772,32 +720,6 @@ pub static BRAVE_157_55: Build = Build {
         toolbar_layout: 0x011E0460, // ?Layout@ToolbarView, found statically and unverified
     },
     vertical: VerticalTabs {
-        supported: true,
-        slot: 0x11501450, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
-        should_display: 0x03CC0CB0, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x00363EB0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x03EABEE0,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0B7ABF10, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x02A4CCE0, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
-        destructor: 0x02C793A0, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
-        destructor_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x89,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x11598D50, // the browser view vtable
-        region_preferred_size: 0x0B5116A0, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x1159D840, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
-        invalidate_layout: 0x05B46EF0,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0B511610, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
         should_draw_tab_strip: 0x06A93F30, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
         detour_strip: false,

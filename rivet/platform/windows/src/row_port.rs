@@ -451,7 +451,6 @@ pub mod x64 {
 /// A byte field with no address field of the same name, and where it was read from.
 fn byte_field_address(key: &str) -> Option<(&'static str, u64)> {
     Some(match key {
-        "region_minimum_prologue" => ("region_minimum_size", 0),
         "bounds_bytes" => ("bounds_in_screen", 0),
         "page_info_bytes" => ("page_info_path", 0),
         "hwnd_for_widget_head" => ("hwnd_for_widget", 0),
@@ -2786,7 +2785,6 @@ mod tests {
             "signatures": [["0x101400", "4883ec28"]],
         });
         prior["build"]["vertical"] = json!({
-            "supported": false,
             "detour_strip": false,
             "should_draw_tab_strip": "0x101500",
             "should_draw_tab_strip_prologue": "4883ec28",

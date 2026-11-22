@@ -55,32 +55,6 @@ pub static EDGE: Build = Build {
         toolbar_layout: ABSENT,
     },
     vertical: VerticalTabs {
-        supported: false,                     // not checked on Edge yet
-        slot: 0x1172CF10, // VerticalTabStripStateControllerImpl vtable, ShouldDisplayVerticalTabs slot
-        should_display: 0x0A3D40D0, // ?loaded@TopSitesImpl@history@@UEBA_NXZ
-        browser_view_for_browser: 0x010CDA9A, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x01078A59,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0A3D3176, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x0,     // none in Edge
-        destructor: 0x0A3D4830, // ??_GVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
-        destructor_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0xE8,
-        ],
-        browser_offset: 0x1B8, // Chrome value, not checked on Edge
-        mode_offset: 0x1E8,    // Chrome value, not checked on Edge
-        width_offset: 0x1CC,   // Chrome value, not checked on Edge
-        browser_view_view_vtable: 0x11937B18, // BrowserView View vtable
-        region_preferred_size: 0x0CAE1ED0, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@
-        region_preferred_size_slot: 0x1181EC28, // VerticalTabStripRegionView vtable, CalculatePreferredSize slot 86
-        invalidate_layout: 0x00FFA880,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x38,
-        ],
-        region_minimum_size: 0x0CAE1E50, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7,
-            0x02, 0, 0, 0, 0,
-        ], // Chrome value, not checked on Edge
         should_draw_tab_strip: 0x0100A550, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[
             0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x89, 0x18, 0x06, 0x00,

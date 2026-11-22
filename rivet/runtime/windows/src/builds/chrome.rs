@@ -50,32 +50,6 @@ pub static CHROME: Build = Build {
         toolbar_layout: ABSENT,
     },
     vertical: VerticalTabs {
-        supported: true,
-        slot: 0x0FDA_FE00, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
-        should_display: 0x0369_C6E0, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x0034_D3E0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x036A_A950,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0A1D_B330, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x020F_3D90, // ??0VerticalTabStripStateController@tabs@@IEAA@AEAVBrowserWindowInterface@@@Z
-        destructor: 0x0296_C3F0, // ??_EVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
-        destructor_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x89, 0xd7, 0x48, 0x89, 0xce, 0xe8,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x0FE7_BF68, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
-        region_preferred_size: 0x0BC7_FA80, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x0FF1_7CF8, // .weak.??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$Cd
-        invalidate_layout: 0x0411_6480,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0BC7_F9F0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7,
-            0x02, 0, 0, 0, 0,
-        ],
         should_draw_tab_strip: 0x0528_6C00, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
         window_feature: ABSENT,
@@ -446,32 +420,6 @@ pub static CHROME_156_74: Build = Build {
         toolbar_layout: 0x011C_98D0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
     },
     vertical: VerticalTabs {
-        supported: true,
-        slot: 0x0FC2_23A8, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
-        should_display: 0x0345_2850, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x002E_75B0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x0346_0F20,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x09F9_9710, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x01DB_9180, // ??0VerticalTabStripStateController@tabs@@IEAA@AEAVBrowserWindowInterface@@@Z
-        destructor: 0x02AD_3050, // ??_EVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
-        destructor_prologue: &[
-            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x0FCE_E270, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
-        region_preferred_size: 0x0BAA_5650, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x0FD8_A000, // .weak.??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$Cd
-        invalidate_layout: 0x046F_2F30,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0BAA_55C0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7,
-            0x02, 0, 0, 0, 0,
-        ],
         should_draw_tab_strip: 0x0504_F960, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
         window_feature: ABSENT,
@@ -845,32 +793,6 @@ pub static CHROME_156_80: Build = Build {
         toolbar_layout: 0x0130_94D0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
     },
     vertical: VerticalTabs {
-        supported: true,
-        slot: 0x0FC1_D120, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
-        should_display: 0x0348_10D0, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x0021_19B0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x0348_D7F0,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x09F8_E9D0, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x0208_FB20, // ??0VerticalTabStripStateController@tabs@@IEAA@AEAVBrowserWindowInterface@@@Z
-        destructor: 0x0289_05D0, // ??_EVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
-        destructor_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0xE8,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x0FCE_91B0, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
-        region_preferred_size: 0x0BAA_1270, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x0FD8_4F40, // .weak.??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$Cd
-        invalidate_layout: 0x044A_1090,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0BAA_11E0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7,
-            0x02, 0, 0, 0, 0,
-        ],
         should_draw_tab_strip: 0x0500_F4B0, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
         window_feature: ABSENT,
@@ -1276,32 +1198,6 @@ pub static CHROME_157_38: Build = Build {
         toolbar_layout: 0x0119_5EC0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
     },
     vertical: VerticalTabs {
-        supported: true,
-        slot: 0x100A_DE20, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
-        should_display: 0x0372_F780, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x0031_9000, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x0373_9690,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0A87_5880, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x0204_3D80, // ??0VerticalTabStripStateController@tabs@@IEAA@AEAVBrowserWindowInterface@@@Z
-        destructor: 0x02AA_EA60, // ??_EVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
-        destructor_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0xE8,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x1016_E590, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
-        region_preferred_size: 0x0A8D_3A70, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x1017_6640, // .weak.??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$Cd
-        invalidate_layout: 0x0458_7C70,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0A8D_39E0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
         should_draw_tab_strip: 0x054D_6710, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
         should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
         window_feature: ABSENT,
