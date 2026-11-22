@@ -466,7 +466,7 @@ const NOT_CODE: &[&str] = &["http_icon_name", "nav_icon_names"];
 /// Data, rather than instructions, so its shape is not read as code.
 const DATA_BYTES: &[&str] = &["page_info_bytes"];
 
-/// The value at a path such as `toolbar.paint_slot`.
+/// The value at a path such as `layout.on_paint_slot`.
 fn at_path<'a>(row: &'a Value, path: &str) -> &'a Value {
     path.split('.').fold(row, |value, key| &value[key])
 }
@@ -475,44 +475,9 @@ fn at_path<'a>(row: &'a Value, path: &str) -> &'a Value {
 /// module can answer on its own. A function listed twice settles a folded name.
 const VTABLE_SLOTS: &[(&str, &str, &str)] = &[
     (
-        "toolbar.browser_widget_vtable",
-        "toolbar.paint_slot",
-        "toolbar.paint",
-    ),
-    (
-        "toolbar.browser_widget_vtable",
-        "toolbar.layout_slot",
-        "toolbar.layout",
-    ),
-    (
-        "toolbar.plain_widget_vtable",
-        "toolbar.paint_slot",
-        "toolbar.paint",
-    ),
-    (
-        "toolbar.plain_widget_vtable",
-        "toolbar.layout_slot",
-        "toolbar.layout",
-    ),
-    (
-        "toolbar.browser_delegate_vtable",
-        "toolbar.active_web_contents_slot",
-        "toolbar.active_web_contents",
-    ),
-    (
-        "toolbar.web_contents_vtable",
-        "toolbar.web_contents_title_slot",
-        "toolbar.web_contents_title",
-    ),
-    (
         "side_panel.layout_vtable",
         "side_panel.proposed_slot",
         "side_panel.proposed",
-    ),
-    (
-        "toolbar.infobar_vtable",
-        "toolbar.infobar_layout_slot",
-        "toolbar.infobar_layout",
     ),
     (
         "layout.frame_vtable",
@@ -534,16 +499,6 @@ const VTABLE_SLOTS: &[(&str, &str, &str)] = &[
         "layout.caption_vtable",
         "layout.caption_paint_slot",
         "layout.caption_paint",
-    ),
-    (
-        "location_bar.vtable",
-        "location_bar.slot",
-        "location_bar.function",
-    ),
-    (
-        "location_bar.vtable",
-        "location_bar.preferred_slot",
-        "location_bar.preferred",
     ),
 ];
 

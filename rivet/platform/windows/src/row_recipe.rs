@@ -75,53 +75,6 @@ pub const FIELDS: &[Field] = &[
         }],
     },
     Field {
-        path: "toolbar.paint_slot",
-        recipes: &[
-            Recipe::Slot {
-                vtable: "toolbar.browser_widget_vtable",
-                function: "toolbar.paint",
-            },
-            Recipe::Slot {
-                vtable: "toolbar.plain_widget_vtable",
-                function: "toolbar.paint",
-            },
-        ],
-    },
-    Field {
-        path: "toolbar.layout_slot",
-        recipes: &[
-            Recipe::Slot {
-                vtable: "toolbar.browser_widget_vtable",
-                function: "toolbar.layout",
-            },
-            Recipe::Slot {
-                vtable: "toolbar.plain_widget_vtable",
-                function: "toolbar.layout",
-            },
-        ],
-    },
-    Field {
-        path: "toolbar.active_web_contents_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "toolbar.browser_delegate_vtable",
-            function: "toolbar.active_web_contents",
-        }],
-    },
-    Field {
-        path: "toolbar.web_contents_title_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "toolbar.web_contents_vtable",
-            function: "toolbar.web_contents_title",
-        }],
-    },
-    Field {
-        path: "toolbar.infobar_layout_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "toolbar.infobar_vtable",
-            function: "toolbar.infobar_layout",
-        }],
-    },
-    Field {
         path: "side_panel.proposed_slot",
         recipes: &[Recipe::Slot {
             vtable: "side_panel.layout_vtable",
@@ -161,20 +114,6 @@ pub const FIELDS: &[Field] = &[
         recipes: &[Recipe::Slot {
             vtable: "layout.caption_vtable",
             function: "layout.caption_paint",
-        }],
-    },
-    Field {
-        path: "location_bar.slot",
-        recipes: &[Recipe::Slot {
-            vtable: "location_bar.vtable",
-            function: "location_bar.function",
-        }],
-    },
-    Field {
-        path: "location_bar.preferred_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "location_bar.vtable",
-            function: "location_bar.preferred",
         }],
     },
 ];
@@ -645,21 +584,32 @@ mod tests {
             (0x10_8100, second.as_slice()),
         ]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let mut build = json!({
-            "toolbar": {
-                "browser_widget_vtable": "0x108000", "plain_widget_vtable": "0x108100",
-                "paint": "0x101100", "paint_slot": "0x1",
+        let build = json!({
+            "layout": {
+                "frame_vtable": "0x108000", "caption_vtable": "0x108100",
+                "layout": "0x101100", "layout_slot": "0x1",
             }
         });
-        let derived = derive_row(&mut build, &pe);
-        assert!(
-            derived
-                .failed
-                .iter()
-                .any(|line| line.starts_with("toolbar.paint_slot: its recipes disagree")),
-            "{:?}",
-            derived.failed
-        );
+        // No value of a row has two recipes today, so the rule is checked on a field made here.
+        let field = Field {
+            path: "layout.layout_slot",
+            recipes: &[
+                Recipe::Slot {
+                    vtable: "layout.frame_vtable",
+                    function: "layout.layout",
+                },
+                Recipe::Slot {
+                    vtable: "layout.caption_vtable",
+                    function: "layout.layout",
+                },
+            ],
+        };
+        match derive_field(&field, &build, &pe) {
+            Outcome::Failed(reason) => {
+                assert!(reason.starts_with("its recipes disagree"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
