@@ -234,6 +234,8 @@ pub enum When {
     Absent(&'static str),
     /// A flag that is false.
     False(&'static str),
+    /// A flag that is not true: false, null or missing.
+    NotTrue(&'static str),
 }
 
 pub const UNUSED_WHEN: &[UnusedWhen] = &[
@@ -256,6 +258,15 @@ pub const UNUSED_WHEN: &[UnusedWhen] = &[
         paths: &["vertical.should_draw_tab_strip"],
         when: When::False("vertical.detour_strip"),
         why: "the build does not leave its tab strip out by a detour",
+    },
+    UnusedWhen {
+        paths: &[
+            "side_panel.layout_vtable",
+            "side_panel.proposed_slot",
+            "side_panel.proposed",
+        ],
+        when: When::NotTrue("side_panel.old_layout"),
+        why: "a Rivet window is an app window, laid out by the app layout class, not the tabbed one",
     },
 ];
 
@@ -305,6 +316,7 @@ pub fn unused(build: &Value, path: &str) -> Option<&'static str> {
                         at(build, address).is_some_and(|value| !is_recorded(value))
                     }
                     When::False(flag) => at(build, flag).and_then(Value::as_bool) == Some(false),
+                    When::NotTrue(flag) => at(build, flag).and_then(Value::as_bool) != Some(true),
                 }
         })
         .map(|rule| rule.why)
@@ -472,6 +484,23 @@ mod tests {
         });
         assert!(unused(&build, "tabs.tab_collection").is_none());
         assert!(unused(&build, "vertical.toolbar_in_view").is_none());
+    }
+
+    #[test]
+    fn nfr6_the_tabbed_layout_is_not_a_value_of_a_build_without_the_old_layout() {
+        let build = json!({"side_panel": {"old_layout": null, "proposed": "0x13c8310"}});
+        for path in [
+            "side_panel.layout_vtable",
+            "side_panel.proposed_slot",
+            "side_panel.proposed",
+        ] {
+            assert!(unused(&build, path).is_some(), "{path}");
+        }
+        assert!(unused(&json!({"side_panel": {}}), "side_panel.proposed").is_some());
+        // An old-layout build lays out every window with the class its row records.
+        let old = json!({"side_panel": {"old_layout": true, "proposed": "0x13c8310"}});
+        assert!(unused(&old, "side_panel.proposed").is_none());
+        assert!(unused(&old, "side_panel.layout_vtable").is_none());
     }
 
     #[test]
