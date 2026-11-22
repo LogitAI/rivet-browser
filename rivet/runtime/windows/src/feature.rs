@@ -275,7 +275,7 @@ mod tests {
 
     type Pick = (&'static str, fn(&Build) -> Needs, fn(&Build) -> bool);
 
-    fn picks() -> [Pick; 5] {
+    fn picks() -> [Pick; 4] {
         [
             ("navigation", crate::features::navigation::needs, |b| {
                 b.navigation.supported
