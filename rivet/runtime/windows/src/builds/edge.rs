@@ -54,22 +54,6 @@ pub static EDGE: Build = Build {
         skip: "updateicon anchor visible", // the address field, icons and bubble anchors are not recorded for Edge yet
         toolbar_layout: ABSENT,
     },
-    vertical: VerticalTabs {
-        should_draw_tab_strip: 0x0100A550, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[
-            0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x89, 0x18, 0x06, 0x00,
-            0x00,
-        ],
-        window_feature: ABSENT,
-        window_feature_prologue: &[0],
-        window_feature_tab_strip: 0,
-        window_feature_callers: (0, 0),
-        set_bounds_rect: ABSENT,
-        set_bounds_rect_prologue: &[0],
-        toolbar_in_view: 0,
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
-    },
     navigation: Navigation {
         supported: true, // opening an address in a tab checked on Edge 156.0.4314.50
         content_window_for_hwnd: 0x026A4DC6, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z

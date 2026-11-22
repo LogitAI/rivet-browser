@@ -60,9 +60,6 @@ rivet/runtime/windows/src/features/split.rs unsafe 17
 rivet/runtime/windows/src/features/split.rs windows_sys 4
 rivet/runtime/windows/src/features/tab_list.rs unsafe 17
 rivet/runtime/windows/src/features/tab_list.rs windows_sys 1
-rivet/runtime/windows/src/features/tab_strip.rs rows 21
-rivet/runtime/windows/src/features/tab_strip.rs unsafe 17
-rivet/runtime/windows/src/features/tab_strip.rs windows_sys 3
 rivet/runtime/windows/src/features/tabs.rs rows 56
 rivet/runtime/windows/src/features/tabs.rs unsafe 52
 rivet/runtime/windows/src/features/tabs.rs windows_sys 5
