@@ -55,12 +55,6 @@ pub static BRAVE: Build = Build {
         skip: "",
         toolbar_layout: ABSENT,
     },
-    vertical: VerticalTabs {
-        should_draw_tab_strip: 0x0661FA10, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
-    },
     navigation: Navigation {
         supported: true,
         content_window_for_hwnd: 0x02EE93A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
@@ -351,12 +345,6 @@ pub static BRAVE_63: Build = Build {
         widget_for_window: 0x02F37C00, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x01378F50, // ?Layout@ToolbarView, found statically and unverified
-    },
-    vertical: VerticalTabs {
-        should_draw_tab_strip: 0x065EAD20, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,
@@ -718,12 +706,6 @@ pub static BRAVE_157_55: Build = Build {
         widget_for_window: 0x03153E70, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x011E0460, // ?Layout@ToolbarView, found statically and unverified
-    },
-    vertical: VerticalTabs {
-        should_draw_tab_strip: 0x06A93F30, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,

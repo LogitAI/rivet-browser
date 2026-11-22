@@ -80,29 +80,6 @@ pub static SAMSUNG: Build = Build {
         skip: "toolbar",
         ..UNCHECKED_TOOLBAR
     },
-    vertical: VerticalTabs {
-        // The tabbed layout's function (0x13c8310) inlines `BrowserView::ShouldDrawTabStrip`, whose
-        // copies at 0x2b44ed0 and 0x2b44420 it never calls, and starts that test by asking this
-        // function for feature 2, the tab strip, at 0x13c8510. Its other callers, the frame's
-        // top inset among them, must keep the browser's answer or the caption buttons go with the
-        // strip. The prologue is 12 bytes and ends on an instruction boundary.
-        window_feature: 0x001F_BB10,
-        window_feature_prologue: &[
-            0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x44, 0x89, 0xC3, 0x89, 0xD6,
-        ],
-        window_feature_tab_strip: 2,
-        window_feature_callers: (0x013C_8310, 0x013C_A742),
-        set_bounds_rect: 0x047C_EA60,
-        set_bounds_rect_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        toolbar_in_view: 0x5B0,
-        // The toggle ends 36 DIPs in and the toolbar keeps 8 before its first button; the back button
-        // then sits 30 DIPs from the toggle's centre, as Chrome's does.
-        toolbar_leading: 32,
-        detour_strip: true,
-        ..UNCHECKED_VERTICALTABS
-    },
     navigation: Navigation {
         supported: true, // opening the start page in a new tab checked on Samsung Internet 30.0.4.29
         content_window_for_hwnd: 0x00B5_A010,

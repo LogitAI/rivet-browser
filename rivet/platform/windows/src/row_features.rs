@@ -230,21 +230,6 @@ pub const UNUSED_WHEN: &[UnusedWhen] = &[
     },
     UnusedWhen {
         paths: &[
-            "vertical.window_feature_tab_strip",
-            "vertical.window_feature_callers",
-            "vertical.toolbar_in_view",
-            "vertical.toolbar_leading",
-        ],
-        when: When::Absent("vertical.window_feature"),
-        why: "the tab strip is left out through ShouldDrawTabStrip, not the window feature",
-    },
-    UnusedWhen {
-        paths: &["vertical.should_draw_tab_strip"],
-        when: When::False("vertical.detour_strip"),
-        why: "the build does not leave its tab strip out by a detour",
-    },
-    UnusedWhen {
-        paths: &[
             "side_panel.layout_vtable",
             "side_panel.proposed_slot",
             "side_panel.proposed",
@@ -458,16 +443,12 @@ mod tests {
     fn nfr6_a_value_the_runtime_does_not_read_is_not_a_value_of_the_build() {
         let build = json!({
             "tabs": {"tab_at": "0x326a00", "tab_collection": "0x30"},
-            "vertical": {"window_feature": "0x7fff0000", "window_feature_callers": ["0x0", "0x0"]},
         });
         assert!(unused(&build, "tabs.tab_collection").is_some());
-        assert!(unused(&build, "vertical.window_feature_callers[1]").is_some());
         let build = json!({
             "tabs": {"tab_at": "0x7fff0000"},
-            "vertical": {"window_feature": "0x1234560"},
         });
         assert!(unused(&build, "tabs.tab_collection").is_none());
-        assert!(unused(&build, "vertical.toolbar_in_view").is_none());
     }
 
     #[test]

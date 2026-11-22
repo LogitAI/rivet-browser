@@ -30,8 +30,6 @@ pub(crate) enum Feature {
     Split,
     /// The layout of the pages of a split view.
     SplitLayout,
-    /// The browser's tab strip is left out of the layout.
-    TabStrip,
 }
 
 impl Feature {
@@ -45,7 +43,6 @@ impl Feature {
             Feature::TopInset => "top_inset",
             Feature::Split => "split",
             Feature::SplitLayout => "split_layout",
-            Feature::TabStrip => "tab_strip",
         }
     }
 }
@@ -354,15 +351,14 @@ mod tests {
 
     type NeedsOf = fn(&Build) -> Needs;
 
-    fn all_needs() -> [(Feature, NeedsOf); 6] {
-        use crate::features::{frame_layout, split, tab_strip};
+    fn all_needs() -> [(Feature, NeedsOf); 5] {
+        use crate::features::{frame_layout, split};
         [
             (Feature::FrameLayout, frame_layout::needs_layout),
             (Feature::FrameColour, frame_layout::needs_colour),
             (Feature::CaptionPaint, frame_layout::needs_caption_paint),
             (Feature::CaptionLayout, frame_layout::needs_caption_layout),
             (Feature::Split, split::needs),
-            (Feature::TabStrip, tab_strip::needs),
         ]
     }
 
@@ -403,11 +399,8 @@ mod tests {
                 "caption_layout"
             ]
         );
-        assert_eq!(
-            names(&builds::WHALE),
-            ["frame_layout", "frame_colour", "tab_strip"]
-        );
-        assert_eq!(names(&builds::SAMSUNG), ["frame_layout", "tab_strip"]);
+        assert_eq!(names(&builds::WHALE), ["frame_layout", "frame_colour"]);
+        assert_eq!(names(&builds::SAMSUNG), ["frame_layout"]);
     }
 
     fn nothing(_: &Build) -> Needs {

@@ -2776,7 +2776,7 @@ mod tests {
     #[test]
     fn nfr6_unplaced_functions_of_a_feature_that_is_off_do_not_block_the_row() {
         // Edge 157's row stopped on functions no method placed, most of which only features the
-        // runtime can do without hold. The prior build gave these two no fingerprint.
+        // runtime can do without hold. The prior build gave this one no fingerprint.
         let mut prior = verified_row();
         prior["build"]["split"] = json!({
             "supported": true,
@@ -2784,17 +2784,12 @@ mod tests {
             "remove_split_prologue": "4883ec28488b0d10000000",
             "signatures": [["0x101400", "4883ec28"]],
         });
-        prior["build"]["vertical"] = json!({
-            "detour_strip": false,
-            "should_draw_tab_strip": "0x101500",
-            "should_draw_tab_strip_prologue": "4883ec28",
-        });
         let bytes = module(&code_refs(&shifted_code(0x2000, 0x44)));
         let pe = PeFile::parse(&bytes).unwrap();
         let prints = prints_of_prior();
         let (row, report) = find_candidate(&prior, &prints, None, &no_classes(), "1.0.0.3", &pe);
         assert_eq!(report.review, Vec::<String>::new());
-        assert_eq!(report.unplaced.len(), 2, "{:?}", report.unplaced);
+        assert_eq!(report.unplaced.len(), 1, "{:?}", report.unplaced);
         assert!(report.unplaced[0].starts_with("0x101400: no fingerprint"));
         assert!(report.unplaced[0].ends_with("split.remove_split, split.signatures[0][0]"));
         let build = &row["build"];
@@ -2812,8 +2807,6 @@ mod tests {
             "{:?}",
             report.switched_off
         );
-        // A function this build does not read is absent, and turns nothing off.
-        assert_eq!(build["vertical"]["should_draw_tab_strip"], "0x7fff0000");
         assert_eq!(report.switched_off.len(), 1, "{:?}", report.switched_off);
         // The rest of the row is found.
         assert_eq!(build["toolbar"]["paint"], "0x103300");
