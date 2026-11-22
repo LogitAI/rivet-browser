@@ -49,19 +49,6 @@ pub static CHROME: Build = Build {
         skip: "",
         toolbar_layout: ABSENT,
     },
-    vertical: VerticalTabs {
-        should_draw_tab_strip: 0x0528_6C00, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        window_feature: ABSENT,
-        window_feature_prologue: &[0],
-        window_feature_tab_strip: 0,
-        window_feature_callers: (0, 0),
-        set_bounds_rect: ABSENT,
-        set_bounds_rect_prologue: &[0],
-        toolbar_in_view: 0,
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
-    },
     navigation: Navigation {
         supported: true,
         content_window_for_hwnd: 0x00D5_64A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
@@ -418,19 +405,6 @@ pub static CHROME_156_74: Build = Build {
         widget_for_window: 0x02F4_8CE0, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x011C_98D0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
-    },
-    vertical: VerticalTabs {
-        should_draw_tab_strip: 0x0504_F960, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        window_feature: ABSENT,
-        window_feature_prologue: &[0],
-        window_feature_tab_strip: 0,
-        window_feature_callers: (0, 0),
-        set_bounds_rect: ABSENT,
-        set_bounds_rect_prologue: &[0],
-        toolbar_in_view: 0,
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,
@@ -791,19 +765,6 @@ pub static CHROME_156_80: Build = Build {
         widget_for_window: 0x02F9_E210, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x0130_94D0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
-    },
-    vertical: VerticalTabs {
-        should_draw_tab_strip: 0x0500_F4B0, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        window_feature: ABSENT,
-        window_feature_prologue: &[0],
-        window_feature_tab_strip: 0,
-        window_feature_callers: (0, 0),
-        set_bounds_rect: ABSENT,
-        set_bounds_rect_prologue: &[0],
-        toolbar_in_view: 0,
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,
@@ -1197,19 +1158,6 @@ pub static CHROME_157_38: Build = Build {
         skip: "",
         toolbar_layout: 0x0119_5EC0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
     },
-    vertical: VerticalTabs {
-        should_draw_tab_strip: 0x054D_6710, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        window_feature: ABSENT,
-        window_feature_prologue: &[0],
-        window_feature_tab_strip: 0,
-        window_feature_callers: (0, 0),
-        set_bounds_rect: ABSENT,
-        set_bounds_rect_prologue: &[0],
-        toolbar_in_view: 0,
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
-    },
     navigation: Navigation {
         supported: true,
         content_window_for_hwnd: 0x00E1_3BC0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
@@ -1501,7 +1449,6 @@ pub static CHROME_150: Build = Build {
         skip: "toolbar",
         ..UNCHECKED_TOOLBAR
     },
-    vertical: UNCHECKED_VERTICALTABS,
     navigation: UNCHECKED_NAVIGATION,
     tabs: UNCHECKED_TABS,
     split: UNCHECKED_SPLIT,

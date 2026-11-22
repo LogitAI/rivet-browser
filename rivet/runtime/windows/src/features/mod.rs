@@ -28,7 +28,6 @@ pub(crate) mod sidebar_page;
 pub(crate) mod split;
 pub(crate) mod split_grid;
 pub(crate) mod tab_list;
-pub(crate) mod tab_strip;
 pub(crate) mod tabs;
 pub(crate) mod tick_gate;
 pub(crate) mod widgets;

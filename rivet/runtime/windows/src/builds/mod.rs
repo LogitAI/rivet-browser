@@ -38,7 +38,6 @@ pub struct Build {
     pub module: &'static str,
     pub version: [u16; 4],
     pub toolbar: Toolbar,
-    pub vertical: VerticalTabs,
     pub navigation: Navigation,
     pub tabs: Tabs,
     pub split: Split,
@@ -198,41 +197,6 @@ pub struct Toolbar {
     /// The toolbar view's own `Layout`, when the browser lays the toolbar out outside the window's
     /// layout pass. `ABSENT` when not needed.
     pub toolbar_layout: usize,
-}
-}
-
-row_struct! {
-/// Values for `tab_strip.rs`, which takes the tab strip out of a Rivet window's layout. A row keeps
-/// them under `vertical`, the name of the experiment they first served.
-pub struct VerticalTabs {
-    /// `BrowserView::ShouldDrawTabStrip` and its first bytes.
-    pub should_draw_tab_strip: usize,
-    pub should_draw_tab_strip_prologue: &'static [u8],
-    /// `Browser::SupportsWindowFeature(browser, feature, check)`, for builds whose layout has the tab
-    /// strip decision inlined so no function of its own answers it. Rivet detours it to answer no
-    /// for the tab strip feature of the browsers of Rivet windows. The prologue must be 12 or more
-    /// bytes, end on an instruction boundary and hold no relative operand.
-    pub window_feature: usize,
-    pub window_feature_prologue: &'static [u8],
-    /// The value of the tab strip feature.
-    pub window_feature_tab_strip: u32,
-    /// The code range whose questions Rivet answers, as start and end RVAs, or `(0, 0)` for every
-    /// caller. Other callers ask the same question for other reasons, and the frame view takes the
-    /// caption buttons away with the strip when it hears the answer.
-    pub window_feature_callers: (usize, usize),
-    /// `View::SetBoundsRect` and the offset of the toolbar view in the browser view. With the strip
-    /// gone the toolbar runs under the caption buttons, so Rivet detours the bounds function to stop
-    /// the toolbar of a Rivet window short of them. The prologue must be 12 or more bytes with no
-    /// relative operand.
-    pub set_bounds_rect: usize,
-    pub set_bounds_rect_prologue: &'static [u8],
-    pub toolbar_in_view: usize,
-    /// How far, in DIPs, the toolbar of a Rivet window starts to the right of the browser view's left
-    /// edge, so Rivet's toggle button has the room before the back button that Chrome's toolbar gives it.
-    pub toolbar_leading: i32,
-    /// Whether a Rivet window leaves that function out of its layout by a detour, with this build's
-    /// prologue copied to a trampoline. Only builds where this has been checked set it.
-    pub detour_strip: bool,
 }
 }
 
@@ -602,20 +566,6 @@ const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
     skip: "",
     toolbar_layout: ABSENT,
     get_color: ABSENT,
-};
-
-const UNCHECKED_VERTICALTABS: VerticalTabs = VerticalTabs {
-    should_draw_tab_strip: ABSENT,
-    should_draw_tab_strip_prologue: &[0],
-    window_feature: ABSENT,
-    window_feature_prologue: &[0],
-    window_feature_tab_strip: 0,
-    window_feature_callers: (0, 0),
-    set_bounds_rect: ABSENT,
-    set_bounds_rect_prologue: &[0],
-    toolbar_in_view: 0,
-    toolbar_leading: 0,
-    detour_strip: false,
 };
 
 const UNCHECKED_NAVIGATION: Navigation = Navigation {

@@ -2974,22 +2974,6 @@ fn attach_steps() -> Vec<Step<Attach>> {
             set_rivet_icons(window);
             true
         }),
-        feature(
-            Feature::TabStrip,
-            crate::features::tab_strip::needs,
-            |attach| unsafe {
-                let hidden = crate::features::tab_strip::hide(attach.window);
-                crate::trace::trace(&format!("tab strip hidden: {hidden}"));
-                if hidden {
-                    Ok(())
-                } else {
-                    Err("the tab strip was not hidden".to_owned())
-                }
-            },
-            OnFailure::Continue,
-            true,
-            None,
-        ),
         Step::Setup(|attach| unsafe {
             // A frame change makes the browser lay out its frame again, now through the layout hook.
             SetWindowPos(
@@ -4307,7 +4291,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             crate::features::link_preview::forget(window);
             crate::features::page_links::forget(window);
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
-            crate::features::tab_strip::forget(window);
             frame_layout::forget_view(window);
             crate::features::widgets::forget(window);
             crate::side_rail::forget(window);

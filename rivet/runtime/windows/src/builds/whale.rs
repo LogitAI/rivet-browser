@@ -89,17 +89,6 @@ pub static WHALE: Build = Build {
         skip: "toolbar",
         ..UNCHECKED_TOOLBAR
     },
-    vertical: VerticalTabs {
-        // Chromium's `BrowserView::ShouldDrawTabStrip` in this build. The
-        // prologue ends on an instruction boundary and holds no relative operand.
-        should_draw_tab_strip: 0x0E6CBE60,
-        should_draw_tab_strip_prologue: &[
-            0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x89, 0xC0, 0x05, 0x00,
-            0x00,
-        ],
-        detour_strip: true,
-        ..UNCHECKED_VERTICALTABS
-    },
     navigation: Navigation {
         supported: true, // opening an address in a tab checked on Whale 5.39.412.57
         content_window_for_hwnd: 0x08F36620,

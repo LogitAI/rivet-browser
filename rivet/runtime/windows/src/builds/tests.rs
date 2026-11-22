@@ -196,16 +196,6 @@ fn nfr3_whale_maps_only_the_frame_hooks() {
             && !WHALE.split.supported
     );
     assert!(WHALE.navigation.supported && WHALE.side_panel.supported);
-    assert!(
-        WHALE.vertical.detour_strip && WHALE.vertical.should_draw_tab_strip_prologue.len() >= 14
-    );
-    assert!(
-        all()
-            .iter()
-            .filter(|build| build.vertical.detour_strip)
-            .count()
-            == 2
-    );
     assert_eq!(WHALE.toolbar.skip, "toolbar");
     // Hooks without a verified address are absent, so their checks fail.
     assert_eq!(WHALE.layout.corner_paint, ABSENT);
@@ -272,7 +262,7 @@ fn check_brave_frame_hooks(brave: &Build) {
             && !brave.tabs.groups
             && brave.navigation.supported
     );
-    assert!(!brave.split.supported && !brave.vertical.detour_strip);
+    assert!(!brave.split.supported);
     // The .62 row records no frame paint or top inset. The .63 row records Chromium's own.
     if brave.version == BRAVE.version {
         assert_eq!(
@@ -532,23 +522,6 @@ fn nfr3_samsung_frame_and_tab_hooks_match_the_installed_build() {
     let Ok(file) = std::fs::read(path) else {
         return;
     };
-    // The inlined tab strip test: `call` of the window feature function from the layout.
-    assert_eq!(
-        file_bytes(&file, 0x13c8510, 5).as_deref(),
-        Some(&[0xE8, 0xFB, 0x35, 0xE3, 0xFE][..])
-    );
-    let callers = SAMSUNG.vertical.window_feature_callers;
-    assert!(callers.0 <= 0x13c8510 && 0x13c8515 <= callers.1);
-    let bounds = SAMSUNG.vertical.set_bounds_rect_prologue;
-    assert_eq!(
-        file_bytes(&file, SAMSUNG.vertical.set_bounds_rect, bounds.len()).as_deref(),
-        Some(bounds)
-    );
-    let bytes = SAMSUNG.vertical.window_feature_prologue;
-    assert_eq!(
-        file_bytes(&file, SAMSUNG.vertical.window_feature, bytes.len()).as_deref(),
-        Some(bytes)
-    );
     for (rva, bytes) in SAMSUNG.tabs.signatures {
         assert_eq!(
             file_bytes(&file, *rva, bytes.len()).as_deref(),

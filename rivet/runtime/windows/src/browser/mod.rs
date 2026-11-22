@@ -25,7 +25,7 @@
 //! | G. Split view and the second page view | split, split_grid, second_view | build values, reflection for bounds |
 //! | H. Infobars per pane | pane_infobar | reflection |
 //! | I. Mini window out and back | mini_window | command id out, build values back |
-//! | J. App window without a tab strip | app_window, tab_strip | build values |
+//! | J. App window without a tab strip | app_window | build values |
 //! | K. Address suggestions | omnibox | build values |
 //! | L. Frame, caption and paint | frame_layout, look, widgets | build values, reflection to find views |
 //! | M. Side panel, bubbles, DevTools | side_panel, bubble_anchor, dev_tools | command ids, reflection, build values |

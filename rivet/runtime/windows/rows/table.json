@@ -600,23 +600,7 @@
           0,
           8078,
           81
-        ],
-        "vertical": {
-          "detour_strip": false,
-          "set_bounds_rect": "0x7fff0000",
-          "set_bounds_rect_prologue": "00",
-          "should_draw_tab_strip": "0x500f570",
-          "should_draw_tab_strip_prologue": "565753",
-          "toolbar_in_view": "0x0",
-          "toolbar_leading": 0,
-          "window_feature": "0x7fff0000",
-          "window_feature_callers": [
-            "0x0",
-            "0x0"
-          ],
-          "window_feature_prologue": "00",
-          "window_feature_tab_strip": 0
-        }
+        ]
       },
       "frame": {
         "browser": "Google Chrome",
@@ -1225,23 +1209,7 @@
           0,
           8078,
           82
-        ],
-        "vertical": {
-          "detour_strip": false,
-          "set_bounds_rect": "0x7fff0000",
-          "set_bounds_rect_prologue": "00",
-          "should_draw_tab_strip": "0x500f430",
-          "should_draw_tab_strip_prologue": "565753",
-          "toolbar_in_view": "0x0",
-          "toolbar_leading": 0,
-          "window_feature": "0x7fff0000",
-          "window_feature_callers": [
-            "0x0",
-            "0x0"
-          ],
-          "window_feature_prologue": "00",
-          "window_feature_tab_strip": 0
-        }
+        ]
       },
       "frame": {
         "browser": "Google Chrome",
@@ -1850,23 +1818,7 @@
           0,
           8103,
           39
-        ],
-        "vertical": {
-          "detour_strip": false,
-          "set_bounds_rect": "0x7fff0000",
-          "set_bounds_rect_prologue": "00",
-          "should_draw_tab_strip": "0x54d6590",
-          "should_draw_tab_strip_prologue": "565753",
-          "toolbar_in_view": "0x0",
-          "toolbar_leading": 0,
-          "window_feature": "0x7fff0000",
-          "window_feature_callers": [
-            "0x0",
-            "0x0"
-          ],
-          "window_feature_prologue": "00",
-          "window_feature_tab_strip": 0
-        }
+        ]
       },
       "frame": {
         "browser": "Google Chrome",
@@ -2456,23 +2408,7 @@
           0,
           4314,
           58
-        ],
-        "vertical": {
-          "detour_strip": false,
-          "set_bounds_rect": "0x7fff0000",
-          "set_bounds_rect_prologue": "00",
-          "should_draw_tab_strip": "0x1038320",
-          "should_draw_tab_strip_prologue": "564883ec204889ce488b8918060000",
-          "toolbar_in_view": "0x0",
-          "toolbar_leading": 0,
-          "window_feature": "0x7fff0000",
-          "window_feature_callers": [
-            "0x0",
-            "0x0"
-          ],
-          "window_feature_prologue": "00",
-          "window_feature_tab_strip": 0
-        }
+        ]
       },
       "frame": {
         "browser": "Microsoft Edge",
