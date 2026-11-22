@@ -421,7 +421,11 @@ pub fn derive_row(build: &mut Value, pe: &PeFile) -> Derived {
 /// takes them the same way, so they are written from the value they follow and never carried.
 pub const FOLLOWS: &[(&str, &str, i64)] = &[
     ("app_window.view_parent", "layout.view_bounds_offset", -0x30),
-    ("app_window.view_children", "layout.view_bounds_offset", -0x28),
+    (
+        "app_window.view_children",
+        "layout.view_bounds_offset",
+        -0x28,
+    ),
 ];
 
 /// Writes each value of `FOLLOWS` the row has from the value it follows.

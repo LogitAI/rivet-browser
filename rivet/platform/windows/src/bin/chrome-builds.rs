@@ -212,9 +212,10 @@ fn score(
     for (feature, each) in &score.features {
         let state = if each.off { "off" } else { "on" };
         println!(
-            "  {feature}: {state}, {} equal, {} different, {} not held",
+            "  {feature}: {state}, {} equal, {} wrong, {} not found, {} not held",
             each.equal,
             each.different.len(),
+            each.not_found.len(),
             each.not_held.len()
         );
         for line in &each.different {

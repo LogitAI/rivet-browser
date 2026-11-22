@@ -293,12 +293,12 @@ fn at<'a>(build: &'a Value, path: &str) -> Option<&'a Value> {
 }
 
 fn at_mut<'a>(build: &'a mut Value, path: &str) -> Option<&'a mut Value> {
-    path.split('.').try_fold(build, |value, key| value.get_mut(key))
+    path.split('.')
+        .try_fold(build, |value, key| value.get_mut(key))
 }
 
 fn is_recorded(value: &Value) -> bool {
-    crate::row_recipe::number(value)
-        .is_some_and(|value| (0x10_0000..0x7FFF_0000).contains(&value))
+    crate::row_recipe::number(value).is_some_and(|value| (0x10_0000..0x7FFF_0000).contains(&value))
 }
 
 /// Why the runtime does not read a value in this row, or `None` when it does.
@@ -426,9 +426,18 @@ mod tests {
     #[test]
     fn nfr6_every_row_value_of_a_feature_has_one_switch() {
         assert_eq!(feature_of("split.view_size").unwrap().name, "split view");
-        assert_eq!(feature_of("toolbar.dev.colours[3][0]").unwrap().name, "developer colours");
-        assert_eq!(feature_of("layout.frame_ids[1]").unwrap().name, "frame colour");
-        assert_eq!(feature_of("omnibox.match_size").unwrap().name, "address suggestions");
+        assert_eq!(
+            feature_of("toolbar.dev.colours[3][0]").unwrap().name,
+            "developer colours"
+        );
+        assert_eq!(
+            feature_of("layout.frame_ids[1]").unwrap().name,
+            "frame colour"
+        );
+        assert_eq!(
+            feature_of("omnibox.match_size").unwrap().name,
+            "address suggestions"
+        );
         // The frame and the page area layout have no switch: the window cannot do without them.
         for core in ["layout.view_bounds_offset", "side_panel.toolbar"] {
             assert!(feature_of(core).is_none(), "{core}");
@@ -475,7 +484,8 @@ mod tests {
 
     #[test]
     fn nfr6_a_switched_off_feature_excuses_only_its_own_checks() {
-        let row = json!({"switched_off": [{"feature": "split view"}, {"feature": "developer colours"}]});
+        let row =
+            json!({"switched_off": [{"feature": "split view"}, {"feature": "developer colours"}]});
         let excused = excused_checks(&row);
         assert_eq!(excuses(&excused, "split-grid-4"), Some("split view"));
         assert_eq!(excuses(&excused, "split"), Some("split view"));

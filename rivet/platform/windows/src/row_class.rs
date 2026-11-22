@@ -135,8 +135,9 @@ impl CodeIndex {
                             let rel = i32::from_le_bytes(raw.try_into().expect("four bytes"));
                             let target = i64::from(rva) + 5 + i64::from(rel);
                             // Only a branch into code can be one into a function.
-                            if let Some(target) =
-                                u32::try_from(target).ok().filter(|target| pe.is_code(*target))
+                            if let Some(target) = u32::try_from(target)
+                                .ok()
+                                .filter(|target| pe.is_code(*target))
                             {
                                 index.branches.push((target, rva, bytes[at] == 0xE9));
                             }
@@ -144,7 +145,9 @@ impl CodeIndex {
                     }
                 }
             }
-            index.uses.sort_unstable_by_key(|each| (each.target, each.at));
+            index
+                .uses
+                .sort_unstable_by_key(|each| (each.target, each.at));
             index.branches.sort_unstable();
             index
         })
@@ -158,7 +161,12 @@ fn rip_uses(pe: &PeFile, targets: &BTreeSet<u32>) -> Vec<RipUse> {
     let mut found = Vec::new();
     for target in targets {
         let from = index.uses.partition_point(|each| each.target < *target);
-        found.extend(index.uses[from..].iter().take_while(|each| each.target == *target).copied());
+        found.extend(
+            index.uses[from..]
+                .iter()
+                .take_while(|each| each.target == *target)
+                .copied(),
+        );
     }
     found.sort_unstable_by_key(|each: &RipUse| each.at);
     found
@@ -409,7 +417,10 @@ fn tables_beside(
         for written in stores.iter().filter(|store| store.table == provider) {
             let tables = object_tables(&stores, written);
             // The provider's own table must be what the constructor leaves at its place.
-            if !tables.iter().any(|(at, table)| *at == written.offset && *table == provider) {
+            if !tables
+                .iter()
+                .any(|(at, table)| *at == written.offset && *table == provider)
+            {
                 continue;
             }
             if let Some((_, table)) = tables.get(order) {
@@ -533,7 +544,9 @@ fn statics_of_table(
             }
         }
     }
-    let order = (orders.len() == 1).then(|| orders.into_iter().next()).flatten();
+    let order = (orders.len() == 1)
+        .then(|| orders.into_iter().next())
+        .flatten();
     (found, order)
 }
 
@@ -639,7 +652,10 @@ mod tests {
         bytes[directory..directory + 4].copy_from_slice(&0x2f00u32.to_le_bytes());
         bytes[directory + 4..directory + 8]
             .copy_from_slice(&(12 * ranges.len() as u32).to_le_bytes());
-        for (index, flags) in [0x6000_0020u32, 0x4000_0040, 0xC000_0040].iter().enumerate() {
+        for (index, flags) in [0x6000_0020u32, 0x4000_0040, 0xC000_0040]
+            .iter()
+            .enumerate()
+        {
             let header = optional + 240 + 40 * index;
             let rva = 0x1000 * (index as u32 + 1);
             bytes[header + 8..header + 12].copy_from_slice(&0x1000u32.to_le_bytes());
@@ -715,7 +731,12 @@ mod tests {
                 (0x2200, provider),
                 (0x2400, class),
             ],
-            &[(0x1100, 0x1120), (0x1300, 0x1301), (0x1310, 0x1311), (0x1400, 0x1420)],
+            &[
+                (0x1100, 0x1120),
+                (0x1300, 0x1301),
+                (0x1310, 0x1311),
+                (0x1400, 0x1420),
+            ],
         )
     }
 
@@ -725,7 +746,10 @@ mod tests {
         let pe = PeFile::parse(&bytes).unwrap();
         // The getter reads the static the way the runtime reads it.
         assert_eq!(load_target(&pe, 0x1200), Some((0x3000, true)));
-        assert_eq!(class_tables(&pe, "EdgeBrowserFrameViewWin"), BTreeSet::from([0x2400]));
+        assert_eq!(
+            class_tables(&pe, "EdgeBrowserFrameViewWin"),
+            BTreeSet::from([0x2400])
+        );
         // A name the build does not hold, or holds only as part of a longer one, gives nothing.
         assert!(class_tables(&pe, "BrowserFrameViewWin").is_empty());
         assert!(class_tables(&pe, "WindowsCaptionButton").is_empty());
@@ -796,10 +820,23 @@ mod tests {
         // seventh in Edge 156, and a name without the place would give the first.
         assert_eq!(name_and_order("BrowserView#6"), ("BrowserView", 6));
         assert_eq!(name_and_order("BrowserView"), ("BrowserView", 0));
-        let store = |table, offset| Store { index: 0, table, base: 6, offset };
-        let stores = [store(0x10, 0), store(0x20, 8), store(0x30, 0x1f8), store(0x11, 0)];
+        let store = |table, offset| Store {
+            index: 0,
+            table,
+            base: 6,
+            offset,
+        };
+        let stores = [
+            store(0x10, 0),
+            store(0x20, 8),
+            store(0x30, 0x1f8),
+            store(0x11, 0),
+        ];
         // A derived constructor's later store at a place replaces the base's.
-        assert_eq!(object_tables(&stores, &stores[1]), [(0, 0x11), (8, 0x20), (0x1f8, 0x30)]);
+        assert_eq!(
+            object_tables(&stores, &stores[1]),
+            [(0, 0x11), (8, 0x20), (0x1f8, 0x30)]
+        );
         // An object whose first table is not seen gives no places.
         assert!(object_tables(&stores[1..3], &stores[1]).is_empty());
     }
@@ -816,5 +853,4 @@ mod tests {
         let pe = PeFile::parse(&bytes).unwrap();
         assert_eq!(load_target(&pe, 0x1000), Some((0x1000 + 26 + 0x2000, true)));
     }
-
 }

@@ -856,9 +856,9 @@ fn settle_carried(row: &mut Value, report: &mut PortReport) {
         if row_features::is_reflected(&path) {
             row_features::leave_out(&mut row["build"], &path);
             report.unread.remove(&path);
-            report
-                .reflected
-                .push(format!("{path}: left out, the runtime finds it by reflection"));
+            report.reflected.push(format!(
+                "{path}: left out, the runtime finds it by reflection"
+            ));
         } else if let Some(why) = row_features::unused(&row["build"], &path) {
             row_features::clear(&mut row["build"], &path, Clear::Zero);
             report.unused.push(format!("{path}: {why}"));
@@ -1077,9 +1077,9 @@ fn finish_row(
                 format!("could not be read from the new build: {failure}"),
             );
         } else {
-            report
-                .review
-                .push(format!("a value could not be read from the new build: {failure}"));
+            report.review.push(format!(
+                "a value could not be read from the new build: {failure}"
+            ));
         }
     }
     (row, report)
@@ -1285,8 +1285,8 @@ pub fn find_candidate(
     // that read the prior build next to the new one.
     let mut wanted: BTreeMap<u32, (String, row_resolve::Wanted)> = BTreeMap::new();
     let commands = command_targets(prior, version);
-    let want = |target: u32, kind: row_resolve::Kind, candidates: Option<Vec<u32>>| {
-        row_resolve::Wanted {
+    let want =
+        |target: u32, kind: row_resolve::Kind, candidates: Option<Vec<u32>>| row_resolve::Wanted {
             kind,
             candidates,
             class: (kind == row_resolve::Kind::Table)
@@ -1296,8 +1296,7 @@ pub fn find_candidate(
                 .then(|| commands.get(&target).copied())
                 .flatten(),
             loose: Vec::new(),
-        }
-    };
+        };
     for target in &targets {
         match stored.get(&format!("{target:#x}")) {
             Some(Value::String(text)) => match hex(text).filter(|shape| shape.len() >= ANCHOR) {
@@ -1382,7 +1381,10 @@ pub fn find_candidate(
             }
             many => {
                 let line = format!("{target:#x} matches {} places", many.len());
-                wanted.insert(*target, (line, want(*target, function, Some(many.to_vec()))));
+                wanted.insert(
+                    *target,
+                    (line, want(*target, function, Some(many.to_vec()))),
+                );
             }
         }
     }
@@ -1469,7 +1471,15 @@ pub fn find_candidate(
     }
     record_classes(prior, &mut row, classes, &moved);
     if let Some(prior_pe) = prior_pe {
-        read_carried(prior, &mut row, &moved, &followed, prior_pe, pe, &mut report);
+        read_carried(
+            prior,
+            &mut row,
+            &moved,
+            &followed,
+            prior_pe,
+            pe,
+            &mut report,
+        );
     }
     settle_carried(&mut row, &mut report);
     (row, report)
@@ -1530,7 +1540,11 @@ fn release_unplaced(
                 None => {
                     let why = row_features::unused(&row["build"], path).unwrap_or_default();
                     // A list holds no single address, so a value in one becomes zero.
-                    let how = if path.contains('[') { Clear::Zero } else { Clear::Absent };
+                    let how = if path.contains('[') {
+                        Clear::Zero
+                    } else {
+                        Clear::Absent
+                    };
                     row_features::clear(&mut row["build"], path, how);
                     report.unused.push(format!("{path}: {why}"));
                 }
@@ -1634,7 +1648,10 @@ fn read_carried(
                 report.derived.push(if value == reading.prior {
                     format!("{}: {value:#x}, {how}", reading.path)
                 } else {
-                    format!("{}: {:#x} -> {value:#x}, {how}", reading.path, reading.prior)
+                    format!(
+                        "{}: {:#x} -> {value:#x}, {how}",
+                        reading.path, reading.prior
+                    )
                 });
             }
             Err(reason) => {
@@ -1825,6 +1842,9 @@ pub struct FeatureScore {
     pub equal: usize,
     /// Values the made row holds differently, with both. Any is a wrong value.
     pub different: Vec<String>,
+    /// Values no method placed in the new build, so the made row still shows the prior build's and
+    /// a review line stops the row. Not a wrong value: the row is not published.
+    pub not_found: Vec<String>,
     /// The made row turns the feature off, so none of its values is used.
     pub off: bool,
     /// Values the made row does not hold or does not use: the runtime finds them by reflection,
@@ -1880,7 +1900,8 @@ fn leaves(path: &str, value: &Value, out: &mut BTreeMap<String, Value>) {
 /// Compares a row made from a prior row with the row people verified for the same build. A value of
 /// a feature the made row turns off is not compared, since the runtime does not use it. A value the
 /// made row leaves out, or writes as zero because this build does not read it, is listed as not
-/// held. Every other value must be equal, and one that differs is listed with both values.
+/// held. A value a review line reports as having no new place is listed as not found. Every other
+/// value must be equal, and one that differs is listed with both values.
 pub fn score_row(made: &Value, report: &PortReport, verified: &Value) -> RowScore {
     let off: BTreeSet<&str> = made[crate::row_features::SWITCHED_OFF]
         .as_array()
@@ -1893,6 +1914,16 @@ pub fn score_row(made: &Value, report: &PortReport, verified: &Value) -> RowScor
         .iter()
         .chain(&report.reflected)
         .filter_map(|line| line.split(": ").next())
+        .collect();
+    let unplaced: BTreeSet<String> = report
+        .review
+        .iter()
+        .filter_map(|line| line.strip_prefix("no new place for ."))
+        .filter_map(|rest| rest.split(' ').next())
+        .map(|path| match path.starts_with("frame.") {
+            true => path.to_owned(),
+            false => format!("build.{path}"),
+        })
         .collect();
     let mut score = RowScore {
         browser: report.browser.clone(),
@@ -1924,6 +1955,7 @@ pub fn score_row(made: &Value, report: &PortReport, verified: &Value) -> RowScor
                 Some(_) if unused.iter().any(|unused| path.starts_with(unused)) => {
                     entry.not_held.push(shown)
                 }
+                Some(_) if unplaced.contains(&shown) => entry.not_found.push(shown),
                 Some(found) => entry
                     .different
                     .push(format!("{shown}: made {found}, verified {value}")),
@@ -2099,8 +2131,11 @@ mod tests {
         assert_eq!(row["build"]["toolbar"]["dev"]["inspect"], 40023);
         assert_eq!(row["build"]["toolbar"]["dev"]["console"], 40005);
         assert!(
-            !report.carried.iter().any(|path| path.starts_with("toolbar.dev.inspect")
-                || path.starts_with("toolbar.dev.console")),
+            !report
+                .carried
+                .iter()
+                .any(|path| path.starts_with("toolbar.dev.inspect")
+                    || path.starts_with("toolbar.dev.console")),
             "{:?}",
             report.carried
         );
@@ -2140,7 +2175,12 @@ mod tests {
     #[test]
     fn nfr6_a_feature_with_an_unread_value_is_off_for_that_build() {
         let code = new_code();
-        let (row, report) = port(&prior_with_features(), NEW_PLACES, &code_refs(&code), "2.0.0.1");
+        let (row, report) = port(
+            &prior_with_features(),
+            NEW_PLACES,
+            &code_refs(&code),
+            "2.0.0.1",
+        );
         // Nothing holds the rest of the row back.
         assert_eq!(report.review, Vec::<String>::new());
         assert!(report.carried.is_empty(), "{:?}", report.carried);
@@ -2156,7 +2196,10 @@ mod tests {
             .iter()
             .map(|entry| entry["feature"].as_str().unwrap())
             .collect();
-        assert_eq!(off, ["address suggestions", "developer colours", "split view"]);
+        assert_eq!(
+            off,
+            ["address suggestions", "developer colours", "split view"]
+        );
         assert_eq!(report.switched_off.len(), 3, "{:?}", report.switched_off);
         // A value this build does not use is written as zero, and no feature goes off for it.
         assert_eq!(build["tabs"]["tab_collection"], "0x0");
@@ -2210,7 +2253,12 @@ mod tests {
     #[test]
     fn nfr6_a_row_within_its_milestone_turns_nothing_off() {
         let code = new_code();
-        let (row, report) = port(&prior_with_features(), NEW_PLACES, &code_refs(&code), "1.0.0.2");
+        let (row, report) = port(
+            &prior_with_features(),
+            NEW_PLACES,
+            &code_refs(&code),
+            "1.0.0.2",
+        );
         assert_eq!(report.review, Vec::<String>::new());
         assert!(report.switched_off.is_empty());
         assert_eq!(row["build"]["split"]["supported"], true);
@@ -2503,7 +2551,14 @@ mod tests {
     ) -> (Value, PortReport) {
         let bytes = module(&code_refs(code));
         let pe = PeFile::parse(&bytes).unwrap();
-        find_candidate(&verified_row(), prints, None, &BTreeMap::new(), version, &pe)
+        find_candidate(
+            &verified_row(),
+            prints,
+            None,
+            &BTreeMap::new(),
+            version,
+            &pe,
+        )
     }
 
     /// `module` with an exception table at 0x10f000 that lists `starts`.
@@ -2561,14 +2616,23 @@ mod tests {
         let bytes = with_ranges(&new, &ranges(0x2000, new[3].1.len()));
         let pe = PeFile::parse(&bytes).unwrap();
         let classes = BTreeMap::new();
-        find_candidate(&verified_row(), &prints, Some(&prior_pe), &classes, "1.0.0.3", &pe)
+        find_candidate(
+            &verified_row(),
+            &prints,
+            Some(&prior_pe),
+            &classes,
+            "1.0.0.3",
+            &pe,
+        )
     }
 
     #[test]
     fn nfr6_a_carried_value_is_read_from_the_instructions_that_use_it() {
         // mov rax, [rcx + 0x20]; mov rdx, [rcx + 0x20], and the new build moved the member to 0x28.
-        let (row, report) =
-            read_view_layer("488b8120000000488b9120000000", "488b8128000000488b9128000000");
+        let (row, report) = read_view_layer(
+            "488b8120000000488b9120000000",
+            "488b8128000000488b9128000000",
+        );
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["view_layer"], "0x28");
         assert!(report.carried.is_empty(), "{:?}", report.carried);
@@ -2600,8 +2664,10 @@ mod tests {
             "{:?}",
             report.review
         );
-        let (_, report) =
-            read_view_layer("488b8120000000488b9120000000", "488b8128000000488b9130000000");
+        let (_, report) = read_view_layer(
+            "488b8120000000488b9120000000",
+            "488b8128000000488b9130000000",
+        );
         assert!(
             report
                 .review
@@ -2633,8 +2699,14 @@ mod tests {
         let (prints, _) = fingerprints_of(&verified, &prior_pe);
         let bytes = with_starts(&code, &[0x103100, 0x103200, 0x103300]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) =
-            find_candidate(&verified, &prints, Some(&prior_pe), &no_classes(), "1.0.0.3", &pe);
+        let (row, report) = find_candidate(
+            &verified,
+            &prints,
+            Some(&prior_pe),
+            &no_classes(),
+            "1.0.0.3",
+            &pe,
+        );
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         // A part moved out of another function starts where it may, and a whole function does not.
@@ -2645,21 +2717,30 @@ mod tests {
         ));
         let bytes = with_starts(&split, &[0x103100, 0x103200, 0x103300, 0x105308]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (row, report) =
-            find_candidate(&verified, &prints, Some(&prior_pe), &no_classes(), "1.0.0.3", &pe);
+        let (row, report) = find_candidate(
+            &verified,
+            &prints,
+            Some(&prior_pe),
+            &no_classes(),
+            "1.0.0.3",
+            &pe,
+        );
         assert!(report.review.is_empty(), "{:?}", report.review);
         assert_eq!(row["build"]["toolbar"]["paint"], "0x103300");
         // Bytes that match only inside another function are no place at all.
         let bytes = with_starts(&code, &[0x103100, 0x103200]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let (_, report) =
-            find_candidate(&verified, &prints, Some(&prior_pe), &no_classes(), "1.0.0.3", &pe);
+        let (_, report) = find_candidate(
+            &verified,
+            &prints,
+            Some(&prior_pe),
+            &no_classes(),
+            "1.0.0.3",
+            &pe,
+        );
         assert!(
-            report
-                .review
-                .iter()
-                .any(|line| line
-                    .starts_with("0x101300 matches no function start, of 2 places; not settled:")),
+            report.review.iter().any(|line| line
+                .starts_with("0x101300 matches no function start, of 2 places; not settled:")),
             "{:?}",
             report.review
         );
@@ -2746,7 +2827,10 @@ mod tests {
         assert_eq!(build["split"]["supported"], false);
         assert_eq!(build["split"]["remove_split"], "0x0");
         assert_eq!(build["split"]["signatures"][0][0], "0x0");
-        assert_eq!(row[crate::row_features::SWITCHED_OFF][0]["feature"], "split view");
+        assert_eq!(
+            row[crate::row_features::SWITCHED_OFF][0]["feature"],
+            "split view"
+        );
         assert!(
             report.switched_off[0]
                 .starts_with("split view is off: split.remove_split has no place"),
@@ -2764,11 +2848,17 @@ mod tests {
         let prints = prints_of_prior();
         let (row, report) = find_candidate(&prior, &prints, None, &no_classes(), "1.0.0.3", &pe);
         assert!(
-            report.review.iter().any(|line| line == "0x101400: no fingerprint"),
+            report
+                .review
+                .iter()
+                .any(|line| line == "0x101400: no fingerprint"),
             "{:?}",
             report.review
         );
-        assert!(report.unplaced.iter().all(|line| !line.contains("0x101400")));
+        assert!(report
+            .unplaced
+            .iter()
+            .all(|line| !line.contains("0x101400")));
         assert_eq!(row["build"]["split"]["supported"], true);
     }
 
@@ -2852,6 +2942,15 @@ mod tests {
             wrong[0].starts_with("build.toolbar.paint: made"),
             "{wrong:?}"
         );
+        // A value a review line reports as unplaced is not found, not wrong.
+        let (_, mut stopped) =
+            candidate(&prints_of_prior(), &shifted_code(0x2000, 0x44), "1.0.0.3");
+        stopped
+            .review
+            .push("no new place for .toolbar.paint 0x101300".into());
+        let score = score_row(&made, &stopped, &verified);
+        assert_eq!(score.wrong(), 0, "{:?}", score.features);
+        assert_eq!(score.features[WINDOW].not_found, ["build.toolbar.paint"]);
         // A value the made row does not hold is not wrong.
         let mut made_less = made.clone();
         made_less["build"]["toolbar"]

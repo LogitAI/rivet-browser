@@ -31,7 +31,10 @@ pub(crate) fn view_fields(build: &crate::builds::Build) -> Option<(usize, usize)
     use crate::chromium::view::View;
     let by_bounds = View::parent_offset(build.layout.view_bounds_offset)
         .map(|parent| (parent, View::children_offset(parent)));
-    agreed_view_fields(crate::chromium::window_views::walked_view_fields(), by_bounds)
+    agreed_view_fields(
+        crate::chromium::window_views::walked_view_fields(),
+        by_bounds,
+    )
 }
 
 /// The view fields from the walk and from the bounds offset. Both must agree when both are known.
@@ -738,10 +741,19 @@ mod tests {
             Some((0x198, 0x1A0))
         );
         // A walk that disagrees with the bounds offset leaves the fields unknown.
-        assert_eq!(agreed_view_fields(Some((0x190, 0x198)), Some((0x198, 0x1A0))), None);
+        assert_eq!(
+            agreed_view_fields(Some((0x190, 0x198)), Some((0x198, 0x1A0))),
+            None
+        );
         // Either alone stands until the other is known.
-        assert_eq!(agreed_view_fields(Some((0x190, 0x198)), None), Some((0x190, 0x198)));
-        assert_eq!(agreed_view_fields(None, Some((0x198, 0x1A0))), Some((0x198, 0x1A0)));
+        assert_eq!(
+            agreed_view_fields(Some((0x190, 0x198)), None),
+            Some((0x190, 0x198))
+        );
+        assert_eq!(
+            agreed_view_fields(None, Some((0x198, 0x1A0))),
+            Some((0x198, 0x1A0))
+        );
         assert_eq!(agreed_view_fields(None, None), None);
     }
 
