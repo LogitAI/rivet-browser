@@ -907,6 +907,21 @@ fn by_callers(
     (most >= VOTERS_LEAST && (all - most) * 10 <= all).then_some((place, most))
 }
 
+/// How many instructions a function must have for its shape to say which function it is.
+const SHAPE_LEAST: usize = 8;
+
+/// Whether two functions are the same instructions from start to end, apart from the addresses,
+/// member offsets and constants in them. A short function is not asked: many are alike.
+fn same_shape(old: &mut Side, new: &mut Side, from: u32, to: u32) -> bool {
+    let (before, after) = (old.body(from), new.body(to));
+    before.len() >= SHAPE_LEAST
+        && before.len() == after.len()
+        && before
+            .iter()
+            .zip(after.iter())
+            .all(|(left, right)| left.skeleton == right.skeleton)
+}
+
 /// Which method gave a place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Method {
@@ -925,6 +940,7 @@ pub enum Method {
     Neighbours,
     Callers,
     Crowd,
+    Shape,
 }
 
 impl fmt::Display for Method {
@@ -945,6 +961,7 @@ impl fmt::Display for Method {
             Method::Neighbours => "the lengths of the functions beside it",
             Method::Callers => "the same call in several placed callers",
             Method::Crowd => "the number of callers that agree",
+            Method::Shape => "the same instructions throughout",
         })
     }
 }
@@ -1263,6 +1280,23 @@ pub fn resolve(
                         }
                         if votes >= VOTERS_CROWD {
                             answers.push((Method::Crowd, place));
+                        }
+                    }
+                    // The shape of a body is a fact apart from where a table, a text or the
+                    // neighbours put the function. It is not one apart from the calls: functions
+                    // alike in shape are often called from the same places.
+                    let apart = answers.iter().copied().find(|(method, _)| {
+                        matches!(
+                            method,
+                            Method::TableSlot
+                                | Method::SlotShift
+                                | Method::Text
+                                | Method::Neighbours
+                        )
+                    });
+                    if let Some((_, place)) = apart {
+                        if same_shape(&mut old, &mut new, target, place) {
+                            answers.push((Method::Shape, place));
                         }
                     }
                     if let Some(place) = by_command.get(&target).copied() {
@@ -2070,5 +2104,40 @@ pub(crate) mod tests {
         assert_eq!(place(3), Some((0x100380, 3)));
         // Two callers are too few to stand.
         assert_eq!(place(2), None);
+    }
+    #[test]
+    fn nfr6_two_functions_of_the_same_instructions_have_the_same_shape() {
+        // Nine instructions that read a member, with another offset in the new build.
+        let body = |offset: u8| -> Vec<u8> {
+            let mut bytes = vec![0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20];
+            bytes.extend([0x48, 0x8B, 0x41, offset]);
+            bytes.extend([
+                0x48, 0x89, 0xC6, 0x48, 0x83, 0xC4, 0x20, 0x5B, 0x5F, 0x5E, 0xC3,
+            ]);
+            bytes
+        };
+        let old_bytes = module(&[(0x100000, body(0x18))], &[(0x100000, 0x100016)]);
+        let mut other = body(0x10);
+        other[2] = 0x55;
+        let new_bytes = module(
+            &[
+                (0x100100, body(0x10)),
+                (0x100200, other),
+                (0x100300, vec![0xC3]),
+            ],
+            &[
+                (0x100100, 0x100116),
+                (0x100200, 0x100216),
+                (0x100300, 0x100301),
+            ],
+        );
+        let old_pe = PeFile::parse(&old_bytes).unwrap();
+        let new_pe = PeFile::parse(&new_bytes).unwrap();
+        let (mut old, mut new) = (Side::new(&old_pe), Side::new(&new_pe));
+        assert!(same_shape(&mut old, &mut new, 0x100000, 0x100100));
+        // Another register saved is another function.
+        assert!(!same_shape(&mut old, &mut new, 0x100000, 0x100200));
+        // A short function has no shape of its own.
+        assert!(!same_shape(&mut new, &mut old, 0x100300, 0x100300));
     }
 }
