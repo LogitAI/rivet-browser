@@ -795,6 +795,68 @@ fn functions_using(side: &Side, texts: &BTreeSet<Vec<u8>>) -> BTreeMap<Vec<u8>, 
     users
 }
 
+/// How many functions on one side of a function are compared by their lengths.
+const NEIGHBOURS: usize = 8;
+
+/// The function starts of a build in order, with every run of `NEIGHBOURS` lengths between them
+/// and where it begins.
+pub struct Lengths {
+    starts: Vec<u32>,
+    runs: HashMap<Vec<u32>, Vec<usize>>,
+}
+
+impl Lengths {
+    pub fn new(starts: &BTreeSet<u32>) -> Self {
+        let starts: Vec<u32> = starts.iter().copied().collect();
+        let gaps: Vec<u32> = starts.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        let mut runs: HashMap<Vec<u32>, Vec<usize>> = HashMap::new();
+        for (index, run) in gaps.windows(NEIGHBOURS).enumerate() {
+            let places = runs.entry(run.to_vec()).or_default();
+            // A run seen more than twice is no better than one seen twice: it names no place.
+            if places.len() < 2 {
+                places.push(index);
+            }
+        }
+        Self { starts, runs }
+    }
+
+    /// The lengths of the `NEIGHBOURS` functions from the one at `index`.
+    fn run(&self, index: usize) -> Option<Vec<u32>> {
+        let part = self.starts.get(index..=index + NEIGHBOURS)?;
+        Some(part.windows(2).map(|pair| pair[1] - pair[0]).collect())
+    }
+}
+
+/// The place of a function by the functions the linker put beside it. The linker keeps the
+/// functions of one source file together and in order, so the lengths of the functions after a
+/// function, and of those before it, form a run that a build holds once. A run of the prior build
+/// that the new build also holds exactly once gives the place. Both sides must not disagree, and a
+/// run of equal lengths, as a row of small stubs has, says nothing.
+fn by_neighbours(old: &Lengths, new: &Lengths, target: u32) -> Option<u32> {
+    let index = old.starts.binary_search(&target).ok()?;
+    let place = |run: Option<Vec<u32>>, back: usize| -> Option<Option<u32>> {
+        let run = run?;
+        if run.iter().collect::<BTreeSet<_>>().len() < NEIGHBOURS / 2 {
+            return None;
+        }
+        match new.runs.get(&run).map(Vec::as_slice) {
+            Some([only]) => Some(new.starts.get(only + back).copied()),
+            Some(_) => Some(None),
+            None => None,
+        }
+    };
+    let after = place(old.run(index), 0);
+    let before = place(
+        index.checked_sub(NEIGHBOURS).and_then(|from| old.run(from)),
+        NEIGHBOURS,
+    );
+    match (after.flatten(), before.flatten()) {
+        (Some(one), Some(other)) => (one == other).then_some(one),
+        (Some(one), None) | (None, Some(one)) => Some(one),
+        (None, None) => None,
+    }
+}
+
 /// Which method gave a place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Method {
@@ -810,6 +872,7 @@ pub enum Method {
     Command,
     KnownCaller,
     Sibling,
+    Neighbours,
 }
 
 impl fmt::Display for Method {
@@ -827,6 +890,7 @@ impl fmt::Display for Method {
             Method::Command => "its command id",
             Method::KnownCaller => "a known caller",
             Method::Sibling => "the slots it shares with a known table",
+            Method::Neighbours => "the lengths of the functions beside it",
         })
     }
 }
@@ -1052,6 +1116,9 @@ pub fn resolve(
         }
     }
 
+    let old_lengths = Lengths::new(&old_pe.function_starts());
+    let new_lengths = Lengths::new(&new_pe.function_starts());
+
     let mut pending: BTreeSet<u32> = wanted.keys().copied().collect();
     for _ in 0..ROUNDS {
         let followed = follow(&mut old, &mut new, &known);
@@ -1107,6 +1174,19 @@ pub fn resolve(
                             if !seen {
                                 answers.push((Method::KnownCaller, place));
                             }
+                        }
+                    }
+                    if let Some(place) = by_neighbours(&old_lengths, &new_lengths, target) {
+                        // Where a function lies says nothing of its bytes, so the fingerprint
+                        // matching at that place is a second fact.
+                        answers.push((Method::Neighbours, place));
+                        let matched = want
+                            .candidates
+                            .as_ref()
+                            .is_some_and(|candidates| candidates.contains(&place))
+                            || want.loose.contains(&place);
+                        if matched {
+                            answers.push((Method::Fingerprint, place));
                         }
                     }
                     if let Some(place) = by_command.get(&target).copied() {
@@ -1835,5 +1915,39 @@ pub(crate) mod tests {
         assert!(!by_sibling(&old, &new, &pairs, 0x200300, 0x200500));
         // The known table itself is no check of its own place.
         assert!(!by_sibling(&old, &new, &pairs, 0x200100, 0x200100));
+    }
+    #[test]
+    fn nfr6_a_function_is_placed_by_the_lengths_of_the_functions_beside_it() {
+        let lengths = [0x30, 0x48, 0x21, 0x90, 0x17, 0x64, 0x52, 0x3d, 0x71, 0x2a];
+        let starts = |from: u32, lengths: &[u32]| -> BTreeSet<u32> {
+            let mut at = from;
+            let mut out = BTreeSet::from([at]);
+            for length in lengths {
+                at += length;
+                out.insert(at);
+            }
+            out
+        };
+        let old = Lengths::new(&starts(0x1000, &lengths));
+        // The new build has another function in front, so every place moved.
+        let mut moved = vec![0x500];
+        moved.extend(lengths);
+        let new = Lengths::new(&starts(0x2000, &moved));
+        assert_eq!(by_neighbours(&old, &new, 0x1000), Some(0x2500));
+        assert_eq!(by_neighbours(&old, &new, 0x1030), Some(0x2530));
+        // The last functions are placed by those before them.
+        let last = 0x1000 + lengths.iter().sum::<u32>();
+        assert_eq!(by_neighbours(&old, &new, last), Some(last + 0x1500));
+        // An address that starts no function has no neighbours.
+        assert_eq!(by_neighbours(&old, &new, 0x1004), None);
+        // A run the new build holds twice names no place.
+        let mut twice = moved.clone();
+        twice.extend(lengths);
+        let new = Lengths::new(&starts(0x2000, &twice));
+        assert_eq!(by_neighbours(&old, &new, 0x1000), None);
+        // A row of stubs of one length says nothing.
+        let old = Lengths::new(&starts(0x1000, &[0x10; 10]));
+        let new = Lengths::new(&starts(0x2000, &[0x10; 8]));
+        assert_eq!(by_neighbours(&old, &new, 0x1000), None);
     }
 }
