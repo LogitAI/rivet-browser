@@ -113,10 +113,10 @@ fn nfr3_chrome_156_frame_paint_prologues_match_the_installed_build() {
 fn nfr6_the_launcher_opens_exactly_the_complete_rows() {
     use rivet_platform_windows::hold::{module_of, table_versions, verified};
     let verified = verified();
-    // Chrome 150 only keeps the frame hooks, so a window of it would not have Rivet's top row.
+    // Rivet places the page itself in its second view, so a row without it opens no Rivet window.
     let complete: Vec<_> = all()
         .iter()
-        .filter(|build| !std::ptr::eq(**build, &CHROME_150))
+        .filter(|build| build.app_window.is_some())
         .collect();
     assert_eq!(
         complete.len(),
