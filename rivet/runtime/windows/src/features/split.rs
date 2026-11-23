@@ -26,12 +26,6 @@ pub unsafe fn install_panels() -> Result<(), String> {
     backend().install_panels()
 }
 
-/// The part of the page area layout that belongs to split view: the pages of a split fill the area
-/// the Sidebar left, and the toolbar follows the active page.
-pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) {
-    backend().on_page_area(area)
-}
-
 /// Whether the browser's address can follow the focused page. A toolbar that places it by hand keeps
 /// it over the first page, so only that page's row shows the browser's address.
 pub fn address_follows_page() -> bool {
@@ -311,15 +305,6 @@ pub fn row_top(first_line: bool, view_top: i32, page_top: i32) -> i32 {
     }
 }
 
-/// The pages of a split fill the area the browser leaves for its pages, whatever insets it keeps
-/// there, so they start where a single page does. The top stays below the browser's bars.
-pub fn fill_area(contents: &mut [i32; 4], area: &[i32; 4]) {
-    let bottom = area[1] + area[3];
-    contents[0] = area[0];
-    contents[2] = area[2];
-    contents[3] = (bottom - contents[1]).max(1);
-}
-
 /// The height of the top row of a page, in device-independent pixels.
 pub const ROW_HEIGHT: i32 = 44;
 /// Room on the first page's row for the appbar toggle, and for the grip on every row.
@@ -466,8 +451,8 @@ pub unsafe fn toggle_split(window: HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        caption_over, drop_pair, drop_zone, fill_area, partner_of, row_buttons, row_top, RowButton,
-        Side, CAPTION_ROOM, TOGGLE_ROOM,
+        caption_over, drop_pair, drop_zone, partner_of, row_buttons, row_top, RowButton, Side,
+        CAPTION_ROOM, TOGGLE_ROOM,
     };
 
     #[test]
@@ -498,13 +483,6 @@ mod tests {
         // A bookmarks bar puts the page 35 DIPs lower, and the row stays at the top.
         assert_eq!(row_top(true, 8, 87), 8);
         assert_eq!(row_top(false, 8, 400), 356);
-    }
-
-    #[test]
-    fn fr9_split_pages_fill_the_browsers_page_area_without_its_insets() {
-        let mut contents = [271, 135, 1157, 699];
-        fill_area(&mut contents, &[267, 79, 1165, 759]);
-        assert_eq!(contents, [267, 135, 1165, 703]);
     }
 
     #[test]

@@ -39,7 +39,6 @@ pub(crate) unsafe fn toggle_dev_mode(window: HWND) -> bool {
         "developer mode of window {:#x} is {on}",
         window as usize
     ));
-    crate::hooks::page_area::relayout(window);
     windows_sys::Win32::Graphics::Gdi::InvalidateRect(window, std::ptr::null(), 0);
     crate::frame::update_appbar(window);
     true

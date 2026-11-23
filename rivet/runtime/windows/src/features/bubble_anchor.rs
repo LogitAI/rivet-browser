@@ -340,7 +340,7 @@ unsafe extern "system" fn get_anchor_rect(
             crate::frame::layout_dpi(window)
         ));
         // Where Chromium itself puts the same rows, beside the place derived from the monitor.
-        let view = crate::features::frame_layout::frame_view(window).unwrap_or(0);
+        let view = crate::chromium::window_views::frame_view_of(window).unwrap_or(0);
         let own = crate::chromium::screen::origin(view).map(|origin| {
             let own = client.map(|rect| at_origin(origin, rect));
             let off = largest_difference(&own, &[page, address, chip]);

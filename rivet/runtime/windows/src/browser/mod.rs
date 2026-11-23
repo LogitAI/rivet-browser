@@ -23,7 +23,7 @@
 //! | E. New, close, select and restore a tab | tabs, control, tab_list | command ids and DevTools |
 //! | F. Tab order and groups | tabs, tab_list | build values, reflection to read |
 //! | G. Split view and the second page view | split, split_grid, second_view | build values, reflection for bounds |
-//! | H. Infobars per pane | pane_infobar | reflection |
+//! | H. Infobars per pane | none: the browser's infobar stays with the page view | reflection |
 //! | I. Mini window out and back | mini_window | command id out, build values back |
 //! | J. App window without a tab strip | app_window | build values |
 //! | K. Address suggestions | omnibox | build values |
