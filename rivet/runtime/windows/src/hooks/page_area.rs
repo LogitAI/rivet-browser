@@ -262,9 +262,26 @@ fn patched() -> bool {
     original() != 0 || crate::browsers::chromium::layout::app_layout_patched()
 }
 
+/// Why the browser's layout is not patched in this process, when an experiment leaves it alone and
+/// Rivet places the page view itself.
+pub(crate) const LEFT_ALONE: &str = "the page view only experiment leaves the browser's layout alone";
+
+fn left_alone() -> Result<(), String> {
+    left_alone_when(crate::features::layout_experiments::page_view_only())
+}
+
+fn left_alone_when(page_view_only: bool) -> Result<(), String> {
+    if page_view_only {
+        Err(LEFT_ALONE.into())
+    } else {
+        Ok(())
+    }
+}
+
 /// Patches the layout of the page area once per process, for a caller that asks for any window:
 /// the layout the row records, or else the app window's own.
 pub(crate) unsafe fn install() -> Result<(), String> {
+    left_alone()?;
     relied_on(false, old_layout(), install_tabbed(), || {
         crate::features::omnibox::install_app_layout()
     })
@@ -273,6 +290,7 @@ pub(crate) unsafe fn install() -> Result<(), String> {
 /// Patches the layout that lays out an app window, once per process. The tabbed layout is patched
 /// too where the row records it, and only an old-layout build needs it.
 pub(crate) unsafe fn install_for_app_window() -> Result<(), String> {
+    left_alone()?;
     relied_on(true, old_layout(), install_tabbed(), || {
         crate::features::omnibox::install_app_layout()
     })
@@ -456,6 +474,17 @@ mod tests {
         // An app window of such a build needs both, as before.
         assert_eq!(relied_on(true, true, Ok(()), no_app), Err("no app layout".into()));
         assert_eq!(relied_on(true, true, Ok(()), || Ok(())), Ok(()));
+    }
+
+    #[test]
+    fn fr12_page_view_only_never_patches_the_page_area_layout() {
+        assert_eq!(left_alone_when(false), Ok(()));
+        assert_eq!(left_alone_when(true), Err(LEFT_ALONE.to_owned()));
+        // The address bar then moves the page view itself, on a build with the second view.
+        assert_eq!(
+            crate::features::address_bar::offset_for(left_alone_when(true), true),
+            crate::features::address_bar::Offset::PageView
+        );
     }
 
     #[test]

@@ -773,6 +773,27 @@ unsafe fn area_of(split: &Split) -> Option<[i32; 4]> {
         );
         *FULL.lock().unwrap_or_else(|error| error.into_inner()) = now;
     }
+    // Experiment: the page area is the panel Rivet placed, not what the browser gave the page view.
+    if crate::features::layout_experiments::page_view_only() {
+        if let Some(panel) = crate::features::frame_layout::panel_bounds(split.window as HWND) {
+            let [ox, oy] = window_origin(split.main);
+            let parent = [ox - now[0], oy - now[1]];
+            let full = crate::features::layout_experiments::page_view_rect(panel, parent, 0);
+            *FULL.lock().unwrap_or_else(|error| error.into_inner()) = full;
+            let container = word(split.main + offsets().0)
+                .filter(|parent| *parent != 0)
+                .map(|parent| bounds_of(parent));
+            crate::trace::trace_changed(
+                "experiment page view area",
+                &format!(
+                    "experiment page view only: panel {panel:?}, page view parent at {parent:?} \
+                     with bounds {container:?}, browser gave {now:?}, Rivet's area {full:?}, \
+                     bar row {}",
+                    top_of(split.window)
+                ),
+            );
+        }
+    }
     let full = *FULL.lock().unwrap_or_else(|error| error.into_inner());
     let full = fitted(split.main, full);
     (full[2] > 0).then(|| below_bar(full, top_inset(split, full)))

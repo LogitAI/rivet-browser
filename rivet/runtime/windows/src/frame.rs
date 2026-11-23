@@ -24,10 +24,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     HTMINBUTTON, HTTOP, HTTOPLEFT, ICON_BIG, ICON_SMALL, IDC_SIZEWE, MSG, PM_REMOVE, SM_CXICON,
     SM_CXPADDEDBORDER, SM_CXSMICON, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, WH_GETMESSAGE, WM_CAPTURECHANGED, WM_CLOSE, WM_DPICHANGED,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST,
-    WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
-    WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_SETCURSOR, WM_SETICON, WM_SYSCOMMAND,
-    WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCDESTROY,
+    WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
+    WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_SETCURSOR, WM_SETICON,
+    WM_SYSCOMMAND, WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
 };
 
 use super::appbar::Appbar;
@@ -2015,6 +2015,26 @@ unsafe fn toggle_message() -> u32 {
 
 /// Lays the browser out again, now that the appbar's width or mode changed, and redraws.
 unsafe fn relayout(window: HWND) {
+    use crate::features::layout_experiments::{self, NcInset};
+    // Experiment: Windows takes the appbar's column out of the client area again at its new width.
+    if attached(window) && layout_experiments::nccalcsize() != NcInset::Off {
+        SetWindowPos(
+            window,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+    // Experiment: Rivet places the panel and the page view, the browser's layout is not asked.
+    if attached(window) && layout_experiments::page_view_only() {
+        place_panel_by_rivet(window);
+        follow_second_view(window);
+        update_appbar(window);
+        return;
+    }
     // The frame view lays out again on request, which also works for a maximized window.
     if frame_layout::relayout(window) {
         if is_waiting(window) {
@@ -2820,7 +2840,20 @@ fn top_inset_extra(window: HWND) -> Option<i32> {
 /// have leaves the window as it is, and a failure of a feature the window cannot do without ends
 /// the attach, so the browser keeps working without Rivet.
 fn attach_steps() -> Vec<Step<Attach>> {
+    attach_steps_for(crate::features::layout_experiments::page_view_only())
+}
+
+/// The attach sequence. `page_view_only` is the experiment that leaves the browser's layout alone:
+/// the frame view's functions are found but its client view placement is not replaced, and the
+/// caption layout, caption height and top inset are not installed. Rivet places the panel and the
+/// page view itself.
+fn attach_steps_for(page_view_only: bool) -> Vec<Step<Attach>> {
     use crate::feature::{Feature, FeatureStep, OnFailure, Step};
+    let frame_install: fn(&mut Attach) -> Result<(), String> = if page_view_only {
+        |_| unsafe { frame_layout::install_unpatched(reserved_width) }
+    } else {
+        |_| unsafe { frame_layout::install(reserved_width) }
+    };
     let feature = |feature, needs, install, on_failure, skip_when_unavailable, log_failure| {
         Step::Feature(FeatureStep {
             feature,
@@ -2831,11 +2864,11 @@ fn attach_steps() -> Vec<Step<Attach>> {
             log_failure,
         })
     };
-    vec![
+    let mut steps = vec![
         feature(
             Feature::FrameLayout,
             frame_layout::needs_layout,
-            |_| unsafe { frame_layout::install(reserved_width) },
+            frame_install,
             OnFailure::Abort,
             false,
             Some("rivet: not attaching to this browser"),
@@ -2912,6 +2945,11 @@ fn attach_steps() -> Vec<Step<Attach>> {
             if crate::trace::tracing() {
                 crate::trace::trace_crashes();
             }
+            crate::trace::trace(&format!(
+                "experiments: page view only {}, client area inset {:?}",
+                crate::features::layout_experiments::page_view_only(),
+                crate::features::layout_experiments::nccalcsize()
+            ));
             true
         }),
         Step::Setup(|_| unsafe {
@@ -2986,9 +3024,131 @@ fn attach_steps() -> Vec<Step<Attach>> {
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
             update_appbar(attach.window);
+            // Without the client view hook no browser layout tells Rivet where the panel is.
+            if crate::features::layout_experiments::page_view_only() {
+                place_panel_by_rivet(attach.window);
+            }
             true
         }),
-    ]
+    ];
+    if page_view_only {
+        steps.retain(|step| {
+            !matches!(
+                step,
+                Step::Feature(step) if matches!(
+                    step.feature,
+                    Feature::CaptionLayout | Feature::CaptionHeight | Feature::TopInset
+                )
+            )
+        });
+    }
+    steps
+}
+
+/// Experiment: the panel of a window from its client area, placed by Rivet where the browser's
+/// client view placement is not hooked. This also does what the hooked layout does for the window:
+/// it records the layout's scale and lets a window that waits for its first layout show.
+pub(crate) unsafe fn place_panel_by_rivet(window: HWND) {
+    if !attached(window) || IsIconic(window) != 0 {
+        return;
+    }
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    let [width, height] =
+        crate::features::layout_experiments::client_dips(client.right, client.bottom, dpi(window));
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let bounds = frame_layout::Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    let Some(reserved) = reserved_width(window, bounds) else {
+        return;
+    };
+    let panel = frame_layout::rivet_panel(bounds, reserved);
+    crate::trace::trace_changed(
+        "experiment page view panel",
+        &format!(
+            "experiment page view only: client {}x{} px at {} dpi, panel {panel:?}",
+            client.right,
+            client.bottom,
+            dpi(window)
+        ),
+    );
+    frame_layout::place_panel(window, panel);
+    crate::features::second_view::note_layout();
+}
+
+/// Experiment: the inset Windows took from a window's client area, in DIPs at the window's layout
+/// scale. Zero unless the client area experiment runs.
+pub(crate) fn client_inset_dips(window: HWND) -> [i32; 2] {
+    let [left, top] = crate::features::layout_experiments::applied_inset(window as isize);
+    if left == 0 && top == 0 {
+        return [0, 0];
+    }
+    let dpi = unsafe { layout_dpi(window) }.max(96) as i32;
+    [(left * 96 + dpi / 2) / dpi, (top * 96 + dpi / 2) / dpi]
+}
+
+/// Experiment: answers `WM_NCCALCSIZE` with the browser's client area less the appbar's column, and
+/// less the top row when asked, and moves Rivet's visuals back by the same amount.
+unsafe fn shrink_client_area(window: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    use crate::features::layout_experiments;
+    let result = call_browser(window, WM_NCCALCSIZE, wparam, lparam);
+    if wparam == 0 || lparam == 0 {
+        return result;
+    }
+    let inset = layout_experiments::nccalcsize();
+    let leading = if framed(window) {
+        layout_of(window).leading()
+    } else {
+        0
+    };
+    let top = crate::features::split::ROW_HEIGHT + frame_layout::PANEL_GAP;
+    let [left, top] = layout_experiments::nc_inset_pixels(inset, leading, top, dpi(window));
+    // The first rect of `NCCALCSIZE_PARAMS` is the client rect the browser answered.
+    let rect = lparam as *mut RECT;
+    let before = [(*rect).left, (*rect).top, (*rect).right, (*rect).bottom];
+    let after = layout_experiments::shrink_client(before, left, top);
+    (*rect).left = after[0];
+    (*rect).top = after[1];
+    let applied = [after[0] - before[0], after[1] - before[1]];
+    let changed = layout_experiments::remember_inset(window as isize, applied);
+    crate::trace::trace_changed(
+        "experiment client area",
+        &format!(
+            "experiment client area: {inset:?} window {:#x} client {before:?} to {after:?}, \
+             inset {applied:?} px at {} dpi, leading {leading} DIPs, changed {changed}",
+            window as usize,
+            dpi(window)
+        ),
+    );
+    // A size message can arrive while the visuals are borrowed, so they are moved every time.
+    offset_visuals(window, applied);
+    result
+}
+
+/// Experiment: moves the root of Rivet's visuals so they keep their place in the window while the
+/// client area starts `inset` pixels further in. A visual left of or above the client area shows
+/// only if the window's composition target draws outside the client area.
+unsafe fn offset_visuals(window: HWND, inset: [i32; 2]) {
+    APPBARS.with(|appbars| {
+        if let Ok(appbars) = appbars.try_borrow() {
+            if let Some(appbar) = appbars.get(&(window as isize)) {
+                let done = appbar.offset_root(-inset[0] as f32, -inset[1] as f32);
+                crate::trace::trace_changed(
+                    "experiment visuals",
+                    &format!(
+                        "experiment client area: Rivet's visuals moved by {:?} px: {done:?}",
+                        [-inset[0], -inset[1]]
+                    ),
+                );
+            }
+        }
+    });
 }
 
 unsafe fn create_appbar(window: HWND) {
@@ -3557,6 +3717,13 @@ fn reserved_width(window: HWND, bounds: frame_layout::Rect) -> Option<i32> {
         }
         let leading = layout_of(window).leading();
         LAID_LEADING.with(|all| all.borrow_mut().insert(window as isize, leading));
+        // Where Windows already left the appbar's column out of the client area, the browser's
+        // layout reserves nothing more.
+        if crate::features::layout_experiments::nccalcsize()
+            != crate::features::layout_experiments::NcInset::Off
+        {
+            return Some(0);
+        }
         Some(leading)
     }
 }
@@ -4202,8 +4369,18 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             }
             0
         }
+        WM_NCCALCSIZE
+            if attached(window)
+                && crate::features::layout_experiments::nccalcsize()
+                    != crate::features::layout_experiments::NcInset::Off =>
+        {
+            shrink_client_area(window, wparam, lparam)
+        }
         WM_WINDOWPOSCHANGED if attached(window) => {
             let result = call_browser(window, message, wparam, lparam);
+            if crate::features::layout_experiments::page_view_only() {
+                place_panel_by_rivet(window);
+            }
             // Every browser sends this on a resize, so the second view follows it on all of them.
             follow_second_view(window);
             update_appbar(window);
@@ -4292,6 +4469,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             crate::features::page_links::forget(window);
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
             frame_layout::forget_view(window);
+            crate::features::layout_experiments::forget(window as isize);
             crate::features::widgets::forget(window);
             crate::side_rail::forget(window);
             crate::features::mini_window::forget(window);
@@ -4944,6 +5122,34 @@ mod tests {
             _ => None,
         });
         assert!(colour.expect("the frame colour step").skip_when_unavailable);
+    }
+
+    #[test]
+    fn fr12_page_view_only_attaches_without_the_frame_layout_hooks() {
+        use crate::feature::{Feature, Step};
+        let features = |steps: Vec<Step<super::Attach>>| -> Vec<Feature> {
+            steps
+                .iter()
+                .filter_map(|step| match step {
+                    Step::Feature(step) => Some(step.feature),
+                    Step::Setup(_) => None,
+                })
+                .collect()
+        };
+        let hooked = [
+            Feature::CaptionLayout,
+            Feature::CaptionHeight,
+            Feature::TopInset,
+        ];
+        let today = features(super::attach_steps_for(false));
+        let experiment = features(super::attach_steps_for(true));
+        for feature in hooked {
+            assert!(today.contains(&feature));
+            assert!(!experiment.contains(&feature));
+        }
+        // The frame view's functions are still found, so a view's window can be told.
+        assert!(experiment.contains(&Feature::FrameLayout));
+        assert_eq!(today.len(), experiment.len() + hooked.len());
     }
 
     #[test]
