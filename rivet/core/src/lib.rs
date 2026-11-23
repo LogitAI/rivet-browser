@@ -282,7 +282,7 @@ fn plan_launch(request: &LaunchRequest, controlled: bool) -> Result<LaunchPlan, 
                 arguments.push(HIDDEN_WINDOW_POSITION.to_owned());
             }
             // An app window has no maker tab strip or toolbar.
-            arguments.push("--disable-sync".to_owned()); arguments.push("--no-first-run".to_owned()); arguments.push("--no-default-browser-check".to_owned()); arguments.push("--disable-features=msImplicitSignin,msEdgeSignIn,CalculateNativeWinOcclusion,Translate".to_owned()); arguments.push("--lang=en-US".to_owned()); arguments.push(format!("--app={}", request.url));
+            arguments.push(format!("--app={}", request.url));
         }
         DisplayMode::Visible | DisplayMode::Hidden => {
             arguments.push("--headless=new".to_owned());
