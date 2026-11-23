@@ -172,11 +172,64 @@ pub(crate) fn forget(window: isize) {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .retain(|entry| entry.0 != window);
+    BROWSER_WIDTH
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|entry| entry.0 != window);
+}
+
+/// The width the browser lays each window out in, in its own DIPs, read from a view that spans the
+/// window. The browser picks its scale itself, which can differ from the one Windows reports for a
+/// window off every monitor, so this width is what turns client pixels into the browser's DIPs.
+static BROWSER_WIDTH: std::sync::Mutex<Vec<(isize, i32)>> = std::sync::Mutex::new(Vec::new());
+
+/// Records the width of a view of the window that starts at its left edge. Returns whether it
+/// changed.
+pub(crate) fn note_browser_width(window: isize, view: [i32; 4]) -> bool {
+    if view[0] != 0 || view[2] <= 0 {
+        return false;
+    }
+    let mut all = BROWSER_WIDTH.lock().unwrap_or_else(|error| error.into_inner());
+    match all.iter_mut().find(|entry| entry.0 == window) {
+        Some(entry) => std::mem::replace(&mut entry.1, view[2]) != view[2],
+        None => {
+            all.push((window, view[2]));
+            true
+        }
+    }
+}
+
+/// The client size in the browser's DIPs: by the width the browser laid the window out in when it
+/// is known, else at `dpi`.
+pub(crate) fn browser_dips(window: isize, width: i32, height: i32, dpi: u32) -> [i32; 2] {
+    let known = BROWSER_WIDTH
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|entry| entry.0 == window)
+        .map(|entry| entry.1);
+    match known {
+        Some(dips) if width > 0 => [dips, (height.max(0) as i64 * dips as i64 / width as i64) as i32],
+        _ => client_dips(width, height, dpi),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fr12_client_pixels_follow_the_scale_the_browser_laid_out_at() {
+        let window = 0x5150;
+        // Before the browser laid anything out, the scale Windows reports is used.
+        assert_eq!(browser_dips(window, 1800, 1067, 192), [900, 534]);
+        // A view that does not start at the left edge says nothing of the window's width.
+        assert!(!note_browser_width(window, [276, 0, 616, 518]));
+        assert!(note_browser_width(window, [0, 0, 1440, 824]));
+        assert_eq!(browser_dips(window, 1800, 1067, 192), [1440, 853]);
+        forget(window);
+        assert_eq!(browser_dips(window, 1800, 1067, 192), [900, 534]);
+    }
 
     #[test]
     fn nfr3_layout_experiments_are_off_unless_switched_on() {

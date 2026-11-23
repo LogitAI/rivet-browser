@@ -783,6 +783,13 @@ unsafe fn area_of(split: &Split) -> Option<[i32; 4]> {
             let container = word(split.main + offsets().0)
                 .filter(|parent| *parent != 0)
                 .map(|parent| bounds_of(parent));
+            // The page view's parent spans the window, so its width is the browser's own.
+            let noted = container.is_some_and(|bounds| {
+                crate::features::layout_experiments::note_browser_width(split.window, bounds)
+            });
+            if noted {
+                crate::frame::place_panel_by_rivet(split.window as HWND);
+            }
             crate::trace::trace_changed(
                 "experiment page view area",
                 &format!(

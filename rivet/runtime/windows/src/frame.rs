@@ -3054,8 +3054,12 @@ pub(crate) unsafe fn place_panel_by_rivet(window: HWND) {
     }
     let mut client: RECT = std::mem::zeroed();
     GetClientRect(window, &mut client);
-    let [width, height] =
-        crate::features::layout_experiments::client_dips(client.right, client.bottom, dpi(window));
+    let [width, height] = crate::features::layout_experiments::browser_dips(
+        window as isize,
+        client.right,
+        client.bottom,
+        dpi(window),
+    );
     if width <= 0 || height <= 0 {
         return;
     }
