@@ -10,6 +10,7 @@ pub(crate) mod dev_page;
 pub(crate) mod dev_tools;
 pub(crate) mod field_caret;
 pub(crate) mod frame_layout;
+pub(crate) mod layout_experiments;
 pub(crate) mod link_preview;
 pub(crate) mod link_rules;
 pub(crate) mod link_tabs;
