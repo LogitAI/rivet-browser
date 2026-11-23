@@ -149,6 +149,12 @@ pub(crate) fn class_name(ranges: &Ranges, view: usize) -> Option<String> {
     class_name_within(ranges, view, 0x100)
 }
 
+/// `class_name` for an object whose `MetaDataProvider` part may come late, after bases with
+/// members of their own, as in `views::Widget` and in a `views::View` reached at its start.
+pub(crate) fn class_name_far(ranges: &Ranges, object: usize) -> Option<String> {
+    class_name_within(ranges, object, 0x800)
+}
+
 /// `class_name` for a pointer to the start of a `views::View`, whose `MetaDataProvider` part comes
 /// after seven other bases and their members, so it is looked for within `reach` bytes.
 fn class_name_within(ranges: &Ranges, view: usize, reach: usize) -> Option<String> {
@@ -435,6 +441,16 @@ pub(crate) fn find_cached(
         ));
     }
     Ok((found, false))
+}
+
+/// The parent and view list fields an earlier walk found for the build with this fingerprint.
+pub(crate) fn walked_fields(build: (u32, u32)) -> Option<(usize, usize)> {
+    CACHE.lock().ok().and_then(|cache| {
+        cache
+            .iter()
+            .find(|(key, _)| *key == build)
+            .map(|(_, offsets)| (offsets.parent, offsets.children))
+    })
 }
 
 /// The views a `std::vector<View*>` at `view + field` holds.

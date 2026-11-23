@@ -39,7 +39,6 @@ pub(crate) unsafe fn toggle_dev_mode(window: HWND) -> bool {
         "developer mode of window {:#x} is {on}",
         window as usize
     ));
-    crate::hooks::page_area::relayout(window);
     windows_sys::Win32::Graphics::Gdi::InvalidateRect(window, std::ptr::null(), 0);
     crate::frame::update_appbar(window);
     true
@@ -47,16 +46,26 @@ pub(crate) unsafe fn toggle_dev_mode(window: HWND) -> bool {
 
 /// The buttons the developer bar of this build offers, with the command each runs.
 pub(crate) fn dev_actions() -> Vec<(Action, u32)> {
-    let dev = &crate::builds::get().toolbar.dev;
+    let (inspect, console) = dev_commands(crate::builds::get());
     // Chromium has no browser command that opens DevTools on its Network or Performance panel.
     // Rivet opens them itself through Chromium's DevTools functions where the build records them.
     let panels = panel_buttons(crate::features::dev_tools::available());
     crate::dev_mode::bar_buttons(&[
-        (Action::Inspect, dev.inspect),
-        (Action::Console, dev.console),
+        (Action::Inspect, inspect),
+        (Action::Console, console),
         (Action::Network, panels),
         (Action::Performance, panels),
     ])
+}
+
+/// The inspect and console commands the developer bar of `build` runs, or zero for each. They are
+/// Chromium's public command ids for the build's milestone. Only a build whose developer colours
+/// were checked has the bar at all.
+pub(crate) fn dev_commands(build: &crate::builds::Build) -> (u32, u32) {
+    if build.toolbar.dev.colours.is_empty() {
+        return (0, 0);
+    }
+    crate::browsers::chromium::commands::dev_tools(build.browser, build.version)
 }
 
 /// The marker the Network and Performance buttons carry when Rivet can open their panels. Rivet

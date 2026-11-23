@@ -410,17 +410,6 @@ pub(crate) fn match_count(begin: usize, second: usize, match_size: usize) -> Opt
     (count <= 64).then_some(count)
 }
 
-/// Patches the app window's layout so the page area steps run for it too. An app window is laid out
-/// by `BrowserViewAppLayoutImpl`, not the tabbed layout the Sidebar patches.
-pub(crate) unsafe fn install_app_layout() -> Result<(), String> {
-    let (f, _) = loaded().ok_or("this build has no recorded app window layout")?;
-    crate::browsers::chromium::layout::install_app_layout(
-        f.app_layout_vtable,
-        f.app_layout_slot,
-        f.app_layout_proposed,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

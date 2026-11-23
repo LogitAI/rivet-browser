@@ -41,8 +41,6 @@ pub static WHALE: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x50,
             0x44, 0x89,
         ],
-        view_parent: 0x190,
-        view_children: 0x198,
         operator_new: 0x3E4AB40,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xEB, 0x0F, 0x48, 0x8B, 0xCB,
@@ -90,17 +88,6 @@ pub static WHALE: Build = Build {
     toolbar: Toolbar {
         skip: "toolbar",
         ..UNCHECKED_TOOLBAR
-    },
-    vertical: VerticalTabs {
-        // Chromium's `BrowserView::ShouldDrawTabStrip` in this build. The
-        // prologue ends on an instruction boundary and holds no relative operand.
-        should_draw_tab_strip: 0x0E6CBE60,
-        should_draw_tab_strip_prologue: &[
-            0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x8B, 0x89, 0xC0, 0x05, 0x00,
-            0x00,
-        ],
-        detour_strip: true,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true, // opening an address in a tab checked on Whale 5.39.412.57
@@ -289,7 +276,6 @@ pub static WHALE: Build = Build {
         flex_layout: crate::builds::ABSENT,
         flex_layout_host: 0,
         location_bar_vtable: crate::builds::ABSENT,
-        view_size: 0,
         signatures: &[
             (
                 0x0819_0FB0,
@@ -348,28 +334,12 @@ pub static WHALE: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x0F9F_BB38,
-        proposed_slot: 15,
-        proposed: 0x0252_E780,
-        old_layout: None,
         registry_end: Some(true),
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x20,
-        page_area: 0x28,
-        contents_container: 0x90,
-        vertical_tabs: 0x60,
-        toolbar: 0x40,
-        contents_outline: 0x38,
-        side_panel: 0xA0,
-        side_panel_animation: 0xA8,
-        layout_immediately: 0x08F7_CD40,
-        layout_immediately_prologue: &[
-            0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE,
-        ],
         event_handler_for_point: 0x08F8_1F60,
     },
     layout: Layout {
@@ -388,15 +358,11 @@ pub static WHALE: Build = Build {
         draw_color: 0x9bc45b0,
         draw_color_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x38],
         frame_ids: &[0x13C, 0x13D, 0x140, 321, 0x144],
-        top_inset_slot: 127,
-        top_inset: 0x0E7B_4500,
         frame_vtable: 0x0FB1_7440,
         // Slot 74 of this caption vtable reads members Chromium's `WindowsCaptionButton` does not
         // have, so the caption buttons' size is the browser's own and stays out.
         caption_vtable: 0xfb15d60,
-        caption_size_slot: 74,
-        caption_size: ABSENT,
-        frame_browser_window_offset: 0x338,
+        frame_browser_window_offset: Some(0x338),
         browser_window_in_view: 0x210,
         view_bounds_offset: 0x1C0,
         ..UNCHECKED_LAYOUT

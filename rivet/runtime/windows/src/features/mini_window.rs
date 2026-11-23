@@ -261,12 +261,6 @@ pub fn is_mini(window: HWND) -> bool {
     MINIS.with(|all| all.borrow().contains_key(&(window as isize)))
 }
 
-/// The room a Mini Window keeps at its top for Rivet's row, in DIPs, so the browser lays the page
-/// out below it.
-pub fn top_inset(window: HWND) -> Option<i32> {
-    is_mini(window).then_some(ROW)
-}
-
 /// The pages' area of the window in DIPs as left, top, right and bottom.
 unsafe fn area(window: HWND) -> Option<[i32; 4]> {
     crate::features::split::page_area(window)

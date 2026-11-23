@@ -38,7 +38,6 @@ pub struct Build {
     pub module: &'static str,
     pub version: [u16; 4],
     pub toolbar: Toolbar,
-    pub vertical: VerticalTabs,
     pub navigation: Navigation,
     pub tabs: Tabs,
     pub split: Split,
@@ -102,18 +101,12 @@ pub struct Omnibox {
     pub controller_published_result: usize,
     pub input_new: usize,
     pub input_drop: usize,
-    pub input_size: usize,
     pub input_prevent_inline: usize,
     pub input_omit_asynchronous: usize,
     pub start: usize,
     pub allocate: usize,
     pub match_contents: usize,
     pub match_description: usize,
-    /// The vtable of `BrowserViewAppLayoutImpl`, the slot of its `CalculateProposedLayout` and that
-    /// function, which lays out an app window.
-    pub app_layout_vtable: usize,
-    pub app_layout_slot: usize,
-    pub app_layout_proposed: usize,
     /// The first bytes of every function above, compared with the loaded module before any call.
     pub signatures: &'static [(usize, &'static [u8])],
 }
@@ -139,9 +132,6 @@ pub struct AppWindow {
     pub detach_prologue: &'static [u8],
     pub insert: Option<usize>,
     pub insert_prologue: &'static [u8],
-    /// A `views::View` keeps its parent at this offset and its children vector right after it.
-    pub view_parent: usize,
-    pub view_children: usize,
     /// `operator new(size)`, `views::WebView::WebView(this, context)` and the object's size.
     pub operator_new: usize,
     pub operator_new_prologue: &'static [u8],
@@ -184,14 +174,15 @@ pub struct AppWindow {
 row_struct! {
 /// Values for `chrome_toolbar.rs`.
 pub struct Toolbar {
-    /// `views::View::GetWidget` is the twelfth entry of every view's vtable.
-    pub get_widget_slot: usize,
+    /// `views::View::GetWidget`'s entry in every view's vtable, only to confirm the widget the root
+    /// of a view's tree names. `None` when the row does not have it: the widget is then found
+    /// through the view tree alone.
+    pub get_widget_slot: Option<usize>,
     /// What this build needs to show a page in developer mode.
     pub dev: DevMode,
     /// `ui::ColorProvider::GetColor(this, id)`. A provider makes a colour the first time it is asked
     /// for it, so one that was never asked for is asked for before its value is replaced.
     pub get_color: usize,
-    pub get_color_bytes: &'static [u8],
     /// `views::DesktopWindowTreeHostWin::GetContentWindowForHWND` and
     /// `views::Widget::GetWidgetForNativeWindow`.
     pub content_window_for_hwnd: usize,
@@ -201,76 +192,6 @@ pub struct Toolbar {
     /// The toolbar view's own `Layout`, when the browser lays the toolbar out outside the window's
     /// layout pass. `ABSENT` when not needed.
     pub toolbar_layout: usize,
-}
-}
-
-row_struct! {
-/// Values for `vertical_tabs.rs`.
-pub struct VerticalTabs {
-    /// Whether this build has been checked for this feature. When it is false the feature is left alone.
-    pub supported: bool,
-    /// The vtable slot of `VerticalTabStripStateControllerImpl::ShouldDisplayVerticalTabs`.
-    pub slot: usize,
-    pub should_display: usize,
-    /// `BrowserView::GetBrowserViewForBrowser`.
-    pub browser_view_for_browser: usize,
-    /// `views::HWNDForView`.
-    pub hwnd_for_view: usize,
-    /// `VerticalTabStripStateController::NotifyModeChanged`.
-    pub notify_mode_changed: usize,
-    /// `VerticalTabStripStateControllerImpl::UpdateCollapseActionItem`.
-    pub update_collapse_action: usize,
-    pub destructor: usize,
-    pub destructor_prologue: &'static [u8],
-    /// Where the controller keeps its browser, its mode and its strip width.
-    pub browser_offset: usize,
-    pub mode_offset: usize,
-    pub width_offset: usize,
-    /// `BrowserView`'s vtable for its `views::View` base. The browser view is reached through another
-    /// base, so the view base is found by this vtable before asking for the window.
-    pub browser_view_view_vtable: usize,
-    /// `VerticalTabStripRegionView::CalculatePreferredSize`, and the vtable slot that holds it.
-    pub region_preferred_size: usize,
-    pub region_preferred_size_slot: usize,
-    /// `views::View::InvalidateLayout`, with the first bytes that identify it in this build.
-    pub invalidate_layout: usize,
-    pub invalidate_layout_prologue: &'static [u8],
-    /// `VerticalTabStripRegionView::GetMinimumSize`. The browser lays the page out after at least
-    /// this width, 126 DIPs while the strip is expanded, however little the strip asks for, so a
-    /// hidden appbar would leave that much of the frame bare. The class is final, so callers reach
-    /// the function directly and its vtable slot is never used. Rivet detours the function instead:
-    /// its first instructions are copied to a trampoline and replaced by a jump to Rivet's version.
-    pub region_minimum_size: usize,
-    /// `push rsi; push rdi; sub rsp, 0x28; mov rsi, rdx; mov rdi, rcx; mov qword ptr [rdx], 0`.
-    pub region_minimum_prologue: &'static [u8],
-    /// `BrowserView::ShouldDrawTabStrip` and its first bytes, for the tab strip experiment.
-    pub should_draw_tab_strip: usize,
-    pub should_draw_tab_strip_prologue: &'static [u8],
-    /// `Browser::SupportsWindowFeature(browser, feature, check)`, for builds whose layout has the tab
-    /// strip decision inlined so no function of its own answers it. Rivet detours it to answer no
-    /// for the tab strip feature of the browsers of Rivet windows. The prologue must be 12 or more
-    /// bytes, end on an instruction boundary and hold no relative operand.
-    pub window_feature: usize,
-    pub window_feature_prologue: &'static [u8],
-    /// The value of the tab strip feature.
-    pub window_feature_tab_strip: u32,
-    /// The code range whose questions Rivet answers, as start and end RVAs, or `(0, 0)` for every
-    /// caller. Other callers ask the same question for other reasons, and the frame view takes the
-    /// caption buttons away with the strip when it hears the answer.
-    pub window_feature_callers: (usize, usize),
-    /// `View::SetBoundsRect` and the offset of the toolbar view in the browser view. With the strip
-    /// gone the toolbar runs under the caption buttons, so Rivet detours the bounds function to stop
-    /// the toolbar of a Rivet window short of them. The prologue must be 12 or more bytes with no
-    /// relative operand.
-    pub set_bounds_rect: usize,
-    pub set_bounds_rect_prologue: &'static [u8],
-    pub toolbar_in_view: usize,
-    /// How far, in DIPs, the toolbar of a Rivet window starts to the right of the browser view's left
-    /// edge, so Rivet's toggle button has the room before the back button that Chrome's toolbar gives it.
-    pub toolbar_leading: i32,
-    /// Whether a Rivet window leaves that function out of its layout by a detour, with this build's
-    /// prologue copied to a trampoline. Only builds where this has been checked set it.
-    pub detour_strip: bool,
 }
 }
 
@@ -423,8 +344,6 @@ pub struct Split {
     pub flex_layout_host: usize,
     /// The primary vtable of `LocationBarView`, which tells the top row's container among all hosts.
     pub location_bar_vtable: usize,
-    /// Where a view keeps its size, two ints.
-    pub view_size: usize,
     /// The first instructions of the functions the split and group calls need.
     pub signatures: &'static [(usize, &'static [u8])],
 }
@@ -480,14 +399,6 @@ pub struct SidePanel {
     /// `ThemeSource::GenerateColorsCss(out, provider, url, flag, flag)`, which writes the style sheet.
     pub generate_colors_css: usize,
     pub generate_colors_css_prologue: &'static [u8],
-    /// `BrowserViewTabbedLayoutImpl::CalculateProposedLayout`, slot 16 of its vtable. It fills a
-    /// `std::map` of view to bounds that the layout then applies.
-    pub layout_vtable: usize,
-    pub proposed_slot: usize,
-    pub proposed: usize,
-    /// The slot holds Chromium's older `BrowserViewLayoutImplOld::Layout` in place of
-    /// `CalculateProposedLayout`, so the layout hook sets bounds after the browser's layout runs.
-    pub old_layout: Option<bool>,
     /// The registry keeps its entries as begin and end pointers at +0x38 and +0x40, where newer
     /// builds keep a pointer and a count.
     pub registry_end: Option<bool>,
@@ -503,23 +414,6 @@ pub struct SidePanel {
     /// The build's show by id stops the browser for an extension's entry, which then opens with
     /// toggle and its key.
     pub extensions_by_toggle: Option<bool>,
-    /// The layout object keeps the host view at +0x38, the contents container at +0xb8, the side
-    /// panel at +0xc0 and the content shown while the side panel animates at +0xc8.
-    pub host_view: usize,
-    /// The view behind the whole area below the top row, which the rail shares the height of.
-    pub page_area: usize,
-    pub contents_container: usize,
-    /// The browser's vertical tab list, which lies left of the page.
-    pub vertical_tabs: usize,
-    /// The browser's top row: toolbar, address bar and the buttons around it.
-    pub toolbar: usize,
-    /// The view that draws the outline around the contents, which has the contents' bounds.
-    pub contents_outline: usize,
-    pub side_panel: usize,
-    pub side_panel_animation: usize,
-    /// `views::View::DeprecatedLayoutImmediately`.
-    pub layout_immediately: usize,
-    pub layout_immediately_prologue: &'static [u8],
     /// `views::View::GetEventHandlerForPoint`, which the click diagnostic calls.
     pub event_handler_for_point: usize,
 }
@@ -552,98 +446,43 @@ pub struct Layout {
     /// wedge is painted with Rivet's frame colour instead of Chrome's blue.
     pub corner_vtable: usize,
     pub corner_paint: usize,
-    /// Experiment, Chrome 156.0.8078.48 only: `WindowsCaptionButton::CalculatePreferredSize` in the
-    /// caption button's vtable. Rivet windows get caption buttons as tall as the shell study's top
-    /// row, so the native buttons sit centred in it.
+    /// `WindowsCaptionButton::PaintButtonContents` in the caption button's vtable, which paints the
+    /// native caption buttons with the window's colours.
     pub caption_vtable: usize,
-    pub caption_size_slot: usize,
-    pub caption_size: usize,
     pub caption_paint_slot: usize,
     pub caption_paint: usize,
-    /// Experiment, Chrome 156.0.8078.48 only: `BrowserFrameViewWin::GetTopInset` in the frame view's
-    /// vtable. It is the height of the browser's own title bar, which also sizes the caption buttons.
-    pub top_inset_slot: usize,
-    pub top_inset: usize,
-    /// Experiment, Chrome 156.0.8078.48 only: `BrowserFrameViewWin::Layout` in the frame view's
-    /// vtable. It sizes the caption button container from the tab strip, not from the title bar
-    /// height, so the container is resized once the browser's own layout is done.
-    pub layout_slot: usize,
-    pub layout: usize,
-    /// `views::View::SetBoundsRect`, and where a frame view keeps its caption button container and a
-    /// view keeps its bounds.
-    pub set_bounds_rect: usize,
-    pub caption_container_offset: usize,
+    /// Where a view keeps its bounds.
     pub view_bounds_offset: usize,
-    /// The vtable of the `views::View` part of `BrowserView`, which sits behind other base classes.
-    pub browser_view_view_vtable: usize,
     /// The `views::View` vtable of the frame view the browser window uses.
     pub frame_vtable: usize,
-    /// `views::View::DeprecatedLayoutImmediately` and its first instructions.
-    pub layout_immediately: usize,
-    pub layout_immediately_prologue: &'static [u8],
-    /// Layer helpers of the panel clip: `View::SetPaintToLayer`, `Layer::SetRoundedCornerRadius`,
-/// `Layer::SetMasksToBounds`, `Layer::StackAtTop` and `Layer::SetFillsBoundsOpaquely`.
-    pub set_layer: usize,
-    pub set_layer_prologue: &'static [u8],
-    pub set_radius: usize,
-    pub set_radius_prologue: &'static [u8],
-    pub set_masks: usize,
-    pub set_masks_prologue: &'static [u8],
-    pub stack_at_top: usize,
-    pub stack_at_top_prologue: &'static [u8],
-    pub set_opaque: usize,
-    pub set_opaque_prologue: &'static [u8],
     pub on_paint_prologue: &'static [u8],
     pub draw_color_prologue: &'static [u8],
     pub get_color_provider_prologue: &'static [u8],
     pub corner_paint_prologue: &'static [u8],
-    pub layout_prologue: &'static [u8],
-    pub set_bounds_rect_prologue: &'static [u8],
     /// `BrowserFrameViewWin` holds the `BrowserView`'s `BrowserWindow` subobject here, and the
-/// subobject lies this many bytes after the start of the `BrowserView`.
-    pub frame_browser_window_offset: usize,
+    /// subobject lies this many bytes after the start of the `BrowserView`. The field is also found
+    /// as the one that holds the browser view, and a row value only confirms it.
+    pub frame_browser_window_offset: Option<usize>,
     pub browser_window_in_view: usize,
     pub caption_paint_prologue: &'static [u8],
     /// Colour ids `WindowsCaptionButton::PaintButtonContents` reads for its glyphs: active, inactive
     /// and on the toolbar. Ids shift between milestones.
     pub caption_ink_ids: &'static [i32],
-    /// Added to the top inset a Rivet window reports, in DIPs. Chrome's client area begins at the top
-    /// of the frame in its one-row layout, whatever the inset says, so Rivet's extra title height only
-    /// reaches the caption buttons. Brave's client area begins at the inset, which would leave the
-    /// page lower than the row, so its extra cancels out.
-    pub top_inset_adjust: i32,
 }
 }
 
 row_struct! {
 /// What a build needs to show a page in developer mode.
 pub struct DevMode {
-    /// The browser's own commands the developer bar runs, as `WM_COMMAND` ids, or zero when the build
-    /// has none. They are the commands of the Ctrl+Shift+C and Ctrl+Shift+J keys, read from the
-    /// browser's accelerator table.
-    pub inspect: u32,
-    pub console: u32,
     /// Colour ids of this build and the colours the row takes in developer mode, as `0xAARRGGBB`.
     /// An id that `colours` does not hold is asked of the provider first, like the ones that it does.
+    /// A build with no colours has no developer bar. The bar's browser commands are Chromium's
+    /// public command ids, which come from `browsers::chromium::commands`, not from the row.
     pub colours: &'static [(i32, u32)],
-    /// `gfx::Font::Font(this, &name, size)` and `gfx::FontList::FontList(this, &font)`, which build
-    /// the monospace font of the address. A build without them keeps the address in its own font.
-    pub font_new: usize,
-    pub font_new_prologue: &'static [u8],
-    pub font_list_new: usize,
-    pub font_list_new_prologue: &'static [u8],
 }
 }
 
-const UNCHECKED_DEV: DevMode = DevMode {
-    inspect: 0,
-    console: 0,
-    colours: &[],
-    font_new: ABSENT,
-    font_new_prologue: &[0],
-    font_list_new: ABSENT,
-    font_list_new_prologue: &[0],
-};
+const UNCHECKED_DEV: DevMode = DevMode { colours: &[] };
 
 const DEV_GROUND: u32 = 0xFF2A_2C31;
 const DEV_RULE: u32 = 0xFF17_181B;
@@ -654,47 +493,13 @@ const DEV_HOVER: u32 = 0x17FF_FFFF;
 const DEV_RIPPLE: u32 = 0x24FF_FFFF;
 
 const UNCHECKED_TOOLBAR: Toolbar = Toolbar {
-    get_widget_slot: 0,
+    get_widget_slot: None,
     dev: UNCHECKED_DEV,
     content_window_for_hwnd: ABSENT,
     widget_for_window: ABSENT,
     skip: "",
     toolbar_layout: ABSENT,
     get_color: ABSENT,
-    get_color_bytes: &[0],
-};
-
-const UNCHECKED_VERTICALTABS: VerticalTabs = VerticalTabs {
-    supported: false,
-    slot: 0,
-    should_display: ABSENT,
-    browser_view_for_browser: ABSENT,
-    hwnd_for_view: ABSENT,
-    notify_mode_changed: ABSENT,
-    update_collapse_action: ABSENT,
-    destructor: ABSENT,
-    destructor_prologue: &[0],
-    browser_offset: 0,
-    mode_offset: 0,
-    width_offset: 0,
-    browser_view_view_vtable: ABSENT,
-    region_preferred_size: ABSENT,
-    region_preferred_size_slot: 0,
-    invalidate_layout: ABSENT,
-    invalidate_layout_prologue: &[0],
-    region_minimum_size: ABSENT,
-    region_minimum_prologue: &[0],
-    should_draw_tab_strip: ABSENT,
-    should_draw_tab_strip_prologue: &[0],
-    window_feature: ABSENT,
-    window_feature_prologue: &[0],
-    window_feature_tab_strip: 0,
-    window_feature_callers: (0, 0),
-    set_bounds_rect: ABSENT,
-    set_bounds_rect_prologue: &[0],
-    toolbar_in_view: 0,
-    toolbar_leading: 0,
-    detour_strip: false,
 };
 
 const UNCHECKED_NAVIGATION: Navigation = Navigation {
@@ -781,7 +586,6 @@ const UNCHECKED_SPLIT: Split = Split {
     flex_layout: ABSENT,
     flex_layout_host: 0,
     location_bar_vtable: ABSENT,
-    view_size: 0,
     signatures: &[],
 };
 
@@ -812,26 +616,12 @@ const UNCHECKED_SIDEPANEL: SidePanel = SidePanel {
     color_source: 0,
     generate_colors_css: ABSENT,
     generate_colors_css_prologue: &[0],
-    layout_vtable: ABSENT,
-    proposed_slot: 0,
-    proposed: ABSENT,
-    old_layout: None,
     registry_end: None,
     registry_in_coordinator: None,
     registry_entries: None,
     coordinator_browser: None,
     entry_key_size: None,
     extensions_by_toggle: None,
-    host_view: 0,
-    page_area: 0,
-    contents_container: 0,
-    vertical_tabs: 0,
-    toolbar: 0,
-    contents_outline: 0,
-    side_panel: 0,
-    side_panel_animation: 0,
-    layout_immediately: ABSENT,
-    layout_immediately_prologue: &[0],
     event_handler_for_point: ABSENT,
 };
 
@@ -846,56 +636,30 @@ const UNCHECKED_LAYOUT: Layout = Layout {
     corner_vtable: ABSENT,
     corner_paint: ABSENT,
     caption_vtable: ABSENT,
-    caption_size_slot: 0,
-    caption_size: ABSENT,
     caption_paint_slot: 0,
     caption_paint: ABSENT,
-    top_inset_slot: 0,
-    top_inset: ABSENT,
-    layout_slot: 0,
-    layout: ABSENT,
-    set_bounds_rect: ABSENT,
-    caption_container_offset: 0,
     view_bounds_offset: 0,
-    browser_view_view_vtable: ABSENT,
     frame_vtable: ABSENT,
-    layout_immediately: ABSENT,
-    layout_immediately_prologue: &[0],
-    set_layer: ABSENT,
-    set_layer_prologue: &[0],
-    set_radius: ABSENT,
-    set_radius_prologue: &[0],
-    set_masks: ABSENT,
-    set_masks_prologue: &[0],
-    stack_at_top: ABSENT,
-    stack_at_top_prologue: &[0],
-    set_opaque: ABSENT,
-    set_opaque_prologue: &[0],
     on_paint_prologue: &[0],
     draw_color_prologue: &[0],
     get_color_provider_prologue: &[0],
     corner_paint_prologue: &[0],
-    layout_prologue: &[0],
-    set_bounds_rect_prologue: &[0],
-    frame_browser_window_offset: 0,
+    frame_browser_window_offset: None,
     browser_window_in_view: 0,
     caption_paint_prologue: &[0],
     caption_ink_ids: &[],
-    top_inset_adjust: 0,
 };
 
 /// Why a row leaves a feature off though it may record some of its addresses. A feature whose
 /// addresses are all missing needs no reason of its own.
 pub fn unchecked_reason(build: &Build, feature: &str) -> &'static str {
     match (build.browser, feature) {
-        ("Microsoft Edge", "vertical tabs") => "vertical tabs are not checked on Edge yet",
         ("Microsoft Edge", "sidebar") => "the only panel Edge registers has no page behind it, so the Sidebar has nothing to show on Edge",
         ("Samsung Internet", "split view") => {
             "split view is not checked on Samsung Internet: its split call stops inside the tab collection"
         }
         (_, "split view") => "split view is not checked on this browser build",
         (_, "sidebar") => "the Sidebar is not checked on this browser build",
-        (_, "vertical tabs") => "vertical tabs are not checked on this browser build",
         (_, "opening addresses") => "opening addresses is not checked on this browser build",
         _ => "tab control is not checked on this browser build",
     }

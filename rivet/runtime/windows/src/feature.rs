@@ -20,20 +20,10 @@ pub(crate) enum Feature {
     FrameColour,
     /// Caption buttons are painted in the window's colours.
     CaptionPaint,
-    /// Caption buttons sit in the panel's top row.
-    CaptionLayout,
-    /// The height of the top row.
-    CaptionHeight,
-    /// The space above the top row.
-    TopInset,
     /// Pages of a split view are panels.
     Split,
     /// The layout of the pages of a split view.
     SplitLayout,
-    /// The browser's own vertical tab strip, reported to the appbar.
-    VerticalTabs,
-    /// The browser's tab strip is left out of the layout.
-    TabStrip,
 }
 
 impl Feature {
@@ -42,13 +32,8 @@ impl Feature {
             Feature::FrameLayout => "frame_layout",
             Feature::FrameColour => "frame_colour",
             Feature::CaptionPaint => "caption_paint",
-            Feature::CaptionLayout => "caption_layout",
-            Feature::CaptionHeight => "caption_height",
-            Feature::TopInset => "top_inset",
             Feature::Split => "split",
             Feature::SplitLayout => "split_layout",
-            Feature::VerticalTabs => "vertical_tabs",
-            Feature::TabStrip => "tab_strip",
         }
     }
 }
@@ -278,7 +263,7 @@ mod tests {
 
     type Pick = (&'static str, fn(&Build) -> Needs, fn(&Build) -> bool);
 
-    fn picks() -> [Pick; 5] {
+    fn picks() -> [Pick; 4] {
         [
             ("navigation", crate::features::navigation::needs, |b| {
                 b.navigation.supported
@@ -290,11 +275,6 @@ mod tests {
             ("sidebar", crate::features::side_panel::needs, |b| {
                 b.side_panel.supported
             }),
-            (
-                "vertical tabs",
-                crate::features::vertical_tabs::needs,
-                |b| b.vertical.supported,
-            ),
         ]
     }
 
@@ -325,12 +305,6 @@ mod tests {
     #[test]
     fn nfr3_a_feature_switched_off_with_addresses_names_its_reason() {
         let edge = &builds::EDGE;
-        let vertical = crate::features::vertical_tabs::needs(edge);
-        assert!(vertical.targets.iter().all(Target::recorded));
-        assert_eq!(
-            vertical.unavailable().as_deref(),
-            Some("vertical tabs are not checked on Edge yet")
-        );
         let sidebar = crate::features::side_panel::needs(edge);
         assert!(sidebar.targets.iter().any(Target::recorded));
         assert!(sidebar
@@ -368,16 +342,13 @@ mod tests {
 
     type NeedsOf = fn(&Build) -> Needs;
 
-    fn all_needs() -> [(Feature, NeedsOf); 7] {
-        use crate::features::{frame_layout, split, tab_strip};
+    fn all_needs() -> [(Feature, NeedsOf); 4] {
+        use crate::features::{frame_layout, split};
         [
             (Feature::FrameLayout, frame_layout::needs_layout),
             (Feature::FrameColour, frame_layout::needs_colour),
             (Feature::CaptionPaint, frame_layout::needs_caption_paint),
-            (Feature::CaptionLayout, frame_layout::needs_caption_layout),
             (Feature::Split, split::needs),
-            (Feature::TabStrip, tab_strip::needs),
-            (Feature::VerticalTabs, crate::features::vertical_tabs::needs),
         ]
     }
 
@@ -392,41 +363,19 @@ mod tests {
     /// What each row offers, as the attach of that browser was seen to install it.
     #[test]
     fn nfr3_each_row_offers_the_features_its_browser_installs() {
-        let chromium = [
-            "frame_layout",
-            "frame_colour",
-            "caption_paint",
-            "caption_layout",
-            "split",
-        ];
-        assert_eq!(
-            names(&builds::CHROME),
-            [&chromium[..], &["vertical_tabs"]].concat()
-        );
+        let chromium = ["frame_layout", "frame_colour", "caption_paint", "split"];
+        assert_eq!(names(&builds::CHROME), chromium);
         assert_eq!(
             names(&builds::BRAVE),
-            [
-                "frame_layout",
-                "caption_paint",
-                "caption_layout",
-                "vertical_tabs"
-            ]
+            ["frame_layout", "caption_paint"]
         );
         assert_eq!(names(&builds::EDGE), chromium);
         assert_eq!(
             names(&builds::CHROME_150),
-            [
-                "frame_layout",
-                "frame_colour",
-                "caption_paint",
-                "caption_layout"
-            ]
+            ["frame_layout", "frame_colour", "caption_paint"]
         );
-        assert_eq!(
-            names(&builds::WHALE),
-            ["frame_layout", "frame_colour", "tab_strip"]
-        );
-        assert_eq!(names(&builds::SAMSUNG), ["frame_layout", "tab_strip"]);
+        assert_eq!(names(&builds::WHALE), ["frame_layout", "frame_colour"]);
+        assert_eq!(names(&builds::SAMSUNG), ["frame_layout"]);
     }
 
     fn nothing(_: &Build) -> Needs {
@@ -471,7 +420,7 @@ mod tests {
                 OnFailure::Abort,
             ),
             step(
-                Feature::CaptionHeight,
+                Feature::CaptionPaint,
                 left_out,
                 |ran| {
                     let _: () = ran.push("caption");
@@ -491,7 +440,7 @@ mod tests {
                 OnFailure::Continue,
             ),
             step(
-                Feature::TopInset,
+                Feature::SplitLayout,
                 nothing,
                 |ran| {
                     let _: () = ran.push("inset");
@@ -504,14 +453,14 @@ mod tests {
         assert!(unsafe { run(&steps, &mut ran, |_| {}) });
         assert_eq!(ran, ["layout", "caption", "split", "inset"]);
         assert_eq!(
-            outcome(Feature::CaptionHeight),
+            outcome(Feature::CaptionPaint),
             Some(Outcome::NotInThisBuild("the row leaves it out".to_owned()))
         );
         assert_eq!(
             outcome(Feature::Split),
             Some(Outcome::Failed("it failed".to_owned()))
         );
-        assert_eq!(outcome(Feature::TopInset), Some(Outcome::Installed));
+        assert_eq!(outcome(Feature::SplitLayout), Some(Outcome::Installed));
 
         let steps = vec![
             step(
@@ -526,7 +475,7 @@ mod tests {
                 OnFailure::Abort,
             ),
             step(
-                Feature::CaptionHeight,
+                Feature::CaptionPaint,
                 nothing,
                 |ran| {
                     let _: () = ran.push("caption");

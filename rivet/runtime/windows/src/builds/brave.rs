@@ -1,6 +1,5 @@
 //! Rows for Brave builds.
 
-use super::chrome::DEV_CHROME_156;
 use super::*;
 
 /// Brave's colour ids sit 17 above Chrome's from 574 on.
@@ -31,7 +30,6 @@ const DEV_BRAVE_156: DevMode = DevMode {
         (1072, DEV_ICON_HOT),
         (1073, DEV_ICON),
     ],
-    ..DEV_CHROME_156
 };
 
 /// Brave 156.1.98.62 (Chromium 156.0.8078.74). Brave publishes its symbols, so this row is filled from
@@ -49,49 +47,13 @@ pub static BRAVE: Build = Build {
     module: "chrome.dll",
     version: [156, 1, 98, 62],
     toolbar: Toolbar {
-        get_widget_slot: 11,
+        get_widget_slot: Some(11),
         dev: DEV_BRAVE_156,
         get_color: 0x06A9A890, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x02EE93A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x02EEBD70, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: ABSENT,
-    },
-    vertical: VerticalTabs {
-        supported: true,
-        slot: 0x11066E60, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
-        should_display: 0x039AC440, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x00365C40, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x03BF81A0,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0B4B7890, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x02916550, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
-        destructor: 0x02A3E050, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
-        destructor_prologue: &[
-            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x1112C600, // the browser view vtable
-        region_preferred_size: 0x0CF05490, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x11131130, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
-        invalidate_layout: 0x05CB4A60,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0CF05400, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
-        should_draw_tab_strip: 0x0661FA10, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,
@@ -202,7 +164,6 @@ pub static BRAVE: Build = Build {
         flex_layout: 0x067B5A30, // ?CalculateProposedLayout@FlexLayout@views
         flex_layout_host: 0x38,
         location_bar_vtable: ABSENT,
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0B4E1CF0,
@@ -226,28 +187,12 @@ pub static BRAVE: Build = Build {
     },
     // Only the browser's layout, which the pages of a split need. The Sidebar stays off.
     side_panel: SidePanel {
-        layout_vtable: ABSENT,
-        proposed_slot: 16,
-        proposed: ABSENT,
-        old_layout: None,
         registry_end: None,
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0x50,
-        contents_container: 0xb8,
-        vertical_tabs: 0x80,
-        toolbar: 0x60,
-        contents_outline: 0x58,
-        side_panel: 0xc0,
-        side_panel_animation: 0xc8,
-        layout_immediately: 0x003E5B50, // ?LayoutImmediately@View@views
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
-        ],
         ..UNCHECKED_SIDEPANEL
     },
     layout: Layout {
@@ -265,40 +210,14 @@ pub static BRAVE: Build = Build {
         corner_paint: 0x0B762730,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_vtable: 0x111E7580, // ??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@
-        caption_size_slot: 74,
-        caption_size: 0x03A4ABD0, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
         caption_paint_slot: 114,
         caption_paint: 0x02EBEF10, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
         caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        top_inset_slot: 127,
-        top_inset: ABSENT,
-        layout_slot: 23,
-        layout: 0x039F55C0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
-        layout_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40],
-        set_bounds_rect: 0x06008490, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        caption_container_offset: 0x3C8,
         view_bounds_offset: 0x1C8,
-        browser_view_view_vtable: 0x1112C600, // the browser view vtable
         frame_vtable: ABSENT,
-        layout_immediately: 0x003E5B50, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE,
-        ],
-        set_layer: 0x0087C150, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
-        set_radius: 0x01B50760, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
-        set_masks: 0x02EF7E10, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
-        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
-        stack_at_top: 0x0BF3E520, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
-        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_opaque: 0x02322E10, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
-        frame_browser_window_offset: 0x340,
+        frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
-        top_inset_adjust: -12,
         provider_verified: true,
     },
 };
@@ -327,8 +246,6 @@ pub static BRAVE_63: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x6F4DE00,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0xD2, 0xCB, 0x22, 0xFE,
@@ -380,49 +297,13 @@ pub static BRAVE_63: Build = Build {
     module: "chrome.dll",
     version: [156, 1, 98, 63],
     toolbar: Toolbar {
-        get_widget_slot: 11,
+        get_widget_slot: Some(11),
         dev: DEV_BRAVE_156,
         get_color: 0x06A5CB00, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x02F353F0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x02F37C00, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x01378F50, // ?Layout@ToolbarView, found statically and unverified
-    },
-    vertical: VerticalTabs {
-        supported: true,
-        slot: 0x11024BD8, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
-        should_display: 0x039C3900, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x00227A40, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x03C06C50,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0B4738F0, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x029F0BE0, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
-        destructor: 0x02B00B60, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
-        destructor_prologue: &[
-            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x110EA540, // the browser view vtable
-        region_preferred_size: 0x0CEC7C70, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x110EF070, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
-        invalidate_layout: 0x05A276E0,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0CEC7BE0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
-        should_draw_tab_strip: 0x065EAD20, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,
@@ -533,7 +414,6 @@ pub static BRAVE_63: Build = Build {
         flex_layout: 0x06746FC0, // ?CalculateProposedLayout@FlexLayout@views
         flex_layout_host: 0x38,
         location_bar_vtable: 0x11133840, // ??_7LocationBarView@@6BLayerDelegate@ui@@@, found statically and unverified
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0B49DD10,
@@ -594,28 +474,12 @@ pub static BRAVE_63: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x11056600, // ??_7BrowserViewTabbedLayoutImpl@@6B@, found statically and unverified
-        proposed_slot: 16,
-        proposed: 0x038CA250, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl, slot 16, found statically and unverified
-        old_layout: None,
         registry_end: None,
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0x50,
-        contents_container: 0xb8,
-        vertical_tabs: 0x80,
-        toolbar: 0x60,
-        contents_outline: 0x58,
-        side_panel: 0xc0,
-        side_panel_animation: 0xc8,
-        layout_immediately: 0x05EE76D0, // ?LayoutImmediately@View@views
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
-        ],
         event_handler_for_point: 0x018960D0, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
     },
     layout: Layout {
@@ -633,40 +497,14 @@ pub static BRAVE_63: Build = Build {
         corner_paint: 0x0B71E3A0,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_vtable: 0x111A54C0, // ??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@
-        caption_size_slot: 74,
-        caption_size: 0x03A60970, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
         caption_paint_slot: 114,
         caption_paint: 0x020F21D0, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
-        top_inset_slot: 127,
-        top_inset: 0x02465480, // ?GetTopInset@BrowserFrameViewWin, slot 127, found statically and unverified
-        layout_slot: 23,
-        layout: 0x03A0BCD0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
-        layout_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40],
-        set_bounds_rect: 0x05EE66C0, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        caption_container_offset: 0x3C8,
         view_bounds_offset: 0x1C8,
-        browser_view_view_vtable: 0x110EA540, // the browser view vtable
         frame_vtable: 0x110ED840, // ??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@, found statically and unverified
-        layout_immediately: 0x05EE76D0, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
-        ],
-        set_layer: 0x00852850, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
-        set_radius: 0x01B70D50, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
-        set_masks: 0x02F42E30, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
-        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
-        stack_at_top: 0x0BEFA460, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
-        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_opaque: 0x0244FE30, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
-        frame_browser_window_offset: 0x340,
+        frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
-        top_inset_adjust: 0, // Chromium's own GetTopInset, as on Chrome
         provider_verified: true,
     },
 };
@@ -700,7 +538,6 @@ const DEV_BRAVE_157: DevMode = DevMode {
         (1079, DEV_ICON_HOT),
         (1080, DEV_ICON),
     ],
-    ..DEV_CHROME_156
 };
 
 /// Brave 157.1.99.55 (Chromium 157.0.8103.39), ported by name from the 156.1.98.63 row with this
@@ -729,8 +566,6 @@ pub static BRAVE_157_55: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x73F5220,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x02, 0x5B, 0x09, 0xFE,
@@ -782,49 +617,13 @@ pub static BRAVE_157_55: Build = Build {
     module: "chrome.dll",
     version: [157, 1, 99, 55],
     toolbar: Toolbar {
-        get_widget_slot: 11,
+        get_widget_slot: Some(11),
         dev: DEV_BRAVE_157,
         get_color: 0x05B6CB30, // ?GetColor@ColorProvider@ui@@QEBAIH@Z
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x00D6A480, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x03153E70, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x011E0460, // ?Layout@ToolbarView, found statically and unverified
-    },
-    vertical: VerticalTabs {
-        supported: true,
-        slot: 0x11501450, // the vtable of tabs::VerticalTabStripStateControllerImpl, at ShouldDisplayVerticalTabs
-        should_display: 0x03CC0CB0, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x00363EB0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x03EABEE0,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0B7ABF10, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x02A4CCE0, // ?UpdateCollapseActionItem@VerticalTabStripStateControllerImpl@tabs@@AEAAXXZ
-        destructor: 0x02C793A0, // the scalar deleting destructor, two words before ShouldDisplayVerticalTabs
-        destructor_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x89,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x11598D50, // the browser view vtable
-        region_preferred_size: 0x0B5116A0, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x1159D840, // slot 74 of ??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@
-        invalidate_layout: 0x05B46EF0,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0B511610, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
-        should_draw_tab_strip: 0x06A93F30, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,
@@ -935,7 +734,6 @@ pub static BRAVE_157_55: Build = Build {
         flex_layout: 0x069ED3B0, // ?CalculateProposedLayout@FlexLayout@views
         flex_layout_host: 0x38,
         location_bar_vtable: 0x115CC710, // ??_7LocationBarView@@6BLayerDelegate@ui@@@, found statically and unverified
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0BDD3650,
@@ -996,28 +794,12 @@ pub static BRAVE_157_55: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x114E49D8, // ??_7BrowserViewTabbedLayoutImpl@@6B@, found statically and unverified
-        proposed_slot: 16,
-        proposed: 0x03B5F310, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl, slot 16, found statically and unverified
-        old_layout: None,
         registry_end: None,
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0x50,
-        contents_container: 0xb8,
-        vertical_tabs: 0x80,
-        toolbar: 0x60,
-        contents_outline: 0x58,
-        side_panel: 0xc0,
-        side_panel_animation: 0xc8,
-        layout_immediately: 0x05E85780, // ?LayoutImmediately@View@views
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
-        ],
         event_handler_for_point: 0x0152B340, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
     },
     layout: Layout {
@@ -1035,40 +817,14 @@ pub static BRAVE_157_55: Build = Build {
         corner_paint: 0x0C083EC0,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_vtable: 0x11644170, // ??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@
-        caption_size_slot: 74,
-        caption_size: 0x03E5AC90, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
         caption_paint_slot: 113,
         caption_paint: 0x01D8BBD0, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
-        top_inset_slot: 126,
-        top_inset: 0x02360D60, // ?GetTopInset@BrowserFrameViewWin, slot 127, found statically and unverified
-        layout_slot: 23,
-        layout: 0x03DFF0D0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
-        layout_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40],
-        set_bounds_rect: 0x05E84A70, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        caption_container_offset: 0x3C0,
         view_bounds_offset: 0x1C8,
-        browser_view_view_vtable: 0x11598D50, // the browser view vtable
         frame_vtable: 0x1159C030, // ??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@, found statically and unverified
-        layout_immediately: 0x05E85780, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
-        ],
-        set_layer: 0x00817D20, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
-        set_radius: 0x0315EF10, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
-        set_masks: 0x0315EF00, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
-        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
-        stack_at_top: 0x0C3D6D80, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
-        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_opaque: 0x0080EA30, // ?SetFillsBoundsOpaquely@Layer@ui@@UEAAX_N@Z
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
-        frame_browser_window_offset: 0x338,
+        frame_browser_window_offset: Some(0x338),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x684, 0x685, 0x686],
-        top_inset_adjust: 0, // Chromium's own GetTopInset, as on Chrome
         provider_verified: true,
     },
 };

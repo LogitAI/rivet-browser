@@ -45,7 +45,15 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use crate::appbar::Appbar;
 use crate::features::side_panel::{self as panel, PANEL_WIDTH, RAIL_WIDTH};
-use crate::hooks::page_area::PageGeometry;
+
+/// Where a window's page area is, in device-independent pixels of the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageGeometry {
+    pub x: i32,
+    pub right: i32,
+    pub top: i32,
+    pub bottom: i32,
+}
 
 const PAPER: u32 = 0xfbfaf7;
 const INK: u32 = 0x1f2024;
@@ -787,20 +795,21 @@ pub(crate) unsafe fn page_and_open_zone(window: HWND) -> Option<([f32; 4], [f32;
         open_zone_at(right, bottom),
     ))
 }
-/// The page area the rail is placed by. Where the second view is recorded, it narrows the page for
-/// the rail itself, so the area comes from the page view and needs neither the browser's layout nor
-/// its side panel. The rail's visual then covers the strip the page left, so no old page pixels show.
-unsafe fn rail_geometry(window: HWND) -> Option<crate::hooks::page_area::PageGeometry> {
-    if crate::features::second_view::available() {
-        let [x, top, right, bottom] = crate::features::second_view::full_page_area(window)?;
-        return Some(crate::hooks::page_area::PageGeometry {
-            x,
-            right,
-            top,
-            bottom,
-        });
+/// The page area the rail is placed by. The second view narrows the page for the rail itself, so
+/// the area comes from the page view and needs neither the browser's layout nor its side panel. The
+/// rail's visual then covers the strip the page left, so no old page pixels show. A build without
+/// the second view has no rail.
+unsafe fn rail_geometry(window: HWND) -> Option<PageGeometry> {
+    if !crate::features::second_view::available() {
+        return None;
     }
-    crate::hooks::page_area::page_geometry(window).filter(|_| panel::sidebar_checked())
+    let [x, top, right, bottom] = crate::features::second_view::full_page_area(window)?;
+    Some(PageGeometry {
+        x,
+        right,
+        top,
+        bottom,
+    })
 }
 
 /// Places and paints the rail and the open button of a window. Called with the other visuals of
@@ -812,9 +821,10 @@ pub unsafe fn update(window: HWND, appbar: &Appbar, visible: bool, dpi: u32) {
         if let std::collections::hash_map::Entry::Vacant(e) = rails.entry(window as isize) {
             let Ok(rail) = Rail::new(appbar) else { return };
             e.insert(rail);
-            // The page area is known once the browser has laid out with the patched layout.
-            if let Err(error) = crate::hooks::page_area::install() {
-                crate::trace::trace(&format!("side rail: {error}"));
+            if !crate::features::second_view::available() {
+                crate::trace::trace(
+                    "side rail: this browser build records no second view, so it has no rail",
+                );
             }
             if let Err(error) = panel::install_page_colours() {
                 crate::trace::trace(&format!("side rail: {error}"));
@@ -1140,10 +1150,8 @@ unsafe extern "system" fn poll(window: HWND, _: u32, _: usize, _: u32) {
     match unknown {
         None => {}
         Some(Unknown::Relayout) => {
-            // Not laid out since the layout hook went in. Lay out outside any layout of the
-            // browser's, a few times at most: a layout repaints the whole browser window.
+            // The page view has not been placed yet. Ask again a few times at most.
             crate::features::activity::count(crate::features::activity::Counter::RailRelayout);
-            crate::hooks::page_area::relayout(window);
             crate::frame::update_appbar(window);
             return;
         }

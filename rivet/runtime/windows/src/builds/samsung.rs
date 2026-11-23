@@ -33,8 +33,6 @@ pub static SAMSUNG: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x190,
-        view_children: 0x198,
         operator_new: 0x55841C8,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xEB, 0x0F, 0x48, 0x8B, 0xCB,
@@ -81,29 +79,6 @@ pub static SAMSUNG: Build = Build {
     toolbar: Toolbar {
         skip: "toolbar",
         ..UNCHECKED_TOOLBAR
-    },
-    vertical: VerticalTabs {
-        // The tabbed layout's function (0x13c8310) inlines `BrowserView::ShouldDrawTabStrip`, whose
-        // copies at 0x2b44ed0 and 0x2b44420 it never calls, and starts that test by asking this
-        // function for feature 2, the tab strip, at 0x13c8510. Its other callers, the frame's
-        // top inset among them, must keep the browser's answer or the caption buttons go with the
-        // strip. The prologue is 12 bytes and ends on an instruction boundary.
-        window_feature: 0x001F_BB10,
-        window_feature_prologue: &[
-            0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x44, 0x89, 0xC3, 0x89, 0xD6,
-        ],
-        window_feature_tab_strip: 2,
-        window_feature_callers: (0x013C_8310, 0x013C_A742),
-        set_bounds_rect: 0x047C_EA60,
-        set_bounds_rect_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        toolbar_in_view: 0x5B0,
-        // The toggle ends 36 DIPs in and the toolbar keeps 8 before its first button; the back button
-        // then sits 30 DIPs from the toggle's centre, as Chrome's does.
-        toolbar_leading: 32,
-        detour_strip: true,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true, // opening the start page in a new tab checked on Samsung Internet 30.0.4.29
@@ -353,43 +328,21 @@ pub static SAMSUNG: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x0E18_0BE0,
-        proposed_slot: 3,
-        proposed: 0x013C_8310,
-        old_layout: Some(true),
         registry_end: Some(true),
         registry_in_coordinator: Some(0x30),
         registry_entries: Some(0x48),
         coordinator_browser: Some(0x28),
         entry_key_size: Some(0x48),
         extensions_by_toggle: Some(true),
-        host_view: 0x30,
-        page_area: ABSENT,
-        contents_container: 0x80,
-        vertical_tabs: ABSENT,
-        toolbar: 0x70,
-        contents_outline: ABSENT,
-        side_panel: 0x98,
-        side_panel_animation: ABSENT,
-        layout_immediately: 0x047C_B9E0,
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
-            0xEC, 0x98, 0x00, 0x00, 0x00, 0x48, 0x89, 0xCE,
-        ],
         event_handler_for_point: ABSENT,
     },
-    // The frame paint and the top inset are not recorded: nothing shows that this build's functions in
-    // those vtable slots are Chromium's, and its frame vtable does not have Chromium's layout.
+    // The frame paint is not recorded: nothing shows that this build's function in that vtable slot
+    // is Chromium's, and its frame vtable does not have Chromium's layout.
     layout: Layout {
         // The browser view's `views::View` lies this far inside the object `GetBrowserViewForNativeWindow`
         // answers, read from the parent of its children.
         browser_window_in_view: 0x1F8,
-        // `views::View::SetBoundsRect` and where a view keeps its bounds, which the older layout's
-        // page area sets after the browser's layout ran.
-        set_bounds_rect: 0x047C_EA60,
-        set_bounds_rect_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
+        // Where a view keeps its bounds.
         view_bounds_offset: 0x1C0,
         ..UNCHECKED_LAYOUT
     },

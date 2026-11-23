@@ -2,9 +2,7 @@
 
 use super::*;
 
-pub(super) const DEV_CHROME_156: DevMode = DevMode {
-    inspect: 40023,
-    console: 40005,
+const DEV_CHROME_156: DevMode = DevMode {
     colours: &[
         (0x13C, DEV_GROUND),
         (1590, DEV_GROUND),
@@ -31,21 +29,6 @@ pub(super) const DEV_CHROME_156: DevMode = DevMode {
         (1055, DEV_ICON_HOT),
         (1056, DEV_ICON),
     ],
-    ..UNCHECKED_DEV
-};
-
-/// Chrome 156.0.8078.74, whose font functions are read from its public symbols and checked against
-/// the module file.
-const DEV_CHROME_156_74: DevMode = DevMode {
-    font_new: 0x02F7_2AE0, // ??0Font@gfx@@QEAA@AEBV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@H@Z
-    font_new_prologue: &[
-        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2,
-    ],
-    font_list_new: 0x02F7_27D0, // ??0FontList@gfx@@QEAA@AEBVFont@1@@Z
-    font_list_new_prologue: &[
-        0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE,
-    ],
-    ..DEV_CHROME_156
 };
 
 pub static CHROME: Build = Build {
@@ -58,56 +41,13 @@ pub static CHROME: Build = Build {
     module: "chrome.dll",
     version: [156, 0, 8078, 48],
     toolbar: Toolbar {
-        get_widget_slot: 11,
+        get_widget_slot: Some(11),
         dev: DEV_CHROME_156,
         get_color: 0x04AA24F0,
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x00D5_64A0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x0315_C7C0, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: ABSENT,
-    },
-    vertical: VerticalTabs {
-        supported: true,
-        slot: 0x0FDA_FE00, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
-        should_display: 0x0369_C6E0, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x0034_D3E0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x036A_A950,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0A1D_B330, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x020F_3D90, // ??0VerticalTabStripStateController@tabs@@IEAA@AEAVBrowserWindowInterface@@@Z
-        destructor: 0x0296_C3F0, // ??_EVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
-        destructor_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x89, 0xd7, 0x48, 0x89, 0xce, 0xe8,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x0FE7_BF68, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
-        region_preferred_size: 0x0BC7_FA80, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x0FF1_7CF8, // .weak.??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$Cd
-        invalidate_layout: 0x0411_6480,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0BC7_F9F0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7,
-            0x02, 0, 0, 0, 0,
-        ],
-        should_draw_tab_strip: 0x0528_6C00, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        window_feature: ABSENT,
-        window_feature_prologue: &[0],
-        window_feature_tab_strip: 0,
-        window_feature_callers: (0, 0),
-        set_bounds_rect: ABSENT,
-        set_bounds_rect_prologue: &[0],
-        toolbar_in_view: 0,
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,
@@ -257,7 +197,6 @@ pub static CHROME: Build = Build {
         flex_layout: 0x054FCC60, // views::FlexLayout::CalculateProposedLayout
         flex_layout_host: 0x38,
         location_bar_vtable: 0x0FE86BE8, // LocationBarView primary vtable
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0A20_5410,
@@ -312,28 +251,12 @@ pub static CHROME: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x0FDB_0278, // .weak.??_7BrowserViewTabbedLayoutImpl@@6B@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplate@
-        proposed_slot: 16,
-        proposed: 0x0104_8AB0, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl@@MEBA?AUProposedLayout@BrowserViewLayoutImpl@@A
-        old_layout: None,
         registry_end: None,
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0x50,
-        contents_container: 0xb8,
-        vertical_tabs: 0x80,
-        toolbar: 0x60,
-        contents_outline: 0x58,
-        side_panel: 0xc0,
-        side_panel_animation: 0xc8,
-        layout_immediately: 0x04BE_C780, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
         event_handler_for_point: 0x007C_6530, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
     },
     layout: Layout {
@@ -346,44 +269,18 @@ pub static CHROME: Build = Build {
         corner_vtable: 0x0FEC_AFC8, // .weak.??_7CustomFloatingCorner@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
         corner_paint: 0x0A4C_73A0,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         caption_vtable: 0x0FF0_25C8, // .weak.??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
-        caption_size_slot: 74,
-        caption_size: 0x0313_2D90, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
         caption_paint_slot: 114,
         caption_paint: 0x0313_32A0, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
-        top_inset_slot: 127,
-        top_inset: 0x0A40_33E0, // ?GetTopInset@BrowserFrameViewWin@@UEBAH_N@Z
-        layout_slot: 23,
-        layout: 0x017A_E5E0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
-        set_bounds_rect: 0x04F4_2540, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
-        caption_container_offset: 0x3C8,
         view_bounds_offset: 0x1C8,
-        browser_view_view_vtable: 0x0FE7_BF68, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
         frame_vtable: 0x0FE7_3E28, // .weak.??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromis
-        layout_immediately: 0x04BE_C780, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        set_layer: 0x00F0_5F10, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xec, 0x28],
-        set_radius: 0x01D3_AB80, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x30],
-        set_masks: 0x0316_7C40, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
-        set_masks_prologue: &[0x48, 0x8b, 0x89, 0x70, 0x01, 0x00, 0x00],
-        stack_at_top: 0x0ACC_8FD0, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
-        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_opaque: 0x020A_FEF0, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xec, 0x20],
         on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         draw_color_prologue: &[0x48, 0x83, 0xec, 0x38, 0x48, 0x8b],
         get_color_provider_prologue: &[0x56, 0x57, 0x48, 0x83, 0xec, 0x78],
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        layout_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53],
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        frame_browser_window_offset: 0x340,
+        frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E],
-        top_inset_adjust: 0,
     },
 };
 
@@ -409,8 +306,6 @@ pub static CHROME_156_74: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x5A1E310,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x12, 0xD5, 0x21, 0xFE,
@@ -462,56 +357,13 @@ pub static CHROME_156_74: Build = Build {
     module: "chrome.dll",
     version: [156, 0, 8078, 74],
     toolbar: Toolbar {
-        get_widget_slot: 11,
-        dev: DEV_CHROME_156_74,
+        get_widget_slot: Some(11),
+        dev: DEV_CHROME_156,
         get_color: 0x0535_9A80,
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x02F4_6B00, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x02F4_8CE0, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x011C_98D0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
-    },
-    vertical: VerticalTabs {
-        supported: true,
-        slot: 0x0FC2_23A8, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
-        should_display: 0x0345_2850, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x002E_75B0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x0346_0F20,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x09F9_9710, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x01DB_9180, // ??0VerticalTabStripStateController@tabs@@IEAA@AEAVBrowserWindowInterface@@@Z
-        destructor: 0x02AD_3050, // ??_EVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
-        destructor_prologue: &[
-            0x41, 0x56, 0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x0FCE_E270, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
-        region_preferred_size: 0x0BAA_5650, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x0FD8_A000, // .weak.??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$Cd
-        invalidate_layout: 0x046F_2F30,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0BAA_55C0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7,
-            0x02, 0, 0, 0, 0,
-        ],
-        should_draw_tab_strip: 0x0504_F960, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        window_feature: ABSENT,
-        window_feature_prologue: &[0],
-        window_feature_tab_strip: 0,
-        window_feature_callers: (0, 0),
-        set_bounds_rect: ABSENT,
-        set_bounds_rect_prologue: &[0],
-        toolbar_in_view: 0,
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,
@@ -661,7 +513,6 @@ pub static CHROME_156_74: Build = Build {
         flex_layout: 0x0522_E1B0, // views::FlexLayout::CalculateProposedLayout
         flex_layout_host: 0x38,
         location_bar_vtable: 0x0FCF_8EF0, // LocationBarView primary vtable
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x09FC_3C40,
@@ -716,28 +567,12 @@ pub static CHROME_156_74: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x0FC2_2820, // .weak.??_7BrowserViewTabbedLayoutImpl@@6B@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplate@
-        proposed_slot: 16,
-        proposed: 0x012B_2170, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl@@MEBA?AUProposedLayout@BrowserViewLayoutImpl@@A
-        old_layout: None,
         registry_end: None,
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0x50,
-        contents_container: 0xb8,
-        vertical_tabs: 0x80,
-        toolbar: 0x60,
-        contents_outline: 0x58,
-        side_panel: 0xc0,
-        side_panel_animation: 0xc8,
-        layout_immediately: 0x003E_BA00, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE, 0x48,
-        ],
         event_handler_for_point: 0x00BA_AC10, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
     },
     layout: Layout {
@@ -750,58 +585,19 @@ pub static CHROME_156_74: Build = Build {
         corner_vtable: 0x0FD3_D2D0, // .weak.??_7CustomFloatingCorner@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
         corner_paint: 0x0A28_63E0,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         caption_vtable: 0x0FD7_48D0, // .weak.??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
-        caption_size_slot: 74,
-        caption_size: 0x02F1_FA20, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
         caption_paint_slot: 114,
         caption_paint: 0x02F2_0040, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
-        top_inset_slot: 127,
-        top_inset: 0x0184_E3A0, // ?GetTopInset@BrowserFrameViewWin@@UEBAH_N@Z
-        layout_slot: 23,
-        layout: 0x0184_DD70, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
-        set_bounds_rect: 0x04A5_2AF0, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
-        caption_container_offset: 0x3C8,
         view_bounds_offset: 0x1C8,
-        browser_view_view_vtable: 0x0FCE_E270, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
         frame_vtable: 0x0FCE_6130, // .weak.??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromis
-        layout_immediately: 0x003E_BA00, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE, 0x48,
-        ],
-        set_layer: 0x00F2_86B0, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xec, 0x28],
-        set_radius: 0x01C0_25E0, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x30],
-        set_masks: 0x02F5_4C40, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
-        set_masks_prologue: &[0x48, 0x8b, 0x89, 0x70, 0x01, 0x00, 0x00],
-        stack_at_top: 0x0AA9_B0A0, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
-        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_opaque: 0x01D7_6D40, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xec, 0x20],
         on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         draw_color_prologue: &[0x48, 0x83, 0xec, 0x38, 0x48, 0x8b],
         get_color_provider_prologue: &[0x48, 0x83, 0xEC, 0x28, 0x48, 0x8B],
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        layout_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53],
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        frame_browser_window_offset: 0x340,
+        frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E],
-        top_inset_adjust: 0,
     },
-};
-
-/// Chrome 156.0.8078.80's font functions, found by name in its public symbols and unverified.
-const DEV_CHROME_156_80: DevMode = DevMode {
-    font_new: 0x02FC_50E0, // ??0Font@gfx@@QEAA@AEBV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@H@Z
-    font_new_prologue: &[
-        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2,
-    ],
-    font_list_new: 0x02FC_4DD0, // ??0FontList@gfx@@QEAA@AEBVFont@1@@Z
-    font_list_new_prologue: &[
-        0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE,
-    ],
-    ..DEV_CHROME_156
 };
 
 /// Google Chrome 156.0.8078.80, ported by name from the 156.0.8078.74 row with this build's own public
@@ -829,8 +625,6 @@ pub static CHROME_156_80: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x59FC170,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0xB2, 0x85, 0x20, 0xFE,
@@ -882,56 +676,13 @@ pub static CHROME_156_80: Build = Build {
     module: "chrome.dll",
     version: [156, 0, 8078, 80],
     toolbar: Toolbar {
-        get_widget_slot: 11,
-        dev: DEV_CHROME_156_80,
+        get_widget_slot: Some(11),
+        dev: DEV_CHROME_156,
         get_color: 0x052B_06D0,
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x02F9_C1F0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x02F9_E210, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x0130_94D0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
-    },
-    vertical: VerticalTabs {
-        supported: true,
-        slot: 0x0FC1_D120, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
-        should_display: 0x0348_10D0, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x0021_19B0, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x0348_D7F0,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x09F8_E9D0, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x0208_FB20, // ??0VerticalTabStripStateController@tabs@@IEAA@AEAVBrowserWindowInterface@@@Z
-        destructor: 0x0289_05D0, // ??_EVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
-        destructor_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0xE8,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x0FCE_91B0, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
-        region_preferred_size: 0x0BAA_1270, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x0FD8_4F40, // .weak.??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$Cd
-        invalidate_layout: 0x044A_1090,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0BAA_11E0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0xd6, 0x48, 0x89, 0xcf, 0x48, 0xc7,
-            0x02, 0, 0, 0, 0,
-        ],
-        should_draw_tab_strip: 0x0500_F4B0, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        window_feature: ABSENT,
-        window_feature_prologue: &[0],
-        window_feature_tab_strip: 0,
-        window_feature_callers: (0, 0),
-        set_bounds_rect: ABSENT,
-        set_bounds_rect_prologue: &[0],
-        toolbar_in_view: 0,
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,
@@ -1081,7 +832,6 @@ pub static CHROME_156_80: Build = Build {
         flex_layout: 0x051C_9140, // views::FlexLayout::CalculateProposedLayout
         flex_layout_host: 0x38,
         location_bar_vtable: 0x0FCF_3E30, // LocationBarView primary vtable
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x09FB_8F00,
@@ -1136,28 +886,12 @@ pub static CHROME_156_80: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x0FC1_D598, // .weak.??_7BrowserViewTabbedLayoutImpl@@6B@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplate@
-        proposed_slot: 16,
-        proposed: 0x0141_3500, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl@@MEBA?AUProposedLayout@BrowserViewLayoutImpl@@A
-        old_layout: None,
         registry_end: None,
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0x50,
-        contents_container: 0xb8,
-        vertical_tabs: 0x80,
-        toolbar: 0x60,
-        contents_outline: 0x58,
-        side_panel: 0xc0,
-        side_panel_animation: 0xc8,
-        layout_immediately: 0x0497_1310, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
         event_handler_for_point: 0x0196_7ED0, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
     },
     layout: Layout {
@@ -1170,48 +904,22 @@ pub static CHROME_156_80: Build = Build {
         corner_vtable: 0x0FD3_8210, // .weak.??_7CustomFloatingCorner@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
         corner_paint: 0x0A27_B230,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         caption_vtable: 0x0FD6_F810, // .weak.??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
-        caption_size_slot: 74,
-        caption_size: 0x02F7_9030, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
         caption_paint_slot: 114,
         caption_paint: 0x0216_2380, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
-        top_inset_slot: 127,
-        top_inset: 0x0198_BB60, // ?GetTopInset@BrowserFrameViewWin@@UEBAH_N@Z
-        layout_slot: 23,
-        layout: 0x0198_B5C0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
-        set_bounds_rect: 0x0497_0300, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
-        caption_container_offset: 0x3C8,
         view_bounds_offset: 0x1C8,
-        browser_view_view_vtable: 0x0FCE_91B0, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
         frame_vtable: 0x0FCE_1070, // .weak.??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromis
-        layout_immediately: 0x0497_1310, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        set_layer: 0x00F8_65B0, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xec, 0x28],
-        set_radius: 0x01C4_6BA0, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xec, 0x30],
-        set_masks: 0x02FA_9360, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
-        set_masks_prologue: &[0x48, 0x8b, 0x89, 0x70, 0x01, 0x00, 0x00],
-        stack_at_top: 0x0AA9_0760, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
-        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_opaque: 0x00BA_1BC0, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xec, 0x20],
         on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         draw_color_prologue: &[0x48, 0x83, 0xec, 0x38, 0x48, 0x8b],
         get_color_provider_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x78],
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        layout_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53],
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        frame_browser_window_offset: 0x340,
+        frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
         caption_ink_ids: &[0x66C, 0x66D, 0x66E],
-        top_inset_adjust: 0,
     },
 };
 
-/// Chrome 157.0.8103.38's font functions and colour ids, found by name in its public symbols and
+/// Chrome 157.0.8103.38's colour ids, found by name in its public symbols and
 /// in its colour id tables. Unverified.
 const DEV_CHROME_157_38: DevMode = DevMode {
     colours: &[
@@ -1240,15 +948,6 @@ const DEV_CHROME_157_38: DevMode = DevMode {
         (1062, DEV_ICON_HOT),
         (1063, DEV_ICON),
     ],
-    font_new: 0x0323_9230, // ??0Font@gfx@@QEAA@AEBV?$basic_string@DU?$char_traits@D@__Cr@std@@V?$allocator@D@23@@__Cr@std@@H@Z
-    font_new_prologue: &[
-        0x56, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xCE, 0x48, 0x89, 0xD1, 0x44, 0x89, 0xC2,
-    ],
-    font_list_new: 0x0323_8F10, // ??0FontList@gfx@@QEAA@AEBVFont@1@@Z
-    font_list_new_prologue: &[
-        0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0xD3, 0x48, 0x89, 0xCE,
-    ],
-    ..DEV_CHROME_156
 };
 
 /// Google Chrome 157.0.8103.38, ported by name from the 156.0.8078.80 row with this build's own public
@@ -1277,8 +976,6 @@ pub static CHROME_157_38: Build = Build {
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83,
             0xEC, 0x68,
         ],
-        view_parent: 0x198,
-        view_children: 0x1A0,
         operator_new: 0x5E75E90,
         operator_new_prologue: &[
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0xE8, 0x82, 0xB1, 0x05, 0xFE,
@@ -1330,56 +1027,13 @@ pub static CHROME_157_38: Build = Build {
     module: "chrome.dll",
     version: [157, 0, 8103, 38],
     toolbar: Toolbar {
-        get_widget_slot: 11,
+        get_widget_slot: Some(11),
         dev: DEV_CHROME_157_38,
         get_color: 0x0454_F050,
-        get_color_bytes: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x20,
-            0x89, 0xD7,
-        ],
         content_window_for_hwnd: 0x00E1_3BC0, // ?GetContentWindowForHWND@DesktopWindowTreeHostWin@views@@SAPEAVWindow@aura@@PEAUHWND__@@@Z
         widget_for_window: 0x0321_2390, // ?GetWidgetForNativeView@Widget@views@@SAPEAV12@PEAVWindow@aura@@@Z
         skip: "",
         toolbar_layout: 0x0119_5EC0, // ?Layout@ToolbarView@@UEAAXVPassKey@@@Z
-    },
-    vertical: VerticalTabs {
-        supported: true,
-        slot: 0x100A_DE20, // .weak.??_7VerticalTabStripStateControllerImpl@tabs@@6BVerticalTabStripStateController@1@@.default.?R
-        should_display: 0x0372_F780, // ?ShouldDisplayVerticalTabs@VerticalTabStripStateControllerImpl@tabs@@UEBA_NXZ
-        browser_view_for_browser: 0x0031_9000, // ?GetBrowserViewForBrowser@BrowserView@@SAPEAV1@PEBVBrowserWindowInterface@@@Z
-        hwnd_for_view: 0x0373_9690,            // ?HWNDForView@views@@YAPEAUHWND__@@PEBVView@1@@Z
-        notify_mode_changed: 0x0A87_5880, // ?NotifyModeChanged@VerticalTabStripStateController@tabs@@IEAAXXZ
-        update_collapse_action: 0x0204_3D80, // ??0VerticalTabStripStateController@tabs@@IEAA@AEAVBrowserWindowInterface@@@Z
-        destructor: 0x02AA_EA60, // ??_EVerticalTabStripStateControllerImpl@tabs@@UEAAPEAXI@Z
-        destructor_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x89, 0xD7, 0x48, 0x89, 0xCE, 0xE8,
-        ],
-        browser_offset: 0x1B8,
-        mode_offset: 0x1E8,
-        width_offset: 0x1CC,
-        browser_view_view_vtable: 0x1016_E590, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
-        region_preferred_size: 0x0A8D_3A70, // ?CalculatePreferredSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
-        region_preferred_size_slot: 0x1017_6640, // .weak.??_7VerticalTabStripRegionView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$Cd
-        invalidate_layout: 0x0458_7C70,          // ?InvalidateLayout@View@views@@QEAAX_N@Z
-        invalidate_layout_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        region_minimum_size: 0x0A8D_39E0, // ?GetMinimumSize@VerticalTabStripRegionView@@UEBA?AVSize@gfx@@XZ
-        region_minimum_prologue: &[
-            0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89, 0xD6, 0x48, 0x89, 0xCF, 0x48, 0xC7,
-            0x02, 0x00, 0x00, 0x00, 0x00,
-        ],
-        should_draw_tab_strip: 0x054D_6710, // ?ShouldDrawTabStrip@BrowserView@@QEBA_NXZ
-        should_draw_tab_strip_prologue: &[0x56, 0x57, 0x53],
-        window_feature: ABSENT,
-        window_feature_prologue: &[0],
-        window_feature_tab_strip: 0,
-        window_feature_callers: (0, 0),
-        set_bounds_rect: ABSENT,
-        set_bounds_rect_prologue: &[0],
-        toolbar_in_view: 0,
-        detour_strip: false,
-        ..UNCHECKED_VERTICALTABS
     },
     navigation: Navigation {
         supported: true,
@@ -1529,7 +1183,6 @@ pub static CHROME_157_38: Build = Build {
         flex_layout: 0x0545_7A60, // views::FlexLayout::CalculateProposedLayout
         flex_layout_host: 0x38,
         location_bar_vtable: 0x1015_9FB0, // LocationBarView primary vtable
-        view_size: 0x1D0,
         signatures: &[
             (
                 0x0A89_FA40,
@@ -1584,28 +1237,12 @@ pub static CHROME_157_38: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x100A_DB68, // .weak.??_7BrowserViewTabbedLayoutImpl@@6B@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplate@
-        proposed_slot: 16,
-        proposed: 0x012C_3340, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl@@MEBA?AUProposedLayout@BrowserViewLayoutImpl@@A
-        old_layout: None,
         registry_end: None,
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: 0x38,
-        page_area: 0x50,
-        contents_container: 0xb8,
-        vertical_tabs: 0x80,
-        toolbar: 0x60,
-        contents_outline: 0x58,
-        side_panel: 0xc0,
-        side_panel_animation: 0xc8,
-        layout_immediately: 0x048C_8EC0, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
         event_handler_for_point: 0x0163_4870, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
     },
     layout: Layout {
@@ -1618,44 +1255,18 @@ pub static CHROME_157_38: Build = Build {
         corner_vtable: 0x101A_C8F0, // .weak.??_7CustomFloatingCorner@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
         corner_paint: 0x0AB9_47C0,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         caption_vtable: 0x101E_13F0, // .weak.??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromi
-        caption_size_slot: 74,
-        caption_size: 0x0320_9420, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
         caption_paint_slot: 113,
         caption_paint: 0x01E3_7DF0, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
-        top_inset_slot: 126,
-        top_inset: 0x0AAD_2250, // ?GetTopInset@BrowserFrameViewWin@@UEBAH_N@Z
-        layout_slot: 23,
-        layout: 0x01A6_3550, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
-        set_bounds_rect: 0x048C_81B0, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
-        caption_container_offset: 0x3C0,
         view_bounds_offset: 0x1C8,
-        browser_view_view_vtable: 0x1016_E590, // .weak.??_7BrowserView@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromiseTemplat
         frame_vtable: 0x1017_4650, // .weak.??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@.default.?RejectPromiseOnDestruction@?$CdmPromis
-        layout_immediately: 0x048C_8EC0, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        set_layer: 0x0100_6330, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
-        set_radius: 0x0321_CF10, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
-        set_masks: 0x0321_CF00, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
-        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
-        stack_at_top: 0x0AF4_77D0, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
-        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_opaque: 0x007E_9970, // ?SetFillsBoundsOpaquely@Layer@ui@@UEAAX_N@Z
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
         on_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         draw_color_prologue: &[0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B],
         get_color_provider_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x78],
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        layout_prologue: &[0x41, 0x56, 0x56, 0x57, 0x55, 0x53],
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        frame_browser_window_offset: 0x338,
+        frame_browser_window_offset: Some(0x338),
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
         caption_ink_ids: &[0x673, 0x674, 0x675],
-        top_inset_adjust: 0,
     },
 };
 
@@ -1674,7 +1285,6 @@ pub static CHROME_150: Build = Build {
         skip: "toolbar",
         ..UNCHECKED_TOOLBAR
     },
-    vertical: UNCHECKED_VERTICALTABS,
     navigation: UNCHECKED_NAVIGATION,
     tabs: UNCHECKED_TABS,
     split: UNCHECKED_SPLIT,
@@ -1689,43 +1299,17 @@ pub static CHROME_150: Build = Build {
         corner_vtable: 0xef34798,
         corner_paint: 0xe451e40,
         caption_vtable: 0xef54f58,
-        caption_size_slot: 74,
-        caption_size: 0x322fdb0,
         caption_paint_slot: 114,
         caption_paint: 0x1d823e0,
-        top_inset_slot: 127,
-        top_inset: 0xe5435a0,
-        layout_slot: 23,
-        layout: 0x17e4cd0,
-        set_bounds_rect: 0x44cff90,
-        caption_container_offset: 0x3c0,
         view_bounds_offset: 0x1c0,
-        browser_view_view_vtable: 0xeeaecd8,
         frame_vtable: 0xef32f18,
-        layout_immediately: 0x44d1380,
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
-        set_layer: 0xd28650,
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
-        set_radius: 0x2c89450,
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
-        set_masks: 0x2c893c0,
-        set_masks_prologue: &[0x48, 0x8B, 0x89, 0xC8, 0x01, 0x00, 0x00],
-        stack_at_top: 0x9baf850,
-        stack_at_top_prologue: &[0x4C, 0x8B, 0x41, 0x30, 0x48, 0x8B],
-        set_opaque: 0x126da80,
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
         on_paint_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0x48, 0x89],
         draw_color_prologue: &[0x48, 0x83, 0xEC, 0x38, 0x48, 0x8B],
         get_color_provider_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x68],
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        layout_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        frame_browser_window_offset: 0x338,
+        frame_browser_window_offset: Some(0x338),
         browser_window_in_view: 0x1f0,
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
         caption_ink_ids: &[1593, 1594, 1595],
-        top_inset_adjust: 0,
     },
 };

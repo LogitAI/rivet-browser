@@ -60,6 +60,14 @@ function Resolve-Edge {
 $url = switch ($Browser) {
     'Google Chrome' { Resolve-Chrome }
     'Microsoft Edge' { Resolve-Edge }
+    'Brave' {
+        # Brave's feed lists only new builds, but every release keeps its installer on GitHub under
+        # the tag of the version without its Chromium milestone, so an earlier build is found too.
+        if ($Download) { $Download } else {
+            $tag = 'v' + (($Version -split '\.', 2)[1])
+            "https://github.com/brave/brave-browser/releases/download/$tag/BraveBrowserStandaloneSilentSetup.exe"
+        }
+    }
     default {
         if (-not $Download) { throw "The feed names no installer for $Browser $Version yet." }
         $Download
@@ -78,11 +86,46 @@ if ($Browser -eq 'Brave') {
     # Brave publishes only update-client installers. Their payload is split into several branch
     # streams that 7-Zip reads as one, so the files come out damaged. A runner is thrown away after
     # the job and has no Brave of its own, so the silent installer installs this exact build.
-    $installed = Join-Path $env:ProgramFiles 'BraveSoftware\Brave-Browser\Application'
-    if (Test-Path $installed) { throw "This runner already has Brave at $installed, so the build would not be the one asked for." }
+    # The installer picks a machine or a user install by itself, and its update client may still be
+    # copying files after the setup process has exited, so every place is checked until the build's
+    # own version folder appears.
+    $places = @(
+        (Join-Path $env:ProgramFiles 'BraveSoftware\Brave-Browser\Application'),
+        (Join-Path ${env:ProgramFiles(x86)} 'BraveSoftware\Brave-Browser\Application'),
+        (Join-Path $env:LOCALAPPDATA 'BraveSoftware\Brave-Browser\Application')
+    )
+    foreach ($place in $places) {
+        if (Test-Path $place) { throw "This runner already has Brave at $place, so the build would not be the one asked for." }
+    }
     $setup = Start-Process $package -Wait -PassThru
     if ($setup.ExitCode -ne 0) { throw "Brave's installer exited with $($setup.ExitCode)" }
-    $unpacked = $installed
+    $installed = $null
+    $until = (Get-Date).AddMinutes(10)
+    while (-not $installed -and (Get-Date) -lt $until) {
+        $installed = $places | Where-Object {
+            (Test-Path (Join-Path $_ 'brave.exe')) -and (Test-Path (Join-Path $_ "$Version\chrome.dll"))
+        } | Select-Object -First 1
+        if (-not $installed) { Start-Sleep -Seconds 5 }
+    }
+    if (-not $installed) {
+        $seen = foreach ($root in $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA) {
+            Get-ChildItem (Join-Path $root 'BraveSoftware') -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                ForEach-Object FullName
+        }
+        throw "Brave's installer exited with 0, but no place holds brave.exe and $Version\chrome.dll after 10 minutes. Under BraveSoftware: $(@($seen) -join '; ')"
+    }
+    # The files are copied out and Brave is removed again, so a second build, such as the one
+    # before it, can be installed on the same runner.
+    $unpacked = Join-Path $Out 'files'
+    New-Item -ItemType Directory -Force $unpacked | Out-Null
+    Copy-Item $installed $unpacked -Recurse -Force
+    $remover = Join-Path $installed "$Version\Installer\setup.exe"
+    $level = if ($installed -like "$env:LOCALAPPDATA*") { @() } else { @('--system-level') }
+    if (Test-Path $remover) {
+        Start-Process $remover -ArgumentList (@('--uninstall', '--force-uninstall') + $level) -Wait | Out-Null
+    }
+    Remove-Item (Split-Path $installed -Parent) -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $installed) { throw "Brave $Version could not be removed from $installed after its files were copied" }
 } else {
     7z x $package "-o$unpacked" -y | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "7-Zip could not unpack $url" }

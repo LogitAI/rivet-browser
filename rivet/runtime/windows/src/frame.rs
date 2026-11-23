@@ -24,10 +24,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     HTMINBUTTON, HTTOP, HTTOPLEFT, ICON_BIG, ICON_SMALL, IDC_SIZEWE, MSG, PM_REMOVE, SM_CXICON,
     SM_CXPADDEDBORDER, SM_CXSMICON, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, WH_GETMESSAGE, WM_CAPTURECHANGED, WM_CLOSE, WM_DPICHANGED,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_NCHITTEST,
-    WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
-    WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_SETCURSOR, WM_SETICON, WM_SYSCOMMAND,
-    WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY,
+    WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
+    WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_SETCURSOR, WM_SETICON,
+    WM_SYSCOMMAND, WM_WINDOWPOSCHANGED, WNDPROC, WS_THICKFRAME,
 };
 
 use super::appbar::Appbar;
@@ -180,8 +180,9 @@ unsafe fn trace_reflection(window: HWND) -> bool {
         return false;
     };
     let handler = GetWindowLongPtrW(window, GWLP_USERDATA) as usize;
-    // Read on the window's own thread, where the browser layout recorded it.
-    let host = crate::hooks::page_area::laid_out_host(window);
+    // The browser view the window's frame view holds, read on the window's own thread. It is known
+    // once an earlier walk of this build ran.
+    let host = crate::chromium::window_views::browser_view_of(window);
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
         let found = reflect::find_cached(
@@ -1020,12 +1021,9 @@ fn slide_of(window: HWND) -> f32 {
         .unwrap_or(0.0)
 }
 
-/// Where the page panel begins, in device-independent pixels. Chromium's own vertical tab strip
-/// keeps its width at the left even while the appbar is hidden, because the browser offers no way
-/// to take it out of the layout, so the page cannot begin before it ends.
+/// Where the page panel begins, in device-independent pixels.
 fn page_x(window: HWND) -> i32 {
-    let leading = layout_of(window).leading();
-    crate::features::vertical_tabs::layout_width(window).map_or(leading, |strip| leading.max(strip))
+    layout_of(window).leading()
 }
 
 /// Converts client pixels to device-independent pixels of the appbar's own coordinates: below the
@@ -1080,7 +1078,6 @@ pub(crate) fn appbar_settings(window: HWND) -> (i32, bool) {
 /// Sets the appbar width as a drag of its edge would.
 pub(crate) unsafe fn set_appbar_width(window: HWND, width: i32) {
     if edit_layout(window, |layout| layout.set_width(width)) {
-        sync_strip(window);
         update_appbar(window);
         relayout(window);
     }
@@ -2017,44 +2014,13 @@ unsafe fn toggle_message() -> u32 {
     RegisterWindowMessageW(wide(TOGGLE_MESSAGE).as_ptr())
 }
 
-/// Makes Chromium's tab strip, which the appbar covers, as wide as the appbar: nothing while the
-/// appbar is hidden.
-unsafe fn sync_strip(window: HWND) {
-    let layout = layout_of(window);
-    crate::features::vertical_tabs::set_strip_override(window, layout.strip());
-}
-
-/// Lays the browser out again, now that the appbar's width or mode changed, and redraws.
+/// Places the panel and the page view again, now that the appbar's width or mode changed, and
+/// redraws. The browser's own layout is not asked.
 unsafe fn relayout(window: HWND) {
-    // The frame view lays out again on request, which also works for a maximized window.
-    crate::features::vertical_tabs::invalidate_strip(window);
-    if frame_layout::relayout(window) {
-        if is_waiting(window) {
-            crate::trace::trace("attach: asked the frame view to lay out again");
-        }
-        update_appbar(window);
-        return;
+    if attached(window) {
+        place_panel_by_rivet(window);
+        follow_second_view(window);
     }
-    // A frame change only marks the browser's views for a layout on its next compositor frame,
-    // and a cloaked or off-screen window may draw none; a size change lays it out at once.
-    if nudge(window, "retry") {
-        update_appbar(window);
-        return;
-    }
-    if is_waiting(window) {
-        crate::trace::trace(
-            "attach: asked for a frame change, as the frame view's layout is not recorded",
-        );
-    }
-    SetWindowPos(
-        window,
-        std::ptr::null_mut(),
-        0,
-        0,
-        0,
-        0,
-        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-    );
     update_appbar(window);
 }
 
@@ -2144,7 +2110,6 @@ unsafe fn toggle_appbar(window: HWND) {
     let before = frame_layout::panel_bounds(window).map(|panel| panel.x);
     edit_layout(window, |layout| layout.toggle());
     crate::trace::trace(&format!("appbar: hidden {}", layout_of(window).collapsed));
-    sync_strip(window);
     SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
     KillTimer(window, PEEK_TIMER);
     relayout(window);
@@ -2404,7 +2369,6 @@ unsafe fn apply_drag(window: HWND) {
     let wanted = AppbarLayout::width_at((x as f32 / factor).round() as i32);
     if edit_layout(window, |layout| layout.set_width(wanted)) {
         crate::trace::trace(&format!("appbar: width {}", layout_of(window).side));
-        sync_strip(window);
         // The appbar takes its new width before the browser lays the page out, so what the
         // browser exposes is only ever ground or appbar, never the appbar's old surface over a
         // page that has already moved.
@@ -2447,7 +2411,6 @@ static SECOND_VIEW_IDLE: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomi
 
 /// Lays the second page view out now and keeps doing so for a few ticks.
 pub(crate) unsafe fn follow_second_view(window: HWND) {
-    crate::features::pane_infobar::follow(window);
     if !crate::features::second_view::is_open(window) {
         return;
     }
@@ -2470,17 +2433,6 @@ pub(crate) unsafe fn open_later(window: HWND, contents: usize, url: String, dela
 
 unsafe fn group_probe_message() -> u32 {
     RegisterWindowMessageW(wide("RivetGroupProbe").as_ptr())
-}
-
-unsafe fn vertical_tabs_message() -> u32 {
-    RegisterWindowMessageW(wide("RivetVerticalTabs").as_ptr())
-}
-
-fn report_vertical_tabs(controller: usize) {
-    let windows: Vec<isize> = APPBARS.with(|appbars| appbars.borrow().keys().copied().collect());
-    for window in windows {
-        unsafe { PostMessageW(window as HWND, vertical_tabs_message(), controller, 0) };
-    }
 }
 
 /// The windows of this process that show the Rivet frame. Call it on the browser UI thread.
@@ -2810,6 +2762,8 @@ pub unsafe fn attach(window: HWND) -> bool {
             layout_dpi(window)
         ));
         crate::features::control::serve(window);
+        // The window's views are found by their class names from here on, on a worker thread.
+        crate::chromium::window_views::walk_views_once(window);
     } else {
         crate::features::look::first_look(window, crate::features::look::FirstLook::AttachFailed);
     }
@@ -2824,28 +2778,19 @@ unsafe fn call_browser(window: HWND, message: u32, wparam: WPARAM, lparam: LPARA
 /// What the attach sequence carries from one step to the next.
 struct Attach {
     window: HWND,
-    /// Whether the browser's own vertical tab strip was reported to the appbar.
-    vertical_tabs: bool,
-}
-
-fn caption_row_height(window: HWND) -> Option<i32> {
-    attached(window).then_some(crate::CAPTION_HEIGHT + frame_layout::PANEL_TOP)
-}
-
-fn top_inset_extra(window: HWND) -> Option<i32> {
-    // A Rivet window has no title bar above its panel: the browser's top elements begin at the
-    // panel's top gap on every browser, whatever height its own title bar has.
-    // A Mini Window keeps the room of Rivet's row on its own surface.
-    attached(window)
-        .then_some(frame_layout::PANEL_GAP)
-        .or_else(|| crate::features::mini_window::top_inset(window))
 }
 
 /// The features of a Rivet window in the order they are installed. A feature the browser does not
 /// have leaves the window as it is, and a failure of a feature the window cannot do without ends
-/// the attach, so the browser keeps working without Rivet.
+/// the attach, so the browser keeps working without Rivet. The browser's own layout is left alone:
+/// the frame view's functions are only found, so a view's window can be told, and Rivet places the
+/// panel and the page view itself.
 fn attach_steps() -> Vec<Step<Attach>> {
     use crate::feature::{Feature, FeatureStep, OnFailure, Step};
+    let frame_install: fn(&mut Attach) -> Result<(), String> = |_| unsafe {
+        frame_layout::install()?;
+        page_view_placeable(crate::features::second_view::available())
+    };
     let feature = |feature, needs, install, on_failure, skip_when_unavailable, log_failure| {
         Step::Feature(FeatureStep {
             feature,
@@ -2860,11 +2805,17 @@ fn attach_steps() -> Vec<Step<Attach>> {
         feature(
             Feature::FrameLayout,
             frame_layout::needs_layout,
-            |_| unsafe { frame_layout::install(reserved_width) },
+            frame_install,
             OnFailure::Abort,
             false,
             Some("rivet: not attaching to this browser"),
         ),
+        // The class tables of the frame view, its caption buttons and corners and the browser view
+        // are read from the window's live views before the features that replace their slots.
+        Step::Setup(|attach| unsafe {
+            crate::chromium::window_views::read_tables(attach.window);
+            true
+        }),
         feature(
             Feature::FrameColour,
             frame_layout::needs_colour,
@@ -2876,7 +2827,6 @@ fn attach_steps() -> Vec<Step<Attach>> {
             Some("rivet: could not paint the frame"),
         ),
         Step::Setup(|_| {
-            frame_layout::PANEL.store(true, std::sync::atomic::Ordering::Relaxed);
             frame_layout::on_panel_change(panel_moved);
             true
         }),
@@ -2888,53 +2838,12 @@ fn attach_steps() -> Vec<Step<Attach>> {
             false,
             Some("rivet: could not paint caption buttons"),
         ),
-        feature(
-            Feature::CaptionLayout,
-            frame_layout::needs_caption_layout,
-            |_| unsafe { frame_layout::install_caption_layout(caption_row_height) },
-            OnFailure::Continue,
-            false,
-            Some("rivet: could not lay out caption buttons"),
-        ),
-        // The caption height and the top inset size the panel's top row, so they never depend on the
-        // trace file. Failures show in the trace when it is on.
-        feature(
-            Feature::CaptionHeight,
-            frame_layout::needs_caption_height,
-            |_| unsafe {
-                let caption = frame_layout::install_caption_height(caption_row_height);
-                crate::trace::trace(&format!("caption height: {caption:?}"));
-                caption
-            },
-            OnFailure::Continue,
-            false,
-            None,
-        ),
-        feature(
-            Feature::TopInset,
-            frame_layout::needs_top_inset,
-            |_| unsafe {
-                let top = frame_layout::install_top_inset(top_inset_extra);
-                crate::trace::trace(&format!("top inset: {top:?}"));
-                top
-            },
-            OnFailure::Continue,
-            false,
-            None,
-        ),
         Step::Setup(|_| unsafe {
             if let Some(path) = trace_file("rivet-nav.log") {
                 crate::trace::set_trace(path);
             }
-            let hide = trace_file("rivet-hide-tab-strip.log");
-            if let Some(path) = hide {
-                crate::trace::set_trace(path);
-                if let Err(error) = crate::features::vertical_tabs::hide_tab_strip_everywhere() {
-                    crate::trace::trace(&format!("hide failed: {error}"));
-                }
-            }
-            // The trace switch only switches the trace on. The toolbar and the
-            // vertical-tab frame are what the top row needs, so they never depend on it.
+            // The trace switch only switches the trace on. What the top row needs never
+            // depends on it.
             if crate::trace::tracing() {
                 crate::trace::trace_crashes();
             }
@@ -2971,21 +2880,6 @@ fn attach_steps() -> Vec<Step<Attach>> {
             false,
             None,
         ),
-        feature(
-            Feature::VerticalTabs,
-            crate::features::vertical_tabs::needs,
-            |attach| unsafe {
-                let installed = crate::features::vertical_tabs::install(report_vertical_tabs);
-                if let Err(error) = &installed {
-                    crate::trace::trace(&format!("unavailable: {error}"));
-                }
-                attach.vertical_tabs = installed.is_ok();
-                installed
-            },
-            OnFailure::Continue,
-            false,
-            None,
-        ),
         Step::Setup(|_| {
             crate::features::app_window::install_features();
             true
@@ -3007,11 +2901,6 @@ fn attach_steps() -> Vec<Step<Attach>> {
                 500,
                 None,
             );
-            if attach.vertical_tabs {
-                for controller in crate::features::vertical_tabs::reported() {
-                    PostMessageW(window, vertical_tabs_message(), controller, 0);
-                }
-            }
             if let Err(error) = taskbar::apply(window as isize, runtime_directory().as_deref()) {
                 log(&format!(
                     "rivet: could not set the taskbar identity: {error}"
@@ -3020,24 +2909,8 @@ fn attach_steps() -> Vec<Step<Attach>> {
             set_rivet_icons(window);
             true
         }),
-        feature(
-            Feature::TabStrip,
-            crate::features::tab_strip::needs,
-            |attach| unsafe {
-                let hidden = crate::features::tab_strip::hide(attach.window);
-                crate::trace::trace(&format!("tab strip hidden: {hidden}"));
-                if hidden {
-                    Ok(())
-                } else {
-                    Err("the tab strip was not hidden".to_owned())
-                }
-            },
-            OnFailure::Continue,
-            true,
-            None,
-        ),
         Step::Setup(|attach| unsafe {
-            // A frame change makes the browser lay out its frame again, now through the layout hook.
+            // A frame change makes the browser lay out its frame again for the subclassed window.
             SetWindowPos(
                 attach.window,
                 std::ptr::null_mut(),
@@ -3048,9 +2921,67 @@ fn attach_steps() -> Vec<Step<Attach>> {
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
             update_appbar(attach.window);
+            // No browser layout tells Rivet where the panel is, so Rivet places it.
+            place_panel_by_rivet(attach.window);
             true
         }),
     ]
+}
+
+/// Whether Rivet can place the window's page view: only through the second view's record. A build
+/// without it would leave the page under Rivet's surfaces, so it stays a plain browser window.
+fn page_view_placeable(second_view: bool) -> Result<(), String> {
+    if second_view {
+        Ok(())
+    } else {
+        Err("this browser build records no second view, so Rivet cannot place its page view".into())
+    }
+}
+
+/// The panel of a window from its client area, placed by Rivet. This also records the layout's
+/// scale and lets a window that waits for its first layout show.
+pub(crate) unsafe fn place_panel_by_rivet(window: HWND) {
+    if !attached(window) || IsIconic(window) != 0 {
+        return;
+    }
+    let mut client: RECT = std::mem::zeroed();
+    GetClientRect(window, &mut client);
+    let [width, height] = crate::features::page_view::browser_dips(
+        window as isize,
+        client.right,
+        client.bottom,
+        dpi(window),
+    );
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let bounds = frame_layout::Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    // Without its sizing frame the window is fullscreen, and the page takes the whole window, as the
+    // browser's own layout gives it then.
+    let panel = if !framed(window) {
+        bounds
+    } else {
+        let Some(reserved) = reserved_width(window, bounds) else {
+            return;
+        };
+        frame_layout::rivet_panel(bounds, reserved)
+    };
+    crate::trace::trace_changed(
+        "page view panel",
+        &format!(
+            "page view: client {}x{} px at {} dpi, panel {panel:?}",
+            client.right,
+            client.bottom,
+            dpi(window)
+        ),
+    );
+    frame_layout::place_panel(window, panel);
+    crate::features::second_view::note_layout();
 }
 
 unsafe fn create_appbar(window: HWND) {
@@ -3060,12 +2991,9 @@ unsafe fn create_appbar(window: HWND) {
     if let Some(path) = trace_file("rivet-vertical-tabs.log") {
         crate::trace::set_trace(path);
     }
-    // Without the layout hook the browser would draw underneath the appbar, so an unknown
+    // Without the build's frame view functions Rivet cannot tell a view's window, so an unknown
     // browser build keeps working without Rivet instead.
-    let mut attach = Attach {
-        window,
-        vertical_tabs: false,
-    };
+    let mut attach = Attach { window };
     crate::feature::run(&attach_steps(), &mut attach, log);
 }
 
@@ -3082,7 +3010,6 @@ unsafe fn compose_appbar(window: HWND) -> bool {
     APPBARS.with(|appbars| appbars.borrow_mut().insert(window as isize, appbar));
     install_keyboard_hook();
     load_persisted(window);
-    sync_strip(window);
     APPBAR_STATE.with(|states| {
         states
             .borrow_mut()
@@ -3621,12 +3548,8 @@ fn reserved_width(window: HWND, bounds: frame_layout::Rect) -> Option<i32> {
                 update_appbar(window);
             }
         }
-        // The scale is recorded above for both tab layouts. The strip is only subtracted here.
         let leading = layout_of(window).leading();
         LAID_LEADING.with(|all| all.borrow_mut().insert(window as isize, leading));
-        if let Some(strip) = crate::features::vertical_tabs::layout_width(window) {
-            return Some(crate::reserved_for_strip(leading, strip));
-        }
         Some(leading)
     }
 }
@@ -3805,8 +3728,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
     if message == RegisterWindowMessageW(wide(crate::features::split::RELAYOUT_MESSAGE).as_ptr())
         && attached(window)
     {
-        crate::hooks::page_area::relayout(window);
-        update_appbar(window);
+        relayout(window);
         return 0;
     }
     if message == RegisterWindowMessageW(wide("Rivet.ToggleSplit").as_ptr()) && attached(window) {
@@ -4267,7 +4189,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             {
                 end_drag(window);
                 if edit_layout(window, |layout| layout.set_width(APPBAR_WIDTH)) {
-                    sync_strip(window);
                     relayout(window);
                 }
             }
@@ -4275,6 +4196,7 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
         }
         WM_WINDOWPOSCHANGED if attached(window) => {
             let result = call_browser(window, message, wparam, lparam);
+            place_panel_by_rivet(window);
             // Every browser sends this on a resize, so the second view follows it on all of them.
             follow_second_view(window);
             update_appbar(window);
@@ -4345,7 +4267,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             KillTimer(window, SECOND_VIEW_TIMER);
             crate::features::second_view::forget(window);
             crate::features::sidebar_page::forget(window);
-            crate::features::pane_infobar::forget(window);
             LAYOUTS.with(|layouts| layouts.borrow_mut().remove(&(window as isize)));
             SLIDE.with(|slides| slides.borrow_mut().remove(&(window as isize)));
             DRAGGING.with(|set| set.borrow_mut().remove(&(window as isize)));
@@ -4362,9 +4283,8 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             crate::features::link_preview::forget(window);
             crate::features::page_links::forget(window);
             APPBAR_STATE.with(|states| states.borrow_mut().remove(&(window as isize)));
-            crate::features::vertical_tabs::forget(window);
-            crate::features::tab_strip::forget(window);
             frame_layout::forget_view(window);
+            crate::features::page_view::forget(window as isize);
             crate::features::widgets::forget(window);
             crate::side_rail::forget(window);
             crate::features::mini_window::forget(window);
@@ -4750,10 +4670,6 @@ unsafe fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             update_appbar(window);
             0
         }
-        _ if message == vertical_tabs_message() => {
-            crate::features::vertical_tabs::offer(window, wparam);
-            0
-        }
         _ if message == attach_message() => {
             // A test run's windows stay off every monitor and inactive from here on, the browser's
             // new windows and bubbles among them.
@@ -5021,6 +4937,39 @@ mod tests {
             _ => None,
         });
         assert!(colour.expect("the frame colour step").skip_when_unavailable);
+    }
+
+    #[test]
+    fn fr12_a_build_without_the_second_view_is_not_attached() {
+        // Rivet places the page view only through the second view, so such a build would leave
+        // the page under Rivet's surfaces.
+        assert_eq!(super::page_view_placeable(true), Ok(()));
+        assert!(super::page_view_placeable(false)
+            .is_err_and(|reason| reason.contains("no second view")));
+    }
+
+    #[test]
+    fn fr12_the_attach_places_the_page_without_the_browsers_layout() {
+        use crate::feature::{Feature, Step};
+        let features: Vec<Feature> = super::attach_steps()
+            .iter()
+            .filter_map(|step| match step {
+                Step::Feature(step) => Some(step.feature),
+                Step::Setup(_) => None,
+            })
+            .collect();
+        // The frame view's functions are still found, so a view's window can be told. No step
+        // changes the browser's own layout.
+        assert_eq!(
+            features,
+            [
+                Feature::FrameLayout,
+                Feature::FrameColour,
+                Feature::CaptionPaint,
+                Feature::Split,
+                Feature::SplitLayout
+            ]
+        );
     }
 
     #[test]

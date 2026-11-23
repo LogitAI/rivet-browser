@@ -90,10 +90,12 @@ if [[ ! -f "$baseline" ]]; then
 fi
 
 failed=0
+# A checkout on Windows may give the file carriage returns, which are not part of a count.
+rows="$(tr -d '\r' <"$baseline")"
 lowered=0
 while read -r file kind count; do
     [[ -n "$file" ]] || continue
-    allowed="$(awk -v f="$file" -v k="$kind" '$1 == f && $2 == k { print $3 }' "$baseline")"
+    allowed="$(awk -v f="$file" -v k="$kind" '$1 == f && $2 == k { print $3 }' <<<"$rows")"
     allowed="${allowed:-0}"
     if (( count > allowed )); then
         echo "error: $file has $count $kind lines, the baseline allows $allowed" >&2
@@ -109,7 +111,7 @@ while read -r file kind allowed; do
         echo "note  $file has $count $kind lines, below its baseline of $allowed"
         lowered=1
     fi
-done <"$baseline"
+done <<<"$rows"
 
 if (( failed )); then
     echo "error: the feature layer must use only the operating system and browser access traits" >&2

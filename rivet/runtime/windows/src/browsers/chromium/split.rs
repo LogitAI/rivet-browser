@@ -5,8 +5,7 @@ use crate::builds::Build;
 use crate::feature::{available_here, Needs};
 use crate::features::frame_layout::Rect;
 use crate::features::split::{
-    caption_over, client_right, fill_area, in_a_line, row_buttons, row_top, Pane, RowButton,
-    RELAYOUT_MESSAGE, ROW_HEIGHT,
+    caption_over, client_right, in_a_line, row_top, Pane, RELAYOUT_MESSAGE, ROW_HEIGHT,
 };
 use crate::targets::Target;
 use std::ffi::c_void;
@@ -75,23 +74,6 @@ pub(crate) fn needs(build: &Build) -> Needs {
         crate::builds::unchecked_reason(build, "split view"),
         targets,
     )
-}
-
-/// The part of the page area layout that belongs to split view: the pages of a split fill the area
-/// the Sidebar left, and the toolbar follows the active page.
-pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) {
-    let row = &crate::builds::get().side_panel;
-    if let (Some(toolbar), Some(contents)) = (
-        area.bounds(row.toolbar),
-        area.bounds(row.contents_container),
-    ) {
-        if area.rail == 0 && active_is_split(area.window) {
-            if let Some(page) = area.bounds(row.page_area) {
-                fill_area(&mut *contents, &*page);
-            }
-        }
-        fit_toolbar(area.window, &mut *toolbar, &*contents);
-    }
 }
 
 /// Whether the loaded build's row has split view.
@@ -490,7 +472,7 @@ unsafe extern "system" fn calculate_layout(
         }
         // A tab dragged onto a single page needs the page area before any split exists.
         if let Some(window) = crate::features::frame_layout::hwnd_of_view(view) {
-            crate::hooks::page_area::remember_own_area(window, view as usize);
+            remember_own_area(window, view as usize);
         }
         return result;
     }
@@ -541,7 +523,7 @@ unsafe extern "system" fn calculate_layout(
         request_relayout(view as usize);
     }
     if let Some(window) = crate::features::frame_layout::hwnd_of_view(view) {
-        crate::hooks::page_area::remember_own_area(window, view as usize);
+        remember_own_area(window, view as usize);
     }
     splits.push((
         widget,
@@ -698,24 +680,49 @@ unsafe fn request_relayout(view: usize) {
     windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(window as _, message, 0, 0);
 }
 
-/// The bounds of the pages' area as the browser's last layout left them, by window. The area's
-/// vertical extent is `page_geometry`'s, and its horizontal one is here because the area starts
-/// after the appbar.
-static CONTENTS: Mutex<Vec<(isize, [i32; 4])>> = Mutex::new(Vec::new());
+/// The page area of each window as the split view's own bounds in the window, as left, top, right
+/// and bottom, from the last layout of the split view.
+static OWN_AREAS: Mutex<Vec<(isize, [i32; 4])>> = Mutex::new(Vec::new());
+
+/// The position of `view` in its window, summing the bounds of the view and its ancestors.
+unsafe fn window_position(view: usize) -> [i32; 2] {
+    let offset = crate::builds::get().layout.view_bounds_offset;
+    let Some(parent) = crate::chromium::view::View::parent_offset(offset) else {
+        return [0, 0];
+    };
+    let (mut x, mut y, mut at) = (0, 0, view);
+    for _ in 0..16 {
+        if at == 0 {
+            break;
+        }
+        let bounds = *((at + offset) as *const [i32; 4]);
+        x += bounds[0];
+        y += bounds[1];
+        at = *((at + parent) as *const usize);
+    }
+    [x, y]
+}
+
+/// Keeps the split view's own bounds in the window as the window's page area.
+unsafe fn remember_own_area(window: HWND, view: usize) {
+    let [x, y] = window_position(view);
+    let bounds = *((view + crate::builds::get().layout.view_bounds_offset) as *const [i32; 4]);
+    let area = [x, y, x + bounds[2], y + bounds[3]];
+    let mut all = OWN_AREAS.lock().unwrap_or_else(|error| error.into_inner());
+    match all.iter_mut().find(|(key, _)| *key == window as isize) {
+        Some(entry) => entry.1 = area,
+        None => all.push((window as isize, area)),
+    }
+}
 
 /// The page area of a window as left, top, right and bottom in device-independent pixels.
 pub unsafe fn page_area(window: HWND) -> Option<[i32; 4]> {
-    let Some(geometry) = crate::hooks::page_area::page_geometry(window) else {
-        return crate::hooks::page_area::own_area(window);
-    };
-    let contents = CONTENTS
+    OWN_AREAS
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .iter()
         .find(|(key, _)| *key == window as isize)
-        .map(|(_, bounds)| *bounds)?;
-    let top = geometry.top - crate::hooks::page_area::area_top(window)? + contents[1];
-    Some([contents[0], top, contents[0] + contents[2], geometry.bottom])
+        .map(|(_, area)| *area)
 }
 
 /// The tabs of the split the active tab is in, in strip order, which is the order of its pages.
@@ -742,17 +749,10 @@ unsafe fn split_tabs(window: HWND) -> Vec<usize> {
 }
 /// The pages of the window's split, or none when the active tab is not in one.
 pub unsafe fn panes(window: HWND) -> Vec<Pane> {
-    let (area, view_top) = match (
-        page_area(window),
-        crate::hooks::page_area::page_geometry(window)
-            .zip(crate::hooks::page_area::area_top(window)),
-    ) {
-        (Some(area), Some((geometry, top))) => (area, geometry.top - top),
-        _ => match crate::hooks::page_area::own_area(window) {
-            Some(area) => (area, area[1] - ROW_HEIGHT),
-            None => return Vec::new(),
-        },
+    let Some(area) = page_area(window) else {
+        return Vec::new();
     };
+    let view_top = area[1] - ROW_HEIGHT;
     let tabs = split_tabs(window);
     if tabs.len() < 2 {
         return Vec::new();
@@ -791,77 +791,6 @@ pub unsafe fn panes(window: HWND) -> Vec<Pane> {
             tab: tabs.get(index).copied(),
         })
         .collect()
-}
-
-/// Narrows the browser's top row to the address of the focused page of a split, so the browser's
-/// own address bar, with its completion and editing, sits where that page's address is. The rest
-/// of every row is drawn by Rivet. `contents` are the bounds of the pages in the same coordinates.
-pub unsafe fn fit_toolbar(window: HWND, toolbar: &mut [i32; 4], contents: &[i32; 4]) {
-    {
-        let mut all = CONTENTS.lock().unwrap_or_else(|error| error.into_inner());
-        match all.iter_mut().find(|(key, _)| *key == window as isize) {
-            Some(entry) => entry.1 = *contents,
-            None => all.push((window as isize, *contents)),
-        }
-    }
-    let leave = || {
-        ADDRESS_ONLY
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .retain(|(key, _)| *key != window as isize);
-    };
-    let splits = SPLITS.lock().unwrap_or_else(|error| error.into_inner());
-    let Some((_, split)) = splits.iter().find(|(_, split)| {
-        crate::features::frame_layout::hwnd_of_view(split.view as *const c_void)
-            .is_some_and(|found| found as isize == window as isize)
-    }) else {
-        return leave();
-    };
-    if split.rects.len() < 2 || !in_a_line(&split.rects) || !active_is_split(window) {
-        return leave();
-    }
-    let active = (*((split.view + bv().active_member) as *const i32)).max(0) as usize;
-    let Some(pane) = split.rects.get(active) else {
-        return leave();
-    };
-    let window_right = client_right(window);
-    let on_top = pane.y == split.rects[0].y;
-    let caption = if on_top {
-        caption_over(window_right, contents[0] + pane.x + pane.width)
-    } else {
-        0.0
-    };
-    let buttons = row_buttons(pane.width as f32, active == 0, caption);
-    // The browser clips its top row to the strip above the pages, so only a page whose row is that
-    // strip can show the browser's address bar. The row of a lower page draws its address itself.
-    let address = buttons
-        .iter()
-        .find(|button| button.0 == RowButton::Address)
-        .filter(|_| on_top);
-    let place = address_in_row(
-        toolbar[0],
-        contents[0] + pane.x,
-        address.map(|(_, x, width)| (*x, *width)),
-    );
-    let mut all = ADDRESS_ONLY
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    match all.iter_mut().find(|(key, _)| *key == window as isize) {
-        Some(entry) => entry.1 = place,
-        None => all.push((window as isize, place)),
-    }
-}
-
-/// Where the address goes inside the browser's top row in a split, as its left edge and width. The
-/// row itself keeps its full width: Rivet's rows cover it except at the focused page's address and
-/// behind the caption buttons, which are the browser's, and without it the browser's own frame colour
-/// shows behind those buttons.
-fn address_in_row(row_left: i32, page_left: i32, address: Option<(f32, f32)>) -> (i32, i32) {
-    match address {
-        Some((x, width)) => (page_left - row_left + x as i32, width as i32),
-        // No room for an address: a sliver of it that shows nothing.
-        None => (page_left - row_left, 1),
-    }
 }
 
 /// Rivet's panel look for the pages of a split: Chrome's outline goes.
@@ -954,10 +883,6 @@ impl crate::browsers::SplitBackend for TabModelSplit {
         page_area(window)
     }
 
-    unsafe fn on_page_area(&self, area: &mut crate::hooks::page_area::PageArea) {
-        on_page_area(area)
-    }
-
     fn address_follows_page(&self) -> bool {
         address_follows_page()
     }
@@ -965,14 +890,7 @@ impl crate::browsers::SplitBackend for TabModelSplit {
 
 #[cfg(test)]
 mod tests {
-    use super::{address_in_row, index_vector, narrow_gap, tab_indices, SPLIT_INSETS};
-
-    #[test]
-    fn fr9_address_sits_inside_the_full_top_row_at_the_focused_page() {
-        assert_eq!(address_in_row(267, 267, Some((145.0, 300.0))), (145, 300));
-        assert_eq!(address_in_row(267, 854, Some((145.0, 300.0))), (732, 300));
-        assert_eq!(address_in_row(267, 854, None), (587, 1));
-    }
+    use super::{index_vector, narrow_gap, tab_indices, SPLIT_INSETS};
 
     #[test]
     fn fr9_split_outer_edges_match_the_single_page() {

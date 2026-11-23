@@ -1,7 +1,7 @@
 //! Reads the values of a row that are not addresses from the new build itself.
 //!
-//! A row holds member offsets, table slots and object sizes as well as addresses. They have no
-//! public symbols, and a new milestone moves them without notice: Chromium 157 moved many view
+//! A row holds member offsets, table slots and object sizes as well as addresses. No name in the
+//! module tells them, and a new milestone moves them without notice: Chromium 157 moved many view
 //! members by 8 bytes and every frame view slot above one removed virtual by one. A port that
 //! copies them gives a row that looks complete and is wrong. So each such value has recipes that
 //! read it from the new build's own instructions and tables. A value is taken only when every
@@ -75,60 +75,6 @@ pub const FIELDS: &[Field] = &[
         }],
     },
     Field {
-        path: "toolbar.paint_slot",
-        recipes: &[
-            Recipe::Slot {
-                vtable: "toolbar.browser_widget_vtable",
-                function: "toolbar.paint",
-            },
-            Recipe::Slot {
-                vtable: "toolbar.plain_widget_vtable",
-                function: "toolbar.paint",
-            },
-        ],
-    },
-    Field {
-        path: "toolbar.layout_slot",
-        recipes: &[
-            Recipe::Slot {
-                vtable: "toolbar.browser_widget_vtable",
-                function: "toolbar.layout",
-            },
-            Recipe::Slot {
-                vtable: "toolbar.plain_widget_vtable",
-                function: "toolbar.layout",
-            },
-        ],
-    },
-    Field {
-        path: "toolbar.active_web_contents_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "toolbar.browser_delegate_vtable",
-            function: "toolbar.active_web_contents",
-        }],
-    },
-    Field {
-        path: "toolbar.web_contents_title_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "toolbar.web_contents_vtable",
-            function: "toolbar.web_contents_title",
-        }],
-    },
-    Field {
-        path: "toolbar.infobar_layout_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "toolbar.infobar_vtable",
-            function: "toolbar.infobar_layout",
-        }],
-    },
-    Field {
-        path: "side_panel.proposed_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "side_panel.layout_vtable",
-            function: "side_panel.proposed",
-        }],
-    },
-    Field {
         path: "layout.on_paint_slot",
         recipes: &[Recipe::Slot {
             vtable: "layout.frame_vtable",
@@ -136,45 +82,10 @@ pub const FIELDS: &[Field] = &[
         }],
     },
     Field {
-        path: "layout.top_inset_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "layout.frame_vtable",
-            function: "layout.top_inset",
-        }],
-    },
-    Field {
-        path: "layout.layout_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "layout.frame_vtable",
-            function: "layout.layout",
-        }],
-    },
-    Field {
-        path: "layout.caption_size_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "layout.caption_vtable",
-            function: "layout.caption_size",
-        }],
-    },
-    Field {
         path: "layout.caption_paint_slot",
         recipes: &[Recipe::Slot {
             vtable: "layout.caption_vtable",
             function: "layout.caption_paint",
-        }],
-    },
-    Field {
-        path: "location_bar.slot",
-        recipes: &[Recipe::Slot {
-            vtable: "location_bar.vtable",
-            function: "location_bar.function",
-        }],
-    },
-    Field {
-        path: "location_bar.preferred_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "location_bar.vtable",
-            function: "location_bar.preferred",
         }],
     },
 ];
@@ -190,7 +101,7 @@ pub enum Outcome {
     Failed(String),
 }
 
-/// The value at a path such as `layout.top_inset_slot`.
+/// The value at a path such as `layout.on_paint_slot`.
 fn at_path<'a>(row: &'a Value, path: &str) -> &'a Value {
     path.split('.').fold(row, |value, key| &value[key])
 }
@@ -415,11 +326,44 @@ pub fn derive_row(build: &mut Value, pe: &PeFile) -> Derived {
     derived
 }
 
+/// Values Rivet chooses rather than reads from a build, such as how long it waits before it opens
+/// a new tab. The row carries them for the runtime, so they are kept from the prior row.
+pub const SETTINGS: &[&str] = &["tabs.new_tab_delay_ms"];
+
+/// Lists of `[id, colour]` pairs: the id is a value of the build, and the colour is Rivet's choice.
+pub const ID_COLOUR_PAIRS: &[&str] = &["toolbar.dev.colours"];
+
+/// The values of a row that are Rivet's settings rather than facts about its build.
+pub fn settings(build: &Value) -> Vec<String> {
+    let mut out: Vec<String> = SETTINGS
+        .iter()
+        .filter(|path| number(at_path(build, path)).is_some())
+        .map(|path| (*path).to_owned())
+        .collect();
+    for list in ID_COLOUR_PAIRS {
+        if let Some(pairs) = at_path(build, list).as_array() {
+            out.extend((0..pairs.len()).map(|index| format!("{list}[{index}][1]")));
+        }
+    }
+    out
+}
+
 /// Every number of a row below the address range that no recipe reads: member offsets, slots,
-/// sizes, ids and constants that a port can only carry over.
+/// sizes, ids and constants that a port can only carry over. Rivet's own settings and Chromium's
+/// public command ids are not listed.
 pub fn without_recipe(build: &Value) -> Vec<String> {
     fn walk(path: &str, value: &Value, out: &mut Vec<String>) {
         match value {
+            Value::Array(items)
+                if items.len() == 2
+                    && path
+                        .rsplit_once('[')
+                        .is_some_and(|(list, _)| ID_COLOUR_PAIRS.contains(&list)) =>
+            {
+                if number(&items[0]).is_some_and(|id| id < LOWEST_ADDRESS) {
+                    out.push(format!("{path}[0]"));
+                }
+            }
             Value::Object(object) => {
                 for (key, item) in object {
                     let next = if path.is_empty() {
@@ -459,6 +403,8 @@ pub fn without_recipe(build: &Value) -> Vec<String> {
         path != "version"
             && !path.starts_with("version[")
             && !FIELDS.iter().any(|field| field.path == path)
+            && !SETTINGS.contains(&path.as_str())
+            && !crate::command_ids::ROW_PATHS.contains(&path.as_str())
     });
     out
 }
@@ -559,18 +505,19 @@ mod tests {
         let pe = PeFile::parse(&bytes).unwrap();
         let mut build = json!({
             "layout": {
-                "frame_vtable": "0x108000", "top_inset": "0x101200", "top_inset_slot": 3,
-                "layout": "0x101100", "layout_slot": "0x1",
+                "frame_vtable": "0x108000", "on_paint": "0x101200", "on_paint_slot": 3,
+                "caption_vtable": "0x108000", "caption_paint": "0x101100",
+                "caption_paint_slot": "0x1",
             }
         });
         let derived = derive_row(&mut build, &pe);
-        assert_eq!(build["layout"]["top_inset_slot"], 2);
-        assert_eq!(build["layout"]["layout_slot"], "0x1");
+        assert_eq!(build["layout"]["on_paint_slot"], 2);
+        assert_eq!(build["layout"]["caption_paint_slot"], "0x1");
         assert_eq!(
             derived.read,
             vec![
-                "layout.top_inset_slot: 0x3 -> 0x2",
-                "layout.layout_slot: 0x1"
+                "layout.on_paint_slot: 0x3 -> 0x2",
+                "layout.caption_paint_slot: 0x1"
             ]
         );
         assert!(derived.failed.is_empty());
@@ -608,21 +555,32 @@ mod tests {
             (0x10_8100, second.as_slice()),
         ]);
         let pe = PeFile::parse(&bytes).unwrap();
-        let mut build = json!({
-            "toolbar": {
-                "browser_widget_vtable": "0x108000", "plain_widget_vtable": "0x108100",
-                "paint": "0x101100", "paint_slot": "0x1",
+        let build = json!({
+            "layout": {
+                "frame_vtable": "0x108000", "caption_vtable": "0x108100",
+                "on_paint": "0x101100", "on_paint_slot": "0x1",
             }
         });
-        let derived = derive_row(&mut build, &pe);
-        assert!(
-            derived
-                .failed
-                .iter()
-                .any(|line| line.starts_with("toolbar.paint_slot: its recipes disagree")),
-            "{:?}",
-            derived.failed
-        );
+        // No value of a row has two recipes today, so the rule is checked on a field made here.
+        let field = Field {
+            path: "layout.on_paint_slot",
+            recipes: &[
+                Recipe::Slot {
+                    vtable: "layout.frame_vtable",
+                    function: "layout.on_paint",
+                },
+                Recipe::Slot {
+                    vtable: "layout.caption_vtable",
+                    function: "layout.on_paint",
+                },
+            ],
+        };
+        match derive_field(&field, &build, &pe) {
+            Outcome::Failed(reason) => {
+                assert!(reason.starts_with("its recipes disagree"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -630,11 +588,35 @@ mod tests {
         let build = json!({
             "version": [157, 0, 8103, 38],
             "tabs": {"browser_in_view": "0x558", "title": "0x00b77780", "groups": true},
-            "layout": {"frame_ids": [0x141, 0x142], "caption_container_offset": "0x3c0"},
+            "layout": {"frame_ids": [0x141, 0x142], "view_bounds_offset": "0x1c8"},
         });
         assert_eq!(
             without_recipe(&build),
-            vec!["layout.caption_container_offset", "layout.frame_ids"]
+            vec!["layout.frame_ids", "layout.view_bounds_offset"]
+        );
+    }
+
+    #[test]
+    fn nfr6_rivet_settings_are_not_values_of_the_build() {
+        let build = json!({
+            "tabs": {"new_tab_delay_ms": 0, "tab_contents": "0x0"},
+            "toolbar": {"dev": {"colours": [[316, 4280953905u32], [2082, 0]], "console": 40005}},
+        });
+        assert_eq!(
+            without_recipe(&build),
+            vec![
+                "tabs.tab_contents",
+                "toolbar.dev.colours[0][0]",
+                "toolbar.dev.colours[1][0]"
+            ]
+        );
+        assert_eq!(
+            settings(&build),
+            vec![
+                "tabs.new_tab_delay_ms",
+                "toolbar.dev.colours[0][1]",
+                "toolbar.dev.colours[1][1]"
+            ]
         );
     }
 }

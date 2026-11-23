@@ -161,7 +161,7 @@ pub fn brave_candidates(releases: &Value) -> Vec<Candidate> {
 
 /// What still needs a row, most urgent first: what people have now, then what stable is about to
 /// serve, then beta, which brings the next milestone weeks ahead and gives a person time to review
-/// what symbols cannot show. A version older than every row and not served is history, not news.
+/// what the generator cannot read. A version older than every row and not served is history, not news.
 pub fn pending(candidates: Vec<Candidate>, known: &BTreeSet<(String, String)>) -> Vec<Candidate> {
     let mut newest_known: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
     for (browser, version) in known {
@@ -299,6 +299,18 @@ pub fn test_desktop_limits(browser: &str) -> Vec<(String, String)> {
 /// notes name each feature left undriven by the test desktop, and a listed feature that now
 /// passes, so the list is looked at again.
 pub fn publish_gate(results: &Value, browser: &str) -> Result<Vec<String>, Vec<String>> {
+    publish_gate_for_row(results, browser, &Value::Null)
+}
+
+/// `publish_gate` for the row being published. A check of a feature the row turns off for its
+/// build is not expected to pass: the row ships with that feature off, and a note names it. Every
+/// other check must still pass.
+pub fn publish_gate_for_row(
+    results: &Value,
+    browser: &str,
+    row: &Value,
+) -> Result<Vec<String>, Vec<String>> {
+    let excused = crate::row_features::excused_checks(row);
     let rows: Vec<&Value> = match results {
         Value::Array(rows) => rows.iter().collect(),
         // ConvertTo-Json writes a single row as an object.
@@ -326,6 +338,10 @@ pub fn publish_gate(results: &Value, browser: &str) -> Result<Vec<String>, Vec<S
     let mut reasons = Vec::new();
     let mut notes = Vec::new();
     for feature in FEATURES {
+        if let Some(off) = crate::row_features::excuses(&excused, feature) {
+            notes.push(format!("{feature}: {off} is off in this build's row"));
+            continue;
+        }
         let limit = limits.iter().find(|(name, _)| name == feature);
         match (seen.get(feature), limit) {
             (None, _) => reasons.push(format!("{feature}: not run")),
@@ -529,6 +545,26 @@ mod tests {
             .iter()
             .map(|feature| (browser, *feature, "PASS"))
             .collect()
+    }
+
+    #[test]
+    fn nfr6_a_feature_off_in_the_row_does_not_hold_back_the_rest() {
+        let mut rows = all_pass("chrome");
+        for row in rows.iter_mut().filter(|row| row.1.starts_with("split")) {
+            row.2 = "FAIL";
+        }
+        // Without the row, the failed split checks keep the browser off the list.
+        assert!(publish_gate(&results(&rows), "chrome").is_err());
+        let row = json!({"switched_off": [{"feature": "split view", "values": ["split.outline_member"]}]});
+        let notes = publish_gate_for_row(&results(&rows), "chrome", &row).unwrap();
+        assert!(notes
+            .iter()
+            .any(|note| note == "split-grid-4: split view is off in this build's row"));
+        // Another feature that fails still keeps it off.
+        let sidebar = rows.iter().position(|row| row.1 == "sidebar").unwrap();
+        rows[sidebar].2 = "FAIL";
+        let reasons = publish_gate_for_row(&results(&rows), "chrome", &row).unwrap_err();
+        assert_eq!(reasons, ["sidebar: FAIL"]);
     }
 
     #[test]

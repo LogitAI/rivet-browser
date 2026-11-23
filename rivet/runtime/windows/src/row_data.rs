@@ -391,7 +391,7 @@ mod tests {
             assert_eq!(read.to_row(), row, "{} {:?}", build.browser, build.version);
             assert_eq!(read.version, build.version);
             assert_eq!(read.toolbar.get_color, build.toolbar.get_color);
-            assert_eq!(read.toolbar.get_color_bytes, build.toolbar.get_color_bytes);
+            assert_eq!(read.layout.on_paint_prologue, build.layout.on_paint_prologue);
             assert_eq!(read.layout.caption_ink_ids, build.layout.caption_ink_ids);
         }
     }
@@ -399,15 +399,28 @@ mod tests {
     #[test]
     fn nfr6_a_row_without_a_field_is_refused_and_named() {
         let mut row = builds::CHROME.to_row();
-        row["toolbar"]
-            .as_object_mut()
-            .unwrap()
-            .remove("get_widget_slot");
+        row["toolbar"].as_object_mut().unwrap().remove("get_color");
         let error = match builds::Build::from_row(&row) {
             Err(error) => error,
-            Ok(_) => panic!("a row with no widget slot was accepted"),
+            Ok(_) => panic!("a row with no colour getter was accepted"),
         };
-        assert_eq!(error, "toolbar: get_widget_slot is missing");
+        assert_eq!(error, "toolbar: get_color is missing");
+    }
+
+    #[test]
+    fn nfr6_a_row_without_window_offsets_is_not_blocked() {
+        // The window's views and widget are found by class name and the view tree, so a row made
+        // without these values still reads, and has none of them.
+        let mut row = builds::CHROME.to_row();
+        for (part, key) in [
+            ("layout", "frame_browser_window_offset"),
+            ("toolbar", "get_widget_slot"),
+        ] {
+            row[part].as_object_mut().unwrap().remove(key);
+        }
+        let build = builds::Build::from_row(&row).expect("a row without window offsets reads");
+        assert_eq!(build.layout.frame_browser_window_offset, None);
+        assert_eq!(build.toolbar.get_widget_slot, None);
     }
 
     #[test]
@@ -415,6 +428,11 @@ mod tests {
         // A table written for a newer runtime still serves this one.
         let mut row = builds::CHROME.to_row();
         row["toolbar"]["added_later"] = json!("0x1234");
+        assert!(builds::Build::from_row(&row).is_ok());
+        // So does a row from an older generator, with values no runtime reads any more.
+        row["toolbar"]["get_color_bytes"] = json!("41574156");
+        row["layout"]["top_inset_adjust"] = json!(-12);
+        row["split"]["view_size"] = json!("0x1d0");
         assert!(builds::Build::from_row(&row).is_ok());
     }
 
@@ -426,7 +444,7 @@ mod tests {
             Some("0x")
         );
         assert!(row["layout"]["caption_ink_ids"][0].is_number());
-        let bytes = row["toolbar"]["get_color_bytes"].as_str().unwrap();
+        let bytes = row["layout"]["on_paint_prologue"].as_str().unwrap();
         assert!(!bytes.starts_with("0x") && bytes.len() % 2 == 0);
         assert!(row["version"][0].is_number());
     }

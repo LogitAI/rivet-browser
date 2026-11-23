@@ -1,12 +1,11 @@
-//! Makes Chromium's own frame layout leave room for the Rivet appbar.
+//! The panel of a Rivet window and the frame view functions it needs from the browser.
 //!
-//! Chromium's Windows browser frame asks its frame view where the client view goes. Rivet
-//! replaces that one virtual function in the frame view's vtable. For windows that carry a Rivet
-//! appbar it moves the client view right by the appbar width. Chromium then lays out, paints,
-//! hit-tests and positions menus, IME windows and accessibility bounds for the narrower view
-//! itself, so nothing has to be translated after the fact.
+//! Rivet leaves Chromium's own frame layout alone. It works out the page panel of each window from
+//! the window's client area and the appbar's width, and records it here for every surface that
+//! sits on the panel. The frame view's functions are only found, so a view's window can be told,
+//! and the frame paint takes the window's colours.
 //!
-//! The vtable layout is private to each Chromium build. Rivet only patches builds whose module
+//! The vtable layout is private to each Chromium build. Rivet only attaches to builds whose module
 //! contents match an entry of the supported-build table exactly, and leaves every other build
 //! untouched.
 
@@ -93,40 +92,22 @@ pub(crate) fn needs_caption_paint(build: &Build) -> Needs {
     )
 }
 
-/// What the place of the caption buttons needs from the browser.
-pub(crate) fn needs_caption_layout(build: &Build) -> Needs {
-    let row = &build.layout;
-    Needs::targets(vec![
-        Target::new("frame view layout", row.layout, row.layout_prologue),
-        Target::new(
-            "set bounds rect",
-            row.set_bounds_rect,
-            row.set_bounds_rect_prologue,
-        ),
-        Target::new("set paint to layer", row.set_layer, row.set_layer_prologue),
-        Target::new(
-            "set rounded corners",
-            row.set_radius,
-            row.set_radius_prologue,
-        ),
-        Target::new("set masks", row.set_masks, row.set_masks_prologue),
-        Target::new("stack at top", row.stack_at_top, row.stack_at_top_prologue),
-        Target::new("set opaque", row.set_opaque, row.set_opaque_prologue),
-    ])
+/// The frame view's class table: the row's, read again from the window's live frame view.
+fn frame_table() -> usize {
+    use crate::chromium::live_tables;
+    live_tables::table(bv().frame_vtable, live_tables::found().frame)
 }
 
-/// What the height of the caption buttons needs from the browser.
-pub(crate) fn needs_caption_height(build: &Build) -> Needs {
-    Needs::targets(vec![Target::new(
-        "caption button size",
-        build.layout.caption_size,
-        &[],
-    )])
+/// The caption buttons' class table, settled with the live buttons' as `frame_table` is.
+fn caption_table() -> usize {
+    use crate::chromium::live_tables;
+    live_tables::table(bv().caption_vtable, live_tables::found().caption)
 }
 
-/// What the space above the top row needs from the browser.
-pub(crate) fn needs_top_inset(build: &Build) -> Needs {
-    Needs::targets(vec![Target::new("top inset", build.layout.top_inset, &[])])
+/// The corner wedges' class table, settled with the live wedges' as `frame_table` is.
+fn corner_table() -> usize {
+    use crate::chromium::live_tables;
+    live_tables::table(bv().corner_vtable, live_tables::found().corner)
 }
 
 fn recorded_image() -> Result<Image, String> {
@@ -176,9 +157,6 @@ pub fn reserve_leading(bounds: Rect, reserved: i32) -> Rect {
     }
 }
 
-/// Experiment: whether the page is laid out as the shell study's panel, below a taller top row
-/// and inside a gap on the right and the bottom.
-pub static PANEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// How much taller the top row is than the browser's title bar, and the gap, in DIPs.
 pub const PANEL_TOP: i32 = 12;
 pub const PANEL_GAP: i32 = 8;
@@ -192,9 +170,9 @@ fn inset_panel(bounds: Rect) -> Rect {
     }
 }
 
-/// The panel of a Rivet window from the client view bounds the browser chose. The browser keeps a
-/// title bar above its client view, which a Rivet window does not have: Rivet's bar is the
-/// panel's own top row. So the client view reaches the window's top edge before the gap is taken.
+/// The panel of a Rivet window from the client view bounds. The browser keeps a title bar above its
+/// client view, which a Rivet window does not have: Rivet's bar is the panel's own top row. So the
+/// client view reaches the window's top edge before the gap is taken.
 fn panel_from_client(bounds: Rect) -> Rect {
     inset_panel(lifted_client(bounds))
 }
@@ -208,41 +186,10 @@ fn lifted_client(bounds: Rect) -> Rect {
     }
 }
 
-/// The one offset in `fields` that holds `wanted`, read as rects at 4 byte steps. None when no
-/// field or more than one holds it, since then the cached area cannot be told apart.
-fn sole_rect_offset(fields: &[i32], wanted: Rect) -> Option<usize> {
-    let wanted = [wanted.x, wanted.y, wanted.width, wanted.height];
-    let mut found = (0..fields.len().saturating_sub(3)).filter(|at| fields[*at..*at + 4] == wanted);
-    let first = found.next()?;
-    found.next().is_none().then_some(first * 4)
-}
-
-/// Chromium's frame view keeps the client area it laid out and hands it to the browser view's
-/// layout as the visual client area, which must contain the browser view. Rivet lifts the client
-/// view to the window's top edge, so the kept area is lifted with it, or the browser stops on that
-/// check. The area is the frame view's one field equal to the bounds it reported.
-unsafe fn lift_cached_client_area(view: *const c_void, browser_chose: Rect) {
-    const SPAN: usize = 0x500;
-    if browser_chose.y <= 0 || !crate::chromium::memory::readable(view as usize, SPAN) {
-        return;
-    }
-    let fields = std::slice::from_raw_parts(view.cast::<i32>(), SPAN / 4);
-    if let Some(offset) = sole_rect_offset(fields, browser_chose) {
-        *(view.cast::<u8>().add(offset) as *mut Rect) = lifted_client(browser_chose);
-    }
-}
-
-type ClientViewBounds = unsafe extern "system" fn(*const c_void, *mut Rect) -> *mut Rect;
 type HwndForView = unsafe extern "system" fn(*const c_void) -> HWND;
 
-/// Decides the width to reserve for a window from the client-view bounds the browser chose, or
-/// returns `None` when the window carries no Rivet appbar.
-pub type Reserve = fn(HWND, Rect) -> Option<i32>;
-
 struct Hook {
-    original: ClientViewBounds,
     hwnd_for_view: HwndForView,
-    reserved: Reserve,
 }
 
 static HOOK: OnceLock<Result<Hook, String>> = OnceLock::new();
@@ -394,7 +341,7 @@ unsafe extern "system" fn corner_paint(view: *const c_void, canvas: *const c_voi
 }
 
 unsafe fn install_corner_paint(image: &Image) -> Result<(), String> {
-    let slot_rva = bv().corner_vtable + bv().on_paint_slot * 8;
+    let slot_rva = corner_table() + bv().on_paint_slot * 8;
     if !image.has(bv().corner_paint, bv().corner_paint_prologue) {
         return Err("this browser build has no recorded corner paint".into());
     }
@@ -420,7 +367,7 @@ pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
         return Err("this browser build has no verified colour provider layout".into());
     }
     let image = recorded_image()?;
-    let slot_rva = bv().frame_vtable + bv().on_paint_slot * 8;
+    let slot_rva = frame_table() + bv().on_paint_slot * 8;
     if !image.points_to(slot_rva, bv().on_paint) {
         return Err("this browser build has no recorded frame paint".into());
     }
@@ -454,27 +401,10 @@ pub unsafe fn install_frame_paint(paint: Paint) -> Result<(), String> {
 /// Decides the title bar colour of a window as `0xAARRGGBB`, or `None` to keep the browser's.
 pub type Paint = fn(HWND) -> Option<u32>;
 
-unsafe extern "system" fn client_view_bounds(view: *const c_void, out: *mut Rect) -> *mut Rect {
-    let Some(Ok(hook)) = HOOK.get() else {
-        unreachable!("the vtable is only patched after the hook is stored");
-    };
-    let result = (hook.original)(view, out);
-    if let Some(reserved) = (hook.reserved)((hook.hwnd_for_view)(view), *out) {
-        let browser_chose = *out;
-        *out = reserve_leading(*out, reserved);
-        if PANEL.load(std::sync::atomic::Ordering::Relaxed) {
-            *out = panel_from_client(*out);
-            lift_cached_client_area(view, browser_chose);
-        }
-        record_panel((hook.hwnd_for_view)(view), *out);
-    }
-    result
-}
-
-/// The page panel each window's browser last laid out, in device-independent pixels of the frame
+/// The page panel Rivet last placed for each window, in device-independent pixels of the frame
 /// view. Rivet cuts its ground's hole to exactly this.
 static PANELS: std::sync::Mutex<Vec<(isize, Rect)>> = std::sync::Mutex::new(Vec::new());
-/// Called with a window whose panel changed, from inside the browser's layout.
+/// Called with a window whose panel changed.
 static PANEL_CHANGED: OnceLock<fn(HWND)> = OnceLock::new();
 
 pub fn on_panel_change(notify: fn(HWND)) {
@@ -497,7 +427,18 @@ fn record_panel(window: HWND, panel: Rect) {
     }
 }
 
-/// The page panel the browser laid out for a window, once it has laid the window out.
+/// The panel of a Rivet window from its client area alone: `reserved` DIPs at the left, then the
+/// panel's gap.
+pub fn rivet_panel(client: Rect, reserved: i32) -> Rect {
+    panel_from_client(reserve_leading(client, reserved))
+}
+
+/// Records a panel Rivet placed.
+pub fn place_panel(window: HWND, panel: Rect) {
+    record_panel(window, panel);
+}
+
+/// The page panel Rivet placed for a window, once it has placed one.
 pub fn panel_bounds(window: HWND) -> Option<Rect> {
     PANELS
         .lock()
@@ -507,16 +448,17 @@ pub fn panel_bounds(window: HWND) -> Option<Rect> {
         .map(|entry| entry.1)
 }
 
-/// Installs the layout hook once per browser process. Returns why it cannot when the build is
+/// Finds the build's frame view functions once per browser process, so a view's window can be
+/// told. The client view placement stays the browser's. Returns why it cannot when the build is
 /// not recognised, so Rivet refuses to attach rather than guess.
-pub unsafe fn install(reserved: Reserve) -> Result<(), String> {
-    HOOK.get_or_init(|| patch(reserved))
+pub unsafe fn install() -> Result<(), String> {
+    HOOK.get_or_init(|| find())
         .as_ref()
         .map(|_| ())
         .map_err(Clone::clone)
 }
 
-unsafe fn patch(reserved: Reserve) -> Result<Hook, String> {
+unsafe fn find() -> Result<Hook, String> {
     log(&format!("rivet: {}", crate::builds::table_note()));
     crate::trace::trace(&format!("build table: {}", crate::builds::table_note()));
     let (build, image) = crate::builds::frame_rows()
@@ -529,31 +471,15 @@ unsafe fn patch(reserved: Reserve) -> Result<Hook, String> {
             matches(&image, build).then_some((build, image))
         })
         .ok_or("this browser build is not supported yet")?;
-    let base = image.base;
-    let slot_rva = build.frame_view_vtable as usize + build.client_view_slot as usize * 8;
-    let slot = image
-        .at(slot_rva, 8)
-        .ok_or("recorded slot outside the image")? as *mut usize;
-    let hook = Hook {
-        original: std::mem::transmute::<usize, ClientViewBounds>(slot.read()),
-        hwnd_for_view: std::mem::transmute::<usize, HwndForView>(
-            base + build.hwnd_for_view as usize,
-        ),
-        reserved,
-    };
-    // Layout runs on this UI thread only, so no call can reach the new slot before HOOK holds
-    // this value.
-    let mut previous: PAGE_PROTECTION_FLAGS = 0;
-    if VirtualProtect(slot.cast(), 8, PAGE_READWRITE, &mut previous) == 0 {
-        return Err("could not unprotect the frame view vtable".into());
-    }
-    slot.write(client_view_bounds as *const () as usize);
-    VirtualProtect(slot.cast(), 8, previous, &mut previous);
     log(&format!(
-        "rivet: laying out {} {}",
+        "rivet: attaching to {} {}, which keeps its own client view placement",
         build.browser, build.version
     ));
-    Ok(hook)
+    Ok(Hook {
+        hwnd_for_view: std::mem::transmute::<usize, HwndForView>(
+            image.base + build.hwnd_for_view as usize,
+        ),
+    })
 }
 
 fn wide(value: &str) -> Vec<u16> {
@@ -565,8 +491,9 @@ fn log(message: &str) {
     unsafe { windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringW(text.as_ptr()) };
 }
 
-/// Checks that the loaded module is the recorded build: the vtable slot must still point at the
-/// recorded function, and the helper must start with the recorded instructions.
+/// Checks that the loaded module is the recorded build: the frame view's client view slot must
+/// still point at the recorded function, and the helper must start with the recorded
+/// instructions.
 unsafe fn matches(image: &Image, build: &ChromeBuild) -> bool {
     let Some(expected) = chrome_build::hex(&build.hwnd_for_view_prologue) else {
         return false;
@@ -588,43 +515,6 @@ fn parse_version(text: &str) -> Option<[u16; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fr12_native_caption_buttons_give_way_to_rivets_own() {
-        // The container keeps its right edge but has no size, so nothing of it paints or answers.
-        assert_eq!(hidden_caption_bounds([900, 0, 138, 32]), [1038, 0, 0, 0]);
-    }
-
-    #[test]
-    fn fr12_top_inset_is_the_panel_gap_for_rivet_windows_only() {
-        // Chrome, Brave, Whale, Samsung and Edge each answer differently; a Rivet window always
-        // gets the panel's top gap, so the bar sits at the same place on every browser.
-        for original in [6, 26, 32, 41] {
-            assert_eq!(panel_top_inset(original, Some(PANEL_GAP)), PANEL_GAP);
-        }
-        // Another window of the same browser keeps the browser's answer.
-        assert_eq!(panel_top_inset(6, None), 6);
-    }
-
-    #[test]
-    fn fr12_lifted_panel_keeps_the_browser_view_inside_the_kept_client_area() {
-        // Chromium checks that its kept client area contains the browser view, so the area is
-        // lifted with the panel and found only where a single field holds it.
-        let chose = Rect {
-            x: 0,
-            y: 30,
-            width: 1600,
-            height: 970,
-        };
-        let mut fields = vec![0i32; 64];
-        fields[20..24].copy_from_slice(&[0, 30, 1600, 970]);
-        assert_eq!(sole_rect_offset(&fields, chose), Some(80));
-        let lifted = lifted_client(chose);
-        let panel = panel_from_client(reserve_leading(chose, 268));
-        assert!(lifted.y <= panel.y && panel.y + panel.height <= lifted.y + lifted.height);
-        fields[40..44].copy_from_slice(&[0, 30, 1600, 970]);
-        assert_eq!(sole_rect_offset(&fields, chose), None);
-    }
 
     #[test]
     fn fr12_panel_starts_at_the_mockup_top_inset() {
@@ -650,13 +540,40 @@ mod tests {
     }
 
     #[test]
-    fn fr12_caption_ink_is_independent_of_window_activation() {
-        assert_eq!(caption_ink(), 0xff1a_1a1a);
+    fn fr12_panel_placed_by_rivet_ignores_the_browsers_title_row() {
+        // The client view reaches the window's top edge once lifted, so the panel Rivet works out
+        // from the client area is the same for any title row height the browser keeps.
+        let client = Rect {
+            x: 0,
+            y: 0,
+            width: 1600,
+            height: 1000,
+        };
+        for top in [0, 32, 41] {
+            let chose = Rect {
+                y: top,
+                height: 1000 - top,
+                ..client
+            };
+            assert_eq!(
+                rivet_panel(client, 268),
+                panel_from_client(reserve_leading(chose, 268))
+            );
+        }
+        assert_eq!(
+            rivet_panel(client, 268),
+            Rect {
+                x: 268,
+                y: PANEL_GAP,
+                width: 1324,
+                height: 1000 - 2 * PANEL_GAP
+            }
+        );
     }
 
     #[test]
-    fn fr2_panel_clips_each_corner_at_twelve_dips() {
-        assert_eq!(panel_radii(), [12.0; 4]);
+    fn fr12_caption_ink_is_independent_of_window_activation() {
+        assert_eq!(caption_ink(), 0xff1a_1a1a);
     }
 
     #[test]
@@ -707,12 +624,6 @@ mod tests {
         assert_eq!(reserve_leading(bounds, 292).width, 1);
     }
 }
-
-type PreferredSize =
-    unsafe extern "system" fn(*const c_void, *mut [i32; 2], *const c_void) -> *mut [i32; 2];
-/// Decides the caption button height of a window in DIPs, or `None` to keep the browser's.
-pub type CaptionHeight = fn(HWND) -> Option<i32>;
-static CAPTION: OnceLock<(PreferredSize, CaptionHeight)> = OnceLock::new();
 
 static CAPTION_PAINT_HOOK: OnceLock<(OnPaint, GetProvider)> = OnceLock::new();
 
@@ -765,7 +676,7 @@ pub unsafe fn install_caption_paint() -> Result<(), String> {
         return Err("this browser build has no verified colour provider layout".into());
     }
     let image = recorded_image()?;
-    let slot_rva = bv().caption_vtable + bv().caption_paint_slot * 8;
+    let slot_rva = caption_table() + bv().caption_paint_slot * 8;
     if !image.points_to(slot_rva, bv().caption_paint)
         || !image.has(bv().caption_paint, bv().caption_paint_prologue)
         || !image.has(bv().get_color_provider, bv().get_color_provider_prologue)
@@ -785,187 +696,7 @@ pub unsafe fn install_caption_paint() -> Result<(), String> {
     )
 }
 
-unsafe extern "system" fn caption_size(
-    button: *const c_void,
-    out: *mut [i32; 2],
-    bounds: *const c_void,
-) -> *mut [i32; 2] {
-    let (original, height) = CAPTION.get().expect("patched after it is stored");
-    let result = original(button, out, bounds);
-    if let Some(Ok(hook)) = HOOK.get() {
-        if let Some(height) = height((hook.hwnd_for_view)(button)) {
-            (*out)[1] = height;
-        }
-    }
-    result
-}
-
-pub unsafe fn install_caption_height(height: CaptionHeight) -> Result<(), String> {
-    if CAPTION.get().is_some() {
-        return Ok(());
-    }
-    let image = recorded_image()?;
-    let slot_rva = bv().caption_vtable + bv().caption_size_slot * 8;
-    if !image.points_to(slot_rva, bv().caption_size) {
-        return Err("this browser build has no recorded caption button size".into());
-    }
-    let _ = CAPTION.set((
-        std::mem::transmute::<usize, PreferredSize>(image.base + bv().caption_size),
-        height,
-    ));
-    replace_vtable_slot(
-        &image,
-        slot_rva,
-        bv().caption_size,
-        caption_size as *const () as usize,
-        "caption button vtable",
-    )
-}
-
-type TopInset = unsafe extern "system" fn(*const c_void, bool) -> i32;
-/// Extra title bar height in DIPs for a window, or `None` to keep the browser's.
-pub type ExtraTop = fn(HWND) -> Option<i32>;
-static TOP: OnceLock<(TopInset, ExtraTop)> = OnceLock::new();
-
-unsafe extern "system" fn top_inset(view: *const c_void, restored: bool) -> i32 {
-    let (original, extra) = TOP.get().expect("patched after it is stored");
-    let inset = original(view, restored);
-    if crate::trace::tracing() {
-        crate::trace::trace(&format!("top inset original {inset} restored {restored}"));
-    }
-    match HOOK.get() {
-        Some(Ok(hook)) => panel_top_inset(inset, extra((hook.hwnd_for_view)(view))),
-        _ => inset,
-    }
-}
-
-/// The top inset of a window: the browser's own, or for a Rivet window the top of its panel. Each
-/// browser keeps a title bar of its own height, so a Rivet window takes a fixed value instead of
-/// adding to it, and the browser's top elements begin at the panel's top edge.
-fn panel_top_inset(original: i32, target: Option<i32>) -> i32 {
-    target.unwrap_or(original)
-}
-
-pub unsafe fn install_top_inset(extra: ExtraTop) -> Result<(), String> {
-    if TOP.get().is_some() {
-        return Ok(());
-    }
-    let image = recorded_image()?;
-    let slot_rva = bv().frame_vtable + bv().top_inset_slot * 8;
-    if !image.points_to(slot_rva, bv().top_inset) {
-        return Err("this browser build has no recorded top inset".into());
-    }
-    let _ = TOP.set((
-        std::mem::transmute::<usize, TopInset>(image.base + bv().top_inset),
-        extra,
-    ));
-    replace_vtable_slot(
-        &image,
-        slot_rva,
-        bv().top_inset,
-        top_inset as *const () as usize,
-        "frame view vtable",
-    )
-}
-
-type Layout = unsafe extern "system" fn(*mut c_void);
-type SetBoundsRect = unsafe extern "system" fn(*mut c_void, *const [i32; 4]);
-static LAYOUT_HOOK: OnceLock<(Layout, SetBoundsRect, CaptionHeight)> = OnceLock::new();
-type SetPaintToLayer = unsafe extern "system" fn(*mut c_void, i32);
-type SetRadius = unsafe extern "system" fn(*mut c_void, *const [f32; 4]);
-type SetMasks = unsafe extern "system" fn(*mut c_void, bool);
-type StackAtTop = unsafe extern "system" fn(*mut c_void, *mut c_void);
-type SetOpaque = unsafe extern "system" fn(*mut c_void, bool);
-static SET_OPAQUE: OnceLock<SetOpaque> = OnceLock::new();
-static STACK_AT_TOP: OnceLock<StackAtTop> = OnceLock::new();
-static PANEL_LAYER: OnceLock<(SetPaintToLayer, SetRadius, SetMasks)> = OnceLock::new();
-
-fn panel_radii() -> [f32; 4] {
-    [12.0; 4]
-}
-
-unsafe fn clip_panel(frame: *mut c_void) {
-    let Some((set_layer, set_radius, set_masks)) = PANEL_LAYER.get() else {
-        return;
-    };
-    // BrowserFrameViewWin holds BrowserView's BrowserWindow subobject at +0x340.
-    let browser_window =
-        *(frame.cast::<u8>().add(bv().frame_browser_window_offset) as *const *mut u8);
-    if browser_window.is_null() {
-        return;
-    }
-    let browser = browser_window
-        .sub(bv().browser_window_in_view)
-        .cast::<usize>();
-    let Some(image) = image::recorded() else {
-        return;
-    };
-    let base = image.base;
-    let Some(index) =
-        (0..0x100).find(|index| *browser.add(*index) == base + bv().browser_view_view_vtable)
-    else {
-        return;
-    };
-    let view = browser.add(index).cast::<c_void>();
-    // `views::View` keeps its `ui::Layer` at +0x20.
-    let layer_of = || *(view.cast::<u8>().add(0x20) as *const *mut c_void);
-    if layer_of().is_null() {
-        set_layer(view, 1);
-    }
-    let layer = layer_of();
-    if !layer.is_null() {
-        set_masks(layer, true);
-        set_radius(layer, &panel_radii());
-    }
-}
-
-/// Gives `view` its own layer and stacks it above its siblings' layers, so it paints over a
-/// sibling it overlaps, such as the page. Views order layers by tree position, so a later layout
-/// can undo it and the caller repeats it after each layout.
-pub unsafe fn raise_view(view: *mut c_void) {
-    let Some((set_layer, _, _)) = PANEL_LAYER.get() else {
-        return;
-    };
-    let Some(stack_at_top) = STACK_AT_TOP.get() else {
-        return;
-    };
-    let layer_of = || *(view.cast::<u8>().add(0x20) as *const *mut c_void);
-    if layer_of().is_null() {
-        set_layer(view, 1);
-    }
-    let layer = layer_of();
-    if layer.is_null() {
-        return;
-    }
-    let parent = *(layer.cast::<u8>().add(0x20) as *const *mut c_void);
-    if !parent.is_null() {
-        stack_at_top(parent, layer);
-    }
-}
-
-/// The native caption container of a Rivet window: no size, at its right edge. Rivet draws its own
-/// minimize, maximize and close buttons in its bar, so the browser's must neither paint over the
-/// panel nor take clicks.
-fn hidden_caption_bounds(bounds: [i32; 4]) -> [i32; 4] {
-    [bounds[0] + bounds[2], 0, 0, 0]
-}
-
-/// The frame view each window last laid out, so Rivet can ask for a layout when the space it
-/// reserves changes. Chromium only lays out again on its own when the window's size changes, and
-/// a maximized window cannot be resized to make it.
-static FRAME_VIEWS: std::sync::Mutex<Vec<(isize, usize)>> = std::sync::Mutex::new(Vec::new());
-
-fn remember_view(window: HWND, view: *mut c_void) {
-    let mut views = FRAME_VIEWS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    match views.iter_mut().find(|entry| entry.0 == window as isize) {
-        Some(entry) => entry.1 = view as usize,
-        None => views.push((window as isize, view as usize)),
-    }
-}
-
-/// The window a view belongs to, once the layout hook is installed.
+/// The window a view belongs to, once the frame view's functions are found.
 pub unsafe fn hwnd_of_view(view: *const c_void) -> Option<HWND> {
     match HOOK.get() {
         Some(Ok(hook)) => Some((hook.hwnd_for_view)(view)),
@@ -973,125 +704,12 @@ pub unsafe fn hwnd_of_view(view: *const c_void) -> Option<HWND> {
     }
 }
 
-/// The frame view a window last laid out, if any.
-pub fn frame_view(window: HWND) -> Option<usize> {
-    FRAME_VIEWS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .iter()
-        .find(|entry| entry.0 == window as isize)
-        .map(|entry| entry.1)
-}
-
-/// Forgets a window that is going away, so its view is never used again.
+/// Forgets a window that is going away, so its panel is never used again.
 pub fn forget_view(window: HWND) {
     PANELS
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .retain(|entry| entry.0 != window as isize);
-    FRAME_VIEWS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .retain(|entry| entry.0 != window as isize);
-}
-
-/// Lays the window's frame out again. Returns false when the window has not been laid out yet.
-pub unsafe fn relayout(window: HWND) -> bool {
-    let view = FRAME_VIEWS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .iter()
-        .find(|entry| entry.0 == window as isize)
-        .map(|entry| entry.1);
-    match view {
-        Some(view) => {
-            let Some(image) = image::recorded() else {
-                return false;
-            };
-            let base = image.base;
-            // `views::View::DeprecatedLayoutImmediately` does the bookkeeping around a layout
-            // and then runs the view's own `Layout`, which is this hook. The wanted bytes are
-            // its first instructions in this build.
-            if !image.has(bv().layout_immediately, bv().layout_immediately_prologue) {
-                return false;
-            }
-            let layout_immediately: unsafe extern "system" fn(*mut c_void) =
-                std::mem::transmute(base + bv().layout_immediately);
-            layout_immediately(view as *mut c_void);
-            true
-        }
-        None => false,
-    }
-}
-
-unsafe extern "system" fn frame_layout(view: *mut c_void) {
-    let (original, set_bounds, height) = LAYOUT_HOOK.get().expect("patched after it is stored");
-    original(view);
-    crate::features::second_view::note_layout();
-    let Some(Ok(hook)) = HOOK.get() else { return };
-    remember_view((hook.hwnd_for_view)(view), view);
-    if height((hook.hwnd_for_view)(view)).is_none() {
-        return;
-    }
-    clip_panel(view);
-    let container = *(view.cast::<u8>().add(bv().caption_container_offset) as *const *mut c_void);
-    if container.is_null() {
-        return;
-    }
-    let bounds = *(container.cast::<u8>().add(bv().view_bounds_offset) as *const [i32; 4]);
-    let wanted = hidden_caption_bounds(bounds);
-    if wanted != bounds {
-        set_bounds(container, &wanted);
-    }
-}
-
-/// Makes the caption button container of a window reach `height` DIPs from the top of the frame.
-pub unsafe fn install_caption_layout(height: CaptionHeight) -> Result<(), String> {
-    if LAYOUT_HOOK.get().is_some() {
-        return Ok(());
-    }
-    let image = recorded_image()?;
-    let slot_rva = bv().frame_vtable + bv().layout_slot * 8;
-    if !image.points_to(slot_rva, bv().layout) {
-        return Err("this browser build has no recorded frame layout".into());
-    }
-    if !image.has(bv().layout, bv().layout_prologue)
-        || !image.has(bv().set_bounds_rect, bv().set_bounds_rect_prologue)
-    {
-        return Err("this browser build has no recorded caption layout helpers".into());
-    }
-    if !image.has(bv().set_layer, bv().set_layer_prologue)
-        || !image.has(bv().set_radius, bv().set_radius_prologue)
-        || !image.has(bv().set_masks, bv().set_masks_prologue)
-        || !image.has(bv().stack_at_top, bv().stack_at_top_prologue)
-        || !image.has(bv().set_opaque, bv().set_opaque_prologue)
-    {
-        return Err("this browser build has no recorded panel layer helpers".into());
-    }
-    let base = image.base;
-    let _ = SET_OPAQUE.set(std::mem::transmute::<usize, SetOpaque>(
-        base + bv().set_opaque,
-    ));
-    let _ = STACK_AT_TOP.set(std::mem::transmute::<usize, StackAtTop>(
-        base + bv().stack_at_top,
-    ));
-    let _ = PANEL_LAYER.set((
-        std::mem::transmute::<usize, SetPaintToLayer>(base + bv().set_layer),
-        std::mem::transmute::<usize, SetRadius>(base + bv().set_radius),
-        std::mem::transmute::<usize, SetMasks>(base + bv().set_masks),
-    ));
-    let _ = LAYOUT_HOOK.set((
-        std::mem::transmute::<usize, Layout>(base + bv().layout),
-        std::mem::transmute::<usize, SetBoundsRect>(base + bv().set_bounds_rect),
-        height,
-    ));
-    replace_vtable_slot(
-        &image,
-        slot_rva,
-        bv().layout,
-        frame_layout as *const () as usize,
-        "frame view vtable",
-    )
 }
 
 #[cfg(test)]
