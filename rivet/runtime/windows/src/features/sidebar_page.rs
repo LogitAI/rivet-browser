@@ -76,14 +76,6 @@ pub(crate) fn below_header(mode: Mode, second: [i32; 4]) -> [i32; 4] {
     [x + 1, y + header, width - 1, (height - header).max(1)]
 }
 
-/// The browser's own side panel and the page after the page area layout, while the second view
-/// shows the panel's page: the page keeps the width it has with no panel, up to `page_right`, and
-/// the browser's panel keeps no width at that edge.
-pub(crate) fn float_over(contents: &mut [i32; 4], side_panel: &mut [i32; 4], page_right: i32) {
-    contents[2] = (page_right - contents[0]).max(1);
-    *side_panel = [page_right, side_panel[1], 0, side_panel[3]];
-}
-
 /// The extension entry the browser shows in the window, if any.
 unsafe fn showing_extension(window: HWND) -> Option<EntryKey> {
     panel::listed_entries(window)
@@ -145,7 +137,6 @@ unsafe fn take(window: HWND, key: EntryKey) {
         crate::trace::trace("sidebar page: the second view did not open");
         return;
     }
-    crate::hooks::page_area::relayout(window);
     crate::trace::trace(&format!(
         "sidebar page: extension page {page:#x} from view {holder:#x} in the second view"
     ));
@@ -160,36 +151,10 @@ pub(crate) unsafe fn give_back(window: HWND) {
         second_view::close(window);
     }
     second_view::hand_page(entry.holder, entry.page);
-    crate::hooks::page_area::relayout(window);
     crate::trace::trace(&format!(
         "sidebar page: extension page {:#x} back to view {:#x}",
         entry.page, entry.holder
     ));
-}
-
-/// The page area step: while the second view shows the side panel's page, the browser's panel
-/// keeps no width and the page keeps its own.
-pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) {
-    if !hosts(area.window) {
-        return;
-    }
-    let row = &crate::builds::get().side_panel;
-    let page = area.page().map(|bounds| *bounds);
-    let Some(page_right) = page.map(|page| page[0] + page[2]) else {
-        return;
-    };
-    for offset in [row.side_panel, row.side_panel_animation] {
-        let Some(side_panel) = area.bounds(offset) else {
-            continue;
-        };
-        if let Some(contents) = area.contents() {
-            float_over(&mut *contents, &mut *side_panel, page_right);
-        }
-        if let Some(outline) = area.bounds(row.contents_outline) {
-            let mut unused = *side_panel;
-            float_over(&mut *outline, &mut unused, page_right);
-        }
-    }
 }
 
 /// Drops a closed window without calling into its views, which the browser deletes with it.
@@ -226,15 +191,5 @@ mod tests {
             below_header(Mode::Inset, [1124, 44, 0, 700]),
             [1124, 44, 0, 700]
         );
-    }
-
-    #[test]
-    fn fr10_an_open_extension_panel_does_not_change_the_page_width() {
-        // The browser narrowed the page by its 320 DIP panel; the page keeps the whole area.
-        let mut contents = [0, 44, 844, 700];
-        let mut side_panel = [844, 44, 320, 700];
-        float_over(&mut contents, &mut side_panel, 1164);
-        assert_eq!(contents, [0, 44, 1164, 700]);
-        assert_eq!(side_panel, [1164, 44, 0, 700]);
     }
 }

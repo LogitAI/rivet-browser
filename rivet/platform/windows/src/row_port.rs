@@ -474,25 +474,9 @@ fn at_path<'a>(row: &'a Value, path: &str) -> &'a Value {
 /// module can answer on its own. A function listed twice settles a folded name.
 const VTABLE_SLOTS: &[(&str, &str, &str)] = &[
     (
-        "side_panel.layout_vtable",
-        "side_panel.proposed_slot",
-        "side_panel.proposed",
-    ),
-    (
         "layout.frame_vtable",
         "layout.on_paint_slot",
         "layout.on_paint",
-    ),
-    (
-        "layout.frame_vtable",
-        "layout.top_inset_slot",
-        "layout.top_inset",
-    ),
-    ("layout.frame_vtable", "layout.layout_slot", "layout.layout"),
-    (
-        "layout.caption_vtable",
-        "layout.caption_size_slot",
-        "layout.caption_size",
     ),
     (
         "layout.caption_vtable",
@@ -2186,27 +2170,25 @@ mod tests {
 
     #[test]
     fn nfr6_a_row_without_window_offsets_is_not_blocked() {
-        // Edge 157's row stopped on exactly these values. The runtime finds them by class name and
-        // the view tree, so the new row leaves them out and nothing holds it back.
+        // Edge 157's row stopped on values like these. The runtime finds them by class name and the
+        // view tree, so the new row leaves them out and nothing holds it back.
         let mut prior = prior_with_features();
         prior["build"]["layout"] = json!({"frame_browser_window_offset": "0x3b0"});
-        prior["build"]["side_panel"] =
-            json!({"host_view": "0x38", "page_area": "0x0", "contents_container": "0xd8"});
         prior["build"]["toolbar"]["get_widget_slot"] = json!("0xa");
         let code = new_code();
         let (row, report) = port(&prior, NEW_PLACES, &code_refs(&code), "2.0.0.1");
         assert_eq!(report.review, Vec::<String>::new());
         assert!(report.carried.is_empty(), "{:?}", report.carried);
-        assert_eq!(report.reflected.len(), 5, "{:?}", report.reflected);
+        assert_eq!(report.reflected.len(), 2, "{:?}", report.reflected);
         let build = &row["build"];
         assert!(build["layout"].get("frame_browser_window_offset").is_none());
-        assert_eq!(build["side_panel"], json!({}));
         assert!(build["toolbar"].get("get_widget_slot").is_none());
         // No feature went off for them.
         assert!(!report
             .switched_off
             .iter()
-            .any(|line| line.contains("side_panel.") || line.contains("get_widget_slot")));
+            .any(|line| line.contains("frame_browser_window_offset")
+                || line.contains("get_widget_slot")));
     }
 
     #[test]

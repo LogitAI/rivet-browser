@@ -413,116 +413,6 @@ unsafe fn dev_reserve(window: HWND) -> f32 {
     }
 }
 
-/// Moves the page below the bar. The browser lays the page out at the top of its panel, since an app
-/// window has no toolbar there.
-pub(crate) unsafe fn on_page_area(area: &mut crate::hooks::page_area::PageArea) {
-    // The second view moves the page instead where the browser's layout could not be patched.
-    if !BY_LAYOUT.load(std::sync::atomic::Ordering::Acquire) || !shown_in(area.window) {
-        return;
-    }
-    let row = &crate::builds::get().side_panel;
-    let Some(contents) = area.contents() else {
-        crate::trace::trace_changed(
-            "bar layout",
-            "address bar: the layout has no page container",
-        );
-        return;
-    };
-    // An app window's top container holds the browser's title row, which Rivet's bar replaces. When
-    // it sits right on top of the page, the page takes its place and it keeps no height.
-    if let Some(toolbar) = area
-        .bounds(row.toolbar)
-        .filter(|toolbar| *toolbar != contents)
-    {
-        let between: Vec<_> = area
-            .all_bounds()
-            .into_iter()
-            .map(|(_, b)| b)
-            .filter(|b| *b != toolbar && *b != contents)
-            .collect();
-        let views: Vec<[i32; 4]> = between.iter().map(|b| **b).collect();
-        if let Some((top, page, moved)) = page_over_top_row(*toolbar, *contents, &views) {
-            *toolbar = top;
-            *contents = page;
-            for (bounds, view) in between.into_iter().zip(moved) {
-                *bounds = view;
-            }
-        }
-    }
-    let before = *contents;
-    // A bar the browser keeps right above the page, like the infobar of a tab, moves down with it.
-    // Left where it was, it sits under the address bar and leaves an empty strip above the page.
-    for (_, bounds) in area.all_bounds() {
-        if bounds != contents && rides_above_page(*bounds, before) {
-            (*bounds)[1] += ROW_HEIGHT;
-        }
-    }
-    let contents = &mut *contents;
-    contents[1] += ROW_HEIGHT;
-    contents[3] = (contents[3] - ROW_HEIGHT).max(1);
-    crate::trace::trace_changed(
-        "bar layout",
-        &format!("address bar: layout page {before:?} to {contents:?}"),
-    );
-}
-
-/// The top row, the page and the views that moved with them.
-pub(crate) type TopRowMove = ([i32; 4], [i32; 4], Vec<[i32; 4]>);
-
-/// The top row, the page and the other views after the page takes the place of a top row above
-/// it. The row keeps its place with no height. Views between the row and the page, such as an
-/// infobar, move up with the page, and the page grows up by the row's height.
-pub(crate) fn page_over_top_row(
-    top: [i32; 4],
-    contents: [i32; 4],
-    views: &[[i32; 4]],
-) -> Option<TopRowMove> {
-    let bottom = top[1] + top[3];
-    let across = |v: [i32; 4]| v[0] < contents[0] + contents[2] && v[0] + v[2] > contents[0];
-    if top[3] <= 0 || bottom > contents[1] || !across(top) {
-        return None;
-    }
-    let between =
-        |v: [i32; 4]| v[3] > 0 && v[1] >= bottom && v[1] + v[3] <= contents[1] && across(v);
-    // The row must reach the page, directly or through the views between them.
-    let covered = views
-        .iter()
-        .filter(|v| between(**v))
-        .map(|v| v[3])
-        .sum::<i32>();
-    if bottom + covered != contents[1] {
-        return None;
-    }
-    let shift = top[3];
-    let moved = views
-        .iter()
-        .map(|v| {
-            if between(*v) {
-                [v[0], v[1] - shift, v[2], v[3]]
-            } else {
-                *v
-            }
-        })
-        .collect();
-    let [x, y, width, height] = contents;
-    Some((
-        [top[0], top[1], top[2], 0],
-        [x, y - shift, width, height + shift],
-        moved,
-    ))
-}
-
-/// Whether a view the browser laid out sits right on top of the page and across it, so it moves
-/// down with the page below the bar.
-pub(crate) fn rides_above_page(view: [i32; 4], contents: [i32; 4]) -> bool {
-    let [x, y, width, height] = view;
-    height > 0
-        && height < contents[3]
-        && y + height == contents[1]
-        && x < contents[0] + contents[2]
-        && x + width > contents[0]
-}
-
 /// The active page's title and address. The visible address is what the page shows now, including
 /// a navigation that has not committed yet.
 unsafe fn page_text(window: HWND) -> (String, String) {
@@ -532,33 +422,14 @@ unsafe fn page_text(window: HWND) -> (String, String) {
         .unwrap_or_default()
 }
 
-/// How the page moves below the bar in this build.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Offset {
-    /// The browser's own layout of the page area is patched and leaves the bar's row free.
-    Layout,
-    /// Rivet's second view keeps the row free by moving the window's page view, which needs no
-    /// record of the browser's layout object.
-    PageView,
-    /// Neither is recorded, so the bar covers the top of the page.
-    None(String),
+/// Why the page cannot move below the bar in a build, or nothing when Rivet's second view moves
+/// the window's page view there.
+pub(crate) fn page_view_missing(second_view: bool) -> Option<&'static str> {
+    (!second_view).then_some("this browser build records no second view to move the page view")
 }
 
-/// Picks how the page moves below the bar: the patched layout when it installed, else the page
-/// view, which every build that records the second view can move.
-pub(crate) fn offset_for(layout: Result<(), String>, second_view: bool) -> Offset {
-    match layout {
-        Ok(()) => Offset::Layout,
-        Err(_) if second_view => Offset::PageView,
-        Err(error) => Offset::None(error),
-    }
-}
-
-/// Set once the patched layout moves the page, so only one mechanism ever leaves the row free.
-static BY_LAYOUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Patches the browser's layout of the page area once, then asks the window to lay out again, so the
-/// page moves below the bar. A build without the layout's record moves the page view instead.
+/// Moves the window's page view below the bar once. A build without the second view keeps the page
+/// where the browser put it, and the trace says why.
 unsafe fn ensure_layout(window: HWND) {
     thread_local! {
         static DONE: RefCell<std::collections::HashSet<isize>> = RefCell::new(std::collections::HashSet::new());
@@ -566,28 +437,13 @@ unsafe fn ensure_layout(window: HWND) {
     if !DONE.with(|done| done.borrow_mut().insert(window as isize)) {
         return;
     }
-    let installed = crate::hooks::page_area::install_for_app_window();
-    let reason = installed.as_ref().err().cloned().unwrap_or_default();
-    match offset_for(installed, crate::features::second_view::available()) {
-        Offset::Layout => {
-            crate::trace::trace("address bar: the browser's layout moves the page below the bar");
-            BY_LAYOUT.store(true, std::sync::atomic::Ordering::Release);
-            let name: Vec<u16> = crate::features::split::RELAYOUT_MESSAGE
-                .encode_utf16()
-                .chain(Some(0))
-                .collect();
-            let message =
-                windows_sys::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW(name.as_ptr());
-            PostMessageW(window, message, 0, 0);
-        }
-        Offset::PageView => {
-            crate::trace::trace(&format!(
-                "address bar: the page view moves below the bar ({reason})"
-            ));
+    match page_view_missing(crate::features::second_view::available()) {
+        None => {
+            crate::trace::trace("address bar: the page view moves below the bar");
             crate::features::second_view::set_top(window, ROW_HEIGHT);
         }
-        Offset::None(error) => crate::trace::trace(&format!(
-            "address bar: the page cannot move below the bar: {error}"
+        Some(reason) => crate::trace::trace(&format!(
+            "address bar: the page cannot move below the bar: {reason}"
         )),
     }
 }
@@ -1960,56 +1816,10 @@ mod tests {
     }
 
     #[test]
-    fn fr12_a_bar_right_above_the_page_moves_below_the_address_bar_with_it() {
-        // Brave's first tab shows an infobar right above the page. Only the page moved, so the
-        // infobar sat under the address bar and an empty band of the bar's height was left above
-        // the page, which put the first pane of a split below the second.
-        let contents = [0, 56, 1164, 708];
-        assert!(rides_above_page([0, 0, 1164, 56], contents));
-        // The page itself, a view beside it and a view that ends above it stay.
-        assert!(!rides_above_page(contents, contents));
-        assert!(!rides_above_page([1164, 0, 40, 56], contents));
-        assert!(!rides_above_page([0, 0, 1164, 40], contents));
-        assert!(!rides_above_page([0, 56, 1164, 0], contents));
-    }
-
-    #[test]
-    fn fr12_page_sits_directly_below_the_bar_where_the_browser_kept_a_title_row() {
-        // Chrome's app window keeps a 23 DIP top container above the page once its client view
-        // reaches the window's top edge. Rivet's bar replaces it, so the page takes its place.
-        let (top, page, _) = page_over_top_row([0, 0, 1164, 23], [0, 23, 1164, 815], &[]).unwrap();
-        assert_eq!(top, [0, 0, 1164, 0]);
-        assert_eq!(page, [0, 0, 1164, 838]);
-        // A top row that does not reach the page is left alone.
-        assert_eq!(
-            page_over_top_row([0, 0, 1164, 20], [0, 23, 1164, 815], &[]),
-            None
-        );
-        // Brave's notice bar between the row and the page moves up with the page.
-        let (_, page, moved) = page_over_top_row(
-            [0, 0, 1164, 23],
-            [0, 79, 1164, 759],
-            &[[0, 23, 1164, 56], [1164, 0, 40, 9]],
-        )
-        .unwrap();
-        assert_eq!(page, [0, 56, 1164, 782]);
-        assert_eq!(moved, vec![[0, 0, 1164, 56], [1164, 0, 40, 9]]);
-    }
-
-    #[test]
-    fn fr12_the_page_moves_below_the_bar_without_a_sidebar_layout_row() {
-        // Edge 156.0.4314.58 and Whale 5.39.412.57 record no Sidebar layout, but both record the
-        // second view, which moves the page view itself.
-        let missing =
-            || Err("this browser build has no recorded layout for the Sidebar".to_string());
-        assert_eq!(offset_for(missing(), true), Offset::PageView);
-        assert_eq!(
-            offset_for(Ok(()), true),
-            Offset::Layout,
-            "a patched layout is used first"
-        );
-        assert_eq!(offset_for(Ok(()), false), Offset::Layout);
-        assert!(matches!(offset_for(missing(), false), Offset::None(_)));
+    fn fr12_the_page_moves_below_the_bar_only_by_its_page_view() {
+        // The browser's layout is never patched, so the second view is the only way down.
+        assert_eq!(page_view_missing(true), None);
+        assert!(page_view_missing(false).is_some_and(|reason| reason.contains("second view")));
     }
 
     #[test]

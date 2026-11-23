@@ -200,7 +200,6 @@ fn nfr3_whale_maps_only_the_frame_hooks() {
     // Hooks without a verified address are absent, so their checks fail.
     assert_eq!(WHALE.layout.corner_paint, ABSENT);
     assert_eq!(WHALE.layout.caption_paint, ABSENT);
-    assert_eq!(WHALE.layout.layout, ABSENT);
     assert_eq!(
         (
             WHALE.layout.frame_browser_window_offset,
@@ -211,14 +210,14 @@ fn nfr3_whale_maps_only_the_frame_hooks() {
 }
 
 #[test]
-fn fr2_whale_records_chromium_s_frame_paint_and_top_inset() {
-    // Rivet's frame on Whale needs Chromium's `BrowserFrameViewWin` paint and top inset.
+fn fr2_whale_records_chromium_s_frame_paint() {
+    // Rivet's frame on Whale needs Chromium's `BrowserFrameViewWin` paint.
     let layout = &WHALE.layout;
     assert_eq!(
-        (layout.frame_vtable, layout.on_paint, layout.top_inset),
-        (0x0FB1_7440, 0x0253_D0E0, 0x0E7B_4500)
+        (layout.frame_vtable, layout.on_paint),
+        (0x0FB1_7440, 0x0253_D0E0)
     );
-    assert_eq!((layout.on_paint_slot, layout.top_inset_slot), (89, 127));
+    assert_eq!(layout.on_paint_slot, 89);
     assert!(layout.on_paint_prologue.len() >= 12);
     let Ok(file) = std::fs::read(WHALE_DLL) else {
         return;
@@ -227,16 +226,11 @@ fn fr2_whale_records_chromium_s_frame_paint_and_top_inset() {
         file_bytes(&file, layout.on_paint, layout.on_paint_prologue.len()).as_deref(),
         Some(layout.on_paint_prologue)
     );
-    // The vtable slots hold the two functions.
-    for (slot, function) in [
-        (layout.on_paint_slot, layout.on_paint),
-        (layout.top_inset_slot, layout.top_inset),
-    ] {
-        let entry = file_bytes(&file, layout.frame_vtable + slot * 8, 8)
-            .expect("the vtable is in the file");
-        let pointer = u64::from_le_bytes(entry.try_into().unwrap()) as usize;
-        assert_eq!(pointer - 0x1_8000_0000, function);
-    }
+    // The vtable slot holds the paint function.
+    let entry = file_bytes(&file, layout.frame_vtable + layout.on_paint_slot * 8, 8)
+        .expect("the vtable is in the file");
+    let pointer = u64::from_le_bytes(entry.try_into().unwrap()) as usize;
+    assert_eq!(pointer - 0x1_8000_0000, layout.on_paint);
 }
 
 /// The chrome.dll of a Brave row, when that version is the one installed.
@@ -263,22 +257,14 @@ fn check_brave_frame_hooks(brave: &Build) {
             && brave.navigation.supported
     );
     assert!(!brave.split.supported);
-    // The .62 row records no frame paint or top inset. The .63 row records Chromium's own.
+    // The .62 row records no frame paint. The .63 row records Chromium's own.
     if brave.version == BRAVE.version {
         assert_eq!(
-            (
-                brave.layout.frame_vtable,
-                brave.layout.on_paint,
-                brave.layout.top_inset
-            ),
-            (ABSENT, ABSENT, ABSENT)
+            (brave.layout.frame_vtable, brave.layout.on_paint),
+            (ABSENT, ABSENT)
         );
     } else {
-        assert!(
-            brave.layout.frame_vtable != ABSENT
-                && brave.layout.on_paint != ABSENT
-                && brave.layout.top_inset != ABSENT
-        );
+        assert!(brave.layout.frame_vtable != ABSENT && brave.layout.on_paint != ABSENT);
     }
     let Some(file) = brave_dll(brave) else {
         return;
@@ -300,42 +286,6 @@ fn check_brave_frame_hooks(brave: &Build) {
             "caption paint",
             layout.caption_paint,
             layout.caption_paint_prologue,
-        ),
-        ("frame layout", layout.layout, layout.layout_prologue),
-        (
-            "set bounds",
-            layout.set_bounds_rect,
-            layout.set_bounds_rect_prologue,
-        ),
-        (
-            "layout immediately",
-            layout.layout_immediately,
-            layout.layout_immediately_prologue,
-        ),
-        (
-            "paint to layer",
-            layout.set_layer,
-            layout.set_layer_prologue,
-        ),
-        (
-            "rounded corners",
-            layout.set_radius,
-            layout.set_radius_prologue,
-        ),
-        (
-            "masks to bounds",
-            layout.set_masks,
-            layout.set_masks_prologue,
-        ),
-        (
-            "stack at top",
-            layout.stack_at_top,
-            layout.stack_at_top_prologue,
-        ),
-        (
-            "fills opaquely",
-            layout.set_opaque,
-            layout.set_opaque_prologue,
         ),
     ] {
         assert_eq!(
@@ -363,12 +313,6 @@ fn check_brave_frame_hooks(brave: &Build) {
             layout.corner_vtable,
             layout.on_paint_slot,
             layout.corner_paint,
-        ),
-        (
-            "caption size",
-            layout.caption_vtable,
-            layout.caption_size_slot,
-            layout.caption_size,
         ),
         (
             "caption paint",
@@ -413,11 +357,6 @@ fn check_side_panel_hooks(file: &[u8], row: &SidePanel, name: &str) {
             row.generate_colors_css,
             row.generate_colors_css_prologue,
         ),
-        (
-            "layout immediately",
-            row.layout_immediately,
-            row.layout_immediately_prologue,
-        ),
     ] {
         assert_eq!(
             file_bytes(file, rva, prologue.len()).as_deref(),
@@ -429,8 +368,7 @@ fn check_side_panel_hooks(file: &[u8], row: &SidePanel, name: &str) {
         file_bytes(file, rva, 8)
             .map(|bytes| u64::from_le_bytes(bytes.try_into().unwrap()) as usize - image_base)
     };
-    // The coordinator's vtable holds Show in slot 2 and Toggle in slot 5, and the layout vtable
-    // holds the function Rivet replaces in the slot the row names.
+    // The coordinator's vtable holds Show in slot 2 and Toggle in slot 5.
     if row.coordinator_vtable != ABSENT {
         assert_eq!(
             pointer(row.coordinator_vtable + 2 * 8),
@@ -443,13 +381,6 @@ fn check_side_panel_hooks(file: &[u8], row: &SidePanel, name: &str) {
             "toggle slot of {name}"
         );
     }
-    if row.layout_vtable != ABSENT {
-        assert_eq!(
-            pointer(row.layout_vtable + row.proposed_slot * 8),
-            Some(row.proposed),
-            "layout slot of {name}"
-        );
-    }
     // Both views start with their own vtable, which the objects are found by.
     assert!(
         pointer(row.side_panel_vtable).is_some() && pointer(row.browser_view_view_vtable).is_some()
@@ -458,7 +389,7 @@ fn check_side_panel_hooks(file: &[u8], row: &SidePanel, name: &str) {
 
 #[test]
 fn fr10_brave_63_side_panel_row_matches_the_installed_build() {
-    // The .63 row records Chromium's coordinator, toggle and page layout. The Sidebar stays off
+    // The .63 row records Chromium's coordinator and toggle. The Sidebar stays off
     // until it is driven.
     assert!(!BRAVE_63.side_panel.supported && !BRAVE.side_panel.supported);
     assert_eq!(
@@ -481,8 +412,6 @@ fn fr10_edge_side_panel_row_matches_the_installed_build() {
         !row.supported,
         "Edge's only registered panel cannot be opened"
     );
-    // The Edge row's layout function is slot 4 of its layout vtable.
-    assert_eq!(row.proposed_slot, 4);
     assert_eq!(row.hidden_entries, &[0]);
     let Ok(file) = std::fs::read(
         r"C:\Program Files (x86)\Microsoft\Edge\Application\156.0.4314.50\msedge.dll",
@@ -508,10 +437,9 @@ fn nfr3_samsung_frame_and_tab_hooks_match_the_installed_build() {
             && !SAMSUNG.tabs.groups
             && !SAMSUNG.split.supported
     );
-    // Nothing outside Chromium is recorded for the frame: no paint, no colours and no top inset.
+    // Nothing outside Chromium is recorded for the frame: no paint and no colours.
     for rva in [
         SAMSUNG.layout.on_paint,
-        SAMSUNG.layout.top_inset,
         SAMSUNG.layout.corner_paint,
         SAMSUNG.layout.caption_paint,
     ] {
@@ -1008,12 +936,7 @@ fn nfr3_chromium_157_rows_record_the_members_that_moved() {
             Some(0x338),
             "{name}"
         );
-        assert_eq!(build.layout.caption_container_offset, 0x3C0, "{name}");
-        assert_eq!(
-            (build.layout.top_inset_slot, build.layout.caption_paint_slot),
-            (126, 113),
-            "{name}"
-        );
+        assert_eq!(build.layout.caption_paint_slot, 113, "{name}");
         assert_eq!(build.omnibox.as_ref().unwrap().match_size, 0x690, "{name}");
         let split = &build.split;
         assert_eq!(
@@ -1355,8 +1278,8 @@ fn fr12_edge_58_whale_57_and_samsung_29_record_the_page_view_bounds_slot() {
 
 #[test]
 fn fr12_edge_58_and_whale_57_record_the_page_view_that_moves_below_the_bar() {
-    // Neither build records the Sidebar's layout, so the bar's row is kept free by moving the page
-    // view, which needs the second view's constructor, its allocation and `AddChildViewAt`.
+    // The bar's row is kept free by moving the page view, which needs the second view's
+    // constructor, its allocation and `AddChildViewAt`.
     let table: serde_json::Value =
         serde_json::from_str(CHECKED_IN).expect("the checked-in table is JSON");
     let edge = table["rows"]
@@ -1368,10 +1291,6 @@ fn fr12_edge_58_and_whale_57_record_the_page_view_that_moves_below_the_bar() {
             })
         })
         .expect("the table holds a row for Edge 156.0.4314.58");
-    assert_eq!(
-        edge["build"]["side_panel"]["layout_vtable"],
-        format!("{ABSENT:#x}")
-    );
     for name in ["operator_new", "web_view_ctor", "add_child", "set_contents"] {
         assert!(
             edge["build"]["app_window"][name].is_string(),
@@ -1380,7 +1299,6 @@ fn fr12_edge_58_and_whale_57_record_the_page_view_that_moves_below_the_bar() {
     }
     let whale = &super::whale::WHALE;
     assert_eq!(whale.version, [5, 39, 412, 57]);
-    assert_eq!(whale.side_panel.layout_vtable, 0x0F9F_BB38);
     let row = whale
         .app_window
         .as_ref()

@@ -20,12 +20,6 @@ pub(crate) enum Feature {
     FrameColour,
     /// Caption buttons are painted in the window's colours.
     CaptionPaint,
-    /// Caption buttons sit in the panel's top row.
-    CaptionLayout,
-    /// The height of the top row.
-    CaptionHeight,
-    /// The space above the top row.
-    TopInset,
     /// Pages of a split view are panels.
     Split,
     /// The layout of the pages of a split view.
@@ -38,9 +32,6 @@ impl Feature {
             Feature::FrameLayout => "frame_layout",
             Feature::FrameColour => "frame_colour",
             Feature::CaptionPaint => "caption_paint",
-            Feature::CaptionLayout => "caption_layout",
-            Feature::CaptionHeight => "caption_height",
-            Feature::TopInset => "top_inset",
             Feature::Split => "split",
             Feature::SplitLayout => "split_layout",
         }
@@ -351,13 +342,12 @@ mod tests {
 
     type NeedsOf = fn(&Build) -> Needs;
 
-    fn all_needs() -> [(Feature, NeedsOf); 5] {
+    fn all_needs() -> [(Feature, NeedsOf); 4] {
         use crate::features::{frame_layout, split};
         [
             (Feature::FrameLayout, frame_layout::needs_layout),
             (Feature::FrameColour, frame_layout::needs_colour),
             (Feature::CaptionPaint, frame_layout::needs_caption_paint),
-            (Feature::CaptionLayout, frame_layout::needs_caption_layout),
             (Feature::Split, split::needs),
         ]
     }
@@ -373,31 +363,16 @@ mod tests {
     /// What each row offers, as the attach of that browser was seen to install it.
     #[test]
     fn nfr3_each_row_offers_the_features_its_browser_installs() {
-        let chromium = [
-            "frame_layout",
-            "frame_colour",
-            "caption_paint",
-            "caption_layout",
-            "split",
-        ];
+        let chromium = ["frame_layout", "frame_colour", "caption_paint", "split"];
         assert_eq!(names(&builds::CHROME), chromium);
         assert_eq!(
             names(&builds::BRAVE),
-            [
-                "frame_layout",
-                "caption_paint",
-                "caption_layout"
-            ]
+            ["frame_layout", "caption_paint"]
         );
         assert_eq!(names(&builds::EDGE), chromium);
         assert_eq!(
             names(&builds::CHROME_150),
-            [
-                "frame_layout",
-                "frame_colour",
-                "caption_paint",
-                "caption_layout"
-            ]
+            ["frame_layout", "frame_colour", "caption_paint"]
         );
         assert_eq!(names(&builds::WHALE), ["frame_layout", "frame_colour"]);
         assert_eq!(names(&builds::SAMSUNG), ["frame_layout"]);
@@ -445,7 +420,7 @@ mod tests {
                 OnFailure::Abort,
             ),
             step(
-                Feature::CaptionHeight,
+                Feature::CaptionPaint,
                 left_out,
                 |ran| {
                     let _: () = ran.push("caption");
@@ -465,7 +440,7 @@ mod tests {
                 OnFailure::Continue,
             ),
             step(
-                Feature::TopInset,
+                Feature::SplitLayout,
                 nothing,
                 |ran| {
                     let _: () = ran.push("inset");
@@ -478,14 +453,14 @@ mod tests {
         assert!(unsafe { run(&steps, &mut ran, |_| {}) });
         assert_eq!(ran, ["layout", "caption", "split", "inset"]);
         assert_eq!(
-            outcome(Feature::CaptionHeight),
+            outcome(Feature::CaptionPaint),
             Some(Outcome::NotInThisBuild("the row leaves it out".to_owned()))
         );
         assert_eq!(
             outcome(Feature::Split),
             Some(Outcome::Failed("it failed".to_owned()))
         );
-        assert_eq!(outcome(Feature::TopInset), Some(Outcome::Installed));
+        assert_eq!(outcome(Feature::SplitLayout), Some(Outcome::Installed));
 
         let steps = vec![
             step(
@@ -500,7 +475,7 @@ mod tests {
                 OnFailure::Abort,
             ),
             step(
-                Feature::CaptionHeight,
+                Feature::CaptionPaint,
                 nothing,
                 |ran| {
                     let _: () = ran.push("caption");

@@ -391,10 +391,7 @@ mod tests {
             assert_eq!(read.to_row(), row, "{} {:?}", build.browser, build.version);
             assert_eq!(read.version, build.version);
             assert_eq!(read.toolbar.get_color, build.toolbar.get_color);
-            assert_eq!(
-                read.layout.layout_immediately_prologue,
-                build.layout.layout_immediately_prologue
-            );
+            assert_eq!(read.layout.on_paint_prologue, build.layout.on_paint_prologue);
             assert_eq!(read.layout.caption_ink_ids, build.layout.caption_ink_ids);
         }
     }
@@ -417,18 +414,12 @@ mod tests {
         let mut row = builds::CHROME.to_row();
         for (part, key) in [
             ("layout", "frame_browser_window_offset"),
-            ("side_panel", "contents_container"),
-            ("side_panel", "host_view"),
-            ("side_panel", "page_area"),
             ("toolbar", "get_widget_slot"),
         ] {
             row[part].as_object_mut().unwrap().remove(key);
         }
         let build = builds::Build::from_row(&row).expect("a row without window offsets reads");
         assert_eq!(build.layout.frame_browser_window_offset, None);
-        assert_eq!(build.side_panel.contents_container, None);
-        assert_eq!(build.side_panel.host_view, None);
-        assert_eq!(build.side_panel.page_area, None);
         assert_eq!(build.toolbar.get_widget_slot, None);
     }
 
@@ -453,7 +444,7 @@ mod tests {
             Some("0x")
         );
         assert!(row["layout"]["caption_ink_ids"][0].is_number());
-        let bytes = row["layout"]["layout_immediately_prologue"].as_str().unwrap();
+        let bytes = row["layout"]["on_paint_prologue"].as_str().unwrap();
         assert!(!bytes.starts_with("0x") && bytes.len() % 2 == 0);
         assert!(row["version"][0].is_number());
     }

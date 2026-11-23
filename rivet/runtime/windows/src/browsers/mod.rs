@@ -18,17 +18,6 @@ fn own_toolbar() -> bool {
     *OWN.get_or_init(|| crate::builds::get().toolbar.skip.contains("toolbar"))
 }
 
-/// The function that takes the place of the browser's layout of its window, so the page area can
-/// change where the page goes. Chromium lays out in two ways, and the row says which one the
-/// build's slot holds.
-pub(crate) fn layout_hook() -> usize {
-    if crate::builds::get().side_panel.old_layout == Some(true) {
-        chromium::old_layout::old_layout as *const () as usize
-    } else {
-        chromium::layout::proposed_layout as *const () as usize
-    }
-}
-
 /// The key of the Rivet window a view of the browser belongs to, or none when the window is not one
 /// of Rivet's. Views are asked from inside the browser's layout, which runs on the UI thread.
 pub(crate) unsafe fn rivet_owner(view: *mut std::ffi::c_void) -> Option<usize> {
@@ -62,8 +51,6 @@ pub(crate) trait SplitBackend: Sync {
     unsafe fn panes(&self, window: HWND) -> Vec<Pane>;
     /// The area the pages fill, as left, top, right and bottom.
     unsafe fn page_area(&self, window: HWND) -> Option<[i32; 4]>;
-    /// What the page area layout does for a split.
-    unsafe fn on_page_area(&self, _area: &mut crate::hooks::page_area::PageArea) {}
     /// Whether the browser's own address follows the focused page.
     fn address_follows_page(&self) -> bool;
     /// The title and address of a page of the split that is no tab of the strip.

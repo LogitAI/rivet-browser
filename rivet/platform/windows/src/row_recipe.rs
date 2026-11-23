@@ -75,38 +75,10 @@ pub const FIELDS: &[Field] = &[
         }],
     },
     Field {
-        path: "side_panel.proposed_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "side_panel.layout_vtable",
-            function: "side_panel.proposed",
-        }],
-    },
-    Field {
         path: "layout.on_paint_slot",
         recipes: &[Recipe::Slot {
             vtable: "layout.frame_vtable",
             function: "layout.on_paint",
-        }],
-    },
-    Field {
-        path: "layout.top_inset_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "layout.frame_vtable",
-            function: "layout.top_inset",
-        }],
-    },
-    Field {
-        path: "layout.layout_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "layout.frame_vtable",
-            function: "layout.layout",
-        }],
-    },
-    Field {
-        path: "layout.caption_size_slot",
-        recipes: &[Recipe::Slot {
-            vtable: "layout.caption_vtable",
-            function: "layout.caption_size",
         }],
     },
     Field {
@@ -129,7 +101,7 @@ pub enum Outcome {
     Failed(String),
 }
 
-/// The value at a path such as `layout.top_inset_slot`.
+/// The value at a path such as `layout.on_paint_slot`.
 fn at_path<'a>(row: &'a Value, path: &str) -> &'a Value {
     path.split('.').fold(row, |value, key| &value[key])
 }
@@ -533,18 +505,19 @@ mod tests {
         let pe = PeFile::parse(&bytes).unwrap();
         let mut build = json!({
             "layout": {
-                "frame_vtable": "0x108000", "top_inset": "0x101200", "top_inset_slot": 3,
-                "layout": "0x101100", "layout_slot": "0x1",
+                "frame_vtable": "0x108000", "on_paint": "0x101200", "on_paint_slot": 3,
+                "caption_vtable": "0x108000", "caption_paint": "0x101100",
+                "caption_paint_slot": "0x1",
             }
         });
         let derived = derive_row(&mut build, &pe);
-        assert_eq!(build["layout"]["top_inset_slot"], 2);
-        assert_eq!(build["layout"]["layout_slot"], "0x1");
+        assert_eq!(build["layout"]["on_paint_slot"], 2);
+        assert_eq!(build["layout"]["caption_paint_slot"], "0x1");
         assert_eq!(
             derived.read,
             vec![
-                "layout.top_inset_slot: 0x3 -> 0x2",
-                "layout.layout_slot: 0x1"
+                "layout.on_paint_slot: 0x3 -> 0x2",
+                "layout.caption_paint_slot: 0x1"
             ]
         );
         assert!(derived.failed.is_empty());
@@ -585,20 +558,20 @@ mod tests {
         let build = json!({
             "layout": {
                 "frame_vtable": "0x108000", "caption_vtable": "0x108100",
-                "layout": "0x101100", "layout_slot": "0x1",
+                "on_paint": "0x101100", "on_paint_slot": "0x1",
             }
         });
         // No value of a row has two recipes today, so the rule is checked on a field made here.
         let field = Field {
-            path: "layout.layout_slot",
+            path: "layout.on_paint_slot",
             recipes: &[
                 Recipe::Slot {
                     vtable: "layout.frame_vtable",
-                    function: "layout.layout",
+                    function: "layout.on_paint",
                 },
                 Recipe::Slot {
                     vtable: "layout.caption_vtable",
-                    function: "layout.layout",
+                    function: "layout.on_paint",
                 },
             ],
         };
@@ -615,11 +588,11 @@ mod tests {
         let build = json!({
             "version": [157, 0, 8103, 38],
             "tabs": {"browser_in_view": "0x558", "title": "0x00b77780", "groups": true},
-            "layout": {"frame_ids": [0x141, 0x142], "caption_container_offset": "0x3c0"},
+            "layout": {"frame_ids": [0x141, 0x142], "view_bounds_offset": "0x1c8"},
         });
         assert_eq!(
             without_recipe(&build),
-            vec!["layout.caption_container_offset", "layout.frame_ids"]
+            vec!["layout.frame_ids", "layout.view_bounds_offset"]
         );
     }
 

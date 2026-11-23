@@ -3,15 +3,9 @@
 //!
 //! Each path below follows public Chromium source:
 //!
-//! - `BrowserViewLayout` keeps the views it lays out in `BrowserViewLayoutViews views_`
-//!   (`chrome/browser/ui/views/frame/layout/browser_view_layout.h`). Its `browser_view` is the
-//!   `BrowserView` as a `views::View`, `main_background_region` is a `MainBackgroundRegionView` and
-//!   `multi_contents_view` is a `MultiContentsView`. `BrowserView::BrowserView` adds both of the
-//!   latter with `AddChildView` (`browser_view.cc`), so each names the browser view as its parent.
-//!   The layout's fields are found by the class names of the views they point at.
 //! - `BrowserFrameView` keeps the browser view in `views::ViewTracker browser_view_`
-//!   (`browser_frame_view.h`), which holds the `BrowserView`'s `views::View`: the view the layout
-//!   lays out. The frame view's field is the one that holds the same view.
+//!   (`browser_frame_view.h`), which holds the `BrowserView`'s `views::View`. The frame view's field
+//!   is the one that holds a view named `BrowserView` whose children all name it as their parent.
 //! - A view's widget is what `View::GetWidget` returns: the root view's `widget_`, a
 //!   `raw_ptr<Widget>` of `views::internal::RootView` (`ui/views/widget/root_view.h`). The root
 //!   view is reached through `View::parent_` until it is null. `Widget` owns the root view in
@@ -31,11 +25,7 @@ pub(crate) trait Memory {
 }
 
 pub(crate) const BROWSER_VIEW: &str = "BrowserView";
-pub(crate) const MAIN_BACKGROUND_REGION: &str = "MainBackgroundRegionView";
-pub(crate) const MULTI_CONTENTS: &str = "MultiContentsView";
 
-/// How far into a layout object its view fields are looked for.
-const LAYOUT_REACH: usize = 0x400;
 /// How far into a frame view, a root view or a widget a field is looked for.
 const OBJECT_REACH: usize = 0x1000;
 /// How many parents a view may have before the walk to its root gives up.
@@ -75,44 +65,8 @@ pub(crate) fn fields_naming<M: Memory>(
     found
 }
 
-/// The fields of a browser layout object, as offsets into it.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct LayoutFields {
-    /// The fields that hold the `BrowserView`, the view the layout lays out.
-    pub host: Vec<usize>,
-    /// The fields that hold the `MainBackgroundRegionView`, the area below the top row.
-    pub page_area: Vec<usize>,
-    /// The fields that hold the `MultiContentsView`, which holds the pages.
-    pub contents: Vec<usize>,
-}
-
-/// The view fields of the layout object at `layout`. With the parent field known, a page area or
-/// contents view counts only when it names the browser view as its parent, as `AddChildView` left
-/// it. `None` when no field holds a browser view.
-pub(crate) fn layout_fields<M: Memory>(
-    memory: &M,
-    layout: usize,
-    parent: Option<usize>,
-) -> Option<LayoutFields> {
-    let anything = |_: usize| true;
-    let (host, view) = fields_naming(memory, layout, LAYOUT_REACH, BROWSER_VIEW, &anything)?;
-    let child_of_host = |child: usize| match parent {
-        Some(parent) => memory.word(child + parent) == Some(view),
-        None => true,
-    };
-    let child = |class: &str| {
-        fields_naming(memory, layout, LAYOUT_REACH, class, &child_of_host)
-            .map_or_else(Vec::new, |(fields, _)| fields)
-    };
-    Some(LayoutFields {
-        host,
-        page_area: child(MAIN_BACKGROUND_REGION),
-        contents: child(MULTI_CONTENTS),
-    })
-}
-
-/// The fields of the frame view at `frame` that hold its browser view. When the layout already
-/// gave the browser view, the field must hold that one; otherwise every view in the browser view's
+/// The fields of the frame view at `frame` that hold its browser view. When the browser view is
+/// already known, the field must hold that one; otherwise every view in the browser view's
 /// own list of children must name it as their parent, which tells a view's own address from a
 /// pointer into another part of the object.
 pub(crate) fn frame_fields<M: Memory>(
@@ -341,23 +295,8 @@ impl Slot {
             }
         }
     }
-
-    fn known(&self, row: Option<usize>) -> Option<usize> {
-        match self
-            .value
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .0
-        {
-            Settled::Known(known) => known,
-            Settled::Unknown => row,
-        }
-    }
 }
 
-static HOST: Slot = Slot::new();
-static PAGE_AREA: Slot = Slot::new();
-static CONTENTS: Slot = Slot::new();
 static FRAME: Slot = Slot::new();
 
 /// A row value that is recorded: an offset the build has, not the absent marker.
@@ -365,57 +304,38 @@ fn recorded(value: Option<usize>) -> Option<usize> {
     value.filter(|value| *value != crate::builds::ABSENT)
 }
 
-fn side_panel_row() -> &'static crate::builds::SidePanel {
-    &crate::builds::get().side_panel
-}
-
-/// Settles the view fields of the browser layout object at `layout`, which the layout hook hands
-/// over, and returns the field that holds the view it lays out. Reads memory only.
-pub(crate) unsafe fn host_field(layout: usize) -> Option<usize> {
-    let row = side_panel_row();
-    let mut found: Option<LayoutFields> = None;
-    let mut fields = || {
-        if found.is_none() {
-            found = live().and_then(|live| layout_fields(live, layout, parent_field()));
-        }
-        found.clone()
-    };
-    let host = HOST.get(recorded(row.host_view), || fields().map(|found| found.host));
-    PAGE_AREA.get(recorded(row.page_area), || {
-        fields()
-            .map(|found| found.page_area)
-            .filter(|fields| !fields.is_empty())
-    });
-    CONTENTS.get(recorded(row.contents_container), || {
-        fields()
-            .map(|found| found.contents)
-            .filter(|fields| !fields.is_empty())
-    });
-    host
-}
-
-/// The layout object's field that holds the area below the top row, or `ABSENT`.
-pub(crate) fn page_area_field() -> usize {
-    PAGE_AREA
-        .known(recorded(side_panel_row().page_area))
-        .unwrap_or(crate::builds::ABSENT)
-}
-
-/// The layout object's field that holds the view of the pages, or `ABSENT`.
-pub(crate) fn contents_field() -> usize {
-    CONTENTS
-        .known(recorded(side_panel_row().contents_container))
-        .unwrap_or(crate::builds::ABSENT)
-}
-
-/// The browser view the frame view at `frame` holds, the same view the browser's layout lays out.
-/// `host` is that view when the layout already ran for the window.
+/// The browser view the frame view at `frame` holds. `host` is that view when it is already known.
 pub(crate) unsafe fn frame_browser_view(frame: usize, host: Option<usize>) -> Option<usize> {
     let row = recorded(crate::builds::get().layout.frame_browser_window_offset);
     let field = FRAME.get(row, || {
         live().and_then(|live| frame_fields(live, frame, host, parent_field()))
     })?;
     live()?.word(frame + field).filter(|view| *view != 0)
+}
+
+/// The frame view of `window`, from its live view tree: the browser view the view walk reaches from
+/// the window's own `HWNDMessageHandler`, and the sibling of it that is named as a frame view. Only a
+/// walk that already ran for this build is followed, so no caller pays the walk's budget. Reads
+/// memory only.
+pub(crate) unsafe fn frame_view_of(window: windows_sys::Win32::Foundation::HWND) -> Option<usize> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
+    let (live, build) = (live()?, fingerprint()?);
+    crate::chromium::reflect::walked_fields(build)?;
+    let handler = GetWindowLongPtrW(window, GWLP_USERDATA) as usize;
+    let (found, _) = crate::chromium::reflect::find_cached(
+        &live.ranges,
+        handler,
+        std::time::Duration::ZERO,
+        build,
+    )
+    .ok()?;
+    crate::chromium::live_tables::frame_view(live, found.browser_view?, found.parent)
+}
+
+/// The browser view the frame view of `window` holds, found from the live view tree as
+/// `frame_view_of` finds the frame view.
+pub(crate) unsafe fn browser_view_of(window: windows_sys::Win32::Foundation::HWND) -> Option<usize> {
+    frame_browser_view(frame_view_of(window)?, None)
 }
 
 /// Starts the view walk of `reflect` from `window`'s own `HWNDMessageHandler`, once per process, on
@@ -641,42 +561,6 @@ mod tests {
         memory.set(FRAME + 0x340, BROWSER);
         memory.set(FRAME + 0x348, BROWSER);
         memory
-    }
-
-    #[test]
-    fn nfr6_the_side_panel_views_are_found_by_class_name() {
-        // Chrome 157 keeps them at 0x38, 0x50 and 0xb8; Edge has its own fields between them.
-        for (host, page_area, contents) in [(0x38, 0x50, 0xB8), (0x38, 0x58, 0xD8)] {
-            let memory = window(host, page_area, contents);
-            let fields = layout_fields(&memory, LAYOUT, Some(PARENT)).expect("a browser view");
-            assert_eq!(fields.host, [host]);
-            assert_eq!(fields.page_area, [page_area]);
-            assert_eq!(fields.contents, [contents]);
-        }
-    }
-
-    #[test]
-    fn nfr6_a_layout_view_that_is_not_the_browser_views_child_is_not_taken() {
-        let mut memory = window(0x38, 0x50, 0xB8);
-        memory.set(CONTENTS + PARENT, OTHER);
-        let fields = layout_fields(&memory, LAYOUT, Some(PARENT)).unwrap();
-        assert!(fields.contents.is_empty());
-        assert_eq!(fields.page_area, [0x50]);
-        // A layout with no browser view has no fields at all.
-        let mut bare = Words::default();
-        bare.set(LAYOUT + 0x38, PAGE_AREA);
-        bare.name(PAGE_AREA, "MainBackgroundRegionView");
-        assert_eq!(layout_fields(&bare, LAYOUT, Some(PARENT)), None);
-    }
-
-    #[test]
-    fn nfr6_two_different_views_of_one_class_leave_the_field_unknown() {
-        let mut memory = window(0x38, 0x50, 0xB8);
-        memory.set(LAYOUT + 0x100, OTHER);
-        memory.name(OTHER, "MultiContentsView");
-        memory.set(OTHER + PARENT, BROWSER);
-        let fields = layout_fields(&memory, LAYOUT, Some(PARENT)).unwrap();
-        assert!(fields.contents.is_empty());
     }
 
     #[test]

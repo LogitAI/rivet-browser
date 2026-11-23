@@ -3,7 +3,7 @@
 //! A row value that could not be read from its own build must never reach a browser. When it
 //! belongs to a feature the runtime can do without, the row turns that feature off and clears the
 //! value, and the rest of the row can still ship once its checks pass. A value of a part the
-//! window cannot do without (the frame and the page area layout) has no switch here, so it still
+//! window cannot do without (the frame) has no switch here, so it still
 //! stops the row and the browser opens with Rivet's held build.
 //!
 //! The switches are the ones the runtime already obeys: a section's `supported` flag, an optional
@@ -80,20 +80,6 @@ pub const ROW_FEATURES: &[RowFeature] = &[
         checks: &["sidebar", "sidebar-", "fullscreen-sidebar"],
     },
     RowFeature {
-        // Fields of the browser's layout object that only the Sidebar's part of the layout reads.
-        // The layout reads an absent field as no view.
-        name: "sidebar",
-        paths: &[
-            "side_panel.side_panel",
-            "side_panel.side_panel_animation",
-            "side_panel.contents_outline",
-            "side_panel.vertical_tabs",
-        ],
-        off: &[Off::Flag("side_panel.supported")],
-        clear: Clear::Absent,
-        checks: &["sidebar", "sidebar-", "fullscreen-sidebar"],
-    },
-    RowFeature {
         // The Sidebar's own functions and class tables. Only `features/side_panel.rs` reads them,
         // and only once the Sidebar's targets are all recorded.
         name: "sidebar",
@@ -165,17 +151,12 @@ pub const ROW_FEATURES: &[RowFeature] = &[
 /// Values the runtime finds in the browser's own memory by Chromium's class names and the shape of
 /// the view tree, so a row needs none of them. Where a row has one, the runtime only compares it
 /// with what it found. A value no instruction of the new build gave is left out of the row rather
-/// than carried from the prior build, and does not stop the row: the browser view, the area below
-/// the top row and the view of the pages are the layout's views named `BrowserView`,
-/// `MainBackgroundRegionView` and `MultiContentsView`; the frame view's field is the one that holds
-/// that same browser view; and a view's widget is the one the root of its view tree names. A
-/// runtime from before this cannot read a row without them, so it refuses the row and opens its
-/// held build instead of guessing.
+/// than carried from the prior build, and does not stop the row: the frame view's field is the one
+/// that holds a view named `BrowserView`, and a view's widget is the one the root of its view tree
+/// names. A runtime from before this cannot read a row without them, so it refuses the row and opens
+/// its held build instead of guessing.
 pub const REFLECTED: &[&str] = &[
     "layout.frame_browser_window_offset",
-    "side_panel.contents_container",
-    "side_panel.host_view",
-    "side_panel.page_area",
     "toolbar.get_widget_slot",
 ];
 
@@ -227,15 +208,6 @@ pub const UNUSED_WHEN: &[UnusedWhen] = &[
         paths: &["tabs.tab_collection", "tabs.tab_contents"],
         when: When::Recorded("tabs.tab_at"),
         why: "the build has its own GetWebContentsAt",
-    },
-    UnusedWhen {
-        paths: &[
-            "side_panel.layout_vtable",
-            "side_panel.proposed_slot",
-            "side_panel.proposed",
-        ],
-        when: When::NotTrue("side_panel.old_layout"),
-        why: "a Rivet window is an app window, laid out by the app layout class, not the tabbed one",
     },
 ];
 
@@ -411,8 +383,8 @@ mod tests {
             feature_of("omnibox.match_size").unwrap().name,
             "address suggestions"
         );
-        // The frame and the page area layout have no switch: the window cannot do without them.
-        for core in ["layout.view_bounds_offset", "side_panel.toolbar"] {
+        // The frame has no switch: the window cannot do without it.
+        for core in ["layout.view_bounds_offset", "layout.frame_vtable"] {
             assert!(feature_of(core).is_none(), "{core}");
             assert!(!is_reflected(core), "{core}");
         }
@@ -472,23 +444,6 @@ mod tests {
         let excused = excused_checks(&row);
         assert_eq!(excuses(&excused, "permission-bubble"), Some("bubble anchor"));
         assert_eq!(excuses(&excused, "security-chip"), None);
-    }
-
-    #[test]
-    fn nfr6_the_tabbed_layout_is_not_a_value_of_a_build_without_the_old_layout() {
-        let build = json!({"side_panel": {"old_layout": null, "proposed": "0x13c8310"}});
-        for path in [
-            "side_panel.layout_vtable",
-            "side_panel.proposed_slot",
-            "side_panel.proposed",
-        ] {
-            assert!(unused(&build, path).is_some(), "{path}");
-        }
-        assert!(unused(&json!({"side_panel": {}}), "side_panel.proposed").is_some());
-        // An old-layout build lays out every window with the class its row records.
-        let old = json!({"side_panel": {"old_layout": true, "proposed": "0x13c8310"}});
-        assert!(unused(&old, "side_panel.proposed").is_none());
-        assert!(unused(&old, "side_panel.layout_vtable").is_none());
     }
 
     #[test]

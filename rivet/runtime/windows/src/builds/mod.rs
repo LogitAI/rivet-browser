@@ -107,11 +107,6 @@ pub struct Omnibox {
     pub allocate: usize,
     pub match_contents: usize,
     pub match_description: usize,
-    /// The vtable of `BrowserViewAppLayoutImpl`, the slot of its `CalculateProposedLayout` and that
-    /// function, which lays out an app window.
-    pub app_layout_vtable: usize,
-    pub app_layout_slot: usize,
-    pub app_layout_proposed: usize,
     /// The first bytes of every function above, compared with the loaded module before any call.
     pub signatures: &'static [(usize, &'static [u8])],
 }
@@ -404,14 +399,6 @@ pub struct SidePanel {
     /// `ThemeSource::GenerateColorsCss(out, provider, url, flag, flag)`, which writes the style sheet.
     pub generate_colors_css: usize,
     pub generate_colors_css_prologue: &'static [u8],
-    /// `BrowserViewTabbedLayoutImpl::CalculateProposedLayout`, slot 16 of its vtable. It fills a
-    /// `std::map` of view to bounds that the layout then applies.
-    pub layout_vtable: usize,
-    pub proposed_slot: usize,
-    pub proposed: usize,
-    /// The slot holds Chromium's older `BrowserViewLayoutImplOld::Layout` in place of
-    /// `CalculateProposedLayout`, so the layout hook sets bounds after the browser's layout runs.
-    pub old_layout: Option<bool>,
     /// The registry keeps its entries as begin and end pointers at +0x38 and +0x40, where newer
     /// builds keep a pointer and a count.
     pub registry_end: Option<bool>,
@@ -427,25 +414,6 @@ pub struct SidePanel {
     /// The build's show by id stops the browser for an extension's entry, which then opens with
     /// toggle and its key.
     pub extensions_by_toggle: Option<bool>,
-    /// The layout object keeps the host view at +0x38, the contents container at +0xb8, the side
-    /// panel at +0xc0 and the content shown while the side panel animates at +0xc8. The host view,
-    /// the page area and the contents container are also found by the class names of the views
-    /// they hold, and a row value only confirms them; `None` when the row does not have one.
-    pub host_view: Option<usize>,
-    /// The view behind the whole area below the top row, which the rail shares the height of.
-    pub page_area: Option<usize>,
-    pub contents_container: Option<usize>,
-    /// The browser's vertical tab list, which lies left of the page.
-    pub vertical_tabs: usize,
-    /// The browser's top row: toolbar, address bar and the buttons around it.
-    pub toolbar: usize,
-    /// The view that draws the outline around the contents, which has the contents' bounds.
-    pub contents_outline: usize,
-    pub side_panel: usize,
-    pub side_panel_animation: usize,
-    /// `views::View::DeprecatedLayoutImmediately`.
-    pub layout_immediately: usize,
-    pub layout_immediately_prologue: &'static [u8],
     /// `views::View::GetEventHandlerForPoint`, which the click diagnostic calls.
     pub event_handler_for_point: usize,
 }
@@ -478,56 +446,22 @@ pub struct Layout {
     /// wedge is painted with Rivet's frame colour instead of Chrome's blue.
     pub corner_vtable: usize,
     pub corner_paint: usize,
-    /// Experiment, Chrome 156.0.8078.48 only: `WindowsCaptionButton::CalculatePreferredSize` in the
-    /// caption button's vtable. Rivet windows get caption buttons as tall as the shell study's top
-    /// row, so the native buttons sit centred in it.
+    /// `WindowsCaptionButton::PaintButtonContents` in the caption button's vtable, which paints the
+    /// native caption buttons with the window's colours.
     pub caption_vtable: usize,
-    pub caption_size_slot: usize,
-    pub caption_size: usize,
     pub caption_paint_slot: usize,
     pub caption_paint: usize,
-    /// Experiment, Chrome 156.0.8078.48 only: `BrowserFrameViewWin::GetTopInset` in the frame view's
-    /// vtable. It is the height of the browser's own title bar, which also sizes the caption buttons.
-    pub top_inset_slot: usize,
-    pub top_inset: usize,
-    /// Experiment, Chrome 156.0.8078.48 only: `BrowserFrameViewWin::Layout` in the frame view's
-    /// vtable. It sizes the caption button container from the tab strip, not from the title bar
-    /// height, so the container is resized once the browser's own layout is done.
-    pub layout_slot: usize,
-    pub layout: usize,
-    /// `views::View::SetBoundsRect`, and where a frame view keeps its caption button container and a
-    /// view keeps its bounds.
-    pub set_bounds_rect: usize,
-    pub caption_container_offset: usize,
+    /// Where a view keeps its bounds.
     pub view_bounds_offset: usize,
-    /// The vtable of the `views::View` part of `BrowserView`, which sits behind other base classes.
-    pub browser_view_view_vtable: usize,
     /// The `views::View` vtable of the frame view the browser window uses.
     pub frame_vtable: usize,
-    /// `views::View::DeprecatedLayoutImmediately` and its first instructions.
-    pub layout_immediately: usize,
-    pub layout_immediately_prologue: &'static [u8],
-    /// Layer helpers of the panel clip: `View::SetPaintToLayer`, `Layer::SetRoundedCornerRadius`,
-/// `Layer::SetMasksToBounds`, `Layer::StackAtTop` and `Layer::SetFillsBoundsOpaquely`.
-    pub set_layer: usize,
-    pub set_layer_prologue: &'static [u8],
-    pub set_radius: usize,
-    pub set_radius_prologue: &'static [u8],
-    pub set_masks: usize,
-    pub set_masks_prologue: &'static [u8],
-    pub stack_at_top: usize,
-    pub stack_at_top_prologue: &'static [u8],
-    pub set_opaque: usize,
-    pub set_opaque_prologue: &'static [u8],
     pub on_paint_prologue: &'static [u8],
     pub draw_color_prologue: &'static [u8],
     pub get_color_provider_prologue: &'static [u8],
     pub corner_paint_prologue: &'static [u8],
-    pub layout_prologue: &'static [u8],
-    pub set_bounds_rect_prologue: &'static [u8],
     /// `BrowserFrameViewWin` holds the `BrowserView`'s `BrowserWindow` subobject here, and the
     /// subobject lies this many bytes after the start of the `BrowserView`. The field is also found
-    /// as the one that holds the view the layout lays out, and a row value only confirms it.
+    /// as the one that holds the browser view, and a row value only confirms it.
     pub frame_browser_window_offset: Option<usize>,
     pub browser_window_in_view: usize,
     pub caption_paint_prologue: &'static [u8],
@@ -682,26 +616,12 @@ const UNCHECKED_SIDEPANEL: SidePanel = SidePanel {
     color_source: 0,
     generate_colors_css: ABSENT,
     generate_colors_css_prologue: &[0],
-    layout_vtable: ABSENT,
-    proposed_slot: 0,
-    proposed: ABSENT,
-    old_layout: None,
     registry_end: None,
     registry_in_coordinator: None,
     registry_entries: None,
     coordinator_browser: None,
     entry_key_size: None,
     extensions_by_toggle: None,
-    host_view: None,
-    page_area: None,
-    contents_container: None,
-    vertical_tabs: 0,
-    toolbar: 0,
-    contents_outline: 0,
-    side_panel: 0,
-    side_panel_animation: 0,
-    layout_immediately: ABSENT,
-    layout_immediately_prologue: &[0],
     event_handler_for_point: ABSENT,
 };
 
@@ -716,37 +636,14 @@ const UNCHECKED_LAYOUT: Layout = Layout {
     corner_vtable: ABSENT,
     corner_paint: ABSENT,
     caption_vtable: ABSENT,
-    caption_size_slot: 0,
-    caption_size: ABSENT,
     caption_paint_slot: 0,
     caption_paint: ABSENT,
-    top_inset_slot: 0,
-    top_inset: ABSENT,
-    layout_slot: 0,
-    layout: ABSENT,
-    set_bounds_rect: ABSENT,
-    caption_container_offset: 0,
     view_bounds_offset: 0,
-    browser_view_view_vtable: ABSENT,
     frame_vtable: ABSENT,
-    layout_immediately: ABSENT,
-    layout_immediately_prologue: &[0],
-    set_layer: ABSENT,
-    set_layer_prologue: &[0],
-    set_radius: ABSENT,
-    set_radius_prologue: &[0],
-    set_masks: ABSENT,
-    set_masks_prologue: &[0],
-    stack_at_top: ABSENT,
-    stack_at_top_prologue: &[0],
-    set_opaque: ABSENT,
-    set_opaque_prologue: &[0],
     on_paint_prologue: &[0],
     draw_color_prologue: &[0],
     get_color_provider_prologue: &[0],
     corner_paint_prologue: &[0],
-    layout_prologue: &[0],
-    set_bounds_rect_prologue: &[0],
     frame_browser_window_offset: None,
     browser_window_in_view: 0,
     caption_paint_prologue: &[0],
