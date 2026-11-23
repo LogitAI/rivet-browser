@@ -3069,10 +3069,16 @@ pub(crate) unsafe fn place_panel_by_rivet(window: HWND) {
         width,
         height,
     };
-    let Some(reserved) = reserved_width(window, bounds) else {
-        return;
+    // Without its sizing frame the window is fullscreen, and the page takes the whole window, as the
+    // browser's own layout gives it then.
+    let panel = if !framed(window) {
+        bounds
+    } else {
+        let Some(reserved) = reserved_width(window, bounds) else {
+            return;
+        };
+        frame_layout::rivet_panel(bounds, reserved)
     };
-    let panel = frame_layout::rivet_panel(bounds, reserved);
     crate::trace::trace_changed(
         "experiment page view panel",
         &format!(
