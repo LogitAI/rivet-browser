@@ -23,8 +23,6 @@ use crate::builds::Build;
 use crate::chromium::image;
 use crate::chromium::memory::{prologue_is, readable};
 use crate::feature::{available_here, Needs};
-use crate::features::frame_layout::{self};
-use crate::hooks::page_area::{self, PageArea};
 use crate::targets::Target;
 
 /// The values of the loaded browser build.
@@ -158,14 +156,9 @@ pub unsafe fn objects(window: HWND) -> Option<Objects> {
 }
 
 /// The `BrowserWindow` subobject of a window's `BrowserView`, which the frame view keeps in its
-/// tracker of the browser view. A window whose frame view is not known has it from the layout,
-/// which lays that same view out.
+/// tracker of the browser view. The frame view is found from the window's live view tree.
 unsafe fn browser_window_of(window: HWND) -> Option<usize> {
-    let host = page_area::laid_out_host(window);
-    match frame_layout::frame_view(window) {
-        Some(frame) => crate::chromium::window_views::frame_browser_view(frame, host),
-        None => host,
-    }
+    crate::chromium::window_views::browser_view_of(window)
 }
 
 unsafe fn find_objects(window: HWND, base: usize) -> Option<Objects> {
@@ -804,150 +797,21 @@ pub fn is_unfolded(window: HWND) -> bool {
     UNFOLDED.with(|set| set.borrow().contains(&(window as isize)))
 }
 
-/// The width the rail takes from the right of a window's page area.
-fn rail_of(window: HWND) -> i32 {
-    // Where the second view is recorded, it keeps the rail free itself.
-    if crate::features::second_view::available() {
-        return 0;
-    }
-    if UNFOLDED.with(|set| set.borrow().contains(&(window as isize))) {
-        RAIL_WIDTH
-    } else {
-        0
-    }
-}
-
 /// The width of an open side panel, in DIPs. The mock-up's extension panel is 240 DIPs wide.
 pub const PANEL_WIDTH: i32 = 240;
 /// The height Rivet keeps free above an open side panel for its own header row.
 pub const HEADER_ROW: i32 = 40;
 
-/// Leaves `rail` DIPs at the right edge of the page area. The page keeps the width it has with no
-/// panel open. An open side panel is `PANEL_WIDTH` wide at the right end of the page, over it, and
-/// ends at the rail. `page` is the left and right edge the page has with no panel open. `top` is the
-/// top of the page area: Rivet's header row sits there, and the panel starts right below it even when
-/// the browser keeps a bar, like an infobar, between the area's top and its own panel.
-fn make_room(
-    contents: &mut [i32; 4],
-    outline: Option<&mut [i32; 4]>,
-    side_panel: Option<&mut [i32; 4]>,
-    animation: Option<&mut [i32; 4]>,
-    page: (i32, i32),
-    rail: i32,
-    top: i32,
-) {
-    // The panel's right edge ends at the rail. While Chrome animates the panel in, it is narrower.
-    let panel = side_panel
-        .as_ref()
-        .filter(|bounds| bounds[2] > 0)
-        .map(|bounds| {
-            (
-                page.1 - rail,
-                bounds[2].min(PANEL_WIDTH),
-                bounds[1],
-                bounds[3],
-            )
-        });
-    for bounds in [side_panel, animation].into_iter().flatten() {
-        bounds[0] = match panel {
-            Some((edge, width, _, _)) => {
-                // The header row above the panel is Rivet's, so the browser's panel starts below it.
-                let below = top + HEADER_ROW;
-                let bottom = bounds[1] + bounds[3];
-                bounds[1] = below;
-                bounds[3] = (bottom - below).max(0);
-                // Rivet's hairline takes the panel's first column.
-                bounds[2] = width - 1;
-                edge - width + 1
-            }
-            None => bounds[0] - rail,
-        };
-    }
-    for bounds in [Some(&mut *contents), outline].into_iter().flatten() {
-        let right = match panel {
-            // Chrome shrank and insets the contents for the panel. The panel floats, so the
-            // contents are what they are with no panel: from the page's left to the rail. The caller
-            // gives both edges, because Chrome's own move while the panel slides in.
-            Some((edge, _, panel_top, height)) => {
-                bounds[0] = page.0;
-                bounds[1] = panel_top;
-                bounds[3] = height;
-                edge
-            }
-            None => bounds[0] + bounds[2] - rail,
-        };
-        bounds[2] = (right - bounds[0]).max(1);
-    }
-}
-
-thread_local! {
-    static CONTENTS_SEEN: std::cell::Cell<[i32; 4]> = const { std::cell::Cell::new([0; 4]) };
-}
-
-/// Traces the page's bounds whenever a layout changes them, so a check can compare the page
-/// before and after a panel opens.
-fn trace_contents(window: HWND, contents: &[i32; 4]) {
-    if CONTENTS_SEEN.with(|seen| seen.replace(*contents)) != *contents {
-        trace(&format!("page {:x} bounds {contents:?}", window as isize));
-    }
-}
-
-/// Whether this build's Sidebar has been checked. A build can record the browser's layout, which the
-/// pages of a split need, without it.
+/// Whether this build's Sidebar has been checked.
 pub fn sidebar_checked() -> bool {
     checked()
 }
 
-/// The Sidebar's part of the page area layout: it reserves the rail, and lets an open panel float
-/// over the page.
-pub(crate) unsafe fn on_page_area(area: &mut PageArea) {
-    let rail = rail_of(area.window);
-    area.rail = rail;
-    if rail > 0 {
-        if let Some(contents) = area.contents() {
-            let side_panel = area.bounds(bv().side_panel);
-            let animation = area.bounds(bv().side_panel_animation);
-            let outline = area.bounds(bv().contents_outline);
-            let panel_view = area.field(bv().side_panel);
-            let page = area.page().map(|bounds| *bounds).unwrap_or([0; 4]);
-            // The page starts where the browser's vertical tab list ends.
-            let left = area
-                .bounds(bv().vertical_tabs)
-                .map_or((*contents)[0], |tabs| (*tabs)[0] + (*tabs)[2]);
-            make_room(
-                &mut *contents,
-                outline.map(|bounds| &mut *bounds),
-                side_panel.map(|bounds| &mut *bounds),
-                animation.map(|bounds| &mut *bounds),
-                (left, page[0] + page[2]),
-                rail,
-                page[1],
-            );
-            // The panel floats over the page, so its layer paints above the page's.
-            if panel_view != 0 && side_panel.is_some_and(|bounds| (*bounds)[2] > 0) {
-                frame_layout::raise_view(panel_view as *mut c_void);
-            }
-            trace_contents(area.window, &*contents);
-        }
-    }
-}
-
-/// Folds or unfolds the Sidebar of a window and lays its page area out again.
+/// Folds or unfolds the Sidebar of a window. The second view keeps the rail free beside the page,
+/// so a build without it cannot unfold the Sidebar.
 pub unsafe fn set_unfolded(window: HWND, unfolded: bool) {
-    if crate::features::second_view::available() {
-        UNFOLDED.with(|set| {
-            let mut set = set.borrow_mut();
-            if unfolded {
-                set.insert(window as isize);
-            } else {
-                set.remove(&(window as isize));
-            }
-        });
-        crate::features::second_view::set_rail(window, if unfolded { RAIL_WIDTH } else { 0 });
-        return;
-    }
-    if let Err(error) = page_area::install() {
-        trace(&error);
+    if !crate::features::second_view::available() {
+        trace("this browser build records no second view, so the rail has no room");
         return;
     }
     UNFOLDED.with(|set| {
@@ -958,7 +822,7 @@ pub unsafe fn set_unfolded(window: HWND, unfolded: bool) {
             set.remove(&(window as isize));
         }
     });
-    page_area::relayout(window);
+    crate::features::second_view::set_rail(window, if unfolded { RAIL_WIDTH } else { 0 });
 }
 
 unsafe fn dump_entry_memory(window: HWND) {
@@ -996,7 +860,6 @@ enum Command {
     Dump,
     Open(u32),
     Rail(bool),
-    DumpLayout,
     Click(String),
     Entries,
     Colours,
@@ -1014,7 +877,6 @@ impl Command {
         match text {
             "rail on" => return Some(Self::Rail(true)),
             "rail off" => return Some(Self::Rail(false)),
-            "layout" => return Some(Self::DumpLayout),
             "entries" => return Some(Self::Entries),
             "colours" => return Some(Self::Colours),
             _ if text.starts_with("hit ") => {
@@ -1076,11 +938,6 @@ pub unsafe fn tick(window: HWND, directory: Option<&std::path::Path>) {
             }
         }
         Some(Command::Click(command)) => crate::side_rail::simulate(window, &command),
-        Some(Command::DumpLayout) => {
-            let _ = page_area::install();
-            page_area::dump_next();
-            page_area::relayout(window);
-        }
         Some(Command::Hit(x, y)) => {
             if let Some(found) =
                 objects(window).filter(|_| bv().event_handler_for_point != crate::builds::ABSENT)
@@ -1221,107 +1078,9 @@ mod tests {
         let whale = row("Naver Whale");
         assert!(whale.supported && whale.registry_end == Some(true));
         assert_eq!((whale.extension_entry, whale.entry_count), (0x15, 0x16));
-        // The traced app window layout keeps the page area, the top row and the page container here.
-        assert_eq!(
-            (whale.page_area, whale.toolbar, whale.contents_container),
-            (Some(0x28), 0x40, Some(0x90))
-        );
         let samsung = row("Samsung Internet");
         assert!(samsung.supported);
         assert_eq!(samsung.hidden_entries, &[20, 21, 22, 23, 24]);
-        assert_eq!(samsung.old_layout, Some(true));
-        assert_eq!(
-            (samsung.contents_container, samsung.side_panel),
-            (Some(0x80), 0x98)
-        );
-    }
-
-    #[test]
-    fn fr10_open_panel_floats_over_the_page_and_leaves_its_width_alone() {
-        let mut contents = [8, 47, 692, 591];
-        let mut panel = [700, 46, 378, 600];
-        let mut animation = [700, 46, 378, 600];
-        make_room(
-            &mut contents,
-            None,
-            Some(&mut panel),
-            Some(&mut animation),
-            (0, 1078),
-            RAIL_WIDTH,
-            46,
-        );
-        assert_eq!(
-            panel,
-            [799, 46 + HEADER_ROW, PANEL_WIDTH - 1, 600 - HEADER_ROW],
-            "ends at the rail, below Rivet's header row, after its hairline"
-        );
-        assert_eq!(
-            contents,
-            [0, 46, 1038, 600],
-            "the page is as wide as with no panel open: up to the rail"
-        );
-        assert_eq!(animation, panel);
-    }
-
-    #[test]
-    fn fr10_open_panel_starts_below_the_header_row_even_under_an_infobar() {
-        // An infobar keeps the browser's own panel and the page 56 DIPs below the page area's top,
-        // where Rivet's header row is. The panel starts right under that row all the same.
-        let mut contents = [267, 101, 747, 737];
-        let mut panel = [1014, 101, 418, 737];
-        make_room(
-            &mut contents,
-            None,
-            Some(&mut panel),
-            None,
-            (267, 1432),
-            RAIL_WIDTH,
-            45,
-        );
-        assert_eq!(panel[1], 45 + HEADER_ROW);
-        assert_eq!(
-            panel[1] + panel[3],
-            101 + 737,
-            "its bottom stays where the browser put it"
-        );
-        assert_eq!(
-            contents[1], 101,
-            "the page keeps its place under the infobar"
-        );
-    }
-
-    #[test]
-    fn fr10_rail_leaves_a_closed_side_panel_without_width_and_the_page_whole() {
-        let mut contents = [0, 46, 1078, 600];
-        let mut panel = [1078, 46, 0, 600];
-        make_room(
-            &mut contents,
-            None,
-            Some(&mut panel),
-            None,
-            (0, 1078),
-            RAIL_WIDTH,
-            46,
-        );
-        assert_eq!(contents, [0, 46, 1038, 600]);
-        assert_eq!(panel[2], 0);
-    }
-
-    #[test]
-    fn fr10_open_panel_keeps_the_page_whole_while_it_slides_in() {
-        // Chrome animates the panel in from outside the window and shifts the contents with it.
-        let mut contents = [270, 45, 900, 681];
-        let mut panel = [1200, 44, 120, 690];
-        make_room(
-            &mut contents,
-            None,
-            Some(&mut panel),
-            None,
-            (268, 1092),
-            RAIL_WIDTH,
-            44,
-        );
-        assert_eq!(contents, [268, 44, 784, 690]);
     }
 
     #[test]
@@ -1330,13 +1089,6 @@ mod tests {
             Command::parse("hit 900 300"),
             Some(Command::Hit(900, 300))
         ));
-    }
-
-    #[test]
-    fn fr10_rail_never_collapses_the_page() {
-        let mut contents = [0, 0, 20, 100];
-        make_room(&mut contents, None, None, None, (0, 20), RAIL_WIDTH, 0);
-        assert_eq!(contents[2], 1);
     }
 
     #[test]

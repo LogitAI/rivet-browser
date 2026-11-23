@@ -362,8 +362,6 @@ mod frame;
 #[cfg(windows)]
 mod ground;
 #[cfg(windows)]
-mod hooks;
-#[cfg(windows)]
 mod installed_browsers;
 #[cfg(windows)]
 mod offscreen;

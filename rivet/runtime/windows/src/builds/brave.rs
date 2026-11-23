@@ -187,28 +187,12 @@ pub static BRAVE: Build = Build {
     },
     // Only the browser's layout, which the pages of a split need. The Sidebar stays off.
     side_panel: SidePanel {
-        layout_vtable: ABSENT,
-        proposed_slot: 16,
-        proposed: ABSENT,
-        old_layout: None,
         registry_end: None,
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: Some(0x38),
-        page_area: Some(0x50),
-        contents_container: Some(0xb8),
-        vertical_tabs: 0x80,
-        toolbar: 0x60,
-        contents_outline: 0x58,
-        side_panel: 0xc0,
-        side_panel_animation: 0xc8,
-        layout_immediately: 0x003E5B50, // ?LayoutImmediately@View@views
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
-        ],
         ..UNCHECKED_SIDEPANEL
     },
     layout: Layout {
@@ -226,36 +210,11 @@ pub static BRAVE: Build = Build {
         corner_paint: 0x0B762730,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_vtable: 0x111E7580, // ??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@
-        caption_size_slot: 74,
-        caption_size: 0x03A4ABD0, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
         caption_paint_slot: 114,
         caption_paint: 0x02EBEF10, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
         caption_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        top_inset_slot: 127,
-        top_inset: ABSENT,
-        layout_slot: 23,
-        layout: 0x039F55C0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
-        layout_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40],
-        set_bounds_rect: 0x06008490, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        caption_container_offset: 0x3C8,
         view_bounds_offset: 0x1C8,
-        browser_view_view_vtable: 0x1112C600, // the browser view vtable
         frame_vtable: ABSENT,
-        layout_immediately: 0x003E5B50, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x56, 0x57, 0x55, 0x53, 0x48, 0x83, 0xEC, 0x58, 0x48, 0x89, 0xCE,
-        ],
-        set_layer: 0x0087C150, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
-        set_radius: 0x01B50760, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
-        set_masks: 0x02EF7E10, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
-        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
-        stack_at_top: 0x0BF3E520, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
-        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_opaque: 0x02322E10, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
         frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
@@ -515,28 +474,12 @@ pub static BRAVE_63: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x11056600, // ??_7BrowserViewTabbedLayoutImpl@@6B@, found statically and unverified
-        proposed_slot: 16,
-        proposed: 0x038CA250, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl, slot 16, found statically and unverified
-        old_layout: None,
         registry_end: None,
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: Some(0x38),
-        page_area: Some(0x50),
-        contents_container: Some(0xb8),
-        vertical_tabs: 0x80,
-        toolbar: 0x60,
-        contents_outline: 0x58,
-        side_panel: 0xc0,
-        side_panel_animation: 0xc8,
-        layout_immediately: 0x05EE76D0, // ?LayoutImmediately@View@views
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
-        ],
         event_handler_for_point: 0x018960D0, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
     },
     layout: Layout {
@@ -554,36 +497,11 @@ pub static BRAVE_63: Build = Build {
         corner_paint: 0x0B71E3A0,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_vtable: 0x111A54C0, // ??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@
-        caption_size_slot: 74,
-        caption_size: 0x03A60970, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
         caption_paint_slot: 114,
         caption_paint: 0x020F21D0, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
-        top_inset_slot: 127,
-        top_inset: 0x02465480, // ?GetTopInset@BrowserFrameViewWin, slot 127, found statically and unverified
-        layout_slot: 23,
-        layout: 0x03A0BCD0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
-        layout_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40],
-        set_bounds_rect: 0x05EE66C0, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        caption_container_offset: 0x3C8,
         view_bounds_offset: 0x1C8,
-        browser_view_view_vtable: 0x110EA540, // the browser view vtable
         frame_vtable: 0x110ED840, // ??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@, found statically and unverified
-        layout_immediately: 0x05EE76D0, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
-        ],
-        set_layer: 0x00852850, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
-        set_radius: 0x01B70D50, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
-        set_masks: 0x02F42E30, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
-        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
-        stack_at_top: 0x0BEFA460, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
-        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_opaque: 0x0244FE30, // ?SetFillsBoundsOpaquely@Layer@ui@@QEAAX_N@Z
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
         frame_browser_window_offset: Some(0x340),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x67D, 0x67E, 0x67F],
@@ -876,28 +794,12 @@ pub static BRAVE_157_55: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x114E49D8, // ??_7BrowserViewTabbedLayoutImpl@@6B@, found statically and unverified
-        proposed_slot: 16,
-        proposed: 0x03B5F310, // ?CalculateProposedLayout@BrowserViewTabbedLayoutImpl, slot 16, found statically and unverified
-        old_layout: None,
         registry_end: None,
         registry_in_coordinator: None,
         registry_entries: None,
         coordinator_browser: None,
         entry_key_size: None,
         extensions_by_toggle: None,
-        host_view: Some(0x38),
-        page_area: Some(0x50),
-        contents_container: Some(0xb8),
-        vertical_tabs: 0x80,
-        toolbar: 0x60,
-        contents_outline: 0x58,
-        side_panel: 0xc0,
-        side_panel_animation: 0xc8,
-        layout_immediately: 0x05E85780, // ?LayoutImmediately@View@views
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
-        ],
         event_handler_for_point: 0x0152B340, // ?GetEventHandlerForPoint@View@views@@QEAAPEAV12@AEBVPoint@gfx@@@Z
     },
     layout: Layout {
@@ -915,36 +817,11 @@ pub static BRAVE_157_55: Build = Build {
         corner_paint: 0x0C083EC0,  // ?OnPaint@CustomFloatingCorner@@UEAAXPEAVCanvas@gfx@@@Z
         corner_paint_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
         caption_vtable: 0x11644170, // ??_7WindowsCaptionButton@@6BLayerDelegate@ui@@@
-        caption_size_slot: 74,
-        caption_size: 0x03E5AC90, // ?CalculatePreferredSize@WindowsCaptionButton@@UEBA?AVSize@gfx@@AEBVSizeBounds@views@@@Z
         caption_paint_slot: 113,
         caption_paint: 0x01D8BBD0, // ?PaintButtonContents@WindowsCaptionButton@@UEAAXPEAVCanvas@gfx@@@Z
         caption_paint_prologue: &[0xE9, 0x0B, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC],
-        top_inset_slot: 126,
-        top_inset: 0x02360D60, // ?GetTopInset@BrowserFrameViewWin, slot 127, found statically and unverified
-        layout_slot: 23,
-        layout: 0x03DFF0D0, // ?Layout@BrowserFrameViewWin@@MEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z
-        layout_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x40],
-        set_bounds_rect: 0x05E84A70, // ?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z
-        set_bounds_rect_prologue: &[0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54],
-        caption_container_offset: 0x3C0,
         view_bounds_offset: 0x1C8,
-        browser_view_view_vtable: 0x11598D50, // the browser view vtable
         frame_vtable: 0x1159C030, // ??_7BrowserFrameViewWin@@6BLayerDelegate@ui@@@, found statically and unverified
-        layout_immediately: 0x05E85780, // ?LayoutImmediately@View@views@@AEAAXXZ
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55,
-        ],
-        set_layer: 0x00817D20, // ?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z
-        set_layer_prologue: &[0x56, 0x57, 0x48, 0x83, 0xEC, 0x28],
-        set_radius: 0x0315EF10, // ?SetRoundedCornerRadius@Layer@ui@@QEAAXAEBVRoundedCornersF@gfx@@@Z
-        set_radius_prologue: &[0x56, 0x57, 0x53, 0x48, 0x83, 0xEC, 0x30],
-        set_masks: 0x0315EF00, // ?SetMasksToBounds@Layer@ui@@QEAAX_N@Z
-        set_masks_prologue: &[0x48, 0x8B, 0x89, 0x70, 0x01, 0x00, 0x00],
-        stack_at_top: 0x0C3D6D80, // ?StackAtTop@Layer@ui@@QEAAXPEAV12@@Z
-        stack_at_top_prologue: &[0x41, 0x57, 0x41, 0x56, 0x56, 0x57],
-        set_opaque: 0x0080EA30, // ?SetFillsBoundsOpaquely@Layer@ui@@UEAAX_N@Z
-        set_opaque_prologue: &[0x56, 0x48, 0x83, 0xEC, 0x20],
         frame_browser_window_offset: Some(0x338),
         browser_window_in_view: 0x1F0,
         caption_ink_ids: &[0x684, 0x685, 0x686],
