@@ -493,7 +493,22 @@ unsafe extern "system" fn client_view_bounds(view: *const c_void, out: *mut Rect
             *out = panel_from_client(*out);
             lift_cached_client_area(view, browser_chose);
         }
-        record_panel((hook.hwnd_for_view)(view), *out);
+        let window = (hook.hwnd_for_view)(view);
+        // With the client area shrunk by Windows, Rivet still draws in the coordinates of the
+        // whole window, so the panel it records moves back by the inset.
+        let shift = crate::frame::client_inset_dips(window);
+        let recorded = shifted(*out, shift);
+        if shift != [0, 0] {
+            crate::trace::trace_changed(
+                "experiment client view",
+                &format!(
+                    "experiment client area: the browser chose client view {browser_chose:?}, \
+                     panel {:?} in the client, {recorded:?} in the window",
+                    *out
+                ),
+            );
+        }
+        record_panel(window, recorded);
     }
     result
 }
@@ -524,6 +539,26 @@ fn record_panel(window: HWND, panel: Rect) {
     }
 }
 
+/// `bounds` moved by `shift` DIPs.
+fn shifted(bounds: Rect, shift: [i32; 2]) -> Rect {
+    Rect {
+        x: bounds.x + shift[0],
+        y: bounds.y + shift[1],
+        ..bounds
+    }
+}
+
+/// The panel of a Rivet window from its client area alone, as the browser's layout would place it
+/// with the client view hook: `reserved` DIPs at the left, then the panel's gap.
+pub fn rivet_panel(client: Rect, reserved: i32) -> Rect {
+    panel_from_client(reserve_leading(client, reserved))
+}
+
+/// Records a panel Rivet placed itself, where the browser's layout is not hooked.
+pub fn place_panel(window: HWND, panel: Rect) {
+    record_panel(window, panel);
+}
+
 /// The page panel the browser laid out for a window, once it has laid the window out.
 pub fn panel_bounds(window: HWND) -> Option<Rect> {
     PANELS
@@ -537,13 +572,22 @@ pub fn panel_bounds(window: HWND) -> Option<Rect> {
 /// Installs the layout hook once per browser process. Returns why it cannot when the build is
 /// not recognised, so Rivet refuses to attach rather than guess.
 pub unsafe fn install(reserved: Reserve) -> Result<(), String> {
-    HOOK.get_or_init(|| patch(reserved))
+    HOOK.get_or_init(|| patch(reserved, true))
         .as_ref()
         .map(|_| ())
         .map_err(Clone::clone)
 }
 
-unsafe fn patch(reserved: Reserve) -> Result<Hook, String> {
+/// Experiment: finds the build's frame view functions as `install` does, so a view's window can be
+/// told, but leaves the client view placement to the browser. Rivet then places the panel itself.
+pub unsafe fn install_unpatched(reserved: Reserve) -> Result<(), String> {
+    HOOK.get_or_init(|| patch(reserved, false))
+        .as_ref()
+        .map(|_| ())
+        .map_err(Clone::clone)
+}
+
+unsafe fn patch(reserved: Reserve, replace_slot: bool) -> Result<Hook, String> {
     log(&format!("rivet: {}", crate::builds::table_note()));
     crate::trace::trace(&format!("build table: {}", crate::builds::table_note()));
     let (build, image) = crate::builds::frame_rows()
@@ -568,6 +612,14 @@ unsafe fn patch(reserved: Reserve) -> Result<Hook, String> {
         ),
         reserved,
     };
+    if !replace_slot {
+        log(&format!(
+            "rivet: {} {} keeps its own client view placement",
+            build.browser, build.version
+        ));
+        crate::trace::trace("experiment page view only: the client view placement is not replaced");
+        return Ok(hook);
+    }
     // Layout runs on this UI thread only, so no call can reach the new slot before HOOK holds
     // this value.
     let mut previous: PAGE_PROTECTION_FLAGS = 0;
@@ -674,6 +726,57 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn fr12_panel_placed_by_rivet_matches_the_hooked_layout() {
+        // The browser's client view reaches the window's top edge once lifted, so the panel Rivet
+        // works out from the client area is the one the hook makes of any title row height.
+        let client = Rect {
+            x: 0,
+            y: 0,
+            width: 1600,
+            height: 1000,
+        };
+        for top in [0, 32, 41] {
+            let chose = Rect {
+                y: top,
+                height: 1000 - top,
+                ..client
+            };
+            assert_eq!(
+                rivet_panel(client, 268),
+                panel_from_client(reserve_leading(chose, 268))
+            );
+        }
+        assert_eq!(
+            rivet_panel(client, 268),
+            Rect {
+                x: 268,
+                y: PANEL_GAP,
+                width: 1324,
+                height: 1000 - 2 * PANEL_GAP
+            }
+        );
+    }
+
+    #[test]
+    fn fr2_panel_in_a_shrunk_client_area_is_recorded_in_window_coordinates() {
+        let panel = Rect {
+            x: 0,
+            y: 8,
+            width: 1324,
+            height: 984,
+        };
+        assert_eq!(shifted(panel, [0, 0]), panel);
+        assert_eq!(
+            shifted(panel, [268, 52]),
+            Rect {
+                x: 268,
+                y: 60,
+                ..panel
+            }
+        );
     }
 
     #[test]
@@ -951,6 +1054,12 @@ unsafe fn clip_panel(frame: *mut c_void) {
 /// can undo it and the caller repeats it after each layout.
 pub unsafe fn raise_view(view: *mut c_void) {
     let Some((set_layer, _, _)) = PANEL_LAYER.get() else {
+        if crate::features::layout_experiments::page_view_only() {
+            crate::trace::trace_changed(
+                "experiment raise",
+                "experiment page view only: no layer helpers, the side panel is not raised",
+            );
+        }
         return;
     };
     let Some(stack_at_top) = STACK_AT_TOP.get() else {

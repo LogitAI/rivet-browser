@@ -600,6 +600,14 @@ impl Appbar {
         }
     }
 
+    /// Experiment: moves every Rivet visual of the window by `x` and `y` physical pixels, so they keep
+    /// their place in the window while the client area starts further in.
+    pub(crate) unsafe fn offset_root(&self, x: f32, y: f32) -> Result<()> {
+        self.root.SetOffsetX2(x)?;
+        self.root.SetOffsetY2(y)?;
+        self.device.Commit()
+    }
+
     fn scene(&self) -> Scene<'_> {
         Scene {
             tabs: &self.tabs,
