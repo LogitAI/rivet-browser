@@ -33,9 +33,6 @@ pub(super) const OMNIBOX_CHROME_156_74: Omnibox = Omnibox {
     allocate: 0x05A1_E310,
     match_contents: 0x2A0,
     match_description: 0x2D0,
-    app_layout_vtable: 0x0FC2_25E0,
-    app_layout_slot: 16,
-    app_layout_proposed: 0x0A28_0200,
     signatures: &[
         (0x04DA_2510, &[0x48, 0x89, 0xC8, 0xC3]),
         (
@@ -165,9 +162,6 @@ pub(super) const OMNIBOX_CHROME_156_80: Omnibox = Omnibox {
     allocate: 0x059F_C170,
     match_contents: 0x2A0,
     match_description: 0x2D0,
-    app_layout_vtable: 0x0FC1_D358,
-    app_layout_slot: 16,
-    app_layout_proposed: 0x0A27_5100,
     signatures: &[
         (0x04BC_8250, &[0x48, 0x89, 0xC8, 0xC3]),
         (
@@ -299,9 +293,6 @@ pub(super) const OMNIBOX_CHROME_157_38: Omnibox = Omnibox {
     allocate: 0x05E7_5E90,
     match_contents: 0x2A0,
     match_description: 0x2D0,
-    app_layout_vtable: 0x100A_D928,
-    app_layout_slot: 16,
-    app_layout_proposed: 0x0AB8_F640,
     signatures: &[
         (0x04FC_8630, &[0x48, 0x89, 0xC8, 0xC3]),
         (
@@ -432,9 +423,6 @@ pub(super) const OMNIBOX_BRAVE_63: Omnibox = Omnibox {
     allocate: 0x06F4_DE00,
     match_contents: 0x2A0,
     match_description: 0x2D0,
-    app_layout_vtable: 0x1105_67A0,
-    app_layout_slot: 16,
-    app_layout_proposed: 0x0B71_A730,
     signatures: &[
         (0x0613_B670, &[0x48, 0x89, 0xC8, 0xC3]),
         (
@@ -565,9 +553,6 @@ pub(super) const OMNIBOX_BRAVE_157_55: Omnibox = Omnibox {
     allocate: 0x073F_5220,
     match_contents: 0x2A0,
     match_description: 0x2D0,
-    app_layout_vtable: 0x114E_4B78,
-    app_layout_slot: 16,
-    app_layout_proposed: 0x0C08_0160,
     signatures: &[
         (0x0658_9680, &[0x48, 0x89, 0xC8, 0xC3]),
         (
@@ -698,9 +683,6 @@ pub(super) const OMNIBOX_WHALE_57: Omnibox = Omnibox {
     allocate: 0x03E4_AB40,
     match_contents: 0x2D8,
     match_description: 0x308,
-    app_layout_vtable: 0x0F9F_BBF8,
-    app_layout_slot: 15,
-    app_layout_proposed: 0x0E6A_8BD0,
     signatures: &[
         (0x005D_5480, &[0x48, 0x89, 0xC8, 0xC3]),
         (
@@ -835,9 +817,6 @@ pub(super) const OMNIBOX_SAMSUNG_29: Omnibox = Omnibox {
     allocate: 0x0558_41C8,
     match_contents: 0x2D0,
     match_description: 0x300,
-    app_layout_vtable: 0,
-    app_layout_slot: 0,
-    app_layout_proposed: 0,
     signatures: &[
         (0x04D1_1D20, &[0x48, 0x89, 0xC8, 0xC3]),
         (

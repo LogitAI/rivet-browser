@@ -328,43 +328,21 @@ pub static SAMSUNG: Build = Build {
         generate_colors_css_prologue: &[
             0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
         ],
-        layout_vtable: 0x0E18_0BE0,
-        proposed_slot: 3,
-        proposed: 0x013C_8310,
-        old_layout: Some(true),
         registry_end: Some(true),
         registry_in_coordinator: Some(0x30),
         registry_entries: Some(0x48),
         coordinator_browser: Some(0x28),
         entry_key_size: Some(0x48),
         extensions_by_toggle: Some(true),
-        host_view: Some(0x30),
-        page_area: Some(ABSENT),
-        contents_container: Some(0x80),
-        vertical_tabs: ABSENT,
-        toolbar: 0x70,
-        contents_outline: ABSENT,
-        side_panel: 0x98,
-        side_panel_animation: ABSENT,
-        layout_immediately: 0x047C_B9E0,
-        layout_immediately_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53, 0x48, 0x81,
-            0xEC, 0x98, 0x00, 0x00, 0x00, 0x48, 0x89, 0xCE,
-        ],
         event_handler_for_point: ABSENT,
     },
-    // The frame paint and the top inset are not recorded: nothing shows that this build's functions in
-    // those vtable slots are Chromium's, and its frame vtable does not have Chromium's layout.
+    // The frame paint is not recorded: nothing shows that this build's function in that vtable slot
+    // is Chromium's, and its frame vtable does not have Chromium's layout.
     layout: Layout {
         // The browser view's `views::View` lies this far inside the object `GetBrowserViewForNativeWindow`
         // answers, read from the parent of its children.
         browser_window_in_view: 0x1F8,
-        // `views::View::SetBoundsRect` and where a view keeps its bounds, which the older layout's
-        // page area sets after the browser's layout ran.
-        set_bounds_rect: 0x047C_EA60,
-        set_bounds_rect_prologue: &[
-            0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x55, 0x53,
-        ],
+        // Where a view keeps its bounds.
         view_bounds_offset: 0x1C0,
         ..UNCHECKED_LAYOUT
     },
