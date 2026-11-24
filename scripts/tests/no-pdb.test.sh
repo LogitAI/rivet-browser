@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Fails if code, scripts or workflows download or read a browser's debug symbols. Rivet and its row
-# generator make every row from the verified prior row, its fingerprints and the two builds'
-# modules: a maker can ship a build long before its symbols appear, or never publish them, so
-# nothing may wait on them. The rows already verified with symbols stay as the starting point.
+# Fails if code, scripts or workflows download or read a browser's debug symbols. Rivet's row finder
+# finds every value in the build's own binary by descriptions written from public source: a maker
+# can ship a build long before its symbols appear, or never publish them, so nothing may wait on
+# them.
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

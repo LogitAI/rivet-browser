@@ -1,14 +1,14 @@
 param(
     # rivet-rows.exe, which prints the rows Rivet knows.
     [Parameter(Mandatory = $true)][string]$Rows,
-    # chrome-builds.exe, the row generator.
-    [Parameter(Mandatory = $true)][string]$Generator,
+    # chrome-builds.exe, which holds the row finder.
+    [Parameter(Mandatory = $true)][string]$Finder,
     # The checked-in table, whose rows count as verified like those built into rivet-rows.
     [Parameter(Mandatory = $true)][string]$Table,
     # Where the modules, rows and scores go. Removed and made again.
     [Parameter(Mandatory = $true)][string]$Work,
-    # `browser@prior>new` pairs. Empty means the list below.
-    [string[]]$Pairs = @(),
+    # `browser@version` builds. Empty means the list below.
+    [string[]]$Builds = @(),
     # Fetches each build with .github/scripts/rows/fetch-browser.ps1. Without it, each module is
     # taken from `$Modules\<browser>\<version>\<chrome.dll or msedge.dll>`.
     [switch]$Fetch,
@@ -16,26 +16,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-# Scores the row generator against answer keys: builds whose rows people verified, made from
-# public symbols before Rivet stopped reading them. Each new row is made without symbols from the
-# verified row of an older build, the way the row job makes rows, and compared value by value with
-# the verified row of the new build. Per feature it reports values found and equal, values found
-# but different, and features the made row turns off because their values were not found.
+# Scores the row finder against builds whose rows people verified. The finder reads only the build
+# at hand, by the checked-in descriptions, and each value it finds is compared with the verified
+# row of the same build. Per feature it reports hits, wrong values and values not found.
 #
-# A value found but different is a wrong value, which would reach people's browsers, so any fails
-# this script. A feature turned off is not a failure: the runtime keeps it off. A pair whose builds
-# cannot be fetched is reported and skipped, and a run that scores no pair fails, since it measured
-# nothing. Nothing is published or proposed.
-#
-# A build newer than every verified row, such as Chrome 158 while the newest verified row is 157,
-# has no answer key and cannot be scored here.
-if (-not $Pairs -or $Pairs.Count -eq 0) {
-    $Pairs = @(
-        'Google Chrome@156.0.8078.82>157.0.8103.38',
-        'Google Chrome@156.0.8078.82>157.0.8103.39',
-        'Google Chrome@156.0.8078.74>156.0.8078.80',
-        'Microsoft Edge@156.0.4314.50>156.0.4314.58',
-        'Brave@156.1.98.63>157.1.99.55'
+# A wrong value would reach people's browsers, so any fails this script. A value not found is not a
+# failure: its feature stays off. A build that cannot be fetched is reported and skipped, and a run
+# that scores no build fails, since it measured nothing. Nothing is published or proposed.
+if (-not $Builds -or $Builds.Count -eq 0) {
+    $Builds = @(
+        'Google Chrome@156.0.8078.81',
+        'Google Chrome@156.0.8078.82',
+        'Google Chrome@157.0.8103.39',
+        'Microsoft Edge@156.0.4314.58'
     )
 }
 
@@ -67,32 +60,28 @@ function Get-VerifiedRow($browser, $version, $file) {
 $scored = 0
 $wrong = 0
 $failed = @()
-foreach ($pair in $Pairs) {
-    $browser, $versions = $pair -split '@', 2
-    $prior, $new = $versions -split '>', 2
-    $slug = ($browser -replace ' ', '-') + "-$prior-to-$new"
-    $priorRow = Join-Path $Work "$slug-prior.json"
+foreach ($build in $Builds) {
+    $browser, $version = $build -split '@', 2
+    $slug = ($browser -replace ' ', '-') + "-$version"
     $verified = Join-Path $Work "$slug-verified.json"
     $score = Join-Path $Work "$slug-score.json"
     try {
-        Get-VerifiedRow $browser $prior $priorRow
-        Get-VerifiedRow $browser $new $verified
-        $priorModule = Find-BuildModule $browser $prior
-        $module = Find-BuildModule $browser $new
+        Get-VerifiedRow $browser $version $verified
+        $module = Find-BuildModule $browser $version
     } catch {
-        "skip ${browser} $prior -> ${new}: $_"
+        "skip ${browser} ${version}: $_"
         continue
     }
-    & $Generator score $priorRow $priorModule $module $verified $score
+    & $Finder score $module $verified $score
     switch ($LASTEXITCODE) {
         0 { $scored++ }
         5 { $scored++; $wrong++ }
-        default { $failed += "$browser $prior -> $new (chrome-builds exited with $LASTEXITCODE)" }
+        default { $failed += "$browser $version (chrome-builds exited with $LASTEXITCODE)" }
     }
 }
 
-"scored $scored of $($Pairs.Count) pairs; $wrong with a wrong value"
-if ($failed.Count -gt 0) { throw "NFR-6: the generator failed on: $($failed -join '; ')" }
-if ($wrong -gt 0) { throw 'NFR-6: a row made without symbols holds a value that differs from its verified row.' }
-if ($scored -eq 0) { throw 'NFR-6: no pair could be scored, so nothing was measured.' }
-'NFR-6: every value the generator found equals the verified row.'
+"scored $scored of $($Builds.Count) builds; $wrong with a wrong value"
+if ($failed.Count -gt 0) { throw "NFR-6: the finder failed on: $($failed -join '; ')" }
+if ($wrong -gt 0) { throw 'NFR-6: the finder found a value that differs from its verified row.' }
+if ($scored -eq 0) { throw 'NFR-6: no build could be scored, so nothing was measured.' }
+'NFR-6: every value the finder found equals the verified row.'

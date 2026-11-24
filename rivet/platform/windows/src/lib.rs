@@ -11,16 +11,17 @@ pub mod control;
 pub mod focus;
 pub mod hold;
 pub mod row_class;
-pub mod row_command;
 pub mod row_features;
-pub mod row_port;
+pub mod row_find;
 pub mod row_recipe;
-pub mod row_resolve;
 pub mod row_watch;
 pub mod signed_table;
 pub mod start;
+#[cfg(test)]
+pub(crate) mod test_module;
 #[cfg(windows)]
 pub mod textservices;
+pub mod x64;
 
 use std::path::Path;
 use std::time::Duration;
