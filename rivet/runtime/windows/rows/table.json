@@ -2,6 +2,434 @@
   "rows": [
     {
       "build": {
+        "app_window": null,
+        "browser": "Brave",
+        "bubble_anchor": null,
+        "layout": {
+          "browser_window_in_view": "0x1f0",
+          "caption_ink_ids": [],
+          "caption_paint": "0x1d8bbd0",
+          "caption_paint_prologue": "cc74ba11c705ca74",
+          "caption_paint_slot": "0x71",
+          "caption_vtable": "0x11644170",
+          "corner_paint": "0xc08d770",
+          "corner_paint_prologue": "4157415641554154",
+          "corner_vtable": "0x117d3b88",
+          "draw_color": "0x3eb2490",
+          "draw_color_prologue": "4883ec38",
+          "frame_browser_window_offset": "0x338",
+          "frame_ids": [],
+          "frame_vtable": "0x1159c030",
+          "get_color_provider": "0x5cc4080",
+          "get_color_provider_prologue": "56574883ec7848",
+          "on_paint": "0x15674d0",
+          "on_paint_prologue": "4157415641554154565755534881",
+          "on_paint_slot": "0x59",
+          "provider_verified": false,
+          "view_bounds_offset": "0x1c8"
+        },
+        "module": "chrome.dll",
+        "navigation": {
+          "active_web_contents": "0xc084570",
+          "browser_view_for_window": "0xc0840c0",
+          "content_window_for_hwnd": "0x318e840",
+          "gurl_drop": "0x544d980",
+          "gurl_empty": "0x6c04e50",
+          "gurl_from_text": "0x5b3db20",
+          "gurl_wide": false,
+          "open_url": "0x9b2fb30",
+          "open_url_params": "0x93bc3b0",
+          "open_url_params_drop": "0x2537b70",
+          "signatures": [
+            [
+              "0x318e840",
+              "564883ec20e8"
+            ],
+            [
+              "0xc0840c0",
+              "4883ec28e8"
+            ],
+            [
+              "0x5b3db20",
+              "4889c131d2e8d6a0"
+            ],
+            [
+              "0x6c04e50",
+              "4889c80f57c0"
+            ],
+            [
+              "0x544d980",
+              "56574883ec28"
+            ],
+            [
+              "0x93bc3b0",
+              "415656575553"
+            ],
+            [
+              "0x2537b70",
+              "56574883ec"
+            ],
+            [
+              "0x9b2fb30",
+              "8d4424284d890845"
+            ],
+            [
+              "0xc084570",
+              "488b8158050000"
+            ]
+          ],
+          "supported": true
+        },
+        "omnibox": null,
+        "page_tools": null,
+        "screen_origin": null,
+        "side_panel": {
+          "browser_offset": "0x0",
+          "browser_view_view_vtable": "0x7fff0000",
+          "color_source": "0x0",
+          "coordinator_browser": null,
+          "coordinator_vtable": "0x7fff0000",
+          "entry_count": 0,
+          "entry_id_to_string": "0x7fff0000",
+          "entry_id_to_string_prologue": "83fa1a0f87030600004889c889d1",
+          "entry_key_size": null,
+          "entry_showing": "0x7fff0000",
+          "entry_showing_prologue": "488b491080793001",
+          "event_handler_for_point": "0x7fff0000",
+          "extension_entry": 0,
+          "extensions_by_toggle": null,
+          "features_coordinator": "0x0",
+          "features_offset": "0x0",
+          "generate_colors_css": "0x7fff0000",
+          "generate_colors_css_prologue": "415741564155415456575553",
+          "get_color_provider": "0x7fff0000",
+          "get_color_provider_prologue": "488b8998000000488b01488b4008",
+          "hidden_entries": [],
+          "registry_end": null,
+          "registry_entries": null,
+          "registry_from": "0x7fff0000",
+          "registry_from_prologue": "4881c1a8000000",
+          "registry_in_coordinator": null,
+          "show": "0x7fff0000",
+          "show_prologue": "41565657534883ec584489cb",
+          "side_panel_vtable": "0x7fff0000",
+          "source_in_widget": "0x0",
+          "supported": false,
+          "toggle": "0x7fff0000",
+          "toggle_prologue": "4157415641545657534883ec684889cf"
+        },
+        "split": {
+          "active_member": "0x0",
+          "add_to_new_split": "0x0",
+          "allocate": "0x7162200",
+          "calculate_layout": "0x0",
+          "calculate_layout_prologue": "415741564155415456575553",
+          "container_count_member": "0x0",
+          "container_delegate_offset": "0x0",
+          "container_layout": "0x0",
+          "containers_member": "0x0",
+          "flex_layout": "0x0",
+          "flex_layout_host": "0x0",
+          "get_split_for_tab": "0x3169bf0",
+          "layout_delegate_offset": "0x0",
+          "location_bar_vtable": "0x0",
+          "mini_toolbar_member": "0x0",
+          "outline_member": "0x0",
+          "remove_split": "0x0",
+          "schedule_paint": "0x0",
+          "schedule_paint_prologue": "564883ec4048",
+          "set_border_slot": "0x0",
+          "set_rounded_corners": "0x3e0e120",
+          "set_rounded_corners_changed": "0x3e0e160",
+          "set_rounded_corners_parity": "0x3e0e12d",
+          "set_rounded_corners_prologue": "f30f10020f2e817c0400007533",
+          "set_visible_slot": "0x0",
+          "signatures": [
+            [
+              "0x0",
+              "415741564155415456575553"
+            ],
+            [
+              "0x0",
+              "41565657534883ec58"
+            ],
+            [
+              "0x0",
+              "564883ec204585c078"
+            ],
+            [
+              "0x0",
+              "40534883ec20488bd9"
+            ]
+          ],
+          "split_adds_active": false,
+          "split_insets_member": "0x0",
+          "split_vector_ends_by_pointer": false,
+          "supported": false,
+          "update_border": "0x7fff0000",
+          "update_border_prologue": "4156565755534883ec600f29742450",
+          "web_contents_focused": "0x3e0eb00",
+          "web_contents_focused_prologue": "56574883ec28488b8190030000"
+        },
+        "tabs": {
+          "activate_tab": "0xbdf32f0",
+          "active_web_contents": "0xc084570",
+          "add_to_new_group": "0x7fff0000",
+          "add_to_new_group_prologue": "00",
+          "allocate": "0x7fff0000",
+          "allocate_prologue": "00",
+          "browser_in_view": "0x558",
+          "browser_view_for_window": "0xc0840c0",
+          "change_group": "0x7fff0000",
+          "close_tab": "0xbdf5fc0",
+          "content_window_for_hwnd": "0x318e840",
+          "get_group": "0x3169ba0",
+          "get_tab_model": "0x61dd290",
+          "groups": false,
+          "has_group": "0x7fff0000",
+          "last_committed_url": "0x6c51130",
+          "lookup_group": "0x7fff0000",
+          "new_tab": "0xbd59f50",
+          "new_tab_address": null,
+          "new_tab_by_open_url": null,
+          "new_tab_delay_ms": 0,
+          "new_tab_prologue": "",
+          "new_tab_takes_address": false,
+          "signatures": [
+            [
+              "0x318e840",
+              "564883ec20e8"
+            ],
+            [
+              "0xc0840c0",
+              "4883ec28e8"
+            ],
+            [
+              "0xc084570",
+              "488b8158050000"
+            ],
+            [
+              "0x61dd290",
+              "488b4130c3"
+            ],
+            [
+              "0x3dc0ee0",
+              "488b41088b4020"
+            ],
+            [
+              "0x3366e0",
+              "4883ec2885d2"
+            ],
+            [
+              "0xbdf32f0",
+              "56574883ec38"
+            ],
+            [
+              "0xbdf5fc0",
+              "56574883ec28"
+            ],
+            [
+              "0xb0a190",
+              "741b4489c0f0"
+            ],
+            [
+              "0xbd59f50",
+              "4157415641545657"
+            ],
+            [
+              "0x6c51130",
+              "486381d4020000"
+            ],
+            [
+              "0x73acd20",
+              "00488d7c246048"
+            ]
+          ],
+          "supported": true,
+          "tab_at": "0x3366e0",
+          "tab_collection": "0x0",
+          "tab_contents": "0x0",
+          "tab_count": "0x3dc0ee0",
+          "tab_object": "0x7fff0000",
+          "title": "0xb0a190",
+          "visible_url": "0x73acd20"
+        },
+        "toolbar": {
+          "content_window_for_hwnd": "0x318e840",
+          "dev": {
+            "colours": []
+          },
+          "get_color": "0x5e2f9e0",
+          "skip": "",
+          "toolbar_layout": "0x11e0460",
+          "widget_for_window": "0x3190860"
+        },
+        "version": [
+          158,
+          1,
+          100,
+          59
+        ]
+      },
+      "classes": {
+        "build.layout.corner_vtable": "CustomFloatingCorner",
+        "frame.frame_view_vtable": "BraveBrowserFrameViewWin"
+      },
+      "frame": {
+        "browser": "Brave",
+        "client_view_bounds": 64975488,
+        "client_view_slot": 102,
+        "frame_view_vtable": 292803272,
+        "hwnd_for_view": 65656000,
+        "hwnd_for_view_prologue": "564883ec204889ce488b01488b4058",
+        "module": "chrome.dll",
+        "version": "158.1.100.59"
+      },
+      "switched_off": [
+        {
+          "feature": "address suggestions",
+          "values": [
+            "omnibox.browser_context",
+            "omnibox.classifier_for_profile",
+            "omnibox.default_providers",
+            "omnibox.delete",
+            "omnibox.provider_client_new",
+            "omnibox.scheme_classifier_new",
+            "omnibox.security_level",
+            "omnibox.show_page_info",
+            "omnibox.signatures[10][0]",
+            "omnibox.signatures[11][0]",
+            "omnibox.signatures[12][0]",
+            "omnibox.signatures[13][0]",
+            "omnibox.signatures[17][0]",
+            "omnibox.signatures[1][0]",
+            "omnibox.signatures[2][0]",
+            "omnibox.signatures[6][0]",
+            "omnibox.signatures[7][0]",
+            "omnibox.signatures[9][0]",
+            "omnibox.start",
+            "omnibox.visible_security_state",
+            "omnibox.controller_published_result",
+            "omnibox.controller_size",
+            "omnibox.input_omit_asynchronous",
+            "omnibox.input_prevent_inline",
+            "omnibox.match_contents",
+            "omnibox.match_description",
+            "omnibox.provider_client_size"
+          ]
+        },
+        {
+          "feature": "app window",
+          "values": [
+            "app_window.add_child",
+            "app_window.browser_context",
+            "app_window.feature_impl",
+            "app_window.set_contents",
+            "app_window.web_view_ctor",
+            "app_window.bounds_changed_slot",
+            "app_window.destructor_slot"
+          ]
+        },
+        {
+          "feature": "bubble anchor",
+          "values": [
+            "bubble_anchor[0]"
+          ]
+        },
+        {
+          "feature": "developer colours",
+          "values": [
+            "toolbar.dev.colours[0][0]",
+            "toolbar.dev.colours[1][0]",
+            "toolbar.dev.colours[2][0]",
+            "toolbar.dev.colours[3][0]",
+            "toolbar.dev.colours[4][0]",
+            "toolbar.dev.colours[5][0]",
+            "toolbar.dev.colours[6][0]",
+            "toolbar.dev.colours[7][0]",
+            "toolbar.dev.colours[8][0]",
+            "toolbar.dev.colours[9][0]",
+            "toolbar.dev.colours[10][0]",
+            "toolbar.dev.colours[11][0]",
+            "toolbar.dev.colours[12][0]",
+            "toolbar.dev.colours[13][0]",
+            "toolbar.dev.colours[14][0]",
+            "toolbar.dev.colours[15][0]",
+            "toolbar.dev.colours[16][0]",
+            "toolbar.dev.colours[17][0]",
+            "toolbar.dev.colours[18][0]",
+            "toolbar.dev.colours[19][0]",
+            "toolbar.dev.colours[20][0]",
+            "toolbar.dev.colours[21][0]",
+            "toolbar.dev.colours[22][0]",
+            "toolbar.dev.colours[23][0]"
+          ]
+        },
+        {
+          "feature": "frame colour",
+          "values": [
+            "layout.caption_ink_ids[0]",
+            "layout.caption_ink_ids[1]",
+            "layout.caption_ink_ids[2]",
+            "layout.frame_ids[1]",
+            "layout.frame_ids[2]",
+            "layout.frame_ids[3]",
+            "layout.frame_ids[4]"
+          ]
+        },
+        {
+          "feature": "page tools",
+          "values": [
+            "page_tools.browser_context[0]",
+            "page_tools.update_target_url[0]"
+          ]
+        },
+        {
+          "feature": "sidebar",
+          "values": [
+            "side_panel.browser_view_view_vtable",
+            "side_panel.coordinator_vtable",
+            "side_panel.entry_id_to_string",
+            "side_panel.generate_colors_css",
+            "side_panel.registry_from",
+            "side_panel.side_panel_vtable",
+            "side_panel.toggle",
+            "side_panel.color_source",
+            "side_panel.entry_count",
+            "side_panel.features_coordinator",
+            "side_panel.features_offset",
+            "side_panel.source_in_widget"
+          ]
+        },
+        {
+          "feature": "split view",
+          "values": [
+            "split.add_to_new_split",
+            "split.calculate_layout",
+            "split.container_layout",
+            "split.flex_layout",
+            "split.location_bar_vtable",
+            "split.remove_split",
+            "split.schedule_paint",
+            "split.signatures[0][0]",
+            "split.signatures[1][0]",
+            "split.active_member",
+            "split.container_count_member",
+            "split.container_delegate_offset",
+            "split.containers_member",
+            "split.flex_layout_host",
+            "split.layout_delegate_offset",
+            "split.mini_toolbar_member",
+            "split.outline_member",
+            "split.set_border_slot",
+            "split.set_visible_slot",
+            "split.split_insets_member"
+          ]
+        }
+      ]
+    },
+    {
+      "build": {
         "app_window": {
           "add_child": "0x549da90",
           "add_child_prologue": "4157415641554154565755534881ec88",
