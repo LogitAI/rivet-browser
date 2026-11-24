@@ -12,13 +12,13 @@
 //! them to load one loads, every function that loads the same pointer as its result, the tables
 //! whose second slot holds one of them, and the table the constructors that write such a table
 //! write at offset zero of the same object. The load is read the way the runtime's
-//! `chromium/reflect.rs` reads it, so the generator and the runtime agree on the static a table
+//! `chromium/reflect.rs` reads it, so the finder and the runtime agree on the static a table
 //! names. Nothing is guessed: a step that finds nothing, or more than one table, gives no table.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::chrome_build::PeFile;
-use crate::row_port::x64;
+use crate::x64;
 
 /// How many levels of callers above the code that uses the name are read.
 const CALLER_DEPTH: usize = 3;
@@ -64,7 +64,7 @@ pub fn load_target(pe: &PeFile, at: u32) -> Option<(u32, bool)> {
 }
 
 /// Every place outside the code that holds `name` as a zero-terminated text.
-fn texts(pe: &PeFile, name: &str) -> BTreeSet<u32> {
+pub(crate) fn texts(pe: &PeFile, name: &str) -> BTreeSet<u32> {
     let mut needle = name.as_bytes().to_vec();
     needle.push(0);
     let mut found = BTreeSet::new();
@@ -83,12 +83,12 @@ fn texts(pe: &PeFile, name: &str) -> BTreeSet<u32> {
 
 /// A `lea` or `mov` of a 64-bit register with a RIP-relative operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RipUse {
-    at: u32,
-    target: u32,
+pub(crate) struct RipUse {
+    pub(crate) at: u32,
+    pub(crate) target: u32,
     register: u8,
     /// A `mov`, which reads the word at the target, rather than a `lea`.
-    word: bool,
+    pub(crate) word: bool,
 }
 
 fn rip_use(bytes: &[u8], rva: u32) -> Option<RipUse> {
@@ -156,7 +156,7 @@ impl CodeIndex {
 
 /// Every RIP-relative `lea` or `mov` in the code whose target is one of `targets`, in the order
 /// of where they are.
-fn rip_uses(pe: &PeFile, targets: &BTreeSet<u32>) -> Vec<RipUse> {
+pub(crate) fn rip_uses(pe: &PeFile, targets: &BTreeSet<u32>) -> Vec<RipUse> {
     let index = CodeIndex::of(pe);
     let mut found = Vec::new();
     for target in targets {
@@ -174,7 +174,7 @@ fn rip_uses(pe: &PeFile, targets: &BTreeSet<u32>) -> Vec<RipUse> {
 
 /// Every direct `call` or `jmp` into one of `targets`, as (site, whether it is a jump), in the
 /// order of where they are.
-fn branches_into(pe: &PeFile, targets: &BTreeSet<u32>) -> Vec<(u32, bool)> {
+pub(crate) fn branches_into(pe: &PeFile, targets: &BTreeSet<u32>) -> Vec<(u32, bool)> {
     let index = CodeIndex::of(pe);
     let mut found = Vec::new();
     for target in targets {
@@ -191,7 +191,7 @@ fn branches_into(pe: &PeFile, targets: &BTreeSet<u32>) -> Vec<(u32, bool)> {
 }
 
 /// The function part the exception table lists around an address.
-fn enclosing(ranges: &BTreeMap<u32, u32>, rva: u32) -> Option<u32> {
+pub(crate) fn enclosing(ranges: &BTreeMap<u32, u32>, rva: u32) -> Option<u32> {
     let (start, end) = ranges.range(..=rva).next_back()?;
     (rva < *end).then_some(*start)
 }
@@ -389,13 +389,42 @@ fn object_tables(stores: &[Store], around: &Store) -> Vec<(i64, u32)> {
     last.into_iter().collect()
 }
 
+/// Which of an object's tables a class name means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    /// The table at this place in the order of where they go: 0 is the object's start.
+    At(usize),
+    /// The table of the object's `views::View` part. `ui/views/view.h` declares `View` with seven
+    /// polymorphic bases before `ui::metadata::MetaDataProvider` (`LayerDelegate`,
+    /// `LayerObserver`, `LayerOwner`, `AcceleratorTarget`, `EventTarget`, `EventHandler`,
+    /// `PropertyHandler`), so the `View` part's table is the seventh before the provider's.
+    View,
+}
+
+/// How many tables of a `views::View` lie between its own table and its metadata provider's.
+const VIEW_BEFORE_PROVIDER: usize = 7;
+
 /// A class name and which of its object's tables is meant: `BrowserView` is the table at the start
-/// of the object, `BrowserView#6` the seventh in the order of where they go. A class with several
-/// bases has a table for each, and the order of the bases is the class's own declaration.
-fn name_and_order(name: &str) -> (&str, usize) {
+/// of the object, `BrowserView#6` the seventh in the order of where they go, and `BrowserView#view`
+/// the table of its `views::View` part. A class with several bases has a table for each, and the
+/// order of the bases is the class's own declaration.
+fn name_and_order(name: &str) -> (&str, Place) {
     match name.split_once('#') {
-        Some((bare, order)) => (bare, order.parse().unwrap_or(usize::MAX)),
-        None => (name, 0),
+        Some((bare, "view")) => (bare, Place::View),
+        Some((bare, order)) => (bare, Place::At(order.parse().unwrap_or(usize::MAX))),
+        None => (name, Place::At(0)),
+    }
+}
+
+/// Which of an object's tables, in the order of where they go, `order` means, when the metadata
+/// provider's table is the one at `provider_offset`.
+fn place_index(tables: &[(i64, u32)], provider_offset: i64, order: Place) -> Option<usize> {
+    match order {
+        Place::At(index) => Some(index),
+        Place::View => tables
+            .iter()
+            .position(|(at, _)| *at == provider_offset)
+            .and_then(|provider| provider.checked_sub(VIEW_BEFORE_PROVIDER)),
     }
 }
 
@@ -404,7 +433,7 @@ fn tables_beside(
     pe: &PeFile,
     ranges: &BTreeMap<u32, u32>,
     provider: u32,
-    order: usize,
+    order: Place,
 ) -> BTreeSet<u32> {
     let writers: BTreeSet<u32> = rip_uses(pe, &BTreeSet::from([provider]))
         .iter()
@@ -423,7 +452,8 @@ fn tables_beside(
             {
                 continue;
             }
-            if let Some((_, table)) = tables.get(order) {
+            let index = place_index(&tables, written.offset, order);
+            if let Some((_, table)) = index.and_then(|index| tables.get(index)) {
                 found.insert(*table);
             }
         }
@@ -448,187 +478,6 @@ pub fn class_tables(pe: &PeFile, name: &str) -> BTreeSet<u32> {
         }
     }
     found
-}
-
-/// How many levels of callees below the code that fills the metadata are read for its name.
-const CALLEE_DEPTH: usize = 2;
-/// How many names may be tried for one table before it counts as too unclear to name.
-const NAMES_MOST: usize = 16;
-/// How long a class name may be.
-const NAME_MOST: usize = 120;
-
-/// The zero-terminated text at `rva` when it reads as a C++ class name without its namespace.
-fn identifier_at(pe: &PeFile, rva: u32) -> Option<String> {
-    let bytes = [NAME_MOST + 1, 64, 32, 16, 8]
-        .into_iter()
-        .find_map(|length| pe.read(rva, length))?;
-    let end = bytes.iter().position(|byte| *byte == 0)?;
-    let name = &bytes[..end];
-    let first = *name.first()?;
-    (name.len() >= 2
-        && (first.is_ascii_alphabetic() || first == b'_')
-        && name
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_'))
-    .then(|| String::from_utf8_lossy(name).into_owned())
-}
-
-/// What a function's body loads with a RIP-relative `lea` outside the code, and the functions it
-/// calls or jumps to directly.
-fn body_of(pe: &PeFile, ranges: &BTreeMap<u32, u32>, start: u32) -> (Vec<u32>, Vec<u32>) {
-    let end = ranges.get(&start).copied().unwrap_or(start);
-    let length = end.saturating_sub(start).min(BODY_MOST) as usize;
-    let Some(bytes) = pe.read(start, length) else {
-        return (vec![], vec![]);
-    };
-    let (mut loads, mut callees) = (Vec::new(), Vec::new());
-    let mut at = 0;
-    while at < bytes.len() {
-        let Some(instruction) = x64::decode_body(&bytes[at..]) else {
-            break;
-        };
-        if instruction.length == 0 || at + instruction.length > bytes.len() {
-            break;
-        }
-        let raw = &bytes[at..at + instruction.length];
-        let rva = start + at as u32;
-        if let Some(found) = (raw.len() == 7).then(|| rip_use(raw, rva)).flatten() {
-            if !found.word && !pe.is_code(found.target) {
-                loads.push(found.target);
-            }
-        }
-        if raw.len() == 5 && matches!(raw[0], 0xE8 | 0xE9) {
-            let rel = i32::from_le_bytes(raw[1..5].try_into().expect("five bytes"));
-            if let Ok(target) = u32::try_from(i64::from(rva) + 5 + i64::from(rel)) {
-                if ranges.contains_key(&target) {
-                    callees.push(target);
-                }
-            }
-        }
-        at += instruction.length;
-    }
-    (loads, callees)
-}
-
-/// The metadata statics a class table's objects reach, and the table's place among the object's
-/// tables: each constructor that writes the table into an object also writes other tables into it,
-/// and the second slot of the `ui::metadata::MetaDataProvider` table among them returns the class's
-/// static, as `getters` reads. Constructors that put the table at different places give no place.
-fn statics_of_table(
-    pe: &PeFile,
-    ranges: &BTreeMap<u32, u32>,
-    table: u32,
-) -> (BTreeSet<(u32, bool)>, Option<usize>) {
-    let writers: BTreeSet<u32> = rip_uses(pe, &BTreeSet::from([table]))
-        .iter()
-        .filter(|each| !each.word)
-        .filter_map(|each| enclosing(ranges, each.at))
-        .collect();
-    let mut found = BTreeSet::new();
-    let mut orders = BTreeSet::new();
-    for writer in writers {
-        let stores = stores_in(pe, writer, ranges[&writer]);
-        for written in stores.iter().filter(|store| store.table == table) {
-            let tables = object_tables(&stores, written);
-            let Some(order) = tables.iter().position(|(_, each)| *each == table) else {
-                continue;
-            };
-            orders.insert(order);
-            for (_, other) in tables.iter().filter(|(_, other)| *other != table) {
-                let Some(getter) = pe.pointer_rva(other + 8).filter(|at| pe.is_code(*at)) else {
-                    continue;
-                };
-                if let Some(each) = load_target(pe, getter).filter(|(at, _)| !pe.is_code(*at)) {
-                    found.insert(each);
-                }
-            }
-        }
-    }
-    let order = (orders.len() == 1)
-        .then(|| orders.into_iter().next())
-        .flatten();
-    (found, order)
-}
-
-/// The names the code that fills a metadata static loads, nearest first: the texts that the
-/// functions whose result is the static, and their callees, load. Only those that read as a class
-/// name are kept.
-fn names_of_static(
-    pe: &PeFile,
-    ranges: &BTreeMap<u32, u32>,
-    found: (u32, bool),
-) -> Vec<Vec<String>> {
-    let mut layer: BTreeSet<u32> = rip_uses(pe, &BTreeSet::from([found.0]))
-        .iter()
-        .filter_map(|each| enclosing(ranges, each.at))
-        .filter(|function| load_target(pe, *function) == Some(found))
-        .collect();
-    let mut seen = layer.clone();
-    let mut by_depth = Vec::new();
-    for _ in 0..=CALLEE_DEPTH {
-        if layer.is_empty() || seen.len() > CALLERS_MOST {
-            break;
-        }
-        let mut names = Vec::new();
-        let mut next = BTreeSet::new();
-        for function in &layer {
-            let (loads, callees) = body_of(pe, ranges, *function);
-            names.extend(loads.into_iter().filter_map(|at| identifier_at(pe, at)));
-            next.extend(callees.into_iter().filter(|callee| !seen.contains(callee)));
-        }
-        by_depth.push(names);
-        seen.extend(&next);
-        layer = next;
-    }
-    by_depth
-}
-
-/// The views class a class table belongs to, by the class name its `ui::metadata` holds, read back
-/// from the build: the metadata static the table's objects reach, and the names the code that fills
-/// it loads. A name counts only where `class_tables` gives exactly this table for it, so a name
-/// that is not the class's own gives none. The nearest code that yields exactly one such name
-/// names the table; none, or two, gives no name.
-pub fn class_name_of_table(pe: &PeFile, table: u32) -> Option<String> {
-    let ranges = pe.function_ranges();
-    let mut by_depth: Vec<Vec<String>> = Vec::new();
-    let (statics, order) = statics_of_table(pe, &ranges, table);
-    let order = order?;
-    let placed = |name: &str| match order {
-        0 => name.to_owned(),
-        order => format!("{name}#{order}"),
-    };
-    for each in statics {
-        for (depth, names) in names_of_static(pe, &ranges, each).into_iter().enumerate() {
-            if by_depth.len() <= depth {
-                by_depth.resize(depth + 1, Vec::new());
-            }
-            by_depth[depth].extend(names);
-        }
-    }
-    let mut tried = BTreeSet::new();
-    for names in by_depth {
-        let mut confirmed = BTreeSet::new();
-        for name in names {
-            if tried.len() >= NAMES_MOST {
-                return None;
-            }
-            let name = placed(&name);
-            if tried.insert(name.clone()) && class_tables(pe, &name) == BTreeSet::from([table]) {
-                confirmed.insert(name);
-            }
-        }
-        match confirmed.len() {
-            0 => continue,
-            1 => return confirmed.into_iter().next(),
-            _ => return None,
-        }
-    }
-    None
-}
-
-/// Whether `name` is the class name of `table` in `pe`: `class_tables` gives this table alone.
-pub fn names_table(pe: &PeFile, name: &str, table: u32) -> bool {
-    class_tables(pe, name) == BTreeSet::from([table])
 }
 
 #[cfg(test)]
@@ -770,56 +619,12 @@ mod tests {
     }
 
     #[test]
-    fn nfr6_a_class_name_counts_only_where_it_gives_the_prior_table_in_the_prior_build() {
-        let prior = class_module("WindowsCaptionButton");
-        let prior = PeFile::parse(&prior).unwrap();
-        let new = class_module("WindowsCaptionButton");
-        let new = PeFile::parse(&new).unwrap();
-        let place = crate::row_resolve::class_place(&prior, &new, 0x2400, "WindowsCaptionButton");
-        assert_eq!(place, Ok(0x2400));
-        // The prior row's table is another one: the name does not tell this table.
-        let other = crate::row_resolve::class_place(&prior, &new, 0x2200, "WindowsCaptionButton");
-        assert!(other.unwrap_err().contains("in the prior build"));
-        let missing = crate::row_resolve::class_place(&prior, &new, 0x2400, "CustomFloatingCorner");
-        assert!(missing.is_err());
-    }
-
-    #[test]
-    fn nfr6_a_class_name_is_read_from_the_prior_build_without_symbols() {
-        let bytes = class_module("EdgeBrowserFrameViewWin");
-        let pe = PeFile::parse(&bytes).unwrap();
-        // The table the constructor writes at the object's start is named by the text its
-        // metadata code loads, and the name gives that table back.
-        assert_eq!(
-            class_name_of_table(&pe, 0x2400).as_deref(),
-            Some("EdgeBrowserFrameViewWin")
-        );
-        assert!(names_table(&pe, "EdgeBrowserFrameViewWin", 0x2400));
-        // The provider table is written further into the object, so it names no class.
-        assert_eq!(class_name_of_table(&pe, 0x2200), None);
-        assert!(!names_table(&pe, "EdgeBrowserFrameViewWin", 0x2200));
-        // A name the metadata code does not load does not name the table.
-        assert!(!names_table(&pe, "BrowserFrameViewWin", 0x2400));
-    }
-
-    #[test]
-    fn nfr6_a_class_name_is_a_plain_identifier() {
-        let mut code = class_module("BrowserView");
-        let at = 0x400 + 0x1000 + 0x100;
-        assert_eq!(&code[at..at + 12], b"BrowserView\0");
-        let pe = PeFile::parse(&code).unwrap();
-        assert_eq!(identifier_at(&pe, 0x2100).as_deref(), Some("BrowserView"));
-        // A path or a qualified name is not a class name.
-        code[at + 7] = b':';
-        let pe = PeFile::parse(&code).unwrap();
-        assert_eq!(identifier_at(&pe, 0x2100), None);
-    }
-    #[test]
     fn nfr6_a_table_past_the_start_of_its_object_is_named_with_its_place() {
-        // A class with several bases has a table for each. The row's table of `BrowserView` is the
-        // seventh in Edge 156, and a name without the place would give the first.
-        assert_eq!(name_and_order("BrowserView#6"), ("BrowserView", 6));
-        assert_eq!(name_and_order("BrowserView"), ("BrowserView", 0));
+        // A class with several bases has a table for each, and a name without the place would give
+        // the first.
+        assert_eq!(name_and_order("BrowserView#6"), ("BrowserView", Place::At(6)));
+        assert_eq!(name_and_order("BrowserView"), ("BrowserView", Place::At(0)));
+        assert_eq!(name_and_order("SidePanel#view"), ("SidePanel", Place::View));
         let store = |table, offset| Store {
             index: 0,
             table,
@@ -839,6 +644,18 @@ mod tests {
         );
         // An object whose first table is not seen gives no places.
         assert!(object_tables(&stores[1..3], &stores[1]).is_empty());
+    }
+
+    #[test]
+    fn nfr6_a_view_part_is_the_seventh_table_before_its_metadata_provider() {
+        // A derived class's own table, then the View part's table and its six other bases, then
+        // the metadata provider's table.
+        let tables: Vec<(i64, u32)> = (0..10).map(|index| (index * 8, 0x100 + index as u32)).collect();
+        assert_eq!(place_index(&tables, 8 * 8, Place::View), Some(1));
+        assert_eq!(place_index(&tables, 8 * 8, Place::At(3)), Some(3));
+        // A provider too near the object's start has no View part before it.
+        assert_eq!(place_index(&tables, 6 * 8, Place::View), None);
+        assert_eq!(place_index(&tables, 0x999, Place::View), None);
     }
 
     #[test]

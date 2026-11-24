@@ -1,0 +1,223 @@
+{
+  "schema": 1,
+  "values": [
+    {
+      "path": "navigation.open_url",
+      "kind": "trace",
+      "texts": ["WebContentsImpl::OpenURL"],
+      "steps": [{"sole_caller": 3}],
+      "source": ["content/browser/web_contents/web_contents_impl.cc"],
+      "tag": "156.0.8078.80",
+      "note": "WebContentsImpl::OpenURL opens with TRACE_EVENT1(\"content\", \"WebContentsImpl::OpenURL\", ...)."
+    },
+    {
+      "path": "omnibox.classify",
+      "kind": "trace",
+      "texts": ["AutocompleteClassifier::Classify"],
+      "steps": [{"sole_caller": 3}],
+      "source": ["components/omnibox/browser/autocomplete_classifier.cc"],
+      "tag": "156.0.8078.80",
+      "note": "AutocompleteClassifier::Classify opens with TRACE_EVENT1 of its own name."
+    },
+    {
+      "path": "omnibox.start",
+      "kind": "trace",
+      "texts": ["AutocompleteController::Start"],
+      "steps": [{"sole_caller": 3}],
+      "source": ["components/omnibox/browser/autocomplete_controller.cc"],
+      "tag": "156.0.8078.80",
+      "note": "AutocompleteController::Start opens with TRACE_EVENT1 of its own name."
+    },
+    {
+      "path": "omnibox.classifier_for_profile",
+      "kind": "trace",
+      "texts": ["AutocompleteClassifier"],
+      "steps": [{"sole_caller": 3}, {"most_callers_lead": 10}],
+      "source": ["chrome/browser/autocomplete/autocomplete_classifier_factory.cc"],
+      "tag": "156.0.8078.80",
+      "note": "The factory's constructor names its service \"AutocompleteClassifier\". GetInstance creates the factory, and GetForProfile, which every user of the classifier calls, is by far its most called caller."
+    },
+    {
+      "path": "layout.on_paint",
+      "kind": "trace",
+      "texts": ["BrowserFrameViewWin::OnPaint"],
+      "steps": [{"sole_caller": 3}],
+      "source": ["chrome/browser/ui/views/frame/browser_frame_view_win.cc"],
+      "tag": "156.0.8078.80",
+      "note": "BrowserFrameViewWin::OnPaint opens with TRACE_EVENT0(\"views.frame\", ...)."
+    },
+    {
+      "path": "layout.layout",
+      "kind": "trace",
+      "texts": ["BrowserFrameViewWin::Layout"],
+      "steps": [{"sole_caller": 3}],
+      "source": ["chrome/browser/ui/views/frame/browser_frame_view_win.cc"],
+      "tag": "156.0.8078.80",
+      "note": "BrowserFrameViewWin::Layout opens with TRACE_EVENT0(\"views.frame\", ...)."
+    },
+    {
+      "path": "tabs.activate_tab",
+      "kind": "trace",
+      "texts": ["TabStripModel::ActivateTab"],
+      "steps": [{"sole_caller": 3}, {"only_caller_at_most_bytes": 128}],
+      "source": ["chrome/browser/ui/tabs/tab_strip_model.cc"],
+      "tag": "156.0.8078.80",
+      "note": "ActivateTab holds TRACE_EVENT0(\"ui\", \"TabStripModel::ActivateTab\"). ActivateTabAt is a check and one call to it, so it is its only small caller."
+    },
+    {
+      "path": "side_panel.generate_colors_css",
+      "kind": "trace",
+      "texts": ["generate_rgb_vars"],
+      "steps": [{"sole_caller": 3}],
+      "source": ["chrome/browser/ui/webui/theme_source.cc"],
+      "tag": "156.0.8078.80",
+      "note": "GenerateColorsCss reads the \"generate_rgb_vars\" query parameter."
+    },
+    {
+      "path": "side_panel.entry_id_to_string",
+      "kind": "trace",
+      "texts": ["kReadingList"],
+      "steps": [{"sole_caller": 3}],
+      "source": ["chrome/browser/ui/side_panel/side_panel_entry_id.cc", "chrome/browser/ui/side_panel/side_panel_entry_id.h"],
+      "tag": "156.0.8078.80",
+      "note": "SidePanelEntryIdToString returns #entry_id for each id of SIDE_PANEL_ENTRY_IDS, and kReadingList is one of them."
+    },
+    {
+      "path": "_web_contents_table",
+      "kind": "table_of",
+      "function": "navigation.open_url",
+      "slot": 1,
+      "source": ["content/public/browser/web_contents.h", "content/public/browser/page_navigator.h"],
+      "tag": "156.0.8078.80",
+      "note": "WebContents derives first from PageNavigator, whose virtual destructor is slot 0 and OpenURL slot 1, so the table that holds OpenURL in slot 1 is the WebContents table of WebContentsImpl."
+    },
+    {
+      "path": "app_window.browser_context",
+      "kind": "table_slot",
+      "table": "_web_contents_table",
+      "slot": 7,
+      "source": ["content/public/browser/web_contents.h"],
+      "tag": "156.0.8078.80",
+      "note": "GetBrowserContext is slot 7: the new virtuals of WebContents follow PageNavigator's two in declaration order, Android, iOS and Mac blocks left out."
+    },
+    {
+      "path": "omnibox.browser_context",
+      "kind": "table_slot",
+      "table": "_web_contents_table",
+      "slot": 7,
+      "source": ["content/public/browser/web_contents.h"],
+      "tag": "156.0.8078.80",
+      "note": "The same GetBrowserContext as app_window.browser_context."
+    },
+    {
+      "path": "tabs.visible_url",
+      "kind": "table_slot",
+      "table": "_web_contents_table",
+      "slot": 13,
+      "source": ["content/public/browser/web_contents.h"],
+      "tag": "156.0.8078.80",
+      "note": "GetVisibleURL is slot 13 in the declaration order of web_contents.h."
+    },
+    {
+      "path": "layout.frame_vtable",
+      "kind": "class",
+      "names": ["BrowserFrameViewWin"],
+      "source": ["chrome/browser/ui/views/frame/browser_frame_view_win.h"],
+      "tag": "156.0.8078.80",
+      "note": "METADATA_HEADER(BrowserFrameViewWin, ...) names the class."
+    },
+    {
+      "path": "frame.frame_view_vtable",
+      "kind": "class",
+      "names": ["BrowserFrameViewWin"],
+      "source": ["chrome/browser/ui/views/frame/browser_frame_view_win.h"],
+      "tag": "156.0.8078.80",
+      "note": "The same table as layout.frame_vtable."
+    },
+    {
+      "path": "layout.caption_vtable",
+      "kind": "class",
+      "names": ["WindowsCaptionButton"],
+      "source": ["chrome/browser/ui/views/frame/windows_caption_button.h"],
+      "tag": "156.0.8078.80",
+      "note": "METADATA_HEADER(WindowsCaptionButton, ...) names the class."
+    },
+    {
+      "path": "layout.corner_vtable",
+      "kind": "class",
+      "names": ["CustomFloatingCorner"],
+      "source": ["chrome/browser/ui/views/frame/custom_floating_corner.h"],
+      "tag": "156.0.8078.80",
+      "note": "METADATA_HEADER(CustomFloatingCorner, ...) names the class."
+    },
+    {
+      "path": "side_panel.side_panel_vtable",
+      "kind": "class",
+      "names": ["SidePanel"],
+      "part": "view",
+      "source": ["chrome/browser/ui/views/side_panel/side_panel.h", "ui/views/view.h"],
+      "tag": "156.0.8078.80",
+      "note": "METADATA_HEADER(SidePanel, ...) names the class. The row holds the table of its views::View part."
+    },
+    {
+      "path": "side_panel.browser_view_view_vtable",
+      "kind": "class",
+      "names": ["BrowserView"],
+      "part": "view",
+      "source": ["chrome/browser/ui/views/frame/browser_view.h", "ui/views/view.h"],
+      "tag": "156.0.8078.80",
+      "note": "METADATA_HEADER(BrowserView, ...) names the class. The row holds the table of its views::View part."
+    },
+    {
+      "path": "split.location_bar_vtable",
+      "kind": "class",
+      "names": ["LocationBarView"],
+      "part": "view",
+      "source": ["chrome/browser/ui/views/location_bar/location_bar_view.h", "ui/views/view.h"],
+      "tag": "156.0.8078.80",
+      "note": "METADATA_HEADER(LocationBarView, ...) names the class. The row holds the table of its views::View part."
+    },
+    {
+      "path": "layout.on_paint_slot",
+      "kind": "slot_of",
+      "table": "layout.frame_vtable",
+      "function": "layout.on_paint",
+      "source": ["chrome/browser/ui/views/frame/browser_frame_view_win.h"],
+      "tag": "156.0.8078.80",
+      "note": "OnPaint overrides views::View::OnPaint, so it sits in one slot of the frame view's table."
+    },
+    {
+      "path": "layout.caption_paint_slot",
+      "kind": "slot_of",
+      "table": "layout.caption_vtable",
+      "function": "layout.caption_paint",
+      "source": ["chrome/browser/ui/views/frame/windows_caption_button.h"],
+      "tag": "156.0.8078.80",
+      "note": "The slot of WindowsCaptionButton::PaintButtonContents. Not found until layout.caption_paint has a description."
+    },
+    {
+      "path": "tabs.browser_in_view",
+      "kind": "first_load",
+      "function": "tabs.active_web_contents",
+      "source": ["chrome/browser/ui/browser.h"],
+      "tag": "156.0.8078.80",
+      "note": "The member the accessor reads first. Not found until tabs.active_web_contents has a description."
+    },
+    {
+      "path": "side_panel.browser_offset",
+      "kind": "first_load",
+      "function": "navigation.active_web_contents",
+      "source": ["chrome/browser/ui/browser.h"],
+      "tag": "156.0.8078.80",
+      "note": "The member the accessor reads first. Not found until navigation.active_web_contents has a description."
+    },
+    {
+      "path": "app_window.web_view_size",
+      "kind": "allocation_size",
+      "constructor": "app_window.web_view_ctor",
+      "source": ["ui/views/controls/webview/webview.h"],
+      "tag": "156.0.8078.80",
+      "note": "The size every std::make_unique<WebView> allocates. Not found until app_window.web_view_ctor has a description."
+    }
+  ]
+}

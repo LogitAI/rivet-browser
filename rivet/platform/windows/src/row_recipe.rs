@@ -9,15 +9,16 @@
 //! fails is reported and never guessed, so its row goes to a person and the runtime keeps the
 //! feature off.
 //!
-//! The recipes read the row's addresses, so they run after the addresses have moved to the new
-//! build. Paths are the row's own field names, as the runtime writes the row.
+//! The recipes read the row's addresses. Paths are the row's own field names, as the runtime writes
+//! the row. The row finder reads the same values with the same readers, `slot_in`, `member_read_by`
+//! and `allocation_size`, from addresses it found in the build itself.
 
 use std::collections::BTreeSet;
 
 use serde_json::{json, Value};
 
 use crate::chrome_build::PeFile;
-use crate::row_port::x64;
+use crate::x64;
 
 /// The lowest value taken for an address. Offsets and slots lie below it.
 const LOWEST_ADDRESS: u64 = 0x10_0000;
@@ -53,8 +54,7 @@ pub struct Field {
     pub recipes: &'static [Recipe],
 }
 
-/// Every value of a row that has a recipe. A value of a row that is not listed here is carried over
-/// from the prior row, and the port reports it as such.
+/// Every value of a row that has a recipe.
 pub const FIELDS: &[Field] = &[
     Field {
         path: "tabs.browser_in_view",
@@ -209,6 +209,61 @@ fn allocation_sizes(pe: &PeFile, constructor: u32) -> (BTreeSet<u64>, usize) {
     (sizes, calls)
 }
 
+/// The slot of the function at `target` in the class table at `table`, named `vtable` and
+/// `function` in a reason. Its check: every slot up to it points at code, so the slot lies inside
+/// one table.
+pub fn slot_in(
+    pe: &PeFile,
+    (vtable, table): (&str, u32),
+    (function, target): (&str, u32),
+) -> Result<u64, String> {
+    let slot = (0..TABLE_SLOTS)
+        .find(|slot| pe.pointer_rva(table + slot * 8) == Some(target))
+        .ok_or_else(|| format!("{vtable} {table:#x} holds no {function} {target:#x}"))?;
+    let inside = (0..=slot).all(|slot| {
+        pe.pointer_rva(table + slot * 8)
+            .is_some_and(|entry| pe.is_code(entry))
+    });
+    if !inside {
+        return Err(format!(
+            "slot {slot} of {vtable} {table:#x} lies past the end of its table"
+        ));
+    }
+    Ok(u64::from(slot))
+}
+
+/// The member the accessor at `target`, named `function` in a reason, reads from `this` with its
+/// first instruction.
+pub fn member_read_by(pe: &PeFile, (function, target): (&str, u32)) -> Result<u64, String> {
+    let bytes = pe
+        .read(target, 8)
+        .ok_or_else(|| format!("{function} {target:#x} lies outside the module"))?;
+    first_load(bytes).ok_or_else(|| {
+        format!(
+            "{function} {target:#x} does not start by reading a member of this: {}",
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        )
+    })
+}
+
+/// The one size every direct caller of the constructor at `target`, named `constructor` in a
+/// reason, allocates its object with.
+pub fn allocation_size(pe: &PeFile, (constructor, target): (&str, u32)) -> Result<u64, String> {
+    let (sizes, calls) = allocation_sizes(pe, target);
+    let found: Vec<u64> = sizes.into_iter().collect();
+    match found.as_slice() {
+        [size] if *size % 8 == 0 && *size >= 0x40 => Ok(*size),
+        [size] => Err(format!("{constructor} is allocated with {size:#x}, which no object has")),
+        [] => Err(format!(
+            "none of the {calls} direct callers of {constructor} {target:#x} allocates with a constant size"
+        )),
+        many => Err(format!("the callers of {constructor} allocate {many:#x?}")),
+    }
+}
+
 /// Runs one recipe: `Ok(None)` when the row lacks the addresses it reads.
 fn run(recipe: &Recipe, build: &Value, pe: &PeFile) -> Result<Option<u64>, String> {
     match *recipe {
@@ -217,51 +272,19 @@ fn run(recipe: &Recipe, build: &Value, pe: &PeFile) -> Result<Option<u64>, Strin
             else {
                 return Ok(None);
             };
-            let slot = (0..TABLE_SLOTS)
-                .find(|slot| pe.pointer_rva(table + slot * 8) == Some(target))
-                .ok_or_else(|| format!("{vtable} {table:#x} holds no {function} {target:#x}"))?;
-            let inside = (0..=slot).all(|slot| {
-                pe.pointer_rva(table + slot * 8)
-                    .is_some_and(|entry| pe.is_code(entry))
-            });
-            if !inside {
-                return Err(format!(
-                    "slot {slot} of {vtable} {table:#x} lies past the end of its table"
-                ));
-            }
-            Ok(Some(u64::from(slot)))
+            slot_in(pe, (vtable, table), (function, target)).map(Some)
         }
         Recipe::FirstLoad { function } => {
             let Some(target) = address(build, function) else {
                 return Ok(None);
             };
-            let bytes = pe
-                .read(target, 8)
-                .ok_or_else(|| format!("{function} {target:#x} lies outside the module"))?;
-            first_load(bytes).map(Some).ok_or_else(|| {
-                format!(
-                    "{function} {target:#x} does not start by reading a member of this: {}",
-                    bytes
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>()
-                )
-            })
+            member_read_by(pe, (function, target)).map(Some)
         }
         Recipe::AllocationSize { constructor } => {
             let Some(target) = address(build, constructor) else {
                 return Ok(None);
             };
-            let (sizes, calls) = allocation_sizes(pe, target);
-            let found: Vec<u64> = sizes.into_iter().collect();
-            match found.as_slice() {
-                [size] if *size % 8 == 0 && *size >= 0x40 => Ok(Some(*size)),
-                [size] => Err(format!("{constructor} is allocated with {size:#x}, which no object has")),
-                [] => Err(format!(
-                    "none of the {calls} direct callers of {constructor} {target:#x} allocates with a constant size"
-                )),
-                many => Err(format!("the callers of {constructor} allocate {many:#x?}")),
-            }
+            allocation_size(pe, (constructor, target)).map(Some)
         }
     }
 }
@@ -324,89 +347,6 @@ pub fn derive_row(build: &mut Value, pe: &PeFile) -> Derived {
         }
     }
     derived
-}
-
-/// Values Rivet chooses rather than reads from a build, such as how long it waits before it opens
-/// a new tab. The row carries them for the runtime, so they are kept from the prior row.
-pub const SETTINGS: &[&str] = &["tabs.new_tab_delay_ms"];
-
-/// Lists of `[id, colour]` pairs: the id is a value of the build, and the colour is Rivet's choice.
-pub const ID_COLOUR_PAIRS: &[&str] = &["toolbar.dev.colours"];
-
-/// The values of a row that are Rivet's settings rather than facts about its build.
-pub fn settings(build: &Value) -> Vec<String> {
-    let mut out: Vec<String> = SETTINGS
-        .iter()
-        .filter(|path| number(at_path(build, path)).is_some())
-        .map(|path| (*path).to_owned())
-        .collect();
-    for list in ID_COLOUR_PAIRS {
-        if let Some(pairs) = at_path(build, list).as_array() {
-            out.extend((0..pairs.len()).map(|index| format!("{list}[{index}][1]")));
-        }
-    }
-    out
-}
-
-/// Every number of a row below the address range that no recipe reads: member offsets, slots,
-/// sizes, ids and constants that a port can only carry over. Rivet's own settings and Chromium's
-/// public command ids are not listed.
-pub fn without_recipe(build: &Value) -> Vec<String> {
-    fn walk(path: &str, value: &Value, out: &mut Vec<String>) {
-        match value {
-            Value::Array(items)
-                if items.len() == 2
-                    && path
-                        .rsplit_once('[')
-                        .is_some_and(|(list, _)| ID_COLOUR_PAIRS.contains(&list)) =>
-            {
-                if number(&items[0]).is_some_and(|id| id < LOWEST_ADDRESS) {
-                    out.push(format!("{path}[0]"));
-                }
-            }
-            Value::Object(object) => {
-                for (key, item) in object {
-                    let next = if path.is_empty() {
-                        key.clone()
-                    } else {
-                        format!("{path}.{key}")
-                    };
-                    walk(&next, item, out);
-                }
-            }
-            Value::Array(items) => {
-                // An array of numbers is one value, such as a list of colour ids.
-                if !items.is_empty() && items.iter().all(|item| number(item).is_some()) {
-                    if items
-                        .iter()
-                        .any(|item| number(item).is_some_and(|value| value < LOWEST_ADDRESS))
-                    {
-                        out.push(path.to_owned());
-                    }
-                    return;
-                }
-                for (index, item) in items.iter().enumerate() {
-                    walk(&format!("{path}[{index}]"), item, out);
-                }
-            }
-            _ => {
-                if number(value).is_some_and(|value| value < LOWEST_ADDRESS) {
-                    out.push(path.to_owned());
-                }
-            }
-        }
-    }
-    let mut out = vec![];
-    walk("", build, &mut out);
-    // The version is the build's name, and the fingerprints describe the prior build.
-    out.retain(|path| {
-        path != "version"
-            && !path.starts_with("version[")
-            && !FIELDS.iter().any(|field| field.path == path)
-            && !SETTINGS.contains(&path.as_str())
-            && !crate::command_ids::ROW_PATHS.contains(&path.as_str())
-    });
-    out
 }
 
 #[cfg(test)]
@@ -581,42 +521,5 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-    }
-
-    #[test]
-    fn nfr6_values_with_no_recipe_are_listed_by_path() {
-        let build = json!({
-            "version": [157, 0, 8103, 38],
-            "tabs": {"browser_in_view": "0x558", "title": "0x00b77780", "groups": true},
-            "layout": {"frame_ids": [0x141, 0x142], "view_bounds_offset": "0x1c8"},
-        });
-        assert_eq!(
-            without_recipe(&build),
-            vec!["layout.frame_ids", "layout.view_bounds_offset"]
-        );
-    }
-
-    #[test]
-    fn nfr6_rivet_settings_are_not_values_of_the_build() {
-        let build = json!({
-            "tabs": {"new_tab_delay_ms": 0, "tab_contents": "0x0"},
-            "toolbar": {"dev": {"colours": [[316, 4280953905u32], [2082, 0]], "console": 40005}},
-        });
-        assert_eq!(
-            without_recipe(&build),
-            vec![
-                "tabs.tab_contents",
-                "toolbar.dev.colours[0][0]",
-                "toolbar.dev.colours[1][0]"
-            ]
-        );
-        assert_eq!(
-            settings(&build),
-            vec![
-                "tabs.new_tab_delay_ms",
-                "toolbar.dev.colours[0][1]",
-                "toolbar.dev.colours[1][1]"
-            ]
-        );
     }
 }
