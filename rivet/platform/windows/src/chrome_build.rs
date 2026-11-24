@@ -225,6 +225,58 @@ impl<'a> PeFile<'a> {
         ranges
     }
 
+    /// The exception table entry that starts at `start`, as its start, end and unwind data. The
+    /// linker writes the table sorted by start.
+    fn runtime_function(&self, start: u32) -> Option<(u32, u32, u32)> {
+        let (directory, size) = self.exception_directory;
+        let table = self.offset(directory).filter(|_| directory != 0)?;
+        let (mut low, mut high) = (0usize, (size / 12) as usize);
+        while low < high {
+            let middle = (low + high) / 2;
+            let entry = table + middle * 12;
+            let begin = u32_at(self.bytes, entry)?;
+            match begin.cmp(&start) {
+                std::cmp::Ordering::Less => low = middle + 1,
+                std::cmp::Ordering::Greater => high = middle,
+                std::cmp::Ordering::Equal => {
+                    return Some((
+                        begin,
+                        u32_at(self.bytes, entry + 4)?,
+                        u32_at(self.bytes, entry + 8)?,
+                    ))
+                }
+            }
+        }
+        None
+    }
+
+    /// The first part of the function that the part at `start` belongs to. A part the linker moved
+    /// out of its function has unwind data with `UNW_FLAG_CHAININFO`, which ends in the entry of the
+    /// part it continues. A part without such data is a function's first part.
+    pub fn primary_part(&self, start: u32) -> u32 {
+        let mut at = start;
+        for _ in 0..8 {
+            let Some((_, _, unwind)) = self.runtime_function(at) else {
+                break;
+            };
+            // The low bit marks an entry that points at another entry rather than unwind data.
+            let unwind = unwind & !1;
+            let Some(head) = self.read(unwind, 4) else {
+                break;
+            };
+            if (head[0] >> 3) & 4 == 0 {
+                break;
+            }
+            let codes = u32::from(head[2]);
+            let chained = unwind + 4 + ((codes + 1) & !1) * 2;
+            match self.read(chained, 4) {
+                Some(raw) => at = u32::from_le_bytes(raw.try_into().expect("four bytes")),
+                None => break,
+            }
+        }
+        at
+    }
+
     /// Finds the slot of `function` in the vtable at `vtable`, scanning a bounded number of slots.
     pub fn vtable_slot(&self, vtable: u32, function: u32) -> Option<u32> {
         (0..512u32).find(|slot| self.pointer_rva(vtable + slot * 8) == Some(function))

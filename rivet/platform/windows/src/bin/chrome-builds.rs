@@ -1,13 +1,12 @@
-//! Makes and publishes rows of Rivet's supported-build table. No browser's debug symbols are read:
-//! a new row comes from the verified prior row, its fingerprints, the prior module and the new one.
+//! Finds the rows of Rivet's supported-build table in one browser build, and keeps the signed
+//! table. No browser's debug symbols and no other build are read: every value is found in the build
+//! at hand by the checked-in descriptions, written from public Chromium source.
 //!
-//! `chrome-builds find <prior-row.json> <prior-module> <new-module> <version> <row.json> <report.json>`
-//! makes a candidate row for a new build and exits 3 when the row needs a person's review.
-//! `chrome-builds score <prior-row.json> <prior-module> <new-module> <verified-row.json> <score.json>`
-//! makes the row of a build that already has a verified row the same way, compares the two value
-//! by value and writes the score of each feature. It exits 5 when a value it found is wrong.
-//! `chrome-builds fingerprint <row.json> <module> <row-out.json>` adds the fingerprints of a row's
-//! functions, read from its own module, so the next build's row can start from them.
+//! `chrome-builds find <module> <version> <report.json>` applies every description to one build and
+//! writes the values found and not found, by feature.
+//! `chrome-builds score <module> <verified-row.json> <score.json>` does the same for a build that
+//! has a verified row and compares the two value by value: per feature, hits, wrong values and
+//! values not found. It exits 5 when a value it found is wrong.
 //! `chrome-builds pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json>`
 //! prints the builds that have no row yet, most urgent first.
 //! `chrome-builds table-key` prints a new signing key pair.
@@ -22,38 +21,15 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use rivet_platform_windows::chrome_build::{self, PeFile};
-use rivet_platform_windows::row_port::{self, PortReport};
-use rivet_platform_windows::{row_watch, signed_table};
+use rivet_platform_windows::chrome_build::PeFile;
+use rivet_platform_windows::{row_find, row_watch, signed_table};
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let result = match arguments.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        ["find", prior, prior_module, module, version, row, report] => {
-            return match find(
-                Path::new(prior),
-                Path::new(prior_module),
-                Path::new(module),
-                version,
-                Path::new(row),
-                Path::new(report),
-            ) {
-                Ok(true) => ExitCode::SUCCESS,
-                Ok(false) => ExitCode::from(3),
-                Err(error) => {
-                    eprintln!("chrome-builds: {error}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        ["score", prior, prior_module, module, verified, out] => {
-            return match score(
-                Path::new(prior),
-                Path::new(prior_module),
-                Path::new(module),
-                Path::new(verified),
-                Path::new(out),
-            ) {
+        ["find", module, version, report] => find(Path::new(module), version, Path::new(report)),
+        ["score", module, verified, out] => {
+            return match score(Path::new(module), Path::new(verified), Path::new(out)) {
                 Ok(true) => ExitCode::SUCCESS,
                 Ok(false) => ExitCode::from(5),
                 Err(error) => {
@@ -67,7 +43,6 @@ fn main() -> ExitCode {
         }
         ["gate", results, browser] => gate(Path::new(results), browser, None),
         ["gate", results, browser, row] => gate(Path::new(results), browser, Some(Path::new(row))),
-        ["fingerprint", row, module, out] => fingerprint(Path::new(row), Path::new(module), Path::new(out)),
         ["release-sign", version, signed, files @ ..] => release_sign(version, Path::new(signed), files),
         ["release-check", signed, file] => release_check(Path::new(signed), Path::new(file)),
         ["table-key"] => signed_table::generate_key().map(|(private, public)| {
@@ -84,7 +59,7 @@ fn main() -> ExitCode {
         ["table-withdraw", published, signed, builds @ ..] if !builds.is_empty() => {
             table_withdraw(Path::new(published), Path::new(signed), builds)
         }
-        _ => Err("usage: chrome-builds find <prior-row.json> <prior-module> <new-module> <version> <row.json> <report.json> | score <prior-row.json> <prior-module> <new-module> <verified-row.json> <score.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> [row.json] | fingerprint <row.json> <module> <row-out.json> | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
+        _ => Err("usage: chrome-builds find <module> <version> <report.json> | score <module> <verified-row.json> <score.json> | pending <chrome-stable.json> <chrome-beta.json> <edge.json> <brave.json> <known.json> | gate <results.json> <browser> [row.json] | release-sign <version> <signed-file> <file>... | release-check <signed-file> <file> | table-key | table-add <table.json> <row.json> | table-read <signed-file> <out.json> | table-merge <table.json> <part.json>... | table-sign <table.json> <signed-file> [published-file] | table-withdraw <published-file> <signed-file> <browser@version>...".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -99,151 +74,80 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|error| format!("could not read {}: {error}", path.display()))
 }
 
-/// Makes the row of `version` from the prior row, the prior row's own module and the new module.
-fn make(
-    prior: &serde_json::Value,
-    prior_module: &Path,
-    module: &Path,
-    version: &str,
-) -> Result<(serde_json::Value, PortReport), String> {
-    let prior_bytes = read(prior_module)?;
-    let prior_pe =
-        PeFile::parse(&prior_bytes).ok_or("the prior module is not a 64-bit PE image")?;
-    // A module of another build would give fingerprints and class names of the wrong functions.
-    let start = prior["frame"]["hwnd_for_view"]
-        .as_u64()
-        .and_then(|address| u32::try_from(address).ok());
-    let prologue = prior["frame"]["hwnd_for_view_prologue"]
-        .as_str()
-        .and_then(chrome_build::hex);
-    match (start, prologue) {
-        (Some(start), Some(prologue))
-            if prior_pe.read(start, prologue.len()) == Some(prologue.as_slice()) => {}
-        _ => return Err("the prior module is not the build of the prior row".into()),
-    }
-    // The fingerprints the prior row stored were read from this module when the row was made.
-    // A row stored without them gets them from the module now.
-    let prints = match prior["fingerprints"].as_object() {
-        Some(stored) => stored.clone(),
-        None => {
-            let (prints, missing) = row_port::fingerprints_of(prior, &prior_pe);
-            if !missing.is_empty() {
-                println!(
-                    "the prior build gives no fingerprint for {}",
-                    missing.join(", ")
-                );
-            }
-            prints
-        }
-    };
-    // Each class table of the prior row is found again by its views class's name too.
-    let classes = row_port::prior_classes(prior, &prior_pe);
+/// Applies every description to one module.
+fn find_in(module: &Path) -> Result<row_find::Found, String> {
+    let descriptions = row_find::descriptions()?;
     let bytes = read(module)?;
-    let pe = PeFile::parse(&bytes).ok_or("the new module is not a 64-bit PE image")?;
-    let (mut row, mut report) =
-        row_port::find_candidate(prior, &prints, Some(&prior_pe), &classes, version, &pe);
-    row_port::leave_out_screen_origin(&mut row, &mut report);
-    report.review.extend(row_port::hand_only_review(prior));
-    println!(
-        "exception tables: {} function starts in the prior build, {} in the new one; {} class tables named",
-        prior_pe.function_starts().len(),
-        pe.function_starts().len(),
-        classes.len()
-    );
-    Ok((row, report))
+    let pe = PeFile::parse(&bytes).ok_or("the module is not a 64-bit PE image")?;
+    Ok(row_find::find(&pe, &descriptions))
 }
 
-/// Makes a candidate row for a new build. True when nothing needs a person's review.
-fn find(
-    prior_path: &Path,
-    prior_module: &Path,
-    module: &Path,
-    version: &str,
-    row_path: &Path,
-    report_path: &Path,
-) -> Result<bool, String> {
-    let prior = json_file(prior_path)?;
-    let (row, report) = make(&prior, prior_module, module, version)?;
-    let text = |value: &dyn erased::Json| value.pretty();
-    std::fs::write(row_path, text(&row)).map_err(|error| error.to_string())?;
-    std::fs::write(report_path, text(&report)).map_err(|error| error.to_string())?;
-    println!(
-        "{} {} from {}: {} of {} addresses found by fingerprint, {} settled by two methods, {} values read, {} carried, {} features off, {} for review",
-        report.browser,
-        report.version,
-        report.prior_version,
-        report.fingerprinted.len(),
-        report.addresses,
-        report.settled.len(),
-        report.derived.len(),
-        report.carried.len(),
-        report.switched_off.len(),
-        report.review.len()
-    );
-    Ok(report.review.is_empty())
+fn write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(value).map_err(|error| error.to_string())? + "
+";
+    std::fs::write(path, text).map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
-/// Makes the row of a build that already has a verified row, and scores it against that row.
-/// True when no value it found is wrong. Nothing is written but the score.
-fn score(
-    prior_path: &Path,
-    prior_module: &Path,
-    module: &Path,
-    verified_path: &Path,
-    out: &Path,
-) -> Result<bool, String> {
-    let prior = json_file(prior_path)?;
-    let verified = json_file(verified_path)?;
-    let version = verified["frame"]["version"]
-        .as_str()
-        .ok_or("the verified row has no frame version")?
-        .to_owned();
-    let (row, report) = make(&prior, prior_module, module, &version)?;
-    let score = row_port::score_row(&row, &report, &verified, &prior);
-    std::fs::write(
+/// Finds the values of one build and reports them by feature. Not finding a value is a result,
+/// not a failure.
+fn find(module: &Path, version: &str, report: &Path) -> Result<(), String> {
+    let found = find_in(module)?;
+    let groups = row_find::report(&found);
+    let values: serde_json::Map<String, serde_json::Value> = found
+        .row_values()
+        .map(|(path, value)| (path.clone(), format!("{value:#x}").into()))
+        .collect();
+    write_json(
+        report,
+        &serde_json::json!({
+            "module": module.display().to_string(),
+            "version": version,
+            "values": values,
+            "features": groups,
+        }),
+    )?;
+    println!("{version}:");
+    for (group, each) in &groups {
+        println!("  {group}: {} found, {} not found", each.found.len(), each.not_found.len());
+        for line in &each.not_found {
+            println!("    not found: {line}");
+        }
+    }
+    Ok(())
+}
+
+/// Finds the values of a build that has a verified row and scores them against it. True when no
+/// value found is wrong.
+fn score(module: &Path, verified: &Path, out: &Path) -> Result<bool, String> {
+    let verified = json_file(verified)?;
+    let found = find_in(module)?;
+    let score = row_find::score(&found, &verified);
+    write_json(
         out,
-        serde_json::to_string_pretty(&score).map_err(|error| error.to_string())? + "\n",
-    )
-    .map_err(|error| error.to_string())?;
+        &serde_json::json!({
+            "browser": verified["frame"]["browser"],
+            "version": verified["frame"]["version"],
+            "features": score.groups,
+        }),
+    )?;
     println!(
-        "{} {} from {}:",
-        score.browser, score.version, score.prior_version
+        "{} {}:",
+        verified["frame"]["browser"].as_str().unwrap_or("?"),
+        verified["frame"]["version"].as_str().unwrap_or("?")
     );
-    for (feature, each) in &score.features {
-        let state = if each.off { "off" } else { "on" };
+    for (group, each) in &score.groups {
         println!(
-            "  {feature}: {state}, {} equal, {} wrong, {} carried, {} not found, {} not held",
-            each.equal,
-            each.different.len(),
-            each.carried.len(),
+            "  {group}: {} hit, {} wrong, {} not found, {} unchecked",
+            each.hit,
+            each.wrong.len(),
             each.not_found.len(),
-            each.not_held.len()
+            each.unchecked.len()
         );
-        for line in &each.different {
+        for line in &each.wrong {
             println!("    wrong: {line}");
         }
-        for line in &each.carried {
-            println!("    carried: {line}");
-        }
-    }
-    if !score.review.is_empty() {
-        println!(
-            "  the row would stop for review: {}",
-            score.review.join("; ")
-        );
     }
     Ok(score.wrong() == 0)
-}
-
-mod erased {
-    pub trait Json {
-        fn pretty(&self) -> String;
-    }
-    impl<T: serde::Serialize> Json for T {
-        fn pretty(&self) -> String {
-            serde_json::to_string_pretty(self).unwrap_or_default() + "\n"
-        }
-    }
 }
 
 fn json_file(path: &Path) -> Result<serde_json::Value, String> {
@@ -380,18 +284,6 @@ fn gate(results: &Path, browser: &str, row: Option<&Path>) -> Result<(), String>
         println!("note: {note}");
     }
     Ok(())
-}
-
-/// Adds the function fingerprints of a verified row, read from its own module, so a runtime can
-/// find the same functions in a build that has no row yet.
-fn fingerprint(row_path: &Path, module: &Path, out: &Path) -> Result<(), String> {
-    let mut row: serde_json::Value = serde_json::from_slice(&read(row_path)?)
-        .map_err(|error| format!("the row is not JSON: {error}"))?;
-    let bytes = read(module)?;
-    let pe = PeFile::parse(&bytes).ok_or("the module is not a 64-bit PE image")?;
-    row_port::add_fingerprints(&mut row, &pe)?;
-    let text = serde_json::to_string_pretty(&row).map_err(|error| error.to_string())?;
-    std::fs::write(out, text).map_err(|error| format!("could not write {}: {error}", out.display()))
 }
 
 /// Signs the SHA-256 of each release file, so an installer or update applies only these files.
