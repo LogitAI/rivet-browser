@@ -2260,6 +2260,429 @@
         "module": "msedge.dll",
         "version": "156.0.4314.58"
       }
+    },
+    {
+      "build": {
+        "app_window": null,
+        "browser": "Microsoft Edge",
+        "layout": {
+          "browser_window_in_view": "0x1f8",
+          "caption_ink_ids": [],
+          "caption_paint": "0x2d4ec50",
+          "caption_paint_prologue": "e87b1a42fe488b05",
+          "caption_paint_slot": "0x7f",
+          "caption_vtable": "0x118faca0",
+          "corner_paint": "0xa6734d0",
+          "corner_paint_prologue": "a80000004889c548",
+          "corner_vtable": "0x118c0700",
+          "draw_color": "0x282f492",
+          "draw_color_prologue": "56574883ec38",
+          "frame_ids": [],
+          "frame_vtable": "0x1185ff40",
+          "get_color_provider": "0xfecfa0",
+          "get_color_provider_prologue": "4883ec28488b",
+          "on_paint": "0x2b714d0",
+          "on_paint_prologue": "9ea8000000488d8e",
+          "on_paint_slot": "0x65",
+          "provider_verified": false,
+          "view_bounds_offset": "0x1c8"
+        },
+        "module": "msedge.dll",
+        "navigation": {
+          "active_web_contents": "0xcaebbe0",
+          "browser_view_for_window": "0x10fc148",
+          "content_window_for_hwnd": "0x250c496",
+          "gurl_drop": "0xfc2228",
+          "gurl_empty": "0x10e8918",
+          "gurl_from_text": "0x1045742",
+          "gurl_wide": false,
+          "open_url": "0x7a63840",
+          "open_url_params": "0xef432d0",
+          "open_url_params_drop": "0x2d98104",
+          "signatures": [
+            [
+              "0x250c496",
+              "564883ec20e8"
+            ],
+            [
+              "0x10fc148",
+              "8c242d0100"
+            ],
+            [
+              "0x1045742",
+              "488d05b7f41a1166"
+            ],
+            [
+              "0x10e8918",
+              "4889c80f57c0"
+            ],
+            [
+              "0xfc2228",
+              "56574883ec28"
+            ],
+            [
+              "0xef432d0",
+              "415656575553"
+            ],
+            [
+              "0x2d98104",
+              "56574883ec"
+            ],
+            [
+              "0x7a63840",
+              "1593abab0b4c8d84"
+            ],
+            [
+              "0xcaebbe0",
+              "168b0183f8010f"
+            ]
+          ],
+          "supported": true
+        },
+        "omnibox": null,
+        "screen_origin": null,
+        "side_panel": {
+          "browser_offset": "0x0",
+          "browser_view_view_vtable": "0x7fff0000",
+          "color_source": "0x0",
+          "coordinator_vtable": "0x7fff0000",
+          "entry_count": 0,
+          "entry_id_to_string": "0x7fff0000",
+          "entry_id_to_string_prologue": "564883ec30488b05b10f0e13",
+          "entry_showing": "0x7fff0000",
+          "entry_showing_prologue": "488b491080793001",
+          "event_handler_for_point": "0x7fff0000",
+          "extension_entry": 0,
+          "features_coordinator": "0x0",
+          "features_offset": "0x0",
+          "generate_colors_css": "0x7fff0000",
+          "generate_colors_css_prologue": "415741564155415456575553",
+          "get_color_provider": "0x7fff0000",
+          "get_color_provider_prologue": "4883ec284883e980e853d5e9ff48",
+          "hidden_entries": [],
+          "registry_from": "0x7fff0000",
+          "registry_from_prologue": "4881c1b0000000",
+          "show": "0x7fff0000",
+          "show_prologue": "41565657534883ec584489cb",
+          "side_panel_vtable": "0x7fff0000",
+          "source_in_widget": "0x0",
+          "supported": false,
+          "toggle": "0x7fff0000",
+          "toggle_prologue": "415741565657534883ec604489c3"
+        },
+        "split": {
+          "active_member": "0x0",
+          "add_to_new_split": "0x1001e3d4",
+          "allocate": "0x33e49d0",
+          "calculate_layout": "0x0",
+          "calculate_layout_prologue": "415741564155415456575553",
+          "container_count_member": "0x0",
+          "container_delegate_offset": "0x0",
+          "container_layout": "0x0",
+          "containers_member": "0x0",
+          "flex_layout": "0xfef480",
+          "flex_layout_host": "0x38",
+          "get_split_for_tab": "0x0",
+          "layout_delegate_offset": "0x0",
+          "location_bar_vtable": "0x0",
+          "mini_toolbar_member": "0x0",
+          "outline_member": "0x0",
+          "remove_split": "0x0",
+          "schedule_paint": "0x7fff0000",
+          "schedule_paint_prologue": "00",
+          "set_border_slot": "0x0",
+          "set_rounded_corners": "0x0",
+          "set_rounded_corners_changed": "0x7fff0000",
+          "set_rounded_corners_parity": "0x7fff0000",
+          "set_rounded_corners_prologue": "56574883ec284889cef30f1002",
+          "set_visible_slot": "0x0",
+          "signatures": [
+            [
+              "0x0",
+              "415741564155415456575553"
+            ],
+            [
+              "0x0",
+              "41565657534883ec48"
+            ],
+            [
+              "0x0",
+              "564883ec204585c00f"
+            ],
+            [
+              "0x0",
+              "40534883ec20488bd9"
+            ]
+          ],
+          "split_adds_active": false,
+          "split_insets_member": "0x0",
+          "split_vector_ends_by_pointer": false,
+          "supported": false,
+          "update_border": "0x0",
+          "update_border_prologue": "4156565755534883ec5089d5",
+          "web_contents_focused": "0x0",
+          "web_contents_focused_prologue": "415741564155415456575553"
+        },
+        "tabs": {
+          "activate_tab": "0xa40cf12",
+          "active_web_contents": "0xcaebbe0",
+          "add_to_new_group": "0x7fff0000",
+          "add_to_new_group_prologue": "00",
+          "allocate": "0x33e49d0",
+          "allocate_prologue": "40534883ec20488bd9",
+          "browser_in_view": "0x618",
+          "browser_view_for_window": "0x10fc148",
+          "change_group": "0x7fff0000",
+          "close_tab": "0xa41036a",
+          "content_window_for_hwnd": "0x250c496",
+          "get_group": "0x26d0670",
+          "get_tab_model": "0x55ec860",
+          "groups": false,
+          "has_group": "0xa3fa07e",
+          "last_committed_url": "0x1189850",
+          "lookup_group": "0xa3fa114",
+          "new_tab": "0x10b79ef0",
+          "new_tab_address": null,
+          "new_tab_delay_ms": 0,
+          "new_tab_prologue": "4157415641554154565755534881ec1801000089d74889ce488b053141ce04",
+          "new_tab_takes_address": false,
+          "signatures": [
+            [
+              "0x26d0670",
+              "0b024889513c664489414448"
+            ],
+            [
+              "0xa3fa07e",
+              "09ba7900000041b8d3000000"
+            ],
+            [
+              "0xa3fa114",
+              "05ff5d9809eb1e488d0d86c3"
+            ],
+            [
+              "0x250c496",
+              "564883ec20e8"
+            ],
+            [
+              "0x10fc148",
+              "8c242d0100"
+            ],
+            [
+              "0xcaebbe0",
+              "168b0183f8010f"
+            ],
+            [
+              "0x55ec860",
+              "8d7c244048"
+            ],
+            [
+              "0x10b06fe",
+              "488b41108b4020"
+            ],
+            [
+              "0x108cd4e",
+              "8d4c24684989"
+            ],
+            [
+              "0xa40cf12",
+              "e8295cd6f6eb"
+            ],
+            [
+              "0xa41036a",
+              "91bbf6488b88"
+            ],
+            [
+              "0x1144550",
+              "488988a0040000"
+            ],
+            [
+              "0x1189850",
+              "bcfaffffe9cabb"
+            ],
+            [
+              "0x1026510",
+              "4883ec284881c1"
+            ]
+          ],
+          "supported": true,
+          "tab_at": "0x108cd4e",
+          "tab_collection": "0x0",
+          "tab_contents": "0x0",
+          "tab_count": "0x10b06fe",
+          "tab_object": "0x7fff0000",
+          "title": "0x1144550",
+          "visible_url": "0x1026510"
+        },
+        "toolbar": {
+          "content_window_for_hwnd": "0x250c496",
+          "dev": {
+            "colours": [],
+            "console": 40005,
+            "inspect": 40023
+          },
+          "get_color": "0x1030e6e",
+          "skip": "updateicon anchor visible",
+          "toolbar_layout": "0x7fff0000",
+          "widget_for_window": "0x28fd6b8"
+        },
+        "version": [
+          158,
+          0,
+          4370,
+          33
+        ]
+      },
+      "frame": {
+        "browser": "Microsoft Edge",
+        "client_view_bounds": 54928864,
+        "client_view_slot": 115,
+        "frame_view_vtable": 293994304,
+        "hwnd_for_view": 17458569,
+        "hwnd_for_view_prologue": "300f8407e9e7084d8b00450fb700",
+        "module": "msedge.dll",
+        "version": "158.0.4370.33"
+      },
+      "switched_off": [
+        {
+          "feature": "address suggestions",
+          "values": [
+            "omnibox.browser_context",
+            "omnibox.classifier_for_profile",
+            "omnibox.controller_new",
+            "omnibox.default_providers",
+            "omnibox.delete",
+            "omnibox.match_drop",
+            "omnibox.match_new",
+            "omnibox.profile_from_context",
+            "omnibox.scheme_classifier_new",
+            "omnibox.security_level",
+            "omnibox.show_page_info",
+            "omnibox.signatures[0][0]",
+            "omnibox.signatures[10][0]",
+            "omnibox.signatures[12][0]",
+            "omnibox.signatures[13][0]",
+            "omnibox.signatures[14][0]",
+            "omnibox.signatures[19][0]",
+            "omnibox.signatures[1][0]",
+            "omnibox.signatures[2][0]",
+            "omnibox.signatures[4][0]",
+            "omnibox.signatures[5][0]",
+            "omnibox.signatures[6][0]",
+            "omnibox.signatures[7][0]",
+            "omnibox.signatures[9][0]",
+            "omnibox.visible_security_state",
+            "omnibox.controller_size",
+            "omnibox.match_contents",
+            "omnibox.match_description",
+            "omnibox.match_size",
+            "omnibox.provider_client_size"
+          ]
+        },
+        {
+          "feature": "app window",
+          "values": [
+            "app_window.browser_context",
+            "app_window.detach",
+            "app_window.request_focus",
+            "app_window.set_bounds",
+            "app_window.web_view_ctor",
+            "app_window.bounds_changed_slot",
+            "app_window.destructor_slot"
+          ]
+        },
+        {
+          "feature": "developer colours",
+          "values": [
+            "toolbar.dev.colours[0][0]",
+            "toolbar.dev.colours[1][0]",
+            "toolbar.dev.colours[2][0]",
+            "toolbar.dev.colours[3][0]",
+            "toolbar.dev.colours[4][0]",
+            "toolbar.dev.colours[5][0]",
+            "toolbar.dev.colours[6][0]",
+            "toolbar.dev.colours[7][0]",
+            "toolbar.dev.colours[8][0]",
+            "toolbar.dev.colours[9][0]",
+            "toolbar.dev.colours[10][0]",
+            "toolbar.dev.colours[11][0]",
+            "toolbar.dev.colours[12][0]",
+            "toolbar.dev.colours[13][0]",
+            "toolbar.dev.colours[14][0]",
+            "toolbar.dev.colours[15][0]",
+            "toolbar.dev.colours[16][0]",
+            "toolbar.dev.colours[17][0]",
+            "toolbar.dev.colours[18][0]",
+            "toolbar.dev.colours[19][0]",
+            "toolbar.dev.colours[20][0]",
+            "toolbar.dev.colours[21][0]",
+            "toolbar.dev.colours[22][0]",
+            "toolbar.dev.colours[23][0]",
+            "toolbar.dev.colours[24][0]",
+            "toolbar.dev.colours[25][0]",
+            "toolbar.dev.colours[26][0]",
+            "toolbar.dev.colours[27][0]"
+          ]
+        },
+        {
+          "feature": "frame colour",
+          "values": [
+            "layout.caption_ink_ids[0]",
+            "layout.caption_ink_ids[1]",
+            "layout.caption_ink_ids[2]",
+            "layout.frame_ids[0]",
+            "layout.frame_ids[1]",
+            "layout.frame_ids[2]",
+            "layout.frame_ids[3]",
+            "layout.frame_ids[4]",
+            "layout.frame_ids[5]"
+          ]
+        },
+        {
+          "feature": "sidebar",
+          "values": [
+            "side_panel.browser_offset",
+            "side_panel.browser_view_view_vtable",
+            "side_panel.coordinator_vtable",
+            "side_panel.entry_showing",
+            "side_panel.event_handler_for_point",
+            "side_panel.registry_from",
+            "side_panel.side_panel_vtable",
+            "side_panel.toggle",
+            "side_panel.color_source",
+            "side_panel.entry_count",
+            "side_panel.extension_entry",
+            "side_panel.features_coordinator",
+            "side_panel.features_offset",
+            "side_panel.hidden_entries[0]",
+            "side_panel.source_in_widget"
+          ]
+        },
+        {
+          "feature": "split view",
+          "values": [
+            "split.calculate_layout",
+            "split.container_layout",
+            "split.get_split_for_tab",
+            "split.location_bar_vtable",
+            "split.remove_split",
+            "split.set_rounded_corners",
+            "split.signatures[1][0]",
+            "split.signatures[2][0]",
+            "split.update_border",
+            "split.web_contents_focused",
+            "split.active_member",
+            "split.container_count_member",
+            "split.container_delegate_offset",
+            "split.containers_member",
+            "split.layout_delegate_offset",
+            "split.mini_toolbar_member",
+            "split.outline_member",
+            "split.set_border_slot",
+            "split.set_visible_slot",
+            "split.split_insets_member"
+          ]
+        }
+      ]
     }
   ],
   "schema": 1,
